@@ -6,32 +6,21 @@ keywords: API authentication, API key, AWS SSM, Secrets Manager, tenant API keys
 
 # :material-lock: Authentication & Security
 
-stdapi.ai provides flexible authentication options and built-in security mechanisms to protect your API. Choose from API key authentication for simple deployments to enterprise-grade identity management via AWS services — all backed by built-in SSRF protection, host header validation, and configurable encryption in transit.
+stdapi.ai provides flexible authentication options and built-in security mechanisms to protect your API. Choose from API key authentication for simple deployments to identity management delegated to Amazon Cognito, AWS IAM Identity Center or any OIDC provider — all backed by built-in SSRF protection, host header validation, and configurable encryption in transit.
 
-<div class="grid cards" markdown>
-
-- :material-key: __API Key Authentication__
-  <br>Securely stored in AWS SSM Parameter Store or Secrets Manager. Mimics OpenAI and Anthropic auth.
-
-- :material-key-multiple: __Tenant API Keys__
-  <br>One key per customer or team, scoped to models and endpoints, minted server-side and revocable within a minute.
-
-- :material-account-key: __Amazon Cognito User Pool Tokens__
-  <br>Per-user and per-application bearer tokens, validated on every request. No key to rotate.
-
-- :material-compass-outline: __Authentication Discovery for Agents__
-  <br>Publish where tokens come from, so an agent authenticates itself with no prior configuration.
-
-- :material-account-check: __OIDC, Cognito & IAM Identity Center__
-  <br>Offload user and workforce identity management to AWS ALB or API Gateway.
-
-- :material-shield-key: __AWS IAM__
-  <br>Use AWS native access control via API Gateway.
-
-- :material-lock-open: __No Authentication__
-  <br>Optional mode for private/internal VPC deployments where security is handled at the network level.
-
-</div>
+| You want to…                                                              | Read                                                                            | What it costs you                                                                                              |
+|:--------------------------------------------------------------------------|:--------------------------------------------------------------------------------|:----------------------------------------------------------------------------------------------------------------|
+| Put one key in front of the whole deployment                              | [API Key Authentication](#api-key-authentication)                               | A secret to store and rotate; the key is read once at startup, so rotation needs a task replacement             |
+| Give each customer or team its own key, scoped and revocable              | [Tenant API Keys](#tenant-api-keys)                                             | A shared DynamoDB table, and one SSM parameter per tenant to collect and delete. Scopes bound invocation, not stored data |
+| Bill a customer's model usage to **their** AWS account                    | [Tenant AWS credentials](#tenant-aws-credentials)                               | A cross-account role per tenant; five operation families are refused, and Bedrock Guardrails become unavailable  |
+| Stop rotating keys, and identify the caller per request                   | [Amazon Cognito User Pool Tokens](#amazon-cognito-user-pool-tokens)             | A user pool and its app clients to run; revoking a caller waits for their current token to expire               |
+| Let an AI agent obtain its own credential                                 | [Authentication Discovery for Agents](#authentication-discovery-for-agents)     | Two settings, or one with a user pool. The agent still needs an app client created for it in advance             |
+| Hand sign-in and SSO to AWS, before the request arrives                   | [OIDC, Cognito & IAM Identity Center](#oidc-cognito-iam-identity-center)        | ALB or API Gateway configuration the Terraform module does not write; stdapi.ai then sees no caller identity     |
+| Sign requests with IAM, service to service                                | [AWS IAM](#aws-iam)                                                             | An API Gateway in front of the deployment; SigV4 on every client                                                |
+| Run with no credential at all                                             | [No Authentication](#no-authentication)                                         | Network controls become the only defense — a reachable endpoint is an open one, billed to you                    |
+| Know what protects a request whatever the credential                      | [Application Security](#application-security)                                   | Nothing: SSRF blocking, Host validation and the size limits are on by default or one setting away                |
+| Pass a Security Hub baseline, and monitor threats                         | [Security Hub, GuardDuty & DNS Firewall](#aws-security-hub-guardduty-dns-firewall-integration) | Opt-in module variables, and a dedicated VPC — they have no effect on your own `subnet_ids`      |
+| Encrypt past the load balancer, or demand a client certificate            | [Encryption in Transit](#encryption-in-transit)                                 | Certificates to mount and renew; the Terraform module does not configure end-to-end TLS                          |
 
 ---
 
@@ -46,7 +35,7 @@ stdapi.ai provides flexible authentication options and built-in security mechani
 | **AWS IAM** | Service-to-service within AWS | API Gateway | AWS (SigV4) |
 | **No Authentication** | Local development, trusted VPC | Any | Network controls only |
 
-The API key, tenant API keys and Cognito tokens can be used together: [`AUTHENTICATION_MODE`](operations_configuration.md#authentication-mode) selects which of them a deployment accepts, and defaults to accepting every method that is configured.
+The API key, tenant API keys and Cognito tokens can be used together: [`AUTHENTICATION_MODE`](operations_configuration_authentication.md#authentication-mode) selects which of them a deployment accepts, and defaults to accepting every method that is configured.
 
 When stdapi.ai enforces the credential itself — the API key, tenant API keys and Cognito user pool tokens — a rejected request is answered with `401 Unauthorized`, a `WWW-Authenticate: Bearer` challenge, and a body that states nothing beyond `Unauthorized` — the reason is written to the server log only, so the response cannot be used to work out which half of a credential was wrong. That challenge is also where an AI agent starts: see [Authentication Discovery for Agents](#authentication-discovery-for-agents). The edge-enforced methods answer an unauthenticated request themselves, before it reaches stdapi.ai, with whatever their own configuration says — commonly a redirect to the identity provider.
 
@@ -60,7 +49,7 @@ Three sources are supported — configure exactly one. If more than one is set, 
 - **SSM Parameter Store** (`API_KEY_SSM_PARAMETER`) — the parameter must already exist before startup.
 - **Secrets Manager** (`API_KEY_SECRETSMANAGER_SECRET`) — the secret must already exist; supports a configurable key within the JSON secret via `API_KEY_SECRETSMANAGER_KEY`.
 
-For the full list of environment variables and required IAM permissions for each method, see the [Configuration Guide](operations_configuration.md#authentication).
+For the full list of environment variables and required IAM permissions for each method, see the [Configuration Guide](operations_configuration_authentication.md#authentication).
 
 !!! abstract "In-Memory Key Protection"
     stdapi.ai never stores API keys in plain text. At startup, the key is retrieved, salted, and hashed using an industry-standard cryptographic function; only the hash is retained in memory — even a full memory dump cannot reconstruct the original key. Verification uses constant-time comparison to prevent timing-based side-channel attacks.
@@ -89,14 +78,14 @@ curl https://your-gateway.example.com/anthropic/v1/models \
 
 #### What you configure in AWS
 
-1. **A user pool**, in any Region. Its ID (for example `eu-west-3_a1b2c3d4e`) goes into [`AWS_COGNITO_USER_POOL_ID`](operations_configuration.md#aws-cognito-user-pool-id); the Region is read from the ID itself, and so is the issuer URL — nothing else names it, here or in [agent discovery](#authentication-discovery-for-agents).
-2. **One or more app clients** in that pool. Their IDs go into [`AWS_COGNITO_CLIENT_IDS`](operations_configuration.md#aws-cognito-client-ids) — a token issued to any other app client is rejected, so this list is required.
-3. **A [pool domain](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-assign-domain.html)**, which is what gives the pool its OAuth 2.0 authorization and token endpoints. It is needed in two cases: to demand a scope such as `stdapi/invoke` through [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration.md#aws-cognito-required-scopes), since custom scopes exist only on tokens those endpoints issue and on a resource server that defines them; and for the [agent discovery flow](#authentication-discovery-for-agents), scope or no scope, since an agent has nowhere to obtain a token otherwise. Machine-to-machine clients use the `client_credentials` grant there.
+1. **A user pool**, in any Region. Its ID (for example `eu-west-3_a1b2c3d4e`) goes into [`AWS_COGNITO_USER_POOL_ID`](operations_configuration_authentication.md#aws-cognito-user-pool-id); the Region is read from the ID itself, and so is the issuer URL — nothing else names it, here or in [agent discovery](#authentication-discovery-for-agents).
+2. **One or more app clients** in that pool. Their IDs go into [`AWS_COGNITO_CLIENT_IDS`](operations_configuration_authentication.md#aws-cognito-client-ids) — a token issued to any other app client is rejected, so this list is required.
+3. **A [pool domain](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-assign-domain.html)**, which is what gives the pool its OAuth 2.0 authorization and token endpoints. It is needed in two cases: to demand a scope such as `stdapi/invoke` through [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration_authentication.md#aws-cognito-required-scopes), since custom scopes exist only on tokens those endpoints issue and on a resource server that defines them; and for the [agent discovery flow](#authentication-discovery-for-agents), scope or no scope, since an agent has nowhere to obtain a token otherwise. Machine-to-machine clients use the `client_credentials` grant there.
 
 No IAM permission is involved: the pool's signing keys are public. The task must be able to **reach** them, though — it reads them over HTTPS from `cognito-idp.<region>.amazonaws.com` in the pool's Region at startup, and fails to start if it cannot. Give the task outbound HTTPS to that host: NAT or internet egress, or an [interface VPC endpoint](https://docs.aws.amazon.com/cognito/latest/developerguide/vpc-interface-endpoints.html) for `com.amazonaws.<region>.cognito-idp` in that Region — note that AWS declares a pool with a domain assigned incompatible with that endpoint, so a pool used for scopes or for agent discovery needs the egress path.
 
 !!! danger "The pool decides who can call the gateway"
-    Any identity that can obtain a token from an app client listed in [`AWS_COGNITO_CLIENT_IDS`](operations_configuration.md#aws-cognito-client-ids) can call the API, and its model usage is billed to your account. A Cognito user pool **allows self sign-up by default**, so pointing the gateway at a customer-facing pool without further restriction turns it into an open, self-service one.
+    Any identity that can obtain a token from an app client listed in [`AWS_COGNITO_CLIENT_IDS`](operations_configuration_authentication.md#aws-cognito-client-ids) can call the API, and its model usage is billed to your account. A Cognito user pool **allows self sign-up by default**, so pointing the gateway at a customer-facing pool without further restriction turns it into an open, self-service one.
 
     Before enabling it: disable self-registration on the pool (`AllowAdminCreateUserOnly`), or dedicate an app client to the gateway and require one of its resource-server scopes.
 
@@ -107,11 +96,11 @@ Every request is checked against all of the following, and any failure returns t
 | Check | Requirement |
 |---|---|
 | **Signature** | RS256, against the pool's published keys. Unsigned (`alg=none`) and symmetric (`HS*`) tokens are always rejected. |
-| **Issuer** | Exactly the configured pool's issuer — see [`AWS_COGNITO_ISSUER_TYPE`](operations_configuration.md#aws-cognito-issuer-type). A token from another pool is rejected. |
-| **Token use** | An access token. Identity tokens are rejected unless [`AWS_COGNITO_ACCEPT_ID_TOKEN`](operations_configuration.md#aws-cognito-accept-id-token) is enabled. |
-| **Application** | The token's app client is in [`AWS_COGNITO_CLIENT_IDS`](operations_configuration.md#aws-cognito-client-ids). |
+| **Issuer** | Exactly the configured pool's issuer — see [`AWS_COGNITO_ISSUER_TYPE`](operations_configuration_authentication.md#aws-cognito-issuer-type). A token from another pool is rejected. |
+| **Token use** | An access token. Identity tokens are rejected unless [`AWS_COGNITO_ACCEPT_ID_TOKEN`](operations_configuration_authentication.md#aws-cognito-accept-id-token) is enabled. |
+| **Application** | The token's app client is in [`AWS_COGNITO_CLIENT_IDS`](operations_configuration_authentication.md#aws-cognito-client-ids). |
 | **Validity period** | Not expired, and not used before its start time, with a one-minute tolerance for clock drift. |
-| **Scopes** | All of [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration.md#aws-cognito-required-scopes) are present. |
+| **Scopes** | All of [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration_authentication.md#aws-cognito-required-scopes) are present. |
 
 !!! abstract "Signing keys are loaded once, at startup"
     The pool's public keys are read at startup and kept in memory, so validation adds no network call and no measurable latency to a request. When a pool rotates its keys, the first request carrying a token signed by the new key reloads them, at most once every five minutes — a forged key identifier cannot turn requests into outbound traffic. A deployment that cannot read the keys at startup **fails to start** rather than serving requests it could not authenticate.
@@ -120,14 +109,14 @@ Every request is checked against all of the following, and any failure returns t
     A token is validated against the pool's published keys and its own claims, without calling the pool, so nothing is checked back with it once it has been issued. Disabling a user, deleting them or signing them out therefore stops the **next** token, not the one already in their hands: that one keeps working until its `exp`, up to the app client's access-token validity (one hour by default, 24 hours at most). Keep that validity short — it is the upper bound on how long a revoked credential stays usable.
 
 !!! warning "Username and password sign-in yields no custom scope"
-    Tokens obtained by signing in directly against the user pool API carry the single scope `aws.cognito.signin.user.admin`. Custom scopes only exist on tokens issued by the pool's OAuth 2.0 token endpoint. Requiring `stdapi/invoke` therefore rejects every client that signs in with a username and password — leave [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration.md#aws-cognito-required-scopes) empty unless all your clients use the OAuth 2.0 endpoints.
+    Tokens obtained by signing in directly against the user pool API carry the single scope `aws.cognito.signin.user.admin`. Custom scopes only exist on tokens issued by the pool's OAuth 2.0 token endpoint. Requiring `stdapi/invoke` therefore rejects every client that signs in with a username and password — leave [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration_authentication.md#aws-cognito-required-scopes) empty unless all your clients use the OAuth 2.0 endpoints.
 
 !!! tip "Both methods, or one"
-    With both a user pool and an API key configured, either credential is accepted: a bearer value shaped like a signed token is validated against the pool, anything else is compared to the API key. Set [`AUTHENTICATION_MODE`](operations_configuration.md#authentication-mode) to `cognito` or `api_key` to accept only one of them — the deployment then refuses to start if the other one is configured too, so a credential is never accepted by accident.
+    With both a user pool and an API key configured, either credential is accepted: a bearer value shaped like a signed token is validated against the pool, anything else is compared to the API key. Set [`AUTHENTICATION_MODE`](operations_configuration_authentication.md#authentication-mode) to `cognito` or `api_key` to accept only one of them — the deployment then refuses to start if the other one is configured too, so a credential is never accepted by accident.
 
 ### :material-key-multiple: Tenant API Keys { #tenant-api-keys }
 
-One deployment can serve several customers or teams, each holding an API key of its own — shaped `sk-std-<key id>-<secret>` — that is validated on every request and scoped to the models and endpoints its tenant is entitled to. Enable the method with [`TENANT_API_KEYS`](operations_configuration.md#tenant-api-keys); it needs the [shared DynamoDB table](operations_configuration.md#aws-dynamodb-table). Keys are delivered under a [delivery prefix](operations_configuration.md#tenant-key-ssm-parameter-prefix) that has a default and only needs overriding on a deployment that shares an AWS account with another. Clients send the key like any API key, in the `Authorization: Bearer <key>` or `X-API-Key` header. The deployment-wide API key and Cognito tokens keep working unchanged alongside it — enabling tenant keys changes nothing for existing credentials.
+One deployment can serve several customers or teams, each holding an API key of its own — shaped `sk-std-<key id>-<secret>` — that is validated on every request and scoped to the models and endpoints its tenant is entitled to. Enable the method with [`TENANT_API_KEYS`](operations_configuration_authentication.md#tenant-api-keys); it needs the [shared DynamoDB table](operations_configuration_storage.md#aws-dynamodb-table). Keys are delivered under a [delivery prefix](operations_configuration_authentication.md#tenant-key-ssm-parameter-prefix) that has a default and only needs overriding on a deployment that shares an AWS account with another. Clients send the key like any API key, in the `Authorization: Bearer <key>` or `X-API-Key` header. The deployment-wide API key and Cognito tokens keep working unchanged alongside it — enabling tenant keys changes nothing for existing credentials.
 
 #### Declaring tenants and receiving their keys
 
@@ -160,7 +149,7 @@ aws ssm get-parameter --name /my-deployment/tenant-keys/AbC123... \
 !!! warning "The delivery prefix is a trust boundary in both directions"
     The parameter is created once and never overwritten, which is what makes minting idempotent across instances — so **whoever creates it defines the secret**. A principal able to call `ssm:PutParameter` under the prefix can therefore pre-create `<prefix>/<key id>` for a tenant that does not exist yet and hold a valid key from the moment it is declared, exactly as read access there exposes the keys already delivered. Grant both actions on `<prefix>/*` to the deployment's task role and to the operators who collect the keys, and to nothing else.
 
-    Read access is wider than that grant while [`TENANT_KEY_SSM_KMS_KEY_ID`](operations_configuration.md#tenant-key-ssm-kms-key-id) is unset: the parameter is then encrypted with the AWS-managed `alias/aws/ssm` key, whose key policy lets **any principal of the account** decrypt through Parameter Store, so `ssm:GetParameter` on the path is the only permission an intruder needs. Point the setting at a key of your own and reading a delivered key also requires `kms:Decrypt` on it — the [Terraform module](operations_getting_started.md#quick-start) points it at the deployment's KMS key automatically.
+    Read access is wider than that grant while [`TENANT_KEY_SSM_KMS_KEY_ID`](operations_configuration_authentication.md#tenant-key-ssm-kms-key-id) is unset: the parameter is then encrypted with the AWS-managed `alias/aws/ssm` key, whose key policy lets **any principal of the account** decrypt through Parameter Store, so `ssm:GetParameter` on the path is the only permission an intruder needs. Point the setting at a key of your own and reading a delivered key also requires `kms:Decrypt` on it — the [Terraform module](operations_getting_started.md#quick-start) points it at the deployment's KMS key automatically.
 
 !!! info "Without the Terraform module"
     Any tool that can write a DynamoDB item can declare a tenant: `pk` = `TENANT`, `sk` = `tenant#<key id>` (a key ID is 16 letters and digits of your choice, unique per tenant), attributes `name` (string), `schema` (number, `1`), optional `disabled` (boolean) and the four scope lists below as lists of strings. The server mints and delivers the key the same way.
@@ -175,7 +164,7 @@ Each tenant record may carry four pattern lists, matched with `*` and `?` globs.
 | `endpoints_allow` / `endpoints_deny` | The matched route's path template, e.g. `/v1/chat/completions` or `/v1/files/{file_id}` | The same detail-free `401 Unauthorized` as any refused credential |
 
 !!! tip "Deny lists match names, so prefer an allow list"
-    Model patterns are matched against the model ID the request resolves to. With [`AWS_BEDROCK_ALLOW_MARKETPLACE_ENDPOINT_ARN`](operations_configuration.md#bedrock-allow-marketplace-endpoint-arn) enabled, an endpoint addressed by its ARN keeps that ARN as its ID, which a name-based pattern such as `mistral.*` does not match. `models_allow` fails closed on it — no pattern matches, so the model is refused — while a deny-only tenant would reach it: add `arn:*` to `models_deny` where that opt-in is on.
+    Model patterns are matched against the model ID the request resolves to. With [`AWS_BEDROCK_ALLOW_MARKETPLACE_ENDPOINT_ARN`](operations_configuration_models.md#bedrock-allow-marketplace-endpoint-arn) enabled, an endpoint addressed by its ARN keeps that ARN as its ID, which a name-based pattern such as `mistral.*` does not match. `models_allow` fails closed on it — no pattern matches, so the model is refused — while a deny-only tenant would reach it: add `arn:*` to `models_deny` where that opt-in is on.
 
 !!! warning "A release that adds endpoints widens an endpoint deny list"
     `endpoints_deny` is matched against the path templates the running version serves. Releases add routes — a new API dialect mounts a whole family of them at once, as `/api/*` did for the [Ollama API](api_ollama_chat.md) — and a deny list written against the previous version matches none of them, so a tenant scoped by denial silently gains them on upgrade. `endpoints_allow` fails closed on the same upgrade: a path it does not list stays refused. Prefer an allow list here too, and re-read the [API reference](api_overview.md) after an upgrade whenever you keep a deny list.
@@ -198,11 +187,11 @@ Both are enforced at choke points every request passes through — the authentic
     ]
     ```
 
-    The leading `*` covers the routes prefix each dialect is mounted under, such as [`ANTHROPIC_ROUTES_PREFIX`](operations_configuration.md#anthropic-routes-prefix). `/v1/responses` itself stays allowed so the Responses API keeps serving requests; a response the tenant asks to `store` is still written, only no longer readable by it. Mutually untrusted tenants that need any of these features want one deployment each — a separate bucket and table is the only isolation there is.
+    The leading `*` covers the routes prefix each dialect is mounted under, such as [`ANTHROPIC_ROUTES_PREFIX`](operations_configuration_server.md#anthropic-routes-prefix). `/v1/responses` itself stays allowed so the Responses API keeps serving requests; a response the tenant asks to `store` is still written, only no longer readable by it. Mutually untrusted tenants that need any of these features want one deployment each — a separate bucket and table is the only isolation there is.
 
 #### Validation, caching and revocation
 
-Validation is a direct read of the tenant's two records, cached in each server instance for [`TENANT_KEY_CACHE_SECONDS`](operations_configuration.md#tenant-key-cache-seconds) — 60 seconds by default. That cache is the revocation window: **a key that is revoked, disabled or re-scoped keeps its previous decision for up to 60 seconds per instance**, and no longer. Revoke a key by removing its tenant from `tenants` (destroying the record), or suspend it by setting `disabled = true`. Unknown key IDs are negative-cached, bounded in size and time, so a flood of fabricated keys neither amplifies table reads nor grows memory.
+Validation is a direct read of the tenant's two records, cached in each server instance for [`TENANT_KEY_CACHE_SECONDS`](operations_configuration_authentication.md#tenant-key-cache-seconds) — 60 seconds by default. That cache is the revocation window: **a key that is revoked, disabled or re-scoped keeps its previous decision for up to 60 seconds per instance**, and no longer. Revoke a key by removing its tenant from `tenants` (destroying the record), or suspend it by setting `disabled = true`. Unknown key IDs are negative-cached, bounded in size and time, so a flood of fabricated keys neither amplifies table reads nor grows memory.
 
 !!! warning "The table being unreachable fails closed"
     When tenant keys are enabled but the DynamoDB table cannot be read, a tenant-shaped credential is refused with `503` — never accepted, and never turned into a `401` that would mislabel a valid key as wrong. The reason (the IAM action, the table) is written to the server log. Other credential kinds are unaffected.
@@ -212,7 +201,7 @@ Validation is a direct read of the tenant's two records, cached in each server i
 
 #### Tenant AWS credentials — the tenant's own quota and bill { #tenant-aws-credentials }
 
-A tenant may go one step further and bring its **own AWS account**: register an IAM role of that account against its key, and every model invocation made with the key runs under that role — the tenant's own Amazon Bedrock model access, quotas, throttling and bill, instead of the deployment's. Enable it with [`TENANT_AWS_CREDENTIALS`](operations_configuration.md#tenant-aws-credentials) and declare the role on the tenant record:
+A tenant may go one step further and bring its **own AWS account**: register an IAM role of that account against its key, and every model invocation made with the key runs under that role — the tenant's own Amazon Bedrock model access, quotas, throttling and bill, instead of the deployment's. Enable it with [`TENANT_AWS_CREDENTIALS`](operations_configuration_authentication.md#tenant-aws-credentials) and declare the role on the tenant record:
 
 ```hcl
 tenants = {
@@ -235,10 +224,10 @@ The design is AWS's own [cross-account confused-deputy pattern](https://docs.aws
 
 The role's permission policy is the tenant's to scope — `bedrock:InvokeModel*` and the Converse actions on the models it wants to allow. **No secret exists anywhere at rest**: the stored role ARN is public-by-design and the ExternalId is only meaningful when presented by the deployment's own IAM principal. The tenant revokes the grant at any moment by editing its own trust policy; sessions are capped at one hour by AWS role chaining, so a revocation is fully effective within that hour, and the server never signs a new request with a session it could not reopen.
 
-**What runs on whose account.** The tenant's credential covers **model invocations only** — the `Converse` and `InvokeModel` families, streaming included. That includes the embedding calls behind vector store indexing and search: the tenant's role must allow the deployment's configured [`VECTOR_STORE_EMBEDDING_MODEL`](operations_configuration.md#vector-store-embedding-model) for vector store operations to work, and their embedding spend is the tenant's. Everything else a request may touch stays on the deployment's account: Amazon Polly, Transcribe, Translate and Comprehend, S3 storage and Knowledge Bases. Five operations are **refused** for a credential-carrying key rather than silently billed to the deployment, each with a clear error naming the reason: the Batch API (a job outlives the one-hour session), real-time speech-to-speech model sessions (a bidirectional stream signs once, as the server), asynchronous (video) generation (the job writes to the deployment's bucket), reranking models (their per-query invocations run through a service the tenant's credential cannot sign), and models only served by Amazon Bedrock Mantle, by a Bedrock Marketplace endpoint or by a SageMaker AI endpoint. A model served by Mantle **by default** but also available on the classic runtime — the GPT-5.6 family — is transparently served from the runtime instead, where the tenant's credential signs and pays.
+**What runs on whose account.** The tenant's credential covers **model invocations only** — the `Converse` and `InvokeModel` families, streaming included. That includes the embedding calls behind vector store indexing and search: the tenant's role must allow the deployment's configured [`VECTOR_STORE_EMBEDDING_MODEL`](operations_configuration_storage.md#vector-store-embedding-model) for vector store operations to work, and their embedding spend is the tenant's. Everything else a request may touch stays on the deployment's account: Amazon Polly, Transcribe, Translate and Comprehend, S3 storage and Knowledge Bases. Five operations are **refused** for a credential-carrying key rather than silently billed to the deployment, each with a clear error naming the reason: the Batch API (a job outlives the one-hour session), real-time speech-to-speech model sessions (a bidirectional stream signs once, as the server), asynchronous (video) generation (the job writes to the deployment's bucket), reranking models (their per-query invocations run through a service the tenant's credential cannot sign), and models only served by Amazon Bedrock Mantle, by a Bedrock Marketplace endpoint or by a SageMaker AI endpoint. A model served by Mantle **by default** but also available on the classic runtime — the GPT-5.6 family — is transparently served from the runtime instead, where the tenant's credential signs and pays.
 
 !!! warning "Not compatible with Amazon Bedrock Guardrails"
-    A guardrail configured in the deployment's account cannot be evaluated by a tenant's principal — AWS Guardrails have no cross-account path. Rather than silently serving tenant requests unguarded, the server **refuses to start** when `TENANT_AWS_CREDENTIALS` is enabled while [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](operations_configuration.md#aws-bedrock-guardrail-identifier) or a model-alias guardrail is configured. A tenant may still name a guardrail of its *own* account per request where header overrides are allowed — on the chat APIs, where the guardrail rides the model invocation itself, it is evaluated by the tenant's principal, in the tenant's account. Every other route applies a guardrail as a separate evaluation under the deployment's identity, which cannot read a guardrail of the tenant's account: the request fails there rather than serving unguarded content.
+    A guardrail configured in the deployment's account cannot be evaluated by a tenant's principal — AWS Guardrails have no cross-account path. Rather than silently serving tenant requests unguarded, the server **refuses to start** when `TENANT_AWS_CREDENTIALS` is enabled while [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](operations_configuration_bedrock.md#aws-bedrock-guardrail-identifier) or a model-alias guardrail is configured. A tenant may still name a guardrail of its *own* account per request where header overrides are allowed — on the chat APIs, where the guardrail rides the model invocation itself, it is evaluated by the tenant's principal, in the tenant's account. Every other route applies a guardrail as a separate evaluation under the deployment's identity, which cannot read a guardrail of the tenant's account: the request fails there rather than serving unguarded content.
 
 !!! info "Why a role, and nothing else"
     Cross-account roles are the only credential form served, by policy and not by omission. **Amazon Bedrock API keys** are refused: short-term keys last at most 12 hours — unstorable by construction — and long-term keys are IAM-user bearer tokens AWS itself marks *"for exploration only"*; storing them would turn the tenant table into a vault of live credentials. **Raw access keys** are long-lived secrets at rest with no tenant-side revocation story. **OIDC federation** adds an identity provider to operate without removing any of the above. A role plus ExternalId stores nothing worth stealing.
@@ -247,7 +236,7 @@ A few behaviors worth knowing:
 
 - **The model catalogue is not per-tenant.** `GET /v1/models` advertises what the deployment serves, from the deployment's account. A model the tenant's account has no access to fails at invocation with an honest `403`: *"Your AWS account does not have access to this model."*
 - **Errors never name the deployment's account.** A revoked trust policy, a wrong ExternalId or a deleted role answers a fixed `403` — *"The AWS credential registered for this API key could not be used…"* — with the full AWS detail written to the server log only. AWS STS being throttled or unreachable is not the tenant's registration and answers a retryable `503` instead, so a client retries it rather than auditing a trust policy that is fine.
-- **A tenant's throttle is its own.** Tenant requests still fail over across the configured Bedrock Regions, but a throttle of the tenant's account is answered as the tenant's own `429` and never marks a Region as blocked for other callers — Bedrock quota is per account, per Region. One exception, and it is opt-in: with [`AWS_ADAPTIVE_RETRY`](operations_configuration.md#aws-adaptive-retry) enabled, the retry token bucket belongs to the shared client rather than to a credential, so a tenant being throttled heavily can slow other callers' retries. Leave adaptive retry off — the default — where tenants must not affect one another.
+- **A tenant's throttle is its own.** Tenant requests still fail over across the configured Bedrock Regions, but a throttle of the tenant's account is answered as the tenant's own `429` and never marks a Region as blocked for other callers — Bedrock quota is per account, per Region. One exception, and it is opt-in: with [`AWS_ADAPTIVE_RETRY`](operations_configuration_aws.md#aws-adaptive-retry) enabled, the retry token bucket belongs to the shared client rather than to a credential, so a tenant being throttled heavily can slow other callers' retries. Leave adaptive retry off — the default — where tenants must not affect one another.
 - **Cross-Region inference profiles** route within the tenant's account: destination Regions that are opt-in must be enabled in the *tenant's* account for the profile to serve them.
 - **Cost reporting stays honest.** Usage billed to the tenant's account is marked `billed_to: tenant` in the [usage log](operations_cost_management.md) and is never priced into the deployment's cost totals.
 
@@ -259,12 +248,12 @@ An AI agent that meets an API it has never been configured for has one thing to 
 
 | Setting | Value |
 |---|---|
-| [`OAUTH_RESOURCE_IDENTIFIER`](operations_configuration.md#oauth-resource-identifier) | The public URL clients dial, exactly as they dial it — for example `https://api.example.com` |
-| [`OAUTH_AUTHORIZATION_SERVERS`](operations_configuration.md#oauth-authorization-servers) | The issuer URL of whatever issues your tokens. Leave it unset with a user pool configured: its issuer is published for you |
-| [`OAUTH_SCOPES_SUPPORTED`](operations_configuration.md#oauth-scopes-supported) | Leave it unset too — [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration.md#aws-cognito-required-scopes) is published, since an agent that is not told which scope to ask for obtains a token without it and is refused on every retry |
+| [`OAUTH_RESOURCE_IDENTIFIER`](operations_configuration_authentication.md#oauth-resource-identifier) | The public URL clients dial, exactly as they dial it — for example `https://api.example.com` |
+| [`OAUTH_AUTHORIZATION_SERVERS`](operations_configuration_authentication.md#oauth-authorization-servers) | The issuer URL of whatever issues your tokens. Leave it unset with a user pool configured: its issuer is published for you |
+| [`OAUTH_SCOPES_SUPPORTED`](operations_configuration_authentication.md#oauth-scopes-supported) | Leave it unset too — [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration_authentication.md#aws-cognito-required-scopes) is published, since an agent that is not told which scope to ask for obtains a token without it and is refused on every retry |
 
 !!! success "With a user pool, one variable turns discovery on"
-    The pool named by [`AWS_COGNITO_USER_POOL_ID`](operations_configuration.md#aws-cognito-user-pool-id) issues the tokens this deployment accepts, so it *is* the authorization server clients must be sent to, and the scopes it requires are the scopes they must ask for. Both are published from it, and the issuer is exactly what the pool signs into `iss`:
+    The pool named by [`AWS_COGNITO_USER_POOL_ID`](operations_configuration_authentication.md#aws-cognito-user-pool-id) issues the tokens this deployment accepts, so it *is* the authorization server clients must be sent to, and the scopes it requires are the scopes they must ask for. Both are published from it, and the issuer is exactly what the pool signs into `iss`:
 
     ```text
     https://cognito-idp.<region>.amazonaws.com/<pool-id>
@@ -305,7 +294,7 @@ From there the agent reads the authorization server's own metadata, signs in, an
     The pool also needs a [domain](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-assign-domain.html): its authorization and token endpoints exist only once one is assigned, so without it the issuer's own discovery document names no endpoint the agent can obtain a token from, and the flow dead-ends after the 401.
 
 !!! tip "Browser-hosted clients need CORS"
-    A client running in a browser reads this document cross-origin. Add its origin to [`CORS_ALLOW_ORIGINS`](operations_configuration.md#cors-allow-origins), which it also needs for the API calls that follow.
+    A client running in a browser reads this document cross-origin. Add its origin to [`CORS_ALLOW_ORIGINS`](operations_configuration_server.md#cors-allow-origins), which it also needs for the API calls that follow.
 
     With a CORS origin configured, the gateway also marks `WWW-Authenticate` as readable cross-origin, so a page-hosted client reads the metadata URL and the advertised scope straight off the `401`. Without one, the browser hides that header and the client falls back to the default well-known path, losing the scope the challenge carries.
 
@@ -315,7 +304,7 @@ For user-facing applications or enterprise SSO, you can offload authentication t
 
 When authentication is handled at this layer, requests are fully validated **before they reach stdapi.ai** — the application receives only authenticated, pre-authorized requests. This remains a valid alternative to [validating Cognito tokens in stdapi.ai](#amazon-cognito-user-pool-tokens): choose the edge when you need a hosted sign-in flow or session cookies, and choose in-application validation when clients already hold a bearer token and you want the verified caller to drive [per-user cost attribution](operations_cost_management.md#per-user-attribution).
 
-!!! tip "Trusted by AWS teams — no custom implementation risk"
+!!! tip "AWS-operated identity — no custom implementation to maintain"
     Cognito and IAM Identity Center are the same identity systems AWS teams already rely on for console access and internal applications. By delegating authentication to these services, you get MFA, SSO, and fine-grained permission sets without building or maintaining custom user management logic — and without the security risk of a home-grown implementation. See [Eliminate key rotation with AWS native auth](#security-best-practices) for the operational payoff.
 
 !!! info "Terraform Module"
@@ -325,7 +314,7 @@ When authentication is handled at this layer, requests are fully validated **bef
 The AWS ALB can authenticate users before forwarding requests to stdapi.ai. This is the most common way to add OIDC or Cognito authentication.
 
 -   **Capabilities**: Integrates with any OIDC-compliant identity provider — including **AWS IAM Identity Center** (workforce SSO), **Amazon Cognito** User Pools, or third-party providers such as Okta, Auth0, and Google.
--   **IAM Identity Center**: Expose the Identity Center OIDC application endpoints as the ALB OIDC configuration. This gives employees and partners seamless SSO using their AWS-managed identity, with support for MFA and permission sets defined in your AWS Organization.
+-   **IAM Identity Center**: Expose the Identity Center OIDC application endpoints as the ALB OIDC configuration. This gives employees and partners SSO using their AWS-managed identity, with support for MFA and permission sets defined in your AWS Organization.
 -   **Documentation**: [Authenticate users using an Application Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/listener-authenticate-users.html)
 
 #### via API Gateway
@@ -357,7 +346,7 @@ In certain environments, you may choose to disable application-level authenticat
 - When an upstream proxy handles all security and identity.
 
 #### Configuration
-To disable application-level authentication, do **not** configure any API key environment variable (`API_KEY`, `API_KEY_SSM_PARAMETER`, or `API_KEY_SECRETSMANAGER_SECRET`) and no user pool (`AWS_COGNITO_USER_POOL_ID`).
+To disable application-level authentication, configure none of the four credential sources: no API key environment variable (`API_KEY`, `API_KEY_SSM_PARAMETER`, or `API_KEY_SECRETSMANAGER_SECRET`), no user pool (`AWS_COGNITO_USER_POOL_ID`), and [`TENANT_API_KEYS`](operations_configuration_authentication.md#tenant-api-keys) left at `false` — tenant keys are a credential source on a par with the others, so leaving them enabled keeps every request needing a valid tenant key.
 
 When no authentication method is configured, stdapi.ai will:
 
@@ -410,7 +399,7 @@ To protect against Host header injection and web cache poisoning, stdapi.ai can 
 
 -   **Recommended Approach**: Use **AWS ALB host-based routing rules** to reject invalid Host headers before they reach the application. This is more performant and centrally managed.
 -   **Application Validation**: Use `TRUSTED_HOSTS` to define a list of approved hostnames (supports wildcards like `*.example.com`). Requests with non-matching headers are rejected with an HTTP 400 error.
--   **Probe Impact**: Validation covers `/health` too. The container image's health probe derives its `Host` header from `TRUSTED_HOSTS` and stays green on its own, but a load balancer health check sends the target's IP address as the `Host` and is rejected — see [`TRUSTED_HOSTS`](operations_configuration.md#trusted-hosts) before enabling it behind an ALB or NLB.
+-   **Probe Impact**: Validation covers `/health` too. The container image's health probe derives its `Host` header from `TRUSTED_HOSTS` and stays green on its own, but a load balancer health check sends the target's IP address as the `Host` and is rejected — see [`TRUSTED_HOSTS`](operations_configuration_server.md#trusted-hosts) before enabling it behind an ALB or NLB.
 
 ### :material-web: Browser Security (CORS)
 
@@ -431,8 +420,8 @@ Large or numerous inputs are a denial-of-service vector: a single request can ca
 
 **Application-level controls:**
 
--   **Inline & downloaded input size**: [`MAX_INPUT_FILE_SIZE`](operations_configuration.md#max-input-file-size) caps the bytes of any single file loaded into memory for model input (base64, `data:` URIs, and HTTP(S)/S3 sources read for the model). Requests over the limit are rejected with HTTP 413 before the content is fully decoded or downloaded — a spoofed `Content-Length` cannot bypass it. Disabled by default; set a value aligned with your largest expected input when exposed to untrusted clients.
--   **Concurrent downloads**: [`MAX_CONCURRENT_INPUT_DOWNLOADS`](operations_configuration.md#max-concurrent-input-downloads) bounds how many remote inputs a single request fetches at once, preventing socket/memory exhaustion and SSRF amplification from a request carrying many URLs.
+-   **Inline & downloaded input size**: [`MAX_INPUT_FILE_SIZE`](operations_configuration_server.md#max-input-file-size) caps the bytes of any single file loaded into memory for model input (base64, `data:` URIs, and HTTP(S)/S3 sources read for the model). Requests over the limit are rejected with HTTP 413 before the content is fully decoded or downloaded — a spoofed `Content-Length` cannot bypass it. Disabled by default; set a value aligned with your largest expected input when exposed to untrusted clients.
+-   **Concurrent downloads**: [`MAX_CONCURRENT_INPUT_DOWNLOADS`](operations_configuration_server.md#max-concurrent-input-downloads) bounds how many remote inputs a single request fetches at once, preventing socket/memory exhaustion and SSRF amplification from a request carrying many URLs.
 
 !!! warning "Application limits do not cap the total request body"
     `MAX_INPUT_FILE_SIZE` applies to individual **file** inputs. It does not bound the overall request body: a large prompt sent as plain text (for example a huge `messages` array rather than a file) is still received and parsed in full before any application limit applies. Cap the total body size at the edge (below).
@@ -451,7 +440,7 @@ The overall request body should be capped at the network edge, before it is buff
 **Duration & throughput controls:**
 
 -   **Output length**: bound generated output with the API's `max_tokens` / `max_output_tokens` parameters; large client-supplied defaults can be constrained at your application or gateway layer.
--   **Upstream timeout**: [`AI_RESPONSE_TIMEOUT`](operations_configuration.md#ai-response-timeout) closes stalled model connections so a slow or hung generation does not hold resources indefinitely.
+-   **Upstream timeout**: [`AI_RESPONSE_TIMEOUT`](operations_configuration_server.md#ai-response-timeout) closes stalled model connections so a slow or hung generation does not hold resources indefinitely.
 -   **Rate limiting & concurrency**: use WAF rate limiting (`alb_waf_rate_limit`, see [Security Best Practices](#security-best-practices)) to bound requests per client, complementing the per-request download concurrency cap above.
 
 ---
@@ -501,7 +490,7 @@ Key practices recommended by AWS:
 - **Keep dependencies updated** — monitor AWS security bulletins and keep the Bedrock SDK and libraries up to date.
 
 !!! tip "Use Amazon Bedrock Guardrails"
-    The most effective mitigation available within stdapi.ai is to configure an **Amazon Bedrock Guardrail**. Guardrails include a dedicated prompt attack detection layer and can be applied **per request** (via request headers) or **globally for the entire server** (via environment variables). See the [Bedrock Guardrails configuration section](operations_configuration.md#bedrock-guardrails) for setup instructions, and [Detect prompt attacks with Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-prompt-attack.html) for the upstream AWS documentation.
+    The most effective mitigation available within stdapi.ai is to configure an **Amazon Bedrock Guardrail**. Guardrails include a dedicated prompt attack detection layer and can be applied **per request** (via request headers) or **globally for the entire server** (via environment variables). See the [Bedrock Guardrails configuration section](operations_configuration_bedrock.md#bedrock-guardrails) for setup instructions, and [Detect prompt attacks with Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-prompt-attack.html) for the upstream AWS documentation.
 
 !!! warning "stdapi.ai does not include built-in prompt injection protection"
     stdapi.ai passes user prompts to the model as-is and does not apply any custom filtering or sanitization against prompt injection. Protecting against this risk is the responsibility of your application and infrastructure.
@@ -528,7 +517,7 @@ Key practices recommended by AWS:
 
 - :material-check: **Use SSM Parameter Store or Secrets Manager** — always use encrypted secret storage for production API keys; never pass keys as plain environment variables.
 - :material-check: **Rotate API keys** — Secrets Manager supports [automated secret rotation](https://docs.aws.amazon.com/secretsmanager/latest/userguide/rotating-secrets.html) via Lambda; note that stdapi.ai reads the key once at startup, so a container restart is required after rotation.
-- :material-check: **Share the Realtime signing key** — the [ephemeral client secrets](api_openai_realtime.md#ephemeral-client-secrets) minted for browser clients are signed, not stored, so every instance must sign with the same key. It is derived from the deployment's API key by default; a deployment running with no API key at all falls back to a per-process random key and must set [`REALTIME_CLIENT_SECRET_KEY`](operations_configuration.md#realtime-client-secret-key) instead. Treat it as a secret and store it the same way: anyone holding it can mint a client secret this deployment accepts.
+- :material-check: **Share the Realtime signing key** — the [ephemeral client secrets](api_openai_realtime.md#ephemeral-client-secrets) minted for browser clients are signed, not stored, so every instance must sign with the same key. It is derived from the deployment's API key by default; a deployment running with no API key at all falls back to a per-process random key and must set [`REALTIME_CLIENT_SECRET_KEY`](operations_configuration_bedrock.md#realtime-client-secret-key) instead. Treat it as a secret and store it the same way: anyone holding it can mint a client secret this deployment accepts.
 
 !!! tip "Eliminate key rotation with AWS native auth"
     When using API key authentication, rotation requires updating SSM/Secrets Manager and performing a rolling ECS task replacement. This is predictable but adds a deployment step.
@@ -537,7 +526,7 @@ Key practices recommended by AWS:
 
 **IAM & Access Control:**
 
-- :material-check: **Apply least-privilege IAM permissions** — ensure the ECS Task Role has only the [required permissions](operations_configuration.md#iam-permissions) needed for operation.
+- :material-check: **Apply least-privilege IAM permissions** — ensure the ECS Task Role has only the [required permissions](operations_iam_permissions.md) needed for operation.
 
 !!! info "Terraform Module"
     The Terraform module enforces security defaults out of the box: **least-privilege IAM** roles scoped to the minimum permissions required by each ECS task, **KMS-encrypted** SSM parameters, log groups, and S3 buckets, and **network isolation** with ECS tasks in private subnets and Security Group rules that allow only ALB-to-service traffic.

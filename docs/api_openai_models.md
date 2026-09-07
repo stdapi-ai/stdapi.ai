@@ -8,53 +8,39 @@ keywords: Amazon Bedrock models, available AI models, list models API, Claude mo
 
 Discover and list available Amazon Bedrock models across all configured regions through an OpenAI-compatible interface.
 
-## Why Choose the Models API?
+## At a glance
 
-<div class="grid cards" markdown>
+- :material-view-grid: **Two endpoints**, `GET /v1/models` and `GET /v1/models/{model_id}`, exposed to AI agents as the `openai_model_list` and `openai_model_get` MCP tools.
+- :material-map-marker-multiple: **One deduplicated list across every configured AWS region.** Per-region availability is on the [Search Models API](api_search_models.md); the browsable catalogue is on the [Models](models.md) page.
+- :material-aws: **Bedrock foundation models plus the AWS AI services** the gateway fronts, such as Amazon Polly and Amazon Transcribe, in the same list.
+- :material-sync: **Discovery is dynamic.** A model that becomes available in your Amazon Bedrock account appears in the listing without a configuration change or a redeploy.
+- :material-swap-horizontal: **Differs from OpenAI:** `owned_by` names the model provider (`Amazon`, `Anthropic`, `Mistral AI`), and `created` is the model's release date as published by Amazon Bedrock.
 
-- :material-view-grid: __Complete Catalog__
-  <br>Browse all available models across Amazon Bedrock regions. Chat, embeddings, images, and specialized AI services. See the [Models](models.md) page for a browsable table.
+```bash
+curl -X GET "$BASE/v1/models" \
+  -H "Authorization: Bearer $OPENAI_API_KEY"
+```
 
-- :material-sync: __Always Up-to-Date__
-  <br>Dynamic model discovery automatically shows new models as they become available in Amazon Bedrock.
-
-- :material-map-marker-multiple: __Multi-Region Aggregation__
-  <br>Combines models from all configured AWS regions in one deduplicated list; use the [Search Models API](api_search_models.md) to see per-region availability.
-
-- :material-aws: __Comprehensive Coverage__
-  <br>Includes Bedrock foundation models plus AWS AI services (Polly, Transcribe) in one unified API.
-
-</div>
-
-## Available Endpoints
+## Endpoints { #available-endpoints }
 
 | Endpoint | Method | What It Does | Powered By | MCP Tool |
 |----------|--------|--------------|------------|----------|
 | `/v1/models` | `GET` | List all available models | Amazon Bedrock + AWS AI Services | `openai_model_list` |
 | `/v1/models/{model_id}` | `GET` | Get details for a specific model | Amazon Bedrock + AWS AI Services | `openai_model_get` |
 
-## OpenAI-Compatible with Amazon Bedrock Power
+## Limits and behaviour to know
 
-**Features:**
+`created` is a Unix timestamp taken from the Amazon Bedrock model lifecycle metadata (`startOfLifeTime`), the date the model was released. Amazon Bedrock does not publish that date for every model; where it is missing the field is `0` (the Unix epoch, 1 January 1970) rather than absent, so a client that sorts on `created` groups those models together at the start.
 
-- **Multi-region aggregation**: Combines models from all configured Amazon Bedrock regions
-- **Comprehensive catalog**: Includes Bedrock foundation models plus specialized models (Transcribe, Polly, etc.)
+Modalities and context windows vary by model and this listing does not carry them: it returns the OpenAI `Model` shape (`id`, `object`, `created`, `owned_by`) and nothing more. Call [`search_models`](api_search_models.md) to filter by modality, route, MCP tool, region or legacy status, or consult the AWS documentation for a specific model.
 
-### What's Different from OpenAI?
+## Try it { #try-it-now }
 
-- **Provider ownership**: `owned_by` field shows the model provider (e.g., `Amazon`, `Anthropic`, `Mistral AI`)
-- **Model-specific capabilities**: Modalities and context windows vary by model—consult AWS documentation for specifics
-
-!!! info "Created Date (`created`)"
-    The `created` field is a Unix timestamp (integer) representing the time at which the model was released. This value is sourced from the Amazon Bedrock model lifecycle metadata (`startOfLifeTime`). If the release date is not available from Amazon Bedrock, it defaults to `0` (Unix epoch, January 1, 1970).
-
-## Try It Now
-
-**List all available models:**
+**List the model identifiers, one per line:**
 
 ```bash
-curl -X GET "$BASE/v1/models" \
-  -H "Authorization: Bearer $OPENAI_API_KEY"
+curl -s -X GET "$BASE/v1/models" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" | jq -r '.data[].id'
 ```
 
 **Get details for a specific model:**
@@ -75,6 +61,6 @@ curl -X GET "$BASE/v1/models/amazon.nova-micro-v1:0" \
 }
 ```
 
----
+## Next steps
 
-Browse foundation models for chat, embeddings, images, audio, and more.
+Next: [Browse the catalogue](models.md) · [Search Models API](api_search_models.md) · [Chat Completions API](api_openai_chat_completions.md) · [Responses API](api_openai_responses.md)

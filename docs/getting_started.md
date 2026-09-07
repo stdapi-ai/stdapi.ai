@@ -6,30 +6,7 @@ keywords: stdapi.ai getting started, try stdapi.ai, OpenAI gateway AWS, Anthropi
 
 # :material-rocket-launch: Get Started
 
-Pick the path that fits where you are right now. Both use the same OpenAI, Anthropic, and Cohere-compatible API, and both are adopted the same way: point your client at the deployment's base URL, give it that deployment's API key, and change the model name only where it differs. Usually it does not — each model is published under the name its provider uses, so a client already asking for `claude-opus-5` or `gpt-5.6-sol` changes nothing but the base URL. Where a name *does* differ, [`MODEL_ALIASES`](operations_configuration.md#model-aliases) maps the name your application already sends onto a model the deployment serves. What the base URL buys is the catalogue behind it: it spans every provider your regions offer, not one vendor's list. [`GET /search_models`](api_search_models.md) lists it. The [Models](models.md) page shows the same catalogue now, before you deploy.
-
-Looking for reference documentation rather than a quickstart? See [Features](features.md) for what the gateway does, and the [API Overview](api_overview.md) for endpoints, parameters, and SDK usage.
-
-!!! tip trial "Start here: 14-day free trial on AWS"
-    Deploy the production-ready stack today — the stdapi.ai license is free for 14 days. AWS charges for what it runs (ALB, Fargate, KMS, NAT) and for Bedrock usage from the first minute. After the trial, the license is $0.10/container-hour — cancel anytime.
-
-## :material-clipboard-check-outline: Before You Start
-
-Both paths need:
-
-- **An AWS account** with access to [Amazon Bedrock](https://aws.amazon.com/bedrock/). [Create one free](https://aws.amazon.com/free/) if you don't have one.
-- **AWS credentials configured locally** — `aws configure` or `aws sso login` ([AWS CLI setup guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-quickstart.html)).
-
-The AWS Terraform path additionally needs:
-
-- **Administrator-level AWS permissions** — the module provisions IAM roles and policies, KMS keys, ECS/Fargate, ALB, and networking. A restricted developer profile will fail.
-- **A sandbox AWS account is strongly recommended** for evaluation. Replicate into your target account once you've validated the stack.
-- [Terraform](https://www.terraform.io/downloads) or [OpenTofu](https://opentofu.org/docs/intro/install/) >= 1.5.
-- An **[AWS Marketplace subscription](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)** (14-day free trial of the license).
-
-The Docker path additionally needs [Docker](https://docs.docker.com/get-started/get-docker/) or [Podman](https://podman.io/docs/installation).
-
----
+Two ways to get an OpenAI-, Anthropic-, Cohere- and Ollama-compatible endpoint in front of Amazon Bedrock. Both give you the same API; pick by where you are today.
 
 ## :material-directions-fork: Pick Your Path
 
@@ -64,6 +41,28 @@ The Docker path additionally needs [Docker](https://docs.docker.com/get-started/
 
 </div>
 
+Looking for reference documentation rather than a quickstart? See [Features](features.md) for what the gateway does, and the [API Overview](api_overview.md) for endpoints, parameters, and SDK usage.
+
+<span id="before-you-start"></span>
+
+??? info "Before you start"
+    Both paths need:
+
+    - **An AWS account** with access to [Amazon Bedrock](https://aws.amazon.com/bedrock/). [Create one free](https://aws.amazon.com/free/) if you don't have one.
+    - **AWS credentials configured locally** — `aws configure` or `aws sso login` ([AWS CLI setup guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-quickstart.html)).
+
+    The AWS Terraform path additionally needs:
+
+    - **Administrator-level AWS permissions** — the module provisions IAM roles and policies, KMS keys, ECS/Fargate, ALB, and networking. A restricted developer profile will fail.
+    - **A sandbox AWS account is strongly recommended** for evaluation. Replicate into your target account once you've validated the stack.
+    - [Terraform](https://www.terraform.io/downloads) or [OpenTofu](https://opentofu.org/docs/intro/install/) >= 1.9.
+    - An **[AWS Marketplace subscription](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)** (14-day free trial of the license).
+
+    The Docker path additionally needs [Docker](https://docs.docker.com/get-started/get-docker/) or [Podman](https://podman.io/docs/installation).
+
+!!! tip trial "14-day free trial on AWS"
+    Deploy the production-ready stack today — the stdapi.ai license is free for 14 days. AWS charges for what it runs (ALB, Fargate, KMS, NAT) and for Bedrock usage from the first minute. After the trial, the license is $0.10/container-hour — cancel anytime.
+
 ---
 
 ## :material-help-circle-outline: Not Sure Which to Pick?
@@ -76,6 +75,14 @@ The Docker path additionally needs [Docker](https://docs.docker.com/get-started/
 | Contributing to an open-source project | **Docker (local)** | AGPL-3.0 community image is free to use and redistribute. |
 
 You can start local and migrate to AWS later — same API, same SDKs, same client-side changes. Point the base URL at your AWS endpoint, add that deployment's API key, and check your model names against what its regions serve.
+
+---
+
+## :material-connection: Pointing a Client at It
+
+Both paths are adopted the same way: point your client at the deployment's base URL, give it that deployment's API key, and change the model name only where it differs. Usually it does not — each model is published under the name its provider uses, so a client already asking for `claude-opus-5` or `gpt-5.6-sol` changes nothing but the base URL. Where a name *does* differ, [`MODEL_ALIASES`](operations_configuration_models.md#model-aliases) maps the name your application already sends onto a model the deployment serves.
+
+What the base URL buys is the catalogue behind it: it spans every provider your regions offer, not one vendor's list. [`GET /search_models`](api_search_models.md) lists it, and the [Models](models.md) page shows the same catalogue now, before you deploy.
 
 ---
 

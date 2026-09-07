@@ -6,42 +6,25 @@ keywords: Ollama chat API, Ollama compatible API, Amazon Bedrock chat, Ollama /a
 
 # Chat API (Ollama Compatible)
 
-Generate conversational AI responses with Amazon Bedrock models through the Ollama `/api/chat` interface.
+Generate conversational AI responses with Amazon Bedrock models through the Ollama `/api/chat` interface. Served under `/ollama` by default; the examples below use `$BASE`, which includes that prefix.
 
-!!! warning "Route Prefix & Base URL"
-    By default, all Ollama-compatible routes are prefixed with `/ollama`. This means the Chat API is available at `/ollama/api/chat` instead of `/api/chat`. You can customize this prefix using the `OLLAMA_ROUTES_PREFIX` configuration variable documented in [Operations Configuration](operations_configuration.md#ollama-routes-prefix).
+## At a glance
 
-    The `curl` examples below use a `$BASE` variable that **must include this prefix** — set it to your scheme and host followed by `OLLAMA_ROUTES_PREFIX`:
+- :material-swap-horizontal: **Drop-in Ollama compatibility** — Follows the Ollama `/api/chat` request and response shape, including its newline-delimited JSON streaming transport, so an existing Ollama client works by changing the base URL.
+- :material-brain: **Tool calling and thinking** — Function tools and thinking (`think`) work the same way they do against a local Ollama server.
+- :material-code-json: **Structured output** — `format` accepts `"json"` or a full JSON Schema, and the answer is constrained to it.
+- :material-cloud-lock: **Private AWS backend** — Served entirely by Amazon Bedrock models in your own AWS account — no traffic to third-party endpoints.
+- :material-image-multiple: **Image input beyond base64** — `messages[].images` also takes a URL, a data URI or an `s3://` URI on models that read images.
+- :material-swap-horizontal: **Differs from the Ollama API:** models are never resident, so `keep_alive` holds nothing loaded and `load_duration` is never reported; `logprobs` is refused with `400`; runner options such as `num_ctx` are accepted and ignored — see [Limits and behaviour to know](#limitations).
+
+!!! info "Base URL and route prefix"
+    By default, all Ollama-compatible routes are prefixed with `/ollama`. This means the Chat API is available at `/ollama/api/chat` instead of `/api/chat`. You can customize this prefix using the `OLLAMA_ROUTES_PREFIX` configuration variable documented in [HTTP Server and MCP](operations_configuration_server.md#ollama-routes-prefix).
+
+    The `curl` examples on this page use a `$BASE` variable that **must include this prefix** — set it to your scheme and host followed by `OLLAMA_ROUTES_PREFIX`:
 
     ```bash
     export BASE="https://your-host/ollama"  # <scheme>://<host> + OLLAMA_ROUTES_PREFIX
     ```
-
-## Why Choose the Ollama Chat API?
-
-<div class="grid cards" markdown>
-
-- :material-swap-horizontal: __Drop-in Ollama Compatibility__
-  <br>Follows the Ollama `/api/chat` request and response shape, including its newline-delimited JSON streaming transport, so an existing Ollama client works by changing the base URL.
-
-- :material-brain: __Tool Calling and Thinking__
-  <br>Function tools and thinking (`think`) work the same way they do against a local Ollama server.
-
-- :material-code-json: __Structured Output__
-  <br>`format` accepts `"json"` or a full JSON Schema, and the answer is constrained to it.
-
-- :material-cloud-lock: __Private AWS Backend__
-  <br>Served entirely by Amazon Bedrock models in your own AWS account — no traffic to third-party endpoints.
-
-</div>
-
-## Available Endpoints
-
-| Endpoint    | Method | What It Does                                    | Powered By                | MCP Tool      |
-|-------------|--------|--------------------------------------------------|----------------------------|---------------|
-| `/api/chat` | `POST` | Conversational AI, following the Ollama Chat API | Amazon Bedrock chat models | `ollama_chat` |
-
-**Example request:**
 
 ```bash
 curl -X POST "$BASE/api/chat" \
@@ -54,20 +37,11 @@ curl -X POST "$BASE/api/chat" \
   }'
 ```
 
-**Example response:**
+## Endpoints { #available-endpoints }
 
-```json
-{
-  "model": "amazon.nova-micro-v1:0",
-  "created_at": "2026-08-27T12:00:00.000000+00:00",
-  "message": {"role": "assistant", "content": "Hello, world!"},
-  "done": true,
-  "done_reason": "stop",
-  "total_duration": 812345678,
-  "prompt_eval_count": 6,
-  "eval_count": 5
-}
-```
+| Endpoint    | Method | What It Does                                    | Powered By                | MCP Tool      |
+|-------------|--------|--------------------------------------------------|----------------------------|---------------|
+| `/api/chat` | `POST` | Conversational AI, following the Ollama Chat API | Amazon Bedrock chat models | `ollama_chat` |
 
 ## Model Names
 
@@ -75,7 +49,7 @@ Send the model names [`GET /api/tags`](api_ollama_models.md#get-apitags) publish
 
 **Find compatible models:** Call [`/search_models`](api_search_models.md) with `route=ollama_chat` to discover model IDs that support this route, or call [`GET /api/tags`](api_ollama_models.md#get-apitags) for the Ollama-shaped listing.
 
-## Feature Compatibility
+## Feature compatibility { #feature-compatibility }
 
 <div class="feature-table" markdown>
 
@@ -95,9 +69,9 @@ Send the model names [`GET /api/tags`](api_ollama_models.md#get-apitags) publish
 | `logprobs` / `top_logprobs`      | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with `400`                                                |
 | **Output**                       |                                          |                                                                    |
 | `message.content`                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Full support                                                       |
-| `message.thinking`               |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Follows [`CHAT_COMPLETIONS_REASONING_FIELD`](operations_configuration.md#chat-completions-reasoning-field); omitted when the operator sets that to `none` |
+| `message.thinking`               |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Follows [`CHAT_COMPLETIONS_REASONING_FIELD`](operations_configuration_observability.md#chat-completions-reasoning-field); omitted when the operator sets that to `none` |
 | `message.tool_calls`             |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Streamed whole in one event, never as partial argument fragments — see [Tool Calling](#tool-calling) |
-| `done_reason`                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `stop` or `length`, the only two values Ollama itself emits         |
+| `done_reason`                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `stop` or `length` on a generated answer; `load` or `unload` on a message-less request — see [Loading and Unloading](#loading-and-unloading) |
 | **Usage tracking**               |                                          |                                                                    |
 | `prompt_eval_count`, `eval_count`|   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Real token counts                                                   |
 | `total_duration`                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Real wall-clock time                                                |
@@ -207,7 +181,7 @@ curl -X POST "$BASE/api/chat" \
 }
 ```
 
-`message.thinking` follows the [`CHAT_COMPLETIONS_REASONING_FIELD`](operations_configuration.md#chat-completions-reasoning-field) server setting: when an operator sets it to `none`, no thinking text is emitted on this API either, whatever `think` was sent.
+`message.thinking` follows the [`CHAT_COMPLETIONS_REASONING_FIELD`](operations_configuration_observability.md#chat-completions-reasoning-field) server setting: when an operator sets it to `none`, no thinking text is emitted on this API either, whatever `think` was sent.
 
 ## Images
 
@@ -220,7 +194,7 @@ A request with an **empty `messages` array** is upstream's way of making a model
 ```json
 {
   "model": "amazon.nova-micro-v1:0",
-  "created_at": "2026-01-01T00:00:00Z",
+  "created_at": "2026-01-01T00:00:00+00:00",
   "message": { "role": "assistant", "content": "" },
   "done": true,
   "done_reason": "load"
@@ -229,10 +203,51 @@ A request with an **empty `messages` array** is upstream's way of making a model
 
 `done_reason` is `unload` when `keep_alive` is `0`, `load` otherwise. The answer is a single JSON object whatever `stream` says, as upstream's is.
 
-## Limitations
+## Limits and behaviour to know { #limitations }
 
 - `logprobs` and `top_logprobs` are rejected with `400` — log probabilities are not available.
 - `keep_alive` does not keep anything loaded: models are never resident. It is read only to tell a message-less request's `done_reason` apart, `load` from `unload`.
 - Runner options inside `options` (`num_ctx`, `num_gpu`, `num_thread`, `num_batch`, `main_gpu`, `use_mmap`, `min_p`, and any other key a local runner would use) are accepted and ignored.
 - `load_duration` is never reported: there is no model-loading phase to measure, and a number there would be invented.
 - `prompt_eval_duration` and `eval_duration` are reported only when streaming. All duration and count fields are optional in the Ollama API, so a client computing tokens-per-second from a non-streamed response has no duration to divide by.
+- A model name learned from ollama.com — `llama3.2:3b`, for one — names nothing this server serves and answers `404`; send a name [`GET /api/tags`](api_ollama_models.md#get-apitags) publishes.
+
+## Request headers
+
+| Header          | Purpose         | Notes                                           |
+|-----------------|-----------------|-------------------------------------------------|
+| `Authorization` | Gateway API key | `Bearer <key>`, required like every other route |
+
+A local Ollama server needs no key; this one does, on every route.
+
+## Try it
+
+```bash
+curl -X POST "$BASE/api/chat" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-micro-v1:0",
+    "messages": [{"role": "user", "content": "Say hello world"}],
+    "stream": false
+  }'
+```
+
+**Example response:**
+
+```json
+{
+  "model": "amazon.nova-micro-v1:0",
+  "created_at": "2026-08-27T12:00:00.000000+00:00",
+  "message": {"role": "assistant", "content": "Hello, world!"},
+  "done": true,
+  "done_reason": "stop",
+  "total_duration": 812345678,
+  "prompt_eval_count": 6,
+  "eval_count": 5
+}
+```
+
+## Next steps
+
+Next: [Generate API](api_ollama_generate.md) · [Embed API](api_ollama_embed.md) · [Models API](api_ollama_models.md) · [Search Models API](api_search_models.md)

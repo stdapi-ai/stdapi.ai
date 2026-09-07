@@ -8,25 +8,26 @@ keywords: chat completions API, OpenAI chat API, Amazon Bedrock chat, streaming 
 
 Generate conversational AI responses with Amazon Bedrock foundation models—including Claude, Nova, Llama, and more—through an OpenAI-compatible interface.
 
-## Why Choose the Chat Completions API?
+## At a glance
 
-<div class="grid cards" markdown>
+- :material-brain: **Every Amazon Bedrock chat model behind one schema** — Anthropic Claude, Amazon Nova, Meta Llama and the rest of the Converse catalogue, plus the [Bedrock Mantle](#bedrock-mantle) models (OpenAI GPT-5.x, xAI Grok, Google Gemma 4) where it is enabled.
+- :material-image-multiple: **Multi-modal messages.** Images, video, documents and audio alongside text, referenced by HTTPS URL, data URI, `s3://` URI, or a `file_id` from the [Files API](api_openai_files.md).
+- :material-lightbulb: **Reasoning in the dialect your client speaks.** `reasoning_effort` (OpenAI), `enable_thinking` and `thinking_budget` (Qwen), `thinking` (Moonshot) and the OpenRouter `reasoning` object all reach the same control.
+- :material-content-save: **Prompt caching and stored completions.** Cache breakpoints map to Amazon Bedrock `cachePoint`s, and `store: true` keeps the completion in Amazon Bedrock session storage in your own AWS account.
+- :material-shield-check: **Content safety per request.** An Amazon Bedrock guardrail applies through a request header or the `moderation` parameter, on requests served by the Converse API.
+- :material-swap-horizontal: **Differs from OpenAI:** `logprobs` is rejected with `400` while `top_logprobs` keeps working, `n > 1` is not available with streaming, and `web_search_options` is rejected — web search is a tool of the [Responses API](api_openai_responses.md#openai-gpt-web-search).
 
-- :material-brain: __Multiple Models__
-  <br>Access models from Anthropic, Amazon, Meta, and more through one API. Choose the best model for your task without vendor lock-in.
+```bash
+curl -X POST "$BASE/v1/chat/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-micro-v1:0",
+    "messages": [{"role": "user", "content": "Say hello world"}]
+  }'
+```
 
-- :material-image-multiple: __Multi-Modal__
-  <br>Process text, images, videos, and documents together. Support for URLs, data URIs, and direct S3 references.
-
-- :material-shield-check: __Built-In Safety__
-  <br>Amazon Bedrock Guardrails provide content filtering and safety policies.
-
-- :material-aws: __AWS Scale & Reliability__
-  <br>Run on AWS infrastructure with service tiers for optimized latency. Multi-region model access for availability and performance.
-
-</div>
-
-## Available Endpoints
+## Endpoints { #available-endpoints }
 
 | Endpoint               | Method | What It Does                               | Powered By               | MCP Tool                  |
 |------------------------|--------|--------------------------------------------|--------------------------|---------------------------|
@@ -37,7 +38,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | `/v1/chat/completions/{completion_id}` | `DELETE` | Delete a stored chat completion    | Amazon Bedrock Sessions     | `openai_chat_completion_delete` |
 | `/v1/chat/completions/{completion_id}/messages` | `GET` | List the input messages of a stored chat completion | Amazon Bedrock Sessions | `openai_chat_completion_messages` |
 
-## Feature Compatibility
+## Feature compatibility
 
 Two outcomes are possible for a parameter no model behind this API can honor, and the Notes column below says which one applies. A parameter that only tunes an answer you can still use — a quality or latency hint, a telemetry opt-in — is **accepted and ignored**, so a client setting it on every request keeps working. A parameter that *is* the request — an output format, a modality, or a safety restriction that would silently disappear — is **rejected with a `400`** naming it, because the alternative is returning something you did not ask for.
 
@@ -62,6 +63,7 @@ Two outcomes are possible for a parameter no model behind this API can honor, an
 | Disable parallel tool calls              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | `parallel_tool_calls: false` is accepted for every model and honored by models able to constrain tool use; the response reports the tool calls actually made |
 | Server tools                             | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Provider system tools and Claude server tools                   |
 | `tool_choice`                             |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `auto`, `none`, `required`, and named-function choice are supported; `tool_choice: {"type": "allowed_tools"}` is rejected with `400` — supported on the [Responses API](api_openai_responses.md) |
+| `custom` tools (free-form)               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with `400`, in `tools`, in a named `tool_choice`, and inside `allowed_tools`; declare the tool as a `function` tool instead — accepted and dropped on the [Responses API](api_openai_responses.md) |
 | **Generation Control**                   |                                          |                                                                 |
 | `max_tokens` / `max_completion_tokens`   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output length limits                                            |
 | `temperature`                            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Mapped to Bedrock inference params                              |
@@ -93,7 +95,7 @@ Two outcomes are possible for a parameter no model behind this API can honor, an
 | **Streaming & Output**                   |                                          |                                                                 |
 | Text                                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Text messages                                                   |
 | Streaming (`stream: true`)               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Server-Sent Events (SSE)                                        |
-| Streaming obfuscation                    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Unsupported                                                     |
+| Streaming obfuscation                    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | `stream_options.include_obfuscation` is accepted and ignored — the stream is never padded |
 | Audio                                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Model output or synthesis from text output (synthesis is Converse-only — not performed for Mantle-served requests); non-streaming only — `stream: true` with audio output is rejected with `400` |
 | `response_format` (JSON mode)            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | `json_object` accepted for all models, without a syntax guarantee on every model; `json_schema` structured output is model-specific |
 | `reasoning_content` (From Deepseek API)  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Text reasoning messages. The single response field; on an assistant message replayed in `messages`, `reasoning` is accepted as an alias for it, and it is [dropped on models that only accept their own thinking](#replaying-reasoning-in-a-multi-turn-conversation) |
@@ -104,7 +106,7 @@ Two outcomes are possible for a parameter no model behind this API can honor, an
 | Reasoning tokens                         |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Converse-served models do not split them out: `completion_tokens_details` is not populated and reasoning tokens are billed inside `completion_tokens`. Mantle-native models report whatever split their upstream API returns |
 | **Other**                                |                                          |                                                                 |
 | Service tiers                            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Mapped to Bedrock service tiers and latency options             |
-| `metadata`                               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Echoed in the response, updatable on stored completions, and usable to filter the Bedrock invocation log. Also forwarded to Bedrock `requestMetadata`, whose limits apply: max 16 pairs, values ≤256 characters, restricted character set |
+| `metadata`                               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Echoed in the response, updatable on stored completions, and usable to filter the Bedrock invocation log. Also forwarded to Bedrock `requestMetadata`, whose limits apply: max 16 pairs, values ≤256 characters, restricted character set. The gateway adds two `stdapi-ai.*` pairs of its own (three when an end user is identified), so send at most 14 (13) pairs |
 | `store`                                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Persists the completion in Amazon Bedrock session storage (non-streaming) |
 | List / update stored completions         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | List with `model`/`metadata` filters; metadata update            |
 | `safety_identifier` / `user`             |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Does not affect generation; identifies the end user in the request log and in [per-user cost attribution](operations_cost_management.md#per-user-attribution) |
@@ -125,7 +127,7 @@ Two outcomes are possible for a parameter no model behind this API can honor, an
 
 </div>
 
-## Model Support
+## Models { #model-support }
 
 All models supported by the Amazon Bedrock Converse and Converse Stream API are supported, plus every model served by [Bedrock Mantle](features.md#bedrock-mantle-models) when enabled — including OpenAI GPT-5.x, xAI Grok, and Google Gemma 4. Requests to Mantle models are passed through natively or converted automatically depending on the model's upstream API support — see [Bedrock Mantle](#bedrock-mantle) below.
 
@@ -136,11 +138,11 @@ Mantle-served requests follow one of three paths, each with its own parameter fi
 | Serving path                | Models                                                                    | Parameter behavior |
 |-----------------------------|---------------------------------------------------------------------------|--------------------|
 | **Passthrough**             | Chat-native models (xAI Grok, OpenAI gpt-oss, Google Gemma 4, other open-weight models) | All schema-accepted parameters are forwarded; the upstream API may reject unsupported ones per model with a clean `400` (the upstream error code and parameter are propagated) |
-| **Converted to Responses**  | OpenAI GPT frontier models; unknown models                                | Dropped silently: `stop`, `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `top_logprobs`, `audio`, `modalities`, `input_audio` content parts, legacy `functions`/`function_call`. Preserved: `metadata`, `safety_identifier`. `max_tokens`/`max_completion_tokens` below 16 is raised to 16, the Responses API's minimum (a budget of 1, sent as a cheap model probe by some clients, would otherwise be rejected with `400`); where the classic endpoint also serves the model (the GPT-5.6 family, by default), clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models) moves it there, where a smaller budget is honored as sent. `n > 1` rejected with `400`. `store` is handled by stdapi.ai only, never forwarded upstream |
+| **Converted to Responses**  | OpenAI GPT frontier models; unknown models                                | Dropped silently: `stop`, `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `top_logprobs`, `audio`, `modalities`, `input_audio` content parts, legacy `functions`/`function_call`. Preserved: `metadata`, `safety_identifier`. `max_tokens`/`max_completion_tokens` below 16 is raised to 16, the Responses API's minimum (a budget of 1, sent as a cheap model probe by some clients, would otherwise be rejected with `400`); where the classic endpoint also serves the model (the GPT-5.6 family, by default), clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) moves it there, where a smaller budget is honored as sent. `n > 1` rejected with `400`. `store` is handled by stdapi.ai only, never forwarded upstream |
 | **Converted to Messages**   | Mantle-only Anthropic Claude models                                       | Same drops and `n > 1` rejection as the Responses conversion, except `stop` which is forwarded as `stop_sequences`; plus: `temperature` clamped to ≤ 1.0; `max_tokens` defaults to `4096` when unset; `reasoning_effort` mapped to Anthropic effort levels; `response_format` `json_object`/`json_schema` not available; `metadata`, `prompt_cache_key`, and `prompt_cache_retention` dropped; `service_tier` forwarded only when `auto` |
 
 !!! note "Project attribution (`OpenAI-Project`)"
-    Mantle requests can be attributed to a Bedrock Project for cost tracking and observability with the `OpenAI-Project: <project-id>` header (a bare project ID such as `proj_abc123`, not an ARN). It is honored per-request only when [`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](operations_configuration.md#bedrock-allow-mantle-project-override) is `true`; otherwise the server default ([`AWS_BEDROCK_MANTLE_PROJECT`](operations_configuration.md#bedrock-mantle-project)) applies. This applies **only** to models served by the Bedrock Mantle endpoint — classic `bedrock-runtime` models ignore the header.
+    Mantle requests can be attributed to a Bedrock Project for cost tracking and observability with the `OpenAI-Project: <project-id>` header (a bare project ID such as `proj_abc123`, not an ARN). It is honored per-request only when [`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](operations_configuration_aws.md#bedrock-allow-mantle-project-override) is `true`; otherwise the server default ([`AWS_BEDROCK_MANTLE_PROJECT`](operations_configuration_aws.md#bedrock-mantle-project)) applies. This applies **only** to models served by the Bedrock Mantle endpoint — classic `bedrock-runtime` models ignore the header.
 
 ### Model Name Aliases
 
@@ -150,7 +152,7 @@ This API supports dynamic model name aliases matching official provider APIs. Mo
 
 - `gpt-oss-20b` → `openai.gpt-oss-20b-1:0`
 
-## Advanced Features
+## Working with the Chat Completions API { #advanced-features }
 
 ### Prompt Caching
 
@@ -312,7 +314,7 @@ In this example, 1,200 tokens were retrieved from cache and the remaining 300 to
 System prompts define the AI assistant's behavior, personality, and instructions (e.g., "You are a helpful assistant"). Most models support system prompts.
 
 !!! warning "Unsupported Models"
-    Some models don't support system prompts (`mistral.mistral-7b-instruct-v0:2`, `mistral.mixtral-8x7b-instruct-v0:1`). By default, **stdapi.ai silently drops system messages** for these models, allowing cross-model compatibility. To receive errors instead, configure [`DROP_UNSUPPORTED_SYSTEM_PROMPT=false`](operations_configuration.md#drop-unsupported-system-prompt).
+    Some models don't support system prompts (`mistral.mistral-7b-instruct-v0:2`, `mistral.mixtral-8x7b-instruct-v0:1`). By default, **stdapi.ai silently drops system messages** for these models, allowing cross-model compatibility. To receive errors instead, configure [`DROP_UNSUPPORTED_SYSTEM_PROMPT=false`](operations_configuration_models.md#drop-unsupported-system-prompt).
 
 ### ![Amazon S3](styles/logo_amazon_s3.svg){ style="height: 1.2em; vertical-align: text-bottom;" } S3 Image Support
 
@@ -457,7 +459,7 @@ When using web grounding, the API response includes `annotations` with URL citat
 - **No streaming citations**: URL citation `annotations` are not emitted in streaming responses.
 
 !!! warning "Region Compatibility"
-    Web Grounding is only available in US Amazon Bedrock regions. To ensure all requests are routed to a US region, restrict the model using [`AWS_BEDROCK_MODEL_REGION_RESTRICT`](operations_configuration.md#bedrock-model-region-restrict):
+    Web Grounding is only available in US Amazon Bedrock regions. To ensure all requests are routed to a US region, restrict the model using [`AWS_BEDROCK_MODEL_REGION_RESTRICT`](operations_configuration_aws.md#bedrock-model-region-restrict):
 
     ```bash
     export AWS_BEDROCK_MODEL_REGION_RESTRICT='{"amazon.nova-": ["us-east-1"]}'
@@ -549,7 +551,7 @@ Use the `reasoning_effort` parameter with predefined effort levels. This format 
 
 **Available Levels:**
 
-- `none` - Disable reasoning
+- `none` - Disable reasoning (accepted but not honored on Claude Fable and Mythos, which always reason: the model's default adaptive mode is used, the response still carries reasoning content and its output tokens are still billed)
 - `minimal` - Quick responses with minimal reasoning
 - `low` - Light reasoning for straightforward tasks
 - `medium` - Balanced reasoning for most use cases
@@ -559,7 +561,7 @@ Use the `reasoning_effort` parameter with predefined effort levels. This format 
 
 **What You Get:**
 
-- **`reasoning_content` field** (DeepSeek API-compatible): models include their thinking process in the response. The field name is an operator setting ([`CHAT_COMPLETIONS_REASONING_FIELD`](operations_configuration.md#chat-completions-reasoning-field)): `reasoning_content` by default, `reasoning` for clients written against OpenRouter or vLLM, or `none` to keep responses strictly OpenAI-shaped.
+- **`reasoning_content` field** (DeepSeek API-compatible): models include their thinking process in the response. The field name is an operator setting ([`CHAT_COMPLETIONS_REASONING_FIELD`](operations_configuration_observability.md#chat-completions-reasoning-field)): `reasoning_content` by default, `reasoning` for clients written against OpenRouter or vLLM, or `none` to keep responses strictly OpenAI-shaped.
 - **Streaming support**: `choices[].delta.reasoning_content` chunks in real time
 
 **Example:**
@@ -768,9 +770,9 @@ curl -X POST "$BASE/v1/chat/completions" \
     See [Using Claude on Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html) for more details on Claude-specific parameters.
 
 
-## Stored Chat Completions
+### Stored Chat Completions
 
-Set `store: true` to persist a chat completion in [Amazon Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html) — same mechanism, region, and [KMS setting](operations_configuration.md#aws-bedrock-session-encryption-key-arn) as [stored responses](api_openai_responses.md#stored-responses). The returned `id` then works with the full stored-completion surface:
+Set `store: true` to persist a chat completion in [Amazon Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html) — same mechanism, region, and [KMS setting](operations_configuration_bedrock.md#aws-bedrock-session-encryption-key-arn) as [stored responses](api_openai_responses.md#stored-responses). The returned `id` then works with the full stored-completion surface:
 
 - `GET /v1/chat/completions` — list stored completions, sorted by creation time (`order`, `after`, `limit`), filterable by `model` and by metadata pairs. Metadata filters accept either one `metadata[key]=value` parameter per key (what the OpenAI SDKs send) or a single `metadata={"key": "value"}` JSON object of string values, for clients that can only send a whole object in one query parameter. A bare `metadata` in any other shape is rejected with `400` naming both accepted forms.
 - `GET /v1/chat/completions/{completion_id}` — retrieve the stored completion.
@@ -778,53 +780,11 @@ Set `store: true` to persist a chat completion in [Amazon Bedrock session storag
 - `GET /v1/chat/completions/{completion_id}/messages` — list its input messages.
 - `DELETE /v1/chat/completions/{completion_id}` — delete it and its backing session.
 
-`store` defaults to **false** on this implementation and is ignored with `stream=true` or when the server lacks the [session storage IAM permissions](operations_configuration.md#bedrock-session-storage-optional) (a warning is recorded in the request log). Listings scan a capped number of sessions (1,000) in the primary Bedrock region; accounts beyond the cap may see incomplete listings.
+`store` defaults to **false** on this implementation and is ignored with `stream=true` or when the server lacks the [session storage IAM permissions](operations_configuration_bedrock.md#bedrock-session-storage-optional) (a warning is recorded in the request log). Listings scan a capped number of sessions (1,000) in the primary Bedrock region; accounts beyond the cap may see incomplete listings.
 
-## Available Request Headers
+### Model-Specific Features
 
-This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
-
-### Content Safety (Guardrails)
-
-| Header                               | Purpose                            | Valid Values                          |
-|--------------------------------------|------------------------------------|---------------------------------------|
-| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
-| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
-| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
-
-### Performance Optimization
-
-| Header                                     | Purpose                | Valid Values                              |
-|--------------------------------------------|------------------------|-------------------------------------------|
-| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `default`, `flex`, `priority`, `reserved` |
-| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`                   |
-
-**Example with all headers:**
-
-```bash
-curl -X POST "$BASE/v1/chat/completions" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -H "X-Amzn-Bedrock-GuardrailIdentifier: your-guardrail-id" \
-  -H "X-Amzn-Bedrock-GuardrailVersion: 1" \
-  -H "X-Amzn-Bedrock-Trace: enabled" \
-  -H "X-Amzn-Bedrock-Service-Tier: priority" \
-  -H "X-Amzn-Bedrock-PerformanceConfig-Latency: optimized" \
-  -d '{
-    "model": "anthropic.claude-fable-5",
-    "messages": [{"role": "user", "content": "Hello!"}]
-  }'
-```
-
-!!! info "Detailed Documentation"
-    For complete information about these headers, configuration options, and use cases, see:
-
-    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
-    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
-
-## Model-Specific Features
-
-### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
+#### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
 
 `twelvelabs.pegasus-1-2-v1:0` is a video-understanding model. Because Pegasus accepts exactly one video and one text prompt per call, this API adapts the conversation automatically:
 
@@ -860,19 +820,60 @@ curl -X POST "$BASE/v1/chat/completions" \
   }'
 ```
 
-## Try It Now
+## Limits and behaviour to know
 
-**Basic chat completion:**
+**What is rejected with a `400`.** `logprobs` when enabled, `web_search_options`, `translation_options`, `custom` (free-form) tools, `tool_choice: {"type": "allowed_tools"}`, a whitespace-only `stop` sequence (an Amazon Bedrock limitation), audio output combined with `stream: true`, and `n > 1` combined with `stream: true`. Each error names the parameter it refuses.
+
+**What is accepted and ignored.** `prediction` and `verbosity` are latency and length hints the Converse API has no equivalent for, and `stream_options.include_obfuscation` never pads the stream. All three are forwarded verbatim on [Mantle passthrough models](#bedrock-mantle), where the upstream API decides what to do with them.
+
+**What changes on a Mantle-served model.** An Amazon Bedrock guardrail is not applied to a Mantle-served request, the `moderation` parameter is rejected with `400`, and audio synthesis from text output is not performed. Where the model is not chat-native, the request is converted to the Responses or Messages API and a documented set of parameters is dropped or clamped — the three serving paths and their exact parameter fidelity are tabled under [Bedrock Mantle](#bedrock-mantle).
+
+**Reasoning tokens are not split out on Converse-served models.** `completion_tokens_details` is not populated and reasoning tokens are billed inside `completion_tokens`; Mantle-native models report whatever split their upstream API returns.
+
+## Request headers { #available-request-headers }
+
+This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
+
+### Content Safety (Guardrails)
+
+| Header                               | Purpose                            | Valid Values                          |
+|--------------------------------------|------------------------------------|---------------------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
+| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
+| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
+| `X-Amzn-Bedrock-GuardrailStreamProcessingMode` | Guardrail assessment timing on a streamed response | `sync`, `async` (streaming requests only) |
+
+### Performance Optimization
+
+| Header                                     | Purpose                | Valid Values                              |
+|--------------------------------------------|------------------------|-------------------------------------------|
+| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `default`, `flex`, `priority`, `reserved` |
+| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`                   |
+
+**Example with all headers:**
 
 ```bash
 curl -X POST "$BASE/v1/chat/completions" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
+  -H "X-Amzn-Bedrock-GuardrailIdentifier: your-guardrail-id" \
+  -H "X-Amzn-Bedrock-GuardrailVersion: 1" \
+  -H "X-Amzn-Bedrock-Trace: enabled" \
+  -H "X-Amzn-Bedrock-Service-Tier: priority" \
+  -H "X-Amzn-Bedrock-PerformanceConfig-Latency: optimized" \
   -d '{
-    "model": "amazon.nova-micro-v1:0",
-    "messages": [{"role": "user", "content": "Say hello world"}]
+    "model": "anthropic.claude-fable-5",
+    "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
+
+!!! info "Detailed Documentation"
+    For complete information about these headers, configuration options, and use cases, see:
+
+    - [Bedrock Guardrails Configuration](operations_configuration_bedrock.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration_bedrock.md#bedrock-service-tier-and-performance-configuration)
+
+## Try it { #try-it-now }
 
 **Streaming response:**
 
@@ -930,6 +931,6 @@ curl -X POST "$BASE/v1/chat/completions" \
 }
 ```
 
----
+## Next steps
 
-**Ready to build with AI?** Check out the [Models API](api_openai_models.md) to see all available foundation models!
+Next: [Responses API](api_openai_responses.md) · [Models API](api_openai_models.md) · [Files API](api_openai_files.md) · [Moderations API](api_openai_moderations.md)

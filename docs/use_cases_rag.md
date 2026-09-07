@@ -15,19 +15,7 @@ There are two ways to do it, and they share the same deployment:
 
 Start managed, and move to the assembled pipeline when you need a retrieval strategy of your own.
 
-## :material-information-outline: About Retrieval-Augmented Generation
-
-A RAG pipeline grounds a model's answer in your own documents instead of its training data: a retriever finds candidate passages by vector similarity, an optional reranker reorders them by relevance to the actual question, and a chat model answers from the reordered context.
-
-**What a RAG pipeline needs from its backend:**
-
-- **Embeddings** - Vectorize documents and queries into the same space
-- **Reranking** - Reorder retrieved candidates by relevance before they reach the model
-- **Generation** - Answer from the retrieved context with a chat-capable model
-
-stdapi.ai serves all three from Amazon Bedrock through standard, unmodified client libraries.
-
-## :material-help-circle-outline: Why RAG + stdapi.ai?
+## :material-lightning-bolt: At a glance { #why-rag-stdapiai }
 
 <div class="grid cards" markdown>
 
@@ -57,6 +45,18 @@ flowchart LR
   rag["Your RAG Framework<br/>(Haystack, LlamaIndex, ...)"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
+
+## :material-information-outline: About Retrieval-Augmented Generation
+
+A RAG pipeline grounds a model's answer in your own documents instead of its training data: a retriever finds candidate passages by vector similarity, an optional reranker reorders them by relevance to the actual question, and a chat model answers from the reordered context.
+
+**What a RAG pipeline needs from its backend:**
+
+- **Embeddings** - Vectorize documents and queries into the same space
+- **Reranking** - Reorder retrieved candidates by relevance before they reach the model
+- **Generation** - Answer from the retrieved context with a chat-capable model
+
+stdapi.ai serves all three from Amazon Bedrock through standard, unmodified client libraries.
 
 ## :material-connection: Connect Your Own Instance
 
@@ -92,7 +92,7 @@ Upload your files, attach them to a vector store, and search it. Nothing else ru
 Only **text** files can be indexed — convert PDFs and office documents first, with the [document parsing](#document-parsing) stage below. See the [Vector Stores API](api_openai_vector_stores.md) for chunking, filters, expiration and the storage it needs in your account.
 
 !!! tip "Indexing that survives a deployment"
-    A file is indexed by the server that accepted it. Point [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url) at a queue and the job is handed over to it instead, so a bulk ingestion keeps going — and finishes — when that server is replaced mid-way. See [Durable indexing](api_openai_vector_stores.md#durable-indexing).
+    A file is indexed by the server that accepted it. Point [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration_storage.md#aws-sqs-vector-store-queue-url) at a queue and the job is handed over to it instead, so a bulk ingestion keeps going — and finishes — when that server is replaced mid-way. See [Durable indexing](api_openai_vector_stores.md#durable-indexing).
 
 #### :material-file-search: Let the Model Do the Retrieving { #file-search }
 
@@ -112,7 +112,7 @@ Naming a store as a `file_search` tool on the [Responses API](api_openai_respons
 
 #### :material-database-import: Searching a Knowledge Base You Already Run { #knowledge-base }
 
-If your documents are already in an **Amazon Bedrock knowledge base**, keep it where it is. Allowlist it in [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids) and it is addressed as the vector store `vs_kb_<knowledgeBaseId>` — searched, listed, read and (on a custom data source) extended with new documents, through the same client code and the same `file_search` tool as above.
+If your documents are already in an **Amazon Bedrock knowledge base**, keep it where it is. Allowlist it in [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration_storage.md#aws-bedrock-knowledge-base-ids) and it is addressed as the vector store `vs_kb_<knowledgeBaseId>` — searched, listed, read and (on a custom data source) extended with new documents, through the same client code and the same `file_search` tool as above.
 
 The knowledge base stays yours: it is never created and never deleted here, and a request that would reshape it — renaming, an expiry, a chunking strategy — is refused with the reason rather than half-applied. Its retrieval scores are reported as the backend states them, so a `score_threshold` against such a store is refused instead of meaning something else. See [Knowledge Base Stores](api_openai_vector_stores.md#knowledge-base-stores).
 
@@ -122,7 +122,7 @@ The rest of this part wires stdapi.ai into a pipeline you build yourself, with y
 
 ### :material-check-circle: Prerequisites
 
-!!! info "What You'll Need"
+??? info "Before you start"
     - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md)
     - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com`
     - ✓ **Your API key** - From Terraform output or configuration
@@ -200,7 +200,7 @@ Point your framework's Cohere-compatible reranker at `/cohere`, not the full rer
     Requires the `cohere-haystack` integration package alongside `haystack-ai`. Give the ranker the retriever's full candidate set—every retrieved document, not just the top few—so it has something to reorder rather than merely confirm. See [Cohere Rerank API](api_cohere_rerank.md) for supported models.
 
 !!! tip "Regional availability"
-    Amazon Bedrock serves reranking from a subset of regions only. Keep at least one of them in [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions); stdapi.ai fails over to it automatically.
+    Amazon Bedrock serves reranking from a subset of regions only. Keep at least one of them in [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions); stdapi.ai fails over to it automatically.
 
 #### :material-chat: Generation
 
@@ -285,10 +285,10 @@ Two things are worth reading off the picture. In managed retrieval, your documen
 | --- | --- | --- |
 | **Amazon ECS on AWS Fargate** | Runs the stdapi.ai gateway and, for the document-parsing stage, Docling Serve, as independent services | Terraform sample |
 | **Elastic Load Balancing** | Public entry point for Docling Serve's document-parsing API; the gateway itself has no listener of its own | Terraform sample |
-| **Amazon Bedrock** | Embedding, reranking and generation models for both modes, plus the vision model behind Docling's optional VLM pipeline | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
-| **Amazon S3** | Holds the Vector Stores API's own records — the stores, their attached files and file batches | [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) |
-| **Amazon S3 Vectors** | Holds the indexed embeddings of every managed vector store, one index per store | [`AWS_S3_VECTORS_BUCKET`](operations_configuration.md#aws-s3-vectors-bucket) |
-| **Amazon SQS** | Carries indexing jobs so an attach survives the task that accepted it, redriving a job that keeps failing to its dead-letter queue | [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url) |
+| **Amazon Bedrock** | Embedding, reranking and generation models for both modes, plus the vision model behind Docling's optional VLM pipeline | [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions) |
+| **Amazon S3** | Holds the Vector Stores API's own records — the stores, their attached files and file batches | [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket) |
+| **Amazon S3 Vectors** | Holds the indexed embeddings of every managed vector store, one index per store | [`AWS_S3_VECTORS_BUCKET`](operations_configuration_storage.md#aws-s3-vectors-bucket) |
+| **Amazon SQS** | Carries indexing jobs so an attach survives the task that accepted it, redriving a job that keeps failing to its dead-letter queue | [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration_storage.md#aws-sqs-vector-store-queue-url) |
 | **AWS KMS** | Customer-managed keys encrypting the S3 bucket, the S3 Vectors bucket and the SQS queue, each independently | Terraform sample |
 | **AWS IAM** | Least-privilege task role for the gateway; the Vector Stores, durable indexing and knowledge base permissions are granted only when their feature is enabled | [IAM permissions](operations_iam_permissions.md#vector-stores-optional) |
 
@@ -298,7 +298,7 @@ Two things are worth reading off the picture. In managed retrieval, your documen
 - **Encryption in transit** — HTTPS from wherever your application or framework runs to the gateway, and HTTPS with SigV4 from the gateway to Amazon Bedrock, Amazon S3, Amazon S3 Vectors and Amazon SQS.
 - **Encryption at rest** — SSE-KMS on the S3 bucket holding vector store records, and on the S3 Vectors bucket and the SQS queue, each behind its own key: `aws_s3_vectors_kms_key_arn` and `aws_sqs_vector_store_queue_kms_key_arn` when you bring your own bucket or queue, a dedicated key created for you otherwise.
 - **Least privilege** — the gateway's task role is granted the Vector Stores, durable indexing and knowledge base actions only when the corresponding feature is configured, scoped to the ARNs of the bucket, the queue and the knowledge bases you name.
-- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) applies to embeddings and reranking through the ApplyGuardrail API rather than Bedrock's native integration, checking each text input before it is embedded or reranked, and its consumed units are reported — unlike the native integration chat routes use.
+- **Content policy** — a [Bedrock guardrail](operations_configuration_bedrock.md#bedrock-guardrails) applies to embeddings and reranking through the ApplyGuardrail API rather than Bedrock's native integration, checking each text input before it is embedded or reranked, and its consumed units are reported — unlike the native integration chat routes use.
 - **Data handling** — uploaded files and their [S3 storage](operations_compliance.md#s3-data-storage) stay in your account, and an Amazon Bedrock knowledge base you already operate is [addressed as a vector store](api_openai_vector_stores.md#knowledge-base-stores) — searched and extended, never recreated.
 
 ### :material-cube-outline: What's Included
@@ -323,7 +323,7 @@ Read a model's price before you send anything to it with [`GET /model_pricing`](
 
 ### :material-eye-outline: What to Watch
 
-The gateway logs one `request` event per call and, for managed indexing, a separate `background` event named `vector_store_indexing` correlated to it by `id` — group on that field to see how long a file's indexing actually took after the attach call returned. The dead-letter queue behind [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url) is the signal that a document failed to index: a file still failing after its queue's redrive policy exhausts its deliveries lands there instead of being silently dropped, so a non-empty dead-letter queue means a document needs attention. Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes the same billed quantities as EMF metrics in the `stdapi` namespace, dimensioned by `Model`.
+The gateway logs one `request` event per call and, for managed indexing, a separate `background` event named `vector_store_indexing` correlated to it by `id` — group on that field to see how long a file's indexing actually took after the attach call returned. The dead-letter queue behind [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration_storage.md#aws-sqs-vector-store-queue-url) is the signal that a document failed to index: a file still failing after its queue's redrive policy exhausts its deliveries lands there instead of being silently dropped, so a non-empty dead-letter queue means a document needs attention. Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes the same billed quantities as EMF metrics in the `stdapi` namespace, dimensioned by `Model`.
 
 ```sql
 fields @timestamp, event, execution_time_ms, id

@@ -8,31 +8,43 @@ keywords: image editing API, AI image editor, inpainting API, image modification
 
 Edit images using inpainting with Amazon Bedrock image models through an OpenAI-compatible interface.
 
-## Why Choose the Image Editing API?
+## At a glance
 
-<div class="grid cards" markdown>
+- :material-image-edit: **Nineteen Amazon Bedrock editing models** — inpainting, image-to-image,
+  upscale, style transfer, search-and-replace, background removal and control, all on
+  `/v1/images/edits`, see [Models](#model-support).
+- :material-palette-advanced: **Task types the OpenAI surface has no field for** — Nova Canvas
+  adds `OUTPAINTING`, `BACKGROUND_REMOVAL` and `VIRTUAL_TRY_ON` with three mask types, reached
+  with extra form fields, see
+  [Working with the editing endpoint](#advanced-features).
+- :material-layers-triple: **Masks in either convention** — an alpha-channel PNG is converted to
+  the black/white RGB form each backend requires, a black/white mask passes through unchanged,
+  see [Working with the editing endpoint](#advanced-features).
+- :material-aws: **Served by Amazon Bedrock in your own AWS account** — `url` responses are
+  download links to your own `AWS_S3_BUCKET`, valid for 60 minutes, see
+  [Feature compatibility](#feature-compatibility).
+- :material-swap-horizontal: **A JSON body is accepted as well as multipart** — an `images` array
+  of 1-16 Files API IDs or URLs, where the OpenAI edits API is multipart-only, see
+  [Working with the editing endpoint](#advanced-features).
+- :material-swap-horizontal: **One source image per request, and `input_fidelity: high` is
+  refused** — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
 
-- :material-image-edit: __Precise Control__
-  <br>Edit specific regions of images while preserving the rest.
+```bash
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -F image=@source.png \
+  -F mask=@edit_mask.png \
+  -F prompt="A red apple on a wooden table" \
+  -F model="amazon.nova-canvas-v1:0"
+```
 
-- :material-palette-advanced: __Creative Freedom__
-  <br>Add, remove, or modify elements in existing images with AI assistance.
-
-- :material-layers-triple: __Flexible Masking__
-  <br>Define edit regions with an explicit mask image, using either alpha transparency or black/white pixels.
-
-- :material-aws: __Scalable Infrastructure__
-  <br>Edit images at scale with Amazon Bedrock infrastructure.
-
-</div>
-
-## Available Endpoints
+## Endpoints { #quick-start-available-endpoint }
 
 | Endpoint           | Method | What It Does                            | Powered By                  | MCP Tool           |
 |--------------------|--------|-----------------------------------------|-----------------------------|--------------------|
 | `/v1/images/edits` | `POST` | Edit images using prompts and masks     | Amazon Bedrock Image Models | `openai_image_edit` |
 
-## Feature Compatibility
+## Feature compatibility
 
 <div class="feature-table" markdown>
 
@@ -52,19 +64,19 @@ Edit images using inpainting with Amazon Bedrock image models through an OpenAI-
 | `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output dimensions (default: 1024x1024, format validated; `auto` resolves to the default) |
 | `model`                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Required parameter                                                                                                                             |
 | `response_format`              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `url` or `b64_json` (default: `url`)                                                                                                           |
-| `output_format`                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `png`, `jpeg`, or `webp` (model-specific)                                                                                                      |
+| `output_format`                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `png`, `jpeg`, or `webp` on every model; the gateway re-encodes when the model cannot produce the format natively                              |
 | `output_compression`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Compression level 1-100% (default: 100)                                                                                                        |
 | `quality`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Quality setting (default: `auto`, supports OpenAI & model-specific); accepted and ignored by models with no quality control                    |
 | `stream`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Generate images in streaming mode, emitting the endpoint's `image_edit.partial_image` and `image_edit.completed` events                        |
 | `partial_images`               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted (0-3) but ignored — no available model currently streams partial images; the final image is always sent as a single event             |
 | `background`                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepts `auto` (default) and `opaque`; `transparent` is unsupported — responses report `opaque`                                                |
-| `input_fidelity`               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted for OpenAI API compatibility and ignored (always behaves as `low`)                                                                    |
+| `input_fidelity`               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Only the default `low` is accepted; `high` is rejected with an error                                                                           |
 | **Output**                     |                                          |                                                                                                                                                |
 | URL response format            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Temporary download URLs, valid for 60 minutes (requires AWS_S3_BUCKET)                                                                        |
 | Base64 JSON format             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Inline base64-encoded images                                                                                                                   |
 | PNG format                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Lossless image output                                                                                                                          |
-| JPEG format                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Lossy compression (model-specific)                                                                                                             |
-| WebP format                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Modern format with compression (model-specific)                                                                                                |
+| JPEG format                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Lossy compression, re-encoded server-side when the model has no native JPEG output                                                             |
+| WebP format                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Modern format with compression, re-encoded server-side when the model has no native WebP output                                                |
 | Streaming response             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Server-sent events with final images (no partial previews)                                                                                     |
 | **Usage tracking**             |                                          |                                                                                                                                                |
 | Input text tokens              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Sourced from AWS billing data when available; remainder after subtracting image tokens                                                         |
@@ -88,7 +100,7 @@ Edit images using inpainting with Amazon Bedrock image models through an OpenAI-
 
 </div>
 
-## Model Support
+## Models { #model-support }
 
 !!! info "Model Support"
     **Inpainting** (mask-based editing) is supported by **Amazon Nova Canvas**, **Amazon Titan Image Generator**, and **Stability AI** inpaint models.
@@ -112,7 +124,7 @@ Edit images using inpainting with Amazon Bedrock image models through an OpenAI-
 | amazon.titan-image-generator-v2:0 (legacy) | `INPAINTING`, `OUTPAINTING`, `BACKGROUND_REMOVAL`                                 | ✅ Required for inpainting/outpainting<br>❌ Rejected for background removal      | Enhanced features including background removal without mask                         |
 
 !!! note "Legacy Amazon Image Models"
-    AWS has scheduled `amazon.nova-canvas-v1:0` and the Titan image models to reach end of life on September 30, 2026. Deployments with existing access can keep using them until then (legacy models are hidden unless [`AWS_BEDROCK_LEGACY=true`](operations_configuration.md#bedrock-legacy)); the Stability AI Stable Image family is the long-term successor.
+    AWS has scheduled `amazon.nova-canvas-v1:0` and the Titan image models to reach end of life on September 30, 2026. Deployments with existing access can keep using them until then (legacy models are hidden unless [`AWS_BEDROCK_LEGACY=true`](operations_configuration_models.md#bedrock-legacy)); the Stability AI Stable Image family is the long-term successor.
 
 !!! info "Amazon Nova Canvas Default Behavior"
     **`amazon.nova-canvas-v1:0`** automatically selects the task type based on the presence of a mask when no `taskType` is explicitly provided:
@@ -177,12 +189,12 @@ Edit images using inpainting with Amazon Bedrock image models through an OpenAI-
     All other Stability models use only standard OpenAI parameters (`image`, `prompt`, and optionally `mask`).
 
 !!! info "No Built-In Aliases for OpenAI Image Model Names"
-    OpenAI's default image model names (`dall-e-2`, `dall-e-3`, `gpt-image-1`) have **no built-in alias**, so requests using them fail with a model-not-found error — the most common first-call issue. Pass one of the model IDs above, or map the OpenAI names to your preferred models with [`MODEL_ALIASES`](operations_configuration.md#model-aliases).
+    `gpt-image-1` and `gpt-image-1-mini` have **no built-in alias**, so requests naming them fail with a model-not-found error — the most common first-call issue. Pass one of the model IDs above, or map those names to your preferred models with [`MODEL_ALIASES`](operations_configuration_models.md#model-aliases). The retired `dall-e-2` and `dall-e-3` names are legacy strings older clients may still send; map them the same way.
 
 !!! warning "Configuration Required"
     You must configure the `AWS_S3_BUCKET` environment variable with a bucket to use the URL response format.
 
-## Advanced Features
+## Working with the editing endpoint { #advanced-features }
 
 ### Request Formats
 
@@ -248,7 +260,7 @@ under the `image` key — the shapes MCP clients derive from the tool schema:
 ```
 
 !!! tip "Workflow Integration"
-    The JSON body format works seamlessly with the [Files API](api_openai_files.md): upload images once, reuse them across multiple edit requests by file ID without re-uploading.
+    The JSON body format works with the [Files API](api_openai_files.md): upload images once, reuse them across multiple edit requests by file ID without re-uploading.
 
 ### How Image Editing Works
 
@@ -553,7 +565,32 @@ All Stability AI models use standard OpenAI parameters directly:
 !!! info "Full Parameter Reference"
     For all Stability AI parameters, see [Stability AI documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-stability-diffusion.html)
 
-## Available Request Headers
+## Limits and behaviour to know
+
+- **Every available model edits exactly one source image.** The schema accepts the repeated
+  `image[]` parameter for OpenAI wire compatibility, and a request carrying more than one image
+  is refused with an error.
+- **An image sent without a `mask` is not auto-masked** — see
+  [Inpainting with Masks](#inpainting-with-masks-amazon-models-and-stability-ai).
+- **A model that does not use a mask rejects one.** The per-model tables under
+  [Models](#model-support) give each model's mask usage: image-to-image, upscale, outpaint and
+  search-based models return an error when a `mask` is provided.
+- **Two models need a form field the OpenAI API has no place for**, `select_prompt` and
+  `search_prompt`, listed under [Models](#model-support).
+- **`n` is capped by the model, not by the endpoint.** The endpoint accepts 1-10; the effective
+  maximum is model-dependent, and Amazon Titan and Nova Canvas stop at 5.
+- **`input_fidelity` accepts only its default `low`.** `high` is rejected with an error.
+- **`partial_images` never produces a preview.** No available model streams partial images, so
+  the value (0-3) is accepted and ignored and each finished image is sent as a single
+  `image_edit.completed` event.
+- **`background` has no transparent mode.** `auto` and `opaque` are accepted, `transparent` is
+  not, and every response reports `opaque`.
+- **`quality` reaches only the models that have the control.** A model with no equivalent
+  setting accepts the field and ignores it.
+- **OpenAI image model names resolve only once you map them**, as described in the
+  [Models](#model-support) section.
+
+## Request headers { #available-request-headers }
 
 This endpoint supports the same standard Bedrock headers as the other images endpoints: guardrail headers (`X-Amzn-Bedrock-GuardrailIdentifier`, `X-Amzn-Bedrock-GuardrailVersion`, `X-Amzn-Bedrock-Trace`) and performance headers (`X-Amzn-Bedrock-Service-Tier`, `X-Amzn-Bedrock-PerformanceConfig-Latency`). All headers are optional and can be combined as needed.
 
@@ -570,7 +607,7 @@ curl -X POST "$BASE/v1/images/edits" \
   -F model="amazon.nova-canvas-v1:0"
 ```
 
-## Try It Now
+## Try it { #try-it-now }
 
 ### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Image-to-Image with Stability AI
 
@@ -657,7 +694,10 @@ curl -X POST "$BASE/v1/images/edits" \
   -F model="stability.stable-image-remove-background-v1:0"
 ```
 
-### Inpainting with Amazon Models
+### Prompt-Driven Transformation Without a Mask (Amazon Models) { #inpainting-with-amazon-models }
+
+With no `mask`, the source image is used as a conditioning image for text-to-image generation,
+not as an inpainting edit.
 
 ```bash
 curl -X POST "$BASE/v1/images/edits" \
@@ -667,7 +707,7 @@ curl -X POST "$BASE/v1/images/edits" \
   -F model="amazon.nova-canvas-v1:0"
 ```
 
-### Edit with Explicit Mask
+### Inpainting with an Explicit Mask { #edit-with-explicit-mask }
 
 ```bash
 curl -X POST "$BASE/v1/images/edits" \
@@ -768,6 +808,6 @@ curl -X POST "$BASE/v1/images/edits" \
   -F model="stability.stable-image-style-guide-v1:0"
 ```
 
----
+## Next steps
 
-**Ready to transform your images?** Explore available image models in the [Models API](api_openai_models.md).
+Next: [Models API](api_openai_models.md) · [Images Generation API](api_openai_images_generations.md) · [Images Variations API](api_openai_images_variations.md) · [Files API](api_openai_files.md)

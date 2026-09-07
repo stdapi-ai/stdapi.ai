@@ -40,7 +40,13 @@ from docs_gen.model_catalog.matching import (
     strict_forms,
 )
 from docs_gen.model_catalog.page import PAGE_PATH
-from docs_gen.model_catalog.schema import Catalog, Manifest, ModelRow, PriceGroup
+from docs_gen.model_catalog.schema import (
+    Catalog,
+    Manifest,
+    ModelRow,
+    PriceGroup,
+    ServiceVariant,
+)
 from docs_gen.model_catalog.sources import (
     RawScore,
     SourceResult,
@@ -838,6 +844,52 @@ def test_every_provider_shown_is_covered_by_the_trademark_registry(
     """
     markdown = page.PAGE_PATH.read_text(encoding="utf-8")
     assert page.check_trademarks(catalog, markdown) == []
+
+
+@pytest.mark.parametrize(
+    ("model_id", "name", "expected"),
+    [
+        ("anthropic.claude-haiku-4-5", "claude-haiku-4-5", "Claude Haiku 4.5"),
+        ("openai.gpt-5.4-2026-03-05", "gpt-5.4-2026-03-05", "GPT 5.4 (2026-03-05)"),
+        (
+            "qwen.qwen3-vl-235b-a22b-instruct",
+            "qwen3-vl-235b-a22b-instruct",
+            "Qwen3 VL 235B A22B Instruct",
+        ),
+        ("amazon.nova-lite-v1:0", "Nova Lite", "Nova Lite"),
+    ],
+)
+def test_a_model_named_only_by_its_id_still_reads_as_a_name(
+    model_id: str, name: str, expected: str
+) -> None:
+    """Bedrock Mantle names most models by their ID; the name column is prose.
+
+    Ref: docs/models.md
+    """
+    assert page._display_name(a_row(model_id, name=name)) == expected  # noqa: SLF001
+
+
+def test_the_noscript_table_names_the_service_behind_every_row(
+    catalog: Catalog,
+) -> None:
+    """Without the service, one model served twice reads as a duplicate row.
+
+    Ref: docs/models.md
+    """
+    folded = a_row(
+        "openai.gpt-oss-20b",
+        name="gpt-oss-20b",
+        provider="OpenAI",
+        service="AWS Bedrock Mantle",
+        variants=[
+            ServiceVariant(id="openai.gpt-oss-20b", service="AWS Bedrock Mantle"),
+            ServiceVariant(id="openai.gpt-oss-20b-1:0", service="AWS Bedrock Runtime"),
+        ],
+    )
+    block = page._noscript_block(catalog.model_copy(update={"models": [folded]}))  # noqa: SLF001
+    assert "<th>Service</th>" in block
+    assert "<td>GPT OSS 20B</td>" in block
+    assert "<td>AWS Bedrock Mantle, AWS Bedrock Runtime</td>" in block
 
 
 def test_no_leaderboard_entry_is_claimed_by_unrelated_models(catalog: Catalog) -> None:

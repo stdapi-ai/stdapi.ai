@@ -79,7 +79,9 @@ _RUNTIME_REGION: RegionName = "us-west-2"
 _RUNTIME_PROFILE = "us.openai.gpt-5.6-sol"
 
 #: The one page quoting the per-million figures in prose; every other links to it.
-_PRICE_REFERENCE = Path(__file__).parents[1] / "docs" / "operations_configuration.md"
+_PRICE_REFERENCE = (
+    Path(__file__).parents[1] / "docs" / "operations_configuration_models.md"
+)
 
 #: The sentence in that page carrying the figures.
 _PRICE_SENTENCE_MARKER = "exactly 10% more per token"
@@ -1031,7 +1033,7 @@ class TestPriceOfTheMove:
         operator sizes spend from is compared to them rather than trusted --
         the figures are quoted here and nowhere else for that reason.
 
-        Ref: docs/operations_configuration.md#bedrock-mantle-preferred-models
+        Ref: docs/operations_configuration_models.md#bedrock-mantle-preferred-models
         """
         sentences = [
             line

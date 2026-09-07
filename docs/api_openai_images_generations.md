@@ -8,31 +8,45 @@ keywords: text to image API, image generation API, AWS Bedrock image, Stable Dif
 
 Generate images with Amazon Bedrock image models like Stability AI and Amazon Nova Canvas through an OpenAI-compatible interface.
 
-## Why Choose the Image Generation API?
+## At a glance
 
-<div class="grid cards" markdown>
+- :material-palette: **Six Amazon Bedrock image models** — Amazon Nova Canvas, two Amazon Titan
+  Image Generator versions and three Stability AI models, behind one endpoint, see
+  [Models](#model-support).
+- :material-ruler: **`n` accepts 1 to 10 images per request** — alongside `size`, `quality`,
+  `style`, `output_format` and `output_compression`, see
+  [Feature compatibility](#feature-compatibility).
+- :material-fast-forward: **`stream: true` emits `image_generation.completed`** — each finished
+  image arrives as its own server-sent event instead of waiting for the whole batch, see
+  [Feature compatibility](#feature-compatibility).
+- :material-aws: **Served by Amazon Bedrock in your own AWS account** — no GPU capacity to
+  provision, and `url` responses are download links to your own `AWS_S3_BUCKET` valid for 60
+  minutes, see [Models](#model-support).
+- :material-swap-horizontal: **`gpt-image-1` and the other OpenAI image model names are not
+  aliased** — map them with `MODEL_ALIASES`, since an unmapped name returns a model-not-found
+  error, see [Limits and behaviour to know](#limits-and-behaviour-to-know).
+- :material-swap-horizontal: **`partial_images`, `moderation` and transparent backgrounds are
+  not served** — the parameters are accepted or refused but never change the image, see
+  [Limits and behaviour to know](#limits-and-behaviour-to-know).
 
-- :material-palette: __Quality Output__
-  <br>Generate photorealistic images, digital art, and illustrations.
+```bash
+curl -X POST "$BASE/v1/images/generations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "stability.stable-image-core-v1:1",
+    "prompt": "A serene mountain landscape at sunset, photorealistic",
+    "size": "1024x1024"
+  }'
+```
 
-- :material-fast-forward: __Real-Time Streaming__
-  <br>Progressive generation shows partial previews as the model works for interactive applications.
-
-- :material-ruler: __Flexible Control__
-  <br>Choose dimensions, quality levels, and styles. From quick drafts to high-resolution finals.
-
-- :material-aws: __Scalable Infrastructure__
-  <br>Generate images at scale with Amazon Bedrock infrastructure. No GPU management required.
-
-</div>
-
-## Available Endpoints
+## Endpoints { #quick-start-available-endpoint }
 
 | Endpoint                 | Method | What It Does                      | Powered By                  | MCP Tool                  |
 |--------------------------|--------|-----------------------------------|-----------------------------|---------------------------|
 | `/v1/images/generations` | `POST` | Generate images from text prompts | Amazon Bedrock Image Models | `openai_image_generation` |
 
-## Feature Compatibility
+## Feature compatibility
 
 <div class="feature-table" markdown>
 
@@ -48,7 +62,7 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 | `response_format`              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `url` or `b64_json` (default: `url`)                                |
 | `quality`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Quality setting (default: `auto`, supports OpenAI & model-specific); accepted and ignored by models with no quality control |
 | `style`                        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Model-specific style parameters; accepted and ignored by models with no style control |
-| `output_format`                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `png`, `jpeg`, or `webp` (model-specific)                           |
+| `output_format`                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `png`, `jpeg`, or `webp` on every model; the gateway re-encodes when the model cannot produce the format natively |
 | `output_compression`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Compression level 1-100% (default: 100)                             |
 | `stream`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Generate images in streaming mode, sending each finished image as an `image_generation.completed` event |
 | `partial_images`               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted (0-3) but ignored — no available model currently streams partial images; the final image is always sent as a single event |
@@ -59,8 +73,8 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 | URL response format            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Temporary download URLs, valid for 60 minutes (requires AWS_S3_BUCKET) |
 | Base64 JSON format             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Inline base64-encoded images                                        |
 | PNG format                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Lossless image output                                               |
-| JPEG format                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Lossy compression (model-specific)                                  |
-| WebP format                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Modern format with compression (model-specific)                     |
+| JPEG format                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Lossy compression, re-encoded server-side when the model has no native JPEG output |
+| WebP format                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Modern format with compression, re-encoded server-side when the model has no native WebP output |
 | Streaming response             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Server-sent events with final images (no partial previews)          |
 | **Usage tracking**             |                                          |                                                                     |
 | Input text tokens              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Sourced from AWS billing when available                             |
@@ -82,7 +96,7 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 
 </div>
 
-## Model Support
+## Models { #model-support }
 
 ### ![Amazon](styles/logo_amazon.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
 
@@ -93,7 +107,7 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 | amazon.titan-image-generator-v2:0 (legacy) | `TEXT_IMAGE`, `COLOR_GUIDED_GENERATION` | Enhanced text-to-image generation with color-guided generation support                      |
 
 !!! note "Legacy Amazon Image Models"
-    AWS has scheduled `amazon.nova-canvas-v1:0` and the Titan image models to reach end of life on September 30, 2026. Deployments with existing access can keep using them until then (legacy models are hidden unless [`AWS_BEDROCK_LEGACY=true`](operations_configuration.md#bedrock-legacy)); the Stability AI Stable Image family is the long-term successor.
+    AWS has scheduled `amazon.nova-canvas-v1:0` and the Titan image models to reach end of life on September 30, 2026. Deployments with existing access can keep using them until then (legacy models are hidden unless [`AWS_BEDROCK_LEGACY=true`](operations_configuration_models.md#bedrock-legacy)); the Stability AI Stable Image family is the long-term successor.
 
 ### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Models
 
@@ -103,16 +117,19 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 | stability.stable-image-core-v1:1  | `TEXT_IMAGE`         | Stable Image Core - balanced quality and speed    |
 | stability.stable-image-ultra-v1:1 | `TEXT_IMAGE`         | Stable Image Ultra - premium quality and detail   |
 
+!!! note "Output Formats"
+    All models support the standard OpenAI output formats (`png`, `jpeg`, `webp`) via the `output_format` parameter. When a model cannot produce the requested format natively, the gateway re-encodes the result server-side, so the response always carries the format you asked for.
+
 !!! info "No Built-In Aliases for OpenAI Image Model Names"
-    OpenAI's default image model names (`dall-e-2`, `dall-e-3`, `gpt-image-1`) have **no built-in alias**, so requests using them fail with a model-not-found error — the most common first-call issue. Pass one of the model IDs above, or map the OpenAI names to your preferred models with [`MODEL_ALIASES`](operations_configuration.md#model-aliases).
+    `gpt-image-1` and `gpt-image-1-mini` have **no built-in alias**, so requests naming them fail with a model-not-found error — the most common first-call issue. Pass one of the model IDs above, or map those names to your preferred models with [`MODEL_ALIASES`](operations_configuration_models.md#model-aliases). The retired `dall-e-2` and `dall-e-3` names are legacy strings older clients may still send; map them the same way.
 
 !!! warning "Configuration Required"
     You must configure the `AWS_S3_BUCKET` environment variable with a bucket to use the URL response format.
 
 !!! tip "Performance Optimization"
-    For faster image downloads, especially for high-resolution images or globally distributed users, enable S3 Transfer Acceleration by setting `AWS_S3_ACCELERATE=true`. This uses CloudFront edge locations to accelerate file downloads, providing 50-500% faster speeds for users far from your S3 bucket region. See [S3 Transfer Acceleration configuration](operations_configuration.md#aws-s3-accelerate) for setup details.
+    For faster image downloads, especially for high-resolution images or globally distributed users, enable S3 Transfer Acceleration by setting `AWS_S3_ACCELERATE=true`. This uses CloudFront edge locations to accelerate file downloads, providing 50-500% faster speeds for users far from your S3 bucket region. See [S3 Transfer Acceleration configuration](operations_configuration_storage.md#aws-s3-accelerate) for setup details.
 
-## Advanced Features
+## Working with image models { #advanced-features }
 
 ### Provider-Specific Parameters
 
@@ -168,7 +185,7 @@ export DEFAULT_MODEL_PARAMS='{
 }
 ```
 
-#### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Canvas
+#### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Canvas { #amazon-nova-canvas-extra-features }
 
 **Basic Usage (Standard OpenAI Parameters):**
 
@@ -226,7 +243,7 @@ curl -X POST "$BASE/v1/images/generations" \
 !!! info "Full Parameter Reference"
     For all parameters, styles, and task types, see [Amazon Nova Canvas documentation](https://docs.aws.amazon.com/nova/latest/userguide/image-generation.html)
 
-#### ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Titan Image Generator
+#### ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Titan Image Generator { #amazon-titan-image-generator-extra-features }
 
 **Basic Usage (Standard OpenAI Parameters):**
 
@@ -283,7 +300,7 @@ curl -X POST "$BASE/v1/images/generations" \
 !!! info "Full Parameter Reference"
     For all parameters and task types, see [Amazon Titan Image Generator documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html)
 
-#### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Models
+#### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Models { #stability-ai-extra-features }
 
 **Basic Usage (Standard OpenAI Parameters):**
 
@@ -307,16 +324,38 @@ curl -X POST "$BASE/v1/images/generations" \
 
 **Model Comparison:**
 
-| Model                             | Output Formats  | Best For                              |
+| Model                             | Native Formats  | Best For                              |
 |-----------------------------------|-----------------|---------------------------------------|
 | stability.sd3-5-large-v1:0        | png, jpeg, webp | High quality, versatile compositions  |
 | stability.stable-image-core-v1:1  | png, jpeg       | Balanced quality and speed            |
 | stability.stable-image-ultra-v1:1 | png, jpeg       | Premium quality and detail            |
 
+A format outside the model's native set is produced by re-encoding the returned image, so any model answers `output_format: "webp"`.
+
 !!! info "Full Parameter Reference"
     For all Stability AI parameters, see [Stability AI documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-stability-diffusion.html)
 
-## Available Request Headers
+## Limits and behaviour to know
+
+- **`n` is capped by the model, not by the endpoint.** The endpoint accepts 1-10; the effective
+  maximum is model-dependent, and Amazon Titan and Nova Canvas stop at 5. Stability AI models
+  have no batch call, so each of the `n` images is a separate Bedrock request.
+- **`partial_images` never produces a preview.** No available model streams partial images, so
+  the value (0-3) is accepted and ignored and each finished image is sent as a single
+  `image_generation.completed` event.
+- **`moderation` accepts only its default `auto`.** Any other value is rejected with an error;
+  content filtering is configured with the guardrail [request headers](#available-request-headers)
+  instead.
+- **`background` has no transparent mode.** `auto` and `opaque` are accepted, `transparent` is
+  not, and every response reports `opaque`.
+- **`quality` and `style` reach only the models that have the control.** A model with no
+  equivalent setting accepts the field and ignores it.
+- **An unsupported provider-specific parameter returns HTTP 400.** Compatible ones are forwarded
+  to Bedrock — see [Provider-Specific Parameters](#provider-specific-parameters).
+- **OpenAI image model names resolve only once you map them**, as described in the
+  [Models](#model-support) section.
+
+## Request headers { #available-request-headers }
 
 This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
 
@@ -344,7 +383,7 @@ curl -X POST "$BASE/v1/images/generations" \
   -H "X-Amzn-Bedrock-Service-Tier: priority" \
   -H "X-Amzn-Bedrock-PerformanceConfig-Latency: optimized" \
   -d '{
-    "model": "amazon.nova-canvas-v1:0",
+    "model": "stability.stable-image-core-v1:1",
     "prompt": "A serene mountain landscape at sunset"
   }'
 ```
@@ -352,10 +391,10 @@ curl -X POST "$BASE/v1/images/generations" \
 !!! info "Detailed Documentation"
     For complete information about these headers, configuration options, and use cases, see:
 
-    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
-    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
+    - [Bedrock Guardrails Configuration](operations_configuration_bedrock.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration_bedrock.md#bedrock-service-tier-and-performance-configuration)
 
-## Try It Now
+## Try it { #try-it-now }
 
 **Generate image (URL response):**
 
@@ -365,7 +404,7 @@ curl -X POST "$BASE/v1/images/generations" \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "A serene mountain landscape at sunset, photorealistic",
-    "model": "amazon.nova-canvas-v1:0",
+    "model": "stability.stable-image-core-v1:1",
     "size": "1024x1024",
     "quality": "high",
     "response_format": "url"
@@ -380,7 +419,7 @@ curl -X POST "$BASE/v1/images/generations" \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "A futuristic cityscape with flying cars, digital art style",
-    "model": "amazon.nova-canvas-v1:0",
+    "model": "stability.stable-image-core-v1:1",
     "response_format": "b64_json"
   }'
 ```
@@ -395,12 +434,12 @@ curl -N -X POST "$BASE/v1/images/generations" \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "An abstract watercolor painting of emotions",
-    "model": "amazon.nova-canvas-v1:0",
+    "model": "stability.stable-image-core-v1:1",
     "stream": true,
     "n": 2
   }'
 ```
 
----
+## Next steps
 
-**Unleash your creativity!** Explore available image models in the [Models API](api_openai_models.md).
+Next: [Models API](api_openai_models.md) · [Images Edits API](api_openai_images_edits.md) · [Images Variations API](api_openai_images_variations.md) · [IAM permissions](operations_iam_permissions.md)

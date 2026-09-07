@@ -6,43 +6,46 @@ keywords: anthropic messages API, claude messages API, AWS Bedrock chat, streami
 
 # Messages API (Anthropic Compatible)
 
-Generate conversational AI responses with Amazon Bedrock foundation models—including Claude, Nova, Llama, and more—through an Anthropic-compatible Messages API interface.
+Generate conversational AI responses with Amazon Bedrock foundation models—including Claude, Nova, Llama, and more—through an Anthropic-compatible Messages API interface. Served under `/anthropic` by default; the examples below use `$BASE`, which includes that prefix.
 
-!!! warning "Route Prefix & Base URL"
-    By default, all Anthropic-compatible routes are prefixed with `/anthropic`. This means the Messages API is available at `/anthropic/v1/messages` instead of `/v1/messages`. You can customize this prefix using the `ANTHROPIC_ROUTES_PREFIX` configuration variable documented in [Operations Configuration](operations_configuration.md#anthropic-routes-prefix).
+## At a glance
 
-    The `curl` examples below use a `$BASE` variable that **must include this prefix** — set it to your scheme and host followed by `ANTHROPIC_ROUTES_PREFIX`:
+- :material-brain: **One catalogue, not one vendor** — name any chat model your regions serve: Anthropic Claude, Amazon Nova, Meta Llama, and every [Bedrock Mantle](features.md#bedrock-mantle-models) model when Mantle is enabled.
+- :material-image-multiple: **Multi-modal input** — text, images, video and PDF documents in one conversation, from HTTP URLs, data URIs, `s3://` URLs and [Files API](api_anthropic_files.md) `file-id:` references.
+- :material-lightning-bolt: **Streaming, tool use, extended thinking, prompt caching** — model permitting; see [Feature compatibility](#feature-compatibility).
+- :material-shield-check: **Bedrock Guardrails and service tiers** — content filtering and `priority` / `flex` latency selection per request, through [request headers](#available-request-headers).
+- :material-swap-horizontal: **Differs from the Anthropic API:** `max_tokens` is optional, `inference_geo` and `container` are accepted and ignored, and `mcp_servers` never opens a connection — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
+- :material-swap-horizontal: **Differs from the official SDK:** `anthropic` ≥ 1.0 removed `temperature`, `top_p` and `top_k` from `messages.create()`; the gateway still accepts them on the wire, so send them through `extra_body`.
+
+!!! info "Base URL and route prefix"
+    By default, all Anthropic-compatible routes are prefixed with `/anthropic`. This means the Messages API is available at `/anthropic/v1/messages` instead of `/v1/messages`. You can customize this prefix using the `ANTHROPIC_ROUTES_PREFIX` configuration variable documented in [HTTP Server and MCP](operations_configuration_server.md#anthropic-routes-prefix).
+
+    The `curl` examples on this page use a `$BASE` variable that **must include this prefix** — set it to your scheme and host followed by `ANTHROPIC_ROUTES_PREFIX`:
 
     ```bash
     export BASE="https://your-host/anthropic"  # <scheme>://<host> + ANTHROPIC_ROUTES_PREFIX
     ```
 
-## Why Choose the Messages API?
+```bash
+curl -X POST "$BASE/v1/messages" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-5",
+    "max_tokens": 256,
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
 
-<div class="grid cards" markdown>
-
-- :material-brain: __Multiple Models__
-  <br>Access models from Anthropic, Amazon, Meta, and more through one API. Choose the best model for your task without vendor lock-in.
-
-- :material-image-multiple: __Multi-Modal__
-  <br>Process text, images, videos, and documents together. Support for URLs, data URIs, and direct S3 references.
-
-- :material-shield-check: __Built-In Safety__
-  <br>Bedrock Guardrails provide content filtering and safety policies.
-
-- :material-aws: __AWS Scale & Reliability__
-  <br>Run on AWS infrastructure with service tiers for optimized latency. Multi-region model access for availability and performance.
-
-</div>
-
-## Available Endpoints
+## Endpoints { #available-endpoints }
 
 | Endpoint                    | Method | What It Does                               | Powered By                                                                    | MCP Tool                         |
 |-----------------------------|--------|--------------------------------------------|-------------------------------------------------------------------------------|----------------------------------|
 | `/v1/messages`              | `POST` | Conversational AI with multi-modal support | Bedrock Converse API · [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) | `anthropic_message`              |
 | `/v1/messages/count_tokens` | `POST` | Count tokens in a message without sending  | Bedrock CountTokens API · Bedrock Mantle                                      | `anthropic_message_count_tokens` |
 
-## Feature Compatibility
+## Feature compatibility { #feature-compatibility }
 
 <div class="feature-table" markdown>
 
@@ -90,6 +93,8 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | **Other**                             |                                          |                                                                                              |
 | Refusal details (`stop_details`)      |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Policy category and explanation behind `stop_reason: "refusal"`, when the model reports them |
 | Metadata                              |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Converse path: logged only. Mantle path: `metadata.user_id` is forwarded upstream            |
+| `inference_geo`                       | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored: data residency is set by the deployment's configured Bedrock regions, not per request — see [Limits](#limits-and-behaviour-to-know) |
+| `container`                           | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored: no code-execution container is created or reused                       |
 | Bedrock Guardrails                    | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Content safety policies                                                                      |
 | Service tiers                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Mapped to Bedrock service tiers and latency options                                          |
 
@@ -107,7 +112,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 
 </div>
 
-## Model Support
+## Models { #model-support }
 
 All models supported by the Bedrock Converse and ConverseStream APIs are supported, plus every model served by [Bedrock Mantle](features.md#bedrock-mantle-models) when enabled — including OpenAI GPT-5.x, xAI Grok, and Google Gemma 4. Requests to Mantle models are passed through natively or converted automatically depending on the model's upstream API support — see [Bedrock Mantle](#bedrock-mantle) below.
 
@@ -126,12 +131,12 @@ Mantle-only Claude models are passed through to the upstream Anthropic Messages 
 | `top_k` | Forwarded | Dropped |
 | `cache_control` markers | Forwarded (prompt caching preserved) | Dropped |
 | `stop_sequences` | Forwarded | Dropped when served via the Responses API |
-| `max_tokens` | Forwarded | Below 16, raised to 16 when served via the Responses API (its minimum; a budget of 1, sent as a cheap model probe by some clients, would otherwise be rejected with `400`) — where the classic endpoint also serves the model (the GPT-5.6 family, by default), clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models) moves it there, where it is honored as sent; forwarded unchanged when served via Chat Completions |
+| `max_tokens` | Forwarded | Below 16, raised to 16 when served via the Responses API (its minimum; a budget of 1, sent as a cheap model probe by some clients, would otherwise be rejected with `400`) — where the classic endpoint also serves the model (the GPT-5.6 family, by default), clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) moves it there, where it is honored as sent; forwarded unchanged when served via Chat Completions |
 | `metadata.user_id` | Forwarded | Forwarded, SHA-256-hashed when over 64 characters |
 | `service_tier` | Forwarded | Only `auto` is forwarded |
 
 !!! note "Workspace attribution (`anthropic-workspace`)"
-    Mantle requests can be attributed to a Bedrock Workspace for cost tracking and observability with the `anthropic-workspace: <project-id>` header (a bare project ID such as `proj_abc123`, not an ARN). It is honored per-request only when [`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](operations_configuration.md#bedrock-allow-mantle-project-override) is `true`; otherwise the server default ([`AWS_BEDROCK_MANTLE_PROJECT`](operations_configuration.md#bedrock-mantle-project)) applies. This applies **only** to models served by the Bedrock Mantle endpoint — classic `bedrock-runtime` models ignore the header.
+    Mantle requests can be attributed to a Bedrock Workspace for cost tracking and observability with the `anthropic-workspace: <project-id>` header (a bare project ID such as `proj_abc123`, not an ARN). It is honored per-request only when [`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](operations_configuration_aws.md#bedrock-allow-mantle-project-override) is `true`; otherwise the server default ([`AWS_BEDROCK_MANTLE_PROJECT`](operations_configuration_aws.md#bedrock-mantle-project)) applies. This applies **only** to models served by the Bedrock Mantle endpoint — classic `bedrock-runtime` models ignore the header.
 
 ### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Claude Models Name Aliases
 
@@ -149,9 +154,9 @@ Aliases for non-Anthropic models are also supported as normal.
 
 ### Wildcard Model Patterns
 
-`model` also accepts a [glob pattern](operations_configuration.md#model-wildcard-patterns) — `claude-sonnet-*`, say — and the server serves the most recently released match. The response's `model` field always names the concrete model that served the request, streaming and non-streaming alike — never the alias or the pattern the request named.
+`model` also accepts a [glob pattern](operations_configuration_models.md#model-wildcard-patterns) — `claude-sonnet-*`, say — and the server serves the most recently released match. The response's `model` field always names the concrete model that served the request, streaming and non-streaming alike — never the alias or the pattern the request named.
 
-## Advanced Features
+## Working with messages { #advanced-features }
 
 ### Prompt Caching
 
@@ -269,7 +274,7 @@ In subsequent requests with cache hits:
 System prompts define the AI assistant's behavior, personality, and instructions (e.g., "You are a helpful assistant"). Most models support system prompts.
 
 !!! warning "Unsupported Models"
-    Some models don't support system prompts (`mistral.mistral-7b-instruct-v0:2`, `mistral.mixtral-8x7b-instruct-v0:1`). By default, **stdapi.ai silently drops system messages** for these models, allowing cross-model compatibility. To receive errors instead, configure [`DROP_UNSUPPORTED_SYSTEM_PROMPT=false`](operations_configuration.md#drop-unsupported-system-prompt).
+    Some models don't support system prompts (`mistral.mistral-7b-instruct-v0:2`, `mistral.mixtral-8x7b-instruct-v0:1`). By default, **stdapi.ai silently drops system messages** for these models, allowing cross-model compatibility. To receive errors instead, configure [`DROP_UNSUPPORTED_SYSTEM_PROMPT=false`](operations_configuration_models.md#drop-unsupported-system-prompt).
 
 ### :material-message-cog: Mid-Conversation System Messages
 
@@ -419,7 +424,7 @@ curl -X POST "$BASE/v1/messages" \
 ```
 
 !!! warning "Region Compatibility"
-    Web grounding is only available in US Bedrock regions. To ensure all requests are routed to a US region, restrict the model using [`AWS_BEDROCK_MODEL_REGION_RESTRICT`](operations_configuration.md#bedrock-model-region-restrict):
+    Web grounding is only available in US Bedrock regions. To ensure all requests are routed to a US region, restrict the model using [`AWS_BEDROCK_MODEL_REGION_RESTRICT`](operations_configuration_aws.md#bedrock-model-region-restrict):
 
     ```bash
     export AWS_BEDROCK_MODEL_REGION_RESTRICT='{"amazon.nova-": ["us-east-1"]}'
@@ -528,7 +533,7 @@ Anthropic's MCP connector — `mcp_servers` plus `mcp_toolset` entries in `tools
 
 Rather than reject an otherwise valid request, the gateway **accepts it and ignores the connector**:
 
-- `mcp_servers` and every `mcp_toolset` entry are dropped; no connection is made and none of the server's tools can be called. An `authorization_token` you supply is never forwarded to any backend, and never appears in the `request_params` log field ([`LOG_REQUEST_PARAMS`](operations_configuration.md#log-request-params)) — but a request rejected as malformed reports the offending value to the server log, so treat a `400` on a body carrying a token as a reason to rotate it.
+- `mcp_servers` and every `mcp_toolset` entry are dropped; no connection is made and none of the server's tools can be called. An `authorization_token` you supply is never forwarded to any backend, and never appears in the `request_params` log field ([`LOG_REQUEST_PARAMS`](operations_configuration_observability.md#log-request-params)) — but a request rejected as malformed reports the offending value to the server log, so treat a `400` on a body carrying a token as a reason to rotate it.
 - Every other tool in `tools` is kept and behaves normally. A `cache_control` breakpoint carried by an `mcp_toolset` is dropped with it, so a request that marked its cache prefix there caches a shorter prefix than intended — put the breakpoint on a tool that survives.
 - A `tool_choice` is dropped when the toolsets were the only entries in `tools`: the choice had nothing left to select from, and forcing a tool against an empty `tools` array is refused by the Messages API.
 - `mcp_tool_use` and `mcp_tool_result` blocks already in the conversation — what a client records from a connector-enabled turn elsewhere, both inside the assistant turn that ran the tool — are accepted and read as an ordinary tool call and its result, so a replayed transcript keeps its meaning. Should the model call that tool again, it comes back as a normal `tool_use` block for you to run.
@@ -604,6 +609,9 @@ On models whose reasoning depth is an effort level rather than a token budget (A
 !!! note "`display` Not Honored"
     The `display` field (`summarized`/`omitted`) is accepted but has no effect: Bedrock's reasoning configuration has no equivalent, so full thinking text is always returned.
 
+!!! note "Disabled Thinking Not Honored on Claude Fable and Mythos"
+    These two families always reason. The request is accepted and a warning is recorded in the request log, but the disabled configuration is dropped and the model's default adaptive mode is used: the response still carries thinking blocks and their output tokens are still billed. Use `output_config.effort` to lower the depth instead.
+
 **Response with Thinking:**
 
 When extended thinking is enabled, the response includes thinking content blocks:
@@ -636,7 +644,64 @@ When extended thinking is enabled, the response includes thinking content blocks
 !!! info "Documentation"
     See [Using Claude on Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html) for more details on Claude-specific parameters.
 
-## Available Request Headers
+## Model-Specific Features
+
+### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
+
+`twelvelabs.pegasus-1-2-v1:0` is a video-understanding model. Because Pegasus accepts exactly one video and one text prompt per call, this API adapts the conversation automatically:
+
+- The **latest video** found anywhere in the conversation (any role, any position) is forwarded as the video input.
+- The **latest contiguous run of user text** (back to the previous assistant or tool turn) is concatenated and forwarded as the text prompt.
+- `temperature` and `max_tokens` are forwarded.
+
+**Silently ignored** (no error): system prompts, tools, `top_p`, stop sequences, and prompt caching.
+
+**Upstream format limitation:** The Anthropic Messages API does not define a `video` content block in its stable spec. To stay fully compatible with standard Anthropic clients, pass the video as an **`image`** content block with `media_type` set to the video MIME type (e.g. `video/mp4`) — the server detects the video MIME type automatically and routes it to Pegasus correctly.
+
+**Video input formats**: `data:video/mp4;base64,…`, `https://…`, `s3://bucket/key`, or `file-id:…`. Videos above 18.75 MB are automatically uploaded to S3.
+
+```bash
+curl -X POST "$BASE/v1/messages" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "twelvelabs.pegasus-1-2-v1:0",
+    "max_tokens": 1024,
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "image",
+            "source": {"type": "url", "url": "s3://my-bucket/video.mp4"}
+          },
+          {"type": "text", "text": "Describe what happens in this video."}
+        ]
+      }
+    ]
+  }'
+```
+
+## Limits and behaviour to know
+
+**`inference_geo` is accepted and ignored.** The gateway routes to the Bedrock regions the deployment configures in [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions), so a per-request geography cannot change where inference runs. A request that sets it is answered normally, from the configured regions; set the regions to pin data residency.
+
+**`container` is accepted and ignored.** No code-execution container is created, reused or returned, and the response carries no `container` object.
+
+**`max_tokens` is optional.** The Anthropic API requires it; here the model's own default output limit applies when the field is absent, so a client that relies on the `400` for a missing field gets an answer instead.
+
+**Token counting is refused for Marketplace model endpoints.** Those endpoints expose no token-counting API, so `POST /v1/messages/count_tokens` answers `400` for a model served by one. Every Converse- and Mantle-served model is counted.
+
+**The official SDK no longer sends the sampling parameters.** `anthropic` ≥ 1.0 removed `temperature`, `top_p` and `top_k` from `messages.create()`. The gateway still accepts all three on the wire and older clients keep working; with the current SDK, pass them as `extra_body={"temperature": …}`.
+
+**The MCP connector never opens a connection.** `mcp_servers` and `mcp_toolset` entries are dropped before the request leaves — declare the tools in `tools` and run them yourself. See [MCP Connector](#mcp-connector) for what happens to `tool_choice` and to an `authorization_token`.
+
+**A server tool a model cannot run is refused, not silently dropped.** `web_search`, `code_execution` and the Claude computer-use tools answer `400` on a model without support for them, and the Mantle-to-OpenAI conversion path rejects server tools outright — see [Server Tools](#server-tools) and [Bedrock Mantle](#bedrock-mantle).
+
+**Some models get their system prompt dropped.** Models with no system-prompt support (`mistral.mistral-7b-instruct-v0:2`, `mistral.mixtral-8x7b-instruct-v0:1`) have system messages removed so the same request works across models; set [`DROP_UNSUPPORTED_SYSTEM_PROMPT=false`](operations_configuration_models.md#drop-unsupported-system-prompt) to get an error instead.
+
+## Request headers { #available-request-headers }
 
 This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
 
@@ -683,49 +748,10 @@ curl -X POST "$BASE/v1/messages" \
 !!! info "Detailed Documentation"
     For complete information about these headers, configuration options, and use cases, see:
 
-    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
-    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
+    - [Bedrock Guardrails Configuration](operations_configuration_bedrock.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration_bedrock.md#bedrock-service-tier-and-performance-configuration)
 
-## Model-Specific Features
-
-### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
-
-`twelvelabs.pegasus-1-2-v1:0` is a video-understanding model. Because Pegasus accepts exactly one video and one text prompt per call, this API adapts the conversation automatically:
-
-- The **latest video** found anywhere in the conversation (any role, any position) is forwarded as the video input.
-- The **latest contiguous run of user text** (back to the previous assistant or tool turn) is concatenated and forwarded as the text prompt.
-- `temperature` and `max_tokens` are forwarded.
-
-**Silently ignored** (no error): system prompts, tools, `top_p`, stop sequences, and prompt caching.
-
-**Upstream format limitation:** The Anthropic Messages API does not define a `video` content block in its stable spec. To stay fully compatible with standard Anthropic clients, pass the video as an **`image`** content block with `media_type` set to the video MIME type (e.g. `video/mp4`) — the server detects the video MIME type automatically and routes it to Pegasus correctly.
-
-**Video input formats**: `data:video/mp4;base64,…`, `https://…`, `s3://bucket/key`, or `file-id:…`. Videos above 18.75 MB are automatically uploaded to S3.
-
-```bash
-curl -X POST "$BASE/v1/messages" \
-  -H "x-api-key: $ANTHROPIC_API_KEY" \
-  -H "anthropic-version: 2023-06-01" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "twelvelabs.pegasus-1-2-v1:0",
-    "max_tokens": 1024,
-    "messages": [
-      {
-        "role": "user",
-        "content": [
-          {
-            "type": "image",
-            "source": {"type": "url", "url": "s3://my-bucket/video.mp4"}
-          },
-          {"type": "text", "text": "Describe what happens in this video."}
-        ]
-      }
-    ]
-  }'
-```
-
-## Try It Now
+## Try it { #try-it-now }
 
 **Basic message:**
 
@@ -831,6 +857,8 @@ curl -X POST "$BASE/v1/messages/count_tokens" \
 !!! info "Counted Request"
     The count is computed on the exact request `anthropic_message` would send for the same body: `thinking`/`output_config.effort`, server tools in their model-native form, `cache_control` breakpoints, and mid-conversation system message placement are all taken into account.
 
----
+Models served by a Marketplace model endpoint have no token-counting API and answer `400`; every Converse- and Mantle-served model is counted.
 
-**Ready to build with AI?** Check out the [Anthropic Models API](api_anthropic_models.md) to see all available foundation models, or the [Models Search API](api_search_models.md) for richer filtering.
+## Next steps
+
+Next: [Models API](api_anthropic_models.md) · [Search Models API](api_search_models.md) · [Files API](api_anthropic_files.md) · [Message Batches API](api_anthropic_batches.md) · [Configuration](operations_configuration.md)

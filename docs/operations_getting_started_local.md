@@ -8,7 +8,7 @@ keywords: Docker OpenAI gateway, local AI development, Podman AI gateway, free O
 
 Run stdapi.ai locally for development, testing, and evaluation using the free community container image (AGPL-3.0). Full API compatibility — the same endpoints and features as the production deployment.
 
-!!! tip "New to Amazon Bedrock?"
+??? info "Before you start"
     To run stdapi.ai locally you need:
 
     1. **[Docker](https://docs.docker.com/get-started/get-docker/) or [Podman](https://podman.io/docs/installation)** installed
@@ -25,10 +25,13 @@ Run stdapi.ai locally for development, testing, and evaluation using the free co
 docker run --rm -p 8000:8000 \
   --user "$(id -u):$(id -g)" -e HOME=/home/nonroot \
   -v ~/.aws:/home/nonroot/.aws:ro \
+  -e AWS_PROFILE=your-profile \
   -e AWS_BEDROCK_REGIONS=us-east-1,us-west-2 \
   -e ENABLE_DOCS=true \
   ghcr.io/stdapi-ai/stdapi.ai-community:latest
 ```
+
+Drop `-e AWS_PROFILE` if your credentials are in the `default` profile: the container reads the mounted `~/.aws` under whichever profile that variable names, and a session created by `aws sso login --profile your-profile` lives under that name.
 
 !!! info "Why `--user`"
     The image runs as the unprivileged user `nonroot` (uid/gid **65532**). Your
@@ -62,6 +65,7 @@ docker run --rm -p 8000:8000 \
     podman run --rm -p 8000:8000 \
       --userns=keep-id:uid=65532,gid=65532 \
       -v ~/.aws:/home/nonroot/.aws:ro,z \
+      -e AWS_PROFILE=your-profile \
       -e AWS_BEDROCK_REGIONS=us-east-1,us-west-2 \
       -e ENABLE_DOCS=true \
       ghcr.io/stdapi-ai/stdapi.ai-community:latest
@@ -107,7 +111,7 @@ curl http://localhost:8000/v1/chat/completions \
 
 **Interactive API docs:** Open [http://localhost:8000/docs](http://localhost:8000/docs) for Swagger UI with all available endpoints.
 
-**Point an application at it:** set the `base_url` (Python) / `baseURL` (Node.js) option to `http://localhost:8000/v1` (OpenAI SDK) or `http://localhost:8000/anthropic` (Anthropic SDK). Often that is the whole change: each model is published under the name its provider uses, so a `model` field already reading `claude-sonnet-5` or `gpt-oss-120b` resolves as it stands. Change it where the name differs — one your application hard-codes for a model this deployment does not serve, such as `gpt-4o` or `dall-e-3`, returns `404` here until you point it at a model from the catalog above or map it with [`MODEL_ALIASES`](operations_configuration.md#model-aliases), while every model your regions serve is one name away. No API key is required by default — pass any non-empty string if your client insists on one. The [API Overview](api_overview.md) has SDK snippets for Python, Node.js, and more.
+**Point an application at it:** set the `base_url` (Python) / `baseURL` (Node.js) option to `http://localhost:8000/v1` (OpenAI SDK) or `http://localhost:8000/anthropic` (Anthropic SDK). Often that is the whole change: each model is published under the name its provider uses, so a `model` field already reading `claude-sonnet-5` or `gpt-oss-120b` resolves as it stands. Change it where the name differs — one your application hard-codes for a model this deployment does not serve, such as `gpt-4o` or `dall-e-3`, returns `404` here until you point it at a model from the catalog above or map it with [`MODEL_ALIASES`](operations_configuration_models.md#model-aliases), while every model your regions serve is one name away. No API key is required by default — pass any non-empty string if your client insists on one. The [API Overview](api_overview.md) has SDK snippets for Python, Node.js, and more.
 
 !!! tip "Try other models"
     `amazon.nova-micro-v1:0` is a fast, low-cost model — great for confirming the pipeline works. Once you see a response, switch the `model` field to `anthropic.claude-fable-5`, `anthropic.claude-sonnet-5`, or any other Bedrock model available in your configured regions.
@@ -117,7 +121,7 @@ curl http://localhost:8000/v1/chat/completions \
 !!! tip "Optional: expose the API as MCP tools"
     The [MCP server](features.md#mcp-model-context-protocol) is off by default. Add `-e ENABLE_MCP_STREAMABLE_HTTP=true` to the `docker run` command and every endpoint becomes a named MCP tool at `http://localhost:8000/mcp`, callable directly by Claude Code or any MCP client.
 
-    Every exposed tool adds its schema to each MCP client's context window, so expose only the tools you actually use — for example `-e MCP_INCLUDE_TOOLS=openai_chat_completion,openai_embedding,search_models`. See the [MCP configuration reference](operations_configuration.md#summary-mcp).
+    Every exposed tool adds its schema to each MCP client's context window, so expose only the tools you actually use — for example `-e MCP_INCLUDE_TOOLS=openai_chat_completion,openai_embedding,search_models`. See the [MCP configuration reference](operations_configuration_server.md#summary-mcp).
 
 ---
 

@@ -8,21 +8,7 @@ keywords: LobeHub AWS, LobeHub Bedrock, private AI chat platform, self-hosted Lo
 
 Connect LobeHub to stdapi.ai as its OpenAI-compatible backend. Chat, vision, image generation, and knowledge-base embeddings all run through Amazon Bedrock with a single connection.
 
-## :material-information-outline: About LobeHub
-
-**🔗 Links:** [Website](https://lobehub.com/) | [GitHub](https://github.com/lobehub/lobehub) | [Documentation](https://lobehub.com/docs/self-hosting/start)
-
-LobeHub (formerly LobeChat) is an open-source, self-hosted AI chat platform with a ChatGPT-like interface, a plugin/agent marketplace, and a built-in knowledge base for retrieval-augmented chat.
-
-**Key Features:**
-
-- **Modern chat UI** - Multi-session, multi-agent chat with Markdown, code, and file rendering
-- **Knowledge base** - Upload documents and search them with semantic retrieval
-- **Vision and image generation** - Analyze images in chat and generate new ones with the AI Image tool
-- **Single provider model** - One "OpenAI" connection covers chat, vision, image generation, and embeddings
-- **Real accounts** - Email/password (or SSO) registration, not a shared access code
-
-## :material-help-circle-outline: Why LobeHub + stdapi.ai?
+## :material-lightning-bolt: At a glance { #why-lobehub-stdapiai }
 
 <div class="grid cards" markdown>
 
@@ -50,13 +36,30 @@ flowchart LR
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
+!!! note "How this page is checked"
+    Every other integration guide in this section has an automated test suite that drives the tool end to end against a live deployment. LobeHub has none: this page and its sample were checked by hand, so a LobeHub release can move ahead of them.
+
+## :material-information-outline: About LobeHub
+
+**🔗 Links:** [Website](https://lobehub.com/) | [GitHub](https://github.com/lobehub/lobehub) | [Documentation](https://lobehub.com/docs/self-hosting/start)
+
+LobeHub (formerly LobeChat) is an open-source, self-hosted AI chat platform with a ChatGPT-like interface, a plugin/agent marketplace, and a built-in knowledge base for retrieval-augmented chat.
+
+**Key Features:**
+
+- **Modern chat UI** - Multi-session, multi-agent chat with Markdown, code, and file rendering
+- **Knowledge base** - Upload documents and search them with semantic retrieval
+- **Vision and image generation** - Analyze images in chat and generate new ones with the AI Image tool
+- **Single provider model** - One "OpenAI" connection covers chat, vision, image generation, and embeddings
+- **Real accounts** - Email/password (or SSO) registration, not a shared access code
+
 ## :material-connection: Connect Your Own Instance
 
 Point any running LobeHub instance—wherever you host it—at your stdapi.ai gateway. Nothing below requires the AWS sample in [Part 2](#deploy-the-full-stack-on-aws).
 
 ### :material-check-circle: Prerequisites
 
-!!! info "What You'll Need"
+??? info "Before you start"
     - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md)
     - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com`
     - ✓ **Your API key** - From Terraform output or configuration
@@ -71,10 +74,10 @@ LobeHub is configured through environment variables. Unlike Open WebUI, LobeHub 
     ENABLED_OPENAI    = "1"
     OPENAI_API_KEY    = YOUR_STDAPI_KEY
     OPENAI_PROXY_URL  = https://YOUR_STDAPI_URL/v1
-    OPENAI_MODEL_LIST = "-all,+anthropic.claude-sonnet-4-5-20250929-v1:0=Claude Sonnet 4.5<200000:vision:fc>,+stability.stable-image-core-v1:1=Stable Image Core<4096:imageOutput>"
+    OPENAI_MODEL_LIST = "-all,+anthropic.claude-sonnet-4-5-20250929-v1:0=Claude Sonnet 4.5<200000:vision:fc>"
     ```
 
-`OPENAI_MODEL_LIST` both selects which models appear in the UI and tags their capabilities (`vision`, `fc` for tool calling, `imageOutput`), following LobeHub's [model list syntax](https://lobehub.com/docs/self-hosting/advanced/model-list). Any model can be swapped for another Bedrock model available through stdapi.ai, as long as its capability tags match its modality.
+`OPENAI_MODEL_LIST` both selects which models appear in the UI and tags their capabilities (`vision`, `fc` for tool calling, `imageOutput`), following LobeHub's [model list syntax](https://lobehub.com/docs/self-hosting/advanced/model-list). Those tags set abilities only, never a model's type: LobeHub infers type from the model ID itself and defaults anything it does not recognize to "chat", so a non-chat model (e.g. an image-generation model) needs to be added by hand through the UI instead of listed here.
 
 Set the default models for chat and background tasks separately:
 
@@ -138,7 +141,7 @@ flowchart TB
 
   user -->|"HTTPS or HTTP · restricted to your IP"| alb
   alb -->|"HTTP · private subnet"| lobehub2
-  lobehub2 -->|"OpenAI API · API key<br/>Cloud Map private DNS<br/>no public endpoint"| stdapi2
+  lobehub2 -->|"OpenAI + Anthropic APIs · same key<br/>Cloud Map private DNS<br/>no public endpoint"| stdapi2
   lobehub2 -->|"TLS · verify-full"| postgres
   lobehub2 -->|"TLS · auth token"| valkey
   lobehub2 -->|"S3 gateway endpoint<br/>IAM user access key"| s3
@@ -156,7 +159,7 @@ Two things stand out. LobeHub is the only service with a public address — the 
 | **Amazon ECS on AWS Fargate** | Runs LobeHub, the stdapi.ai gateway and the self-hosted ParadeDB Postgres task as independent services | Terraform sample |
 | **Elastic Load Balancing** | The only public entry point; optionally terminates TLS with an ACM certificate on your domain, otherwise serves plain HTTP; forwards only to LobeHub | Terraform sample (`alb.tf`) |
 | **AWS Cloud Map** | Private DNS names LobeHub uses to reach the gateway and its Postgres task — neither is exposed outside the VPC, and the Postgres name is also the one its TLS certificate is issued for | Terraform sample (`service_discovery_dns_name`) |
-| **Amazon Bedrock** | Chat, vision, image generation and knowledge-base embeddings | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon Bedrock** | Chat, vision, image generation and knowledge-base embeddings | [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions) |
 | **Amazon S3** | Two separate buckets: LobeHub's file, avatar and knowledge-base uploads, and the gateway's own temporary multimodal objects | [S3 storage](operations_compliance.md#s3-data-storage) |
 | **Amazon ElastiCache (Valkey)** | LobeHub's cache, session state and the stream fan-out that lets a reply generated by one task reach a browser attached to another; reached over `rediss://` with an auth token, and deployed as a primary with a cross-AZ replica, automatic failover and daily snapshots | Terraform sample (`valkey.tf`) |
 | **Self-hosted PostgreSQL (ParadeDB)** | LobeHub's application database and the `pg_search`/`pgvector` store behind its knowledge base; not an AWS managed service — see [below](#why-this-sample-self-hosts-postgres) | Terraform sample (`postgres.tf`) |
@@ -174,7 +177,7 @@ LobeHub's server DB mode requires ParadeDB's `pg_search` extension, and neither 
 - **Encryption in transit** — HTTPS to the ALB when a domain and certificate are configured (plain HTTP otherwise, restricted to the deployer's IP), private-subnet HTTP from the ALB to LobeHub, TLS with an auth token to Valkey, and HTTPS with SigV4 from the gateway to Amazon Bedrock and S3. The Postgres hop is TLS too: Terraform creates a private certificate authority, issues a server certificate for the database's private DNS name — delivered to the container as a KMS-encrypted SSM `SecureString` parameter, never as a file on the shared volume — and LobeHub connects with `sslmode=verify-full` trusting that one authority, which makes the connection authenticated rather than merely encrypted.
 - **Encryption at rest** — SSE-KMS on both S3 buckets, an encrypted Valkey replication group, and a KMS-encrypted, transit-encrypted EFS volume behind the self-hosted Postgres.
 - **Least privilege** — each ECS task assumes its own role; the ALB's security group admits only the deployer's current IP, not the open internet; LobeHub's S3 access runs through a dedicated IAM user scoped to one bucket and one KMS key, because LobeHub's own S3 client needs a static access key and cannot assume the task role.
-- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) configured on the gateway applies to chat, vision and image generation alike, since LobeHub reaches all three through the same connection.
+- **Content policy** — a [Bedrock guardrail](operations_configuration_bedrock.md#bedrock-guardrails) configured on the gateway applies to chat, vision and image generation alike, since both the OpenAI and Anthropic provider surfaces LobeHub uses terminate on the same gateway.
 - **Data handling** — the gateway is stateless and holds request bodies in memory only; LobeHub's own content — chat history, uploaded files, knowledge-base embeddings — lives in the Postgres and S3 resources this sample creates, not in a service operated by LobeHub or stdapi.ai.
 
 ### :material-cube-outline: What's Included
@@ -186,7 +189,7 @@ Deploy LobeHub + stdapi.ai together with production infrastructure:
 **What's included:**
 
 - LobeHub on ECS Fargate, server DB mode
-- stdapi.ai gateway connected to Amazon Bedrock, exposed as LobeHub's single "OpenAI" provider
+- stdapi.ai gateway connected to Amazon Bedrock, exposed as LobeHub's **OpenAI** and **Anthropic** providers — two surfaces on the same gateway, authenticated with the same API key
 - Self-hosted ParadeDB PostgreSQL (`pg_search` + `pgvector`) on EFS — see [above](#why-this-sample-self-hosts-postgres)
 - Amazon S3 for file, avatar and knowledge-base uploads, private and SSE-KMS encrypted, served through presigned URLs
 - ElastiCache Valkey for cache and sessions
@@ -205,7 +208,7 @@ tofu apply
 **Manual steps after apply:**
 
 - **First account** — register through the UI; there is no pre-provisioned admin user, unlike the n8n sample
-- **Image generation model** — verify the model appears in the AI Image tool's model picker; this wiring was not exercised against a live deployment while building the sample
+- **Image generation model** — `OPENAI_MODEL_LIST` can only set a model's abilities, not its type, so an unrecognized ID like the sample's Stable Image Core defaults to type "chat" and `terraform/lobehub.tf` deliberately leaves it out of that list. Add it by hand: assistant's model settings → the **OpenAI** provider's model list → **Add Model** → enter `stability.stable-image-core-v1:1` → set **Model Type** to **Image Generation**
 
 ### :material-gauge: What It Costs to Run
 

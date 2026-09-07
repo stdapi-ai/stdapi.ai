@@ -6,10 +6,22 @@ keywords: Files API, Anthropic files, file upload, S3 file storage, Anthropic me
 
 # Files API (Anthropic Compatible)
 
-!!! warning "Route Prefix & Base URL"
-    By default, all Anthropic-compatible routes are prefixed with `/anthropic`. This means the Files API is available at `/anthropic/v1/files` instead of `/v1/files`. You can customize this prefix using the `ANTHROPIC_ROUTES_PREFIX` configuration variable documented in [Operations Configuration](operations_configuration.md#anthropic-routes-prefix).
+Upload and manage files via an Anthropic-compatible interface. Files are stored in Amazon S3 and can be referenced directly in Messages requests as document or image sources. Served under `/anthropic` by default; the examples below use `$BASE`, which includes that prefix.
 
-    The `curl` examples below use a `$BASE` variable that **must include this prefix** — set it to your scheme and host followed by `ANTHROPIC_ROUTES_PREFIX`:
+## At a glance
+
+- :material-upload: **Simple upload** — Upload any file with a single `multipart/form-data` request. Files are immediately available for use in inference.
+- :material-swap-vertical: **Bidirectional pagination** — Traverse your file list in both directions using `after_id` and `before_id` cursors — the gateway's own ID-cursor envelope, not the opaque `page` token the official Files API moved to (see below).
+- :material-file-document-multiple: **Messages integration** — Reference uploaded files directly in Messages requests as document or image source blocks using `"type": "file"`.
+- :material-download: **Content download** — Download raw file bytes at any time via the `/content` endpoint.
+- :material-database: **One file store for both dialects** — a file uploaded here is readable and deletable through the [OpenAI Files API](api_openai_files.md), and vice versa; both are backed by the same S3 bucket.
+- :material-swap-horizontal: **Differs from the Anthropic API:** no file size cap beyond S3's ~5 TB object limit, `downloadable` is always `true`, and `expires_after` is not implemented — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
+- :material-swap-horizontal: **Differs from the official SDK:** `anthropic` ≥ 1.0 paginates on an opaque `page` cursor this API does not serve, so SDK auto-pagination stops after the first page.
+
+!!! info "Base URL and route prefix"
+    By default, all Anthropic-compatible routes are prefixed with `/anthropic`. This means the Files API is available at `/anthropic/v1/files` instead of `/v1/files`. You can customize this prefix using the `ANTHROPIC_ROUTES_PREFIX` configuration variable documented in [HTTP Server and MCP](operations_configuration_server.md#anthropic-routes-prefix).
+
+    The `curl` examples on this page use a `$BASE` variable that **must include this prefix** — set it to your scheme and host followed by `ANTHROPIC_ROUTES_PREFIX`:
 
     ```bash
     export BASE="https://your-host/anthropic"  # <scheme>://<host> + ANTHROPIC_ROUTES_PREFIX
@@ -17,27 +29,13 @@ keywords: Files API, Anthropic files, file upload, S3 file storage, Anthropic me
 
     `ANTHROPIC_ROUTES_PREFIX` must always be a non-empty path and is validated at startup to differ from `OPENAI_ROUTES_PREFIX` (the server refuses to start otherwise). This Anthropic-compatible Files API is therefore always served on its own path, distinct from the [OpenAI-compatible Files API](api_openai_files.md).
 
-Upload and manage files via an Anthropic-compatible interface. Files are stored in Amazon S3 and can be referenced directly in Messages requests as document or image sources.
+```bash
+curl -X POST "$BASE/v1/files" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -F "file=@document.pdf;type=application/pdf"
+```
 
-## Why Choose the Files API?
-
-<div class="grid cards" markdown>
-
-- :material-upload: __Simple Upload__
-  <br>Upload any file with a single `multipart/form-data` request. Files are immediately available for use in inference.
-
-- :material-swap-vertical: __Bidirectional Pagination__
-  <br>Traverse your file list in both directions using `after_id` and `before_id` cursors — the gateway's own ID-cursor envelope, not the opaque `page` token the official Files API moved to (see below).
-
-- :material-file-document-multiple: __Messages Integration__
-  <br>Reference uploaded files directly in Messages requests as document or image source blocks using `"type": "file"`.
-
-- :material-download: __Content Download__
-  <br>Download raw file bytes at any time via the `/content` endpoint.
-
-</div>
-
-## Available Endpoints
+## Endpoints { #available-endpoints }
 
 | Endpoint                      | Method   | What It Does               | Powered By | MCP Tool                 |
 |-------------------------------|----------|----------------------------|------------|--------------------------|
@@ -47,7 +45,7 @@ Upload and manage files via an Anthropic-compatible interface. Files are stored 
 | `/v1/files/{file_id}`         | `DELETE` | Delete a file              | Amazon S3  | `anthropic_files_delete` |
 | `/v1/files/{file_id}/content` | `GET`    | Download raw file bytes    | Amazon S3  | `anthropic_file_content` |
 
-## Feature Compatibility
+## Feature compatibility { #feature-compatibility }
 
 <div class="feature-table" markdown>
 
@@ -77,10 +75,7 @@ Upload and manage files via an Anthropic-compatible interface. Files are stored 
 
 </div>
 
-## Quick Start
-
-!!! info "Optional Anthropic headers"
-    The `anthropic-version` and `anthropic-beta: files-api-2025-04-14` headers sent by the official Anthropic SDKs are accepted and ignored by this gateway — the Files API works without them. The examples below include them only for parity with SDK-generated requests.
+## Working with files { #quick-start }
 
 ### Upload a File
 
@@ -141,9 +136,6 @@ curl "$BASE/v1/files/file_0190c51c7de7455d9b8c2efe27dfbf67" \
 
 ### List Files
 
-!!! warning "SDK auto-pagination stops after one page"
-    The gateway serves the ID-cursor envelope (`first_id`, `last_id`, `has_more`, and the `after_id`/`before_id` query parameters), not the opaque `page`/`next_page` cursor the official Files API and `anthropic` SDK ≥ 1.0 moved to. The SDK's own iteration (`client.beta.files.list()` as an async iterator) follows `next_page`, which this response never sets, so it stops after the first page instead of walking your whole file list. Paginate by hand with `after_id`/`before_id`, as the examples below do. Adopting the newer cursor is tracked in [issue #206](https://github.com/stdapi-ai/stdapi.ai/issues/206).
-
 ```bash
 # Default (newest first, up to 20 files)
 curl "$BASE/v1/files" \
@@ -160,6 +152,8 @@ curl "$BASE/v1/files?before_id=file_0190c51c7de7455d9b8c2efe27dfbf67" \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -H "anthropic-beta: files-api-2025-04-14"
 ```
+
+Pagination is by ID cursor, as above; the official SDK's own iterator uses a different cursor and stops after one page — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
 
 ### Download Content
 
@@ -253,39 +247,6 @@ curl -X POST "$BASE/v1/messages" \
   }'
 ```
 
-## End-to-End Example
-
-```bash
-# 1. Upload a file
-FILE_ID=$(curl -s -X POST "$BASE/v1/files" \
-  -H "x-api-key: $ANTHROPIC_API_KEY" \
-  -H "anthropic-beta: files-api-2025-04-14" \
-  -F "file=@document.pdf;type=application/pdf" | jq -r .id)
-echo "Uploaded: $FILE_ID"
-
-# 2. Reference in a message
-curl -X POST "$BASE/v1/messages" \
-  -H "x-api-key: $ANTHROPIC_API_KEY" \
-  -H "anthropic-beta: files-api-2025-04-14" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"model\": \"anthropic.claude-haiku-4-5-20251001-v1:0\",
-    \"max_tokens\": 512,
-    \"messages\": [{
-      \"role\": \"user\",
-      \"content\": [
-        {\"type\": \"document\", \"source\": {\"type\": \"file\", \"file_id\": \"$FILE_ID\"}},
-        {\"type\": \"text\", \"text\": \"What is the key finding in this document?\"}
-      ]
-    }]
-  }"
-
-# 3. Cleanup
-curl -X DELETE "$BASE/v1/files/$FILE_ID" \
-  -H "x-api-key: $ANTHROPIC_API_KEY" \
-  -H "anthropic-beta: files-api-2025-04-14"
-```
-
 ## Referencing Uploaded Files via the `file-id:` URI Scheme
 
 The native `{"type": "file", "file_id": "..."}` source shown above is the Anthropic-compatible way to reference an uploaded file in Messages content blocks. For **string-overloaded** file fields that already accept URI schemes like `s3://`, `https://`, or `data:` — for example image and document content blocks with `source.type` `url` or `base64` — this implementation defines an additional project-local URI scheme:
@@ -330,7 +291,23 @@ curl -X POST "$BASE/v1/messages" \
 
 See the [OpenAI Files API documentation](api_openai_files.md#referencing-uploaded-files-via-the-file-id-uri-scheme) for the full list of supported routes — the same scheme works identically across both API surfaces.
 
-## Errors
+## Configuration
+
+Files are stored in S3 under the prefix configured by [`AWS_S3_FILES_PREFIX`](operations_configuration_storage.md#aws-s3-files-prefix) (default: `files/`). All file IDs are shared across the OpenAI and Anthropic endpoints — a file uploaded via one API can be downloaded or deleted via the other.
+
+## Limits and behaviour to know
+
+**The API needs an S3 bucket.** Every route stores and reads objects in [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket); without it configured, all five endpoints answer `503`.
+
+**SDK auto-pagination stops after one page.** The gateway serves the ID-cursor envelope (`first_id`, `last_id`, `has_more`, and the `after_id`/`before_id` query parameters), not the opaque `page`/`next_page` cursor the official Files API and `anthropic` SDK ≥ 1.0 moved to. The SDK's own iteration (`client.beta.files.list()` as an async iterator) follows `next_page`, which this response never sets, so it stops after the first page instead of walking your whole file list. Paginate by hand with `after_id`/`before_id`, as the [List Files](#list-files) examples do. Adopting the newer cursor is tracked in [issue #206](https://github.com/stdapi-ai/stdapi.ai/issues/206).
+
+**`downloadable` is always `true`.** Every file here is stored in S3 and readable through `/content`, so the field never carries the spec's `false` default for user-uploaded files.
+
+**There is no expiry.** The Anthropic surface has no `expires_after`; a file stays until it is deleted, or until an [S3 bucket lifecycle rule](operations_configuration_storage.md#s3-lifecycle) removes it. The [OpenAI Files API](api_openai_files.md) exposes `expires_after` on the same store.
+
+**`file-id:` is refused on upload.** `POST /v1/files` answers `400` for a `file-id:` input, because resolving it there would silently clone an existing file. It is accepted only on string-overloaded file fields — see [the URI scheme](#referencing-uploaded-files-via-the-file-id-uri-scheme).
+
+### Errors
 
 | HTTP | Cause                                                                               |
 |------|-------------------------------------------------------------------------------------|
@@ -340,10 +317,49 @@ See the [OpenAI Files API documentation](api_openai_files.md#referencing-uploade
 | 404  | File not found or already deleted                                                   |
 | 503  | `AWS_S3_BUCKET` is not configured                                                   |
 
-## Configuration
+## Request headers
 
-Files are stored in S3 under the prefix configured by [`AWS_S3_FILES_PREFIX`](operations_configuration.md#aws-s3-files-prefix) (default: `files/`). All file IDs are shared across the OpenAI and Anthropic endpoints — a file uploaded via one API can be downloaded or deleted via the other.
+| Header                                 | Purpose                                     | Notes                                          |
+|----------------------------------------|---------------------------------------------|------------------------------------------------|
+| `x-api-key`                            | Gateway API key                             | Required, like every other route               |
+| `anthropic-version`                    | Anthropic API version pin                   | Accepted and ignored                           |
+| `anthropic-beta: files-api-2025-04-14` | Files API beta opt-in                       | Accepted and ignored                           |
 
----
+The two Anthropic headers are sent by the official SDKs and cost nothing to send; the Files API works without them. The examples on this page include them only for parity with SDK-generated requests.
 
-**Use files across multiple requests without re-uploading.** See [OpenAI Files API](api_openai_files.md) for the OpenAI-compatible equivalent, including `expires_after` support.
+## Try it { #end-to-end-example }
+
+```bash
+# 1. Upload a file
+FILE_ID=$(curl -s -X POST "$BASE/v1/files" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-beta: files-api-2025-04-14" \
+  -F "file=@document.pdf;type=application/pdf" | jq -r .id)
+echo "Uploaded: $FILE_ID"
+
+# 2. Reference in a message
+curl -X POST "$BASE/v1/messages" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-beta: files-api-2025-04-14" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"anthropic.claude-haiku-4-5-20251001-v1:0\",
+    \"max_tokens\": 512,
+    \"messages\": [{
+      \"role\": \"user\",
+      \"content\": [
+        {\"type\": \"document\", \"source\": {\"type\": \"file\", \"file_id\": \"$FILE_ID\"}},
+        {\"type\": \"text\", \"text\": \"What is the key finding in this document?\"}
+      ]
+    }]
+  }"
+
+# 3. Cleanup
+curl -X DELETE "$BASE/v1/files/$FILE_ID" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-beta: files-api-2025-04-14"
+```
+
+## Next steps
+
+Next: [Messages API](api_anthropic_messages.md) · [OpenAI Files API](api_openai_files.md) · [Storage configuration](operations_configuration_storage.md)

@@ -10,25 +10,41 @@ Run a large set of chat completion or embedding requests asynchronously, at a lo
 
 A batch is created from a file of requests, runs without a connection held open, and is read back from the result files it produces — exactly the OpenAI workflow, so the official OpenAI SDKs work by changing the base URL.
 
-## Why Choose the Batch API?
+## At a glance
 
-<div class="grid cards" markdown>
+- :material-api: **Four endpoints** — create, list, retrieve and cancel, served
+  by Amazon Bedrock batch inference, see [Endpoints](#available-endpoints).
+- :material-tag-arrow-down: **The batch rate, roughly half the on-demand rate**
+  — usage is recorded once, when the batch ends, see [Billing](#pricing).
+- :material-file-document-outline: **100 to 50,000 requests per batch, in up to
+  200 MB of JSONL** — a batch outside those bounds is refused when it is
+  created, see [Limits and behaviour to know](#limits).
+- :material-server-off: **A 24-hour processing window, no connection held** —
+  `completion_window` is `24h` as upstream, counted from `created_at` and
+  reported as `expires_at`, see [Listing order](#listing-order).
+- :material-cloud-lock: **Requests and results in your own S3 bucket** — the
+  results are read back through the [Files API](api_openai_files.md) as
+  `output_file_id` and `error_file_id`, with no traffic to third-party
+  endpoints.
+- :material-close-circle: **No tools, `json_schema`, streaming or `n` above 1**
+  — a batch carrying one of them is refused when it is created, see
+  [Feature compatibility](#feature-compatibility).
+- :material-alert-circle-outline: **No `DELETE /v1/batches/{batch_id}`** —
+  deletion is served by the Anthropic Message Batches surface, for the batches
+  created there, see [Deleting a batch](#deleting-a-batch).
 
-- :material-tag-arrow-down: __Lower Price per Token__
-  <br>Batched requests are billed at the published batch rate, well below the on-demand rate for the same model.
+```bash
+curl -X POST "$BASE/v1/batches" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_file_id": "file-06fvfg3lbdqarbad8kbo55g0sg5h3s4a",
+    "endpoint": "/v1/chat/completions",
+    "completion_window": "24h"
+  }'
+```
 
-- :material-swap-horizontal: __Drop-in OpenAI Compatibility__
-  <br>`client.batches.create(...)` and `client.batches.retrieve(...)` work unchanged, as does the JSONL input format.
-
-- :material-server-off: __No Connection to Hold__
-  <br>Submit and walk away. Results stay readable through the [Files API](api_openai_files.md) once the batch ends.
-
-- :material-cloud-lock: __Private AWS Backend__
-  <br>Requests and results are stored in your own S3 buckets — no traffic to third-party endpoints.
-
-</div>
-
-## Available Endpoints
+## Endpoints { #available-endpoints }
 
 | Endpoint                    | Method | What It Does                          | MCP Tool              |
 |-----------------------------|--------|---------------------------------------|-----------------------|
@@ -37,7 +53,7 @@ A batch is created from a file of requests, runs without a connection held open,
 | `/v1/batches/{batch_id}`    | `GET`  | Retrieve a batch and its counters     | `openai_batch_get`    |
 | `/v1/batches/{batch_id}/cancel` | `POST` | Cancel a batch that is still running | `openai_batch_cancel` |
 
-## Feature Compatibility
+## Feature compatibility
 
 <div class="feature-table" markdown>
 
@@ -62,7 +78,7 @@ A batch is created from a file of requests, runs without a connection held open,
 | **Lifecycle**                    |                                          |                                                                             |
 | Retrieve / poll                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `validating` → `in_progress` → `finalizing` → `completed`                    |
 | Cancel                           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `cancelling` then `cancelled`; requests already answered stay in `output_file_id`, and a batch that has ended is unchanged |
-| List batches                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Newest first by `created_at`, with an `after` cursor — see [Listing Order](#listing-order) |
+| List batches                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Newest first by `created_at`, with an `after` cursor — see [Listing order](#listing-order) |
 | `output_file_id` / `error_file_id` |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Readable through the [Files API](api_openai_files.md)                     |
 | `usage`                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Token totals, reported once the batch ends                                  |
 | `finalizing` status              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Reported with `finalizing_at` while the results of a batch whose requests have run are being assembled; `completed` follows once they are readable |
@@ -80,12 +96,23 @@ A batch is created from a file of requests, runs without a connection held open,
 </div>
 
 !!! note "Content Guardrails and Batches"
-    A request that a [guardrail](operations_configuration.md#aws-bedrock-guardrail-identifier) would apply to is refused rather than run unguarded. Send those requests without batching.
+    A request that a [guardrail](operations_configuration_bedrock.md#aws-bedrock-guardrail-identifier) would apply to is refused rather than run unguarded. Send those requests without batching.
 
 !!! note "Prompt Caching and Batches"
     Batched requests neither read nor write a prompt cache, on any model. A request carrying a cache hint is still accepted and answered — the hint is dropped rather than the request — so a batch reports no cached tokens in `usage.input_tokens_details`. Nothing is lost by leaving the hint in: batched requests are already billed at the batch rate, and the cache discount was never available at that rate.
 
-## Listing Order
+## Models { #model-support }
+
+Any chat or embedding model available for batch inference in your configured Amazon Bedrock regions can be used — the same identifiers as [Chat Completions](api_openai_chat_completions.md) and [Embeddings](api_openai_embeddings.md). To shortlist them, call [`search_models`](api_search_models.md) with `route=openai_chat_completion&batch=true`, or `route=openai_embedding&batch=true` for embeddings; each entry also carries a `batch` field.
+
+!!! warning "The shortlist is a hint, not a rule"
+    `batch` is advertised on a best-effort basis and never used to reject a request. A model it does not advertise — or says nothing about — may still run a batch, so submit the batch rather than ruling the model out; the answer you get back is the authoritative one.
+
+A model that cannot serve batched requests is refused when the batch is created, naming the model. A model this deployment normally serves through another Amazon Bedrock endpoint is batched under the identifier the batch endpoint knows it by, so it needs nothing from you.
+
+A batch's own `model` field, and the `model` field of each request in the JSONL body, may name a [wildcard pattern](operations_configuration_models.md#model-wildcard-patterns) instead of an exact model. It is resolved once, when the batch is created: the concrete model that pattern meant that day is what the batch reports and runs for its whole life, even after a newer release would resolve it differently.
+
+## Listing order
 
 Batches are listed **most recent first**, ordered by the `created_at` each one
 reports, so paging with the `after` cursor and sorting a page on `created_at`
@@ -97,7 +124,7 @@ runs from it.
 !!! warning "The Listing Window"
     A listing does not reach every batch ever created. It is answered from a
     window of **up to 1,000 of the most recent batch records** held in the
-    bucket set by [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket),
+    bucket set by [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket),
     and an `after` cursor naming a batch outside that window returns an empty
     page. Finding that window costs a bounded number of storage requests, so
     however many batches the bucket holds, the window is taken from the newest
@@ -115,11 +142,13 @@ runs from it.
       surface**: records created through either API count against the same
       window, and each listing then shows only its own.
     - **Deleted batches keep their slot.** A deleted batch is not listed, but
-      its record still occupies one place in the window.
+      its record still occupies one place in the window — and deletion is
+      served by the Anthropic surface only, see
+      [Deleting a batch](#deleting-a-batch).
 
     Retrieving a batch by its identifier is unaffected — that works for as long
     as the record exists. Keep the identifiers you need rather than relying on
-    the listing to find them again, and delete batches you are done with.
+    the listing to find them again.
 
 !!! warning "Batches Created Before 1.17"
     A batch created by an earlier version reports a `created_at` captured a
@@ -129,18 +158,53 @@ runs from it.
     page with the `after` cursor rather than rebuilding the order from
     `created_at`.
 
-## Model Support
+## Prerequisites
 
-Any chat or embedding model available for batch inference in your configured Amazon Bedrock regions can be used — the same identifiers as [Chat Completions](api_openai_chat_completions.md) and [Embeddings](api_openai_embeddings.md). To shortlist them, call [`search_models`](api_search_models.md) with `route=openai_chat_completion&batch=true`, or `route=openai_embedding&batch=true` for embeddings; each entry also carries a `batch` field.
+The Batch API is disabled until the deployment declares an AWS IAM service role that Amazon Bedrock assumes to read the requests and write the results:
 
-!!! warning "The shortlist is a hint, not a rule"
-    `batch` is advertised on a best-effort basis and never used to reject a request. A model it does not advertise — or says nothing about — may still run a batch, so submit the batch rather than ruling the model out; the answer you get back is the authoritative one.
+- [`AWS_BEDROCK_BATCH_ROLE_ARN`](operations_configuration_bedrock.md#aws-bedrock-batch-role-arn) — the service role.
+- [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket) — the bucket holding the batch data.
+- [`AWS_S3_BATCHES_PREFIX`](operations_configuration_storage.md#aws-s3-batches-prefix) — the prefix it is stored under.
 
-A model that cannot serve batched requests is refused when the batch is created, naming the model. A model this deployment normally serves through another Amazon Bedrock endpoint is batched under the identifier the batch endpoint knows it by, so it needs nothing from you.
+The permissions the role and the server need are listed in [IAM Permissions](operations_iam_permissions.md#batch-inference).
+While the role is unset, every batch endpoint answers `503`.
 
-A batch's own `model` field, and the `model` field of each request in the JSONL body, may name a [wildcard pattern](operations_configuration.md#model-wildcard-patterns) instead of an exact model. It is resolved once, when the batch is created: the concrete model that pattern meant that day is what the batch reports and runs for its whole life, even after a newer release would resolve it differently.
+## Billing { #pricing }
 
-## Workflow
+Batched requests are billed at the published batch rate for the model, roughly half the on-demand rate. Usage is recorded once, when the batch ends. See [Cost Management](operations_cost_management.md#batch-inference).
+
+## Limits and behaviour to know { #limits }
+
+### Caps enforced at creation
+
+| Limit                          | Value                        |
+|--------------------------------|------------------------------|
+| Minimum requests per batch     | 100 (default quota)          |
+| Maximum requests per batch     | 50,000                       |
+| Maximum input file size        | 200 MB                       |
+| `custom_id` length             | 64 characters                |
+| Distinct models per input file | 1 (upstream rule)            |
+| Processing window              | 24 hours from creation       |
+
+A batch below the minimum, or past any of these caps, is refused when it is created and the message names the shortfall, rather than accepted and failed later.
+
+!!! note "The 100-request minimum is a quota default"
+    100 is the default of the Amazon Bedrock quota *Minimum number of records per batch inference job*, which is set **per model** and adjustable for some of them — see [Amazon Bedrock quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html). The gateway checks against that default, not against your account's own value, so a raised quota is enforced by Amazon Bedrock rather than here — a batch of 150 clears this check and is then refused by the backend — and a lowered one is not usable: fewer than 100 requests is still refused here.
+
+### Deleting a batch
+
+This surface serves no `DELETE /v1/batches/{batch_id}`: a batch record created
+here keeps its place in the bucket for as long as the bucket holds it. Its
+result files are ordinary [Files API](api_openai_files.md) objects, so
+`DELETE /v1/files/{file_id}` removes them, and `output_expires_after` set at
+creation expires them on their own.
+
+The [Anthropic Message Batches API](api_anthropic_batches.md) does serve
+`DELETE /v1/messages/batches/{id}`, but a batch record is readable only through
+the API it was created with, so that endpoint deletes Anthropic-created batches
+only.
+
+## Try it { #workflow }
 
 ### 1. Upload the requests
 
@@ -181,8 +245,8 @@ batch = client.batches.create(
 **Example request (curl):**
 
 ```bash
-curl -X POST "https://your-host/v1/batches" \
-  -H "Authorization: Bearer $API_KEY" \
+curl -X POST "$BASE/v1/batches" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "input_file_id": "file-06fvfg3lbdqarbad8kbo55g0sg5h3s4a",
@@ -247,41 +311,6 @@ Requests that failed are collected in a separate file, named by `error_file_id`.
 !!! warning "Results Are Not in Request Order"
     Output lines may come back in any order, as upstream also warns. Match a result to its request with `custom_id`, never with the line number.
 
-## Limits
+## Next steps { #related }
 
-| Limit                          | Value                        |
-|--------------------------------|------------------------------|
-| Minimum requests per batch     | 100 (default quota)          |
-| Maximum requests per batch     | 50,000                       |
-| Maximum input file size        | 200 MB                       |
-| `custom_id` length             | 64 characters                |
-| Distinct models per input file | 1 (upstream rule)            |
-| Processing window              | 24 hours from creation       |
-
-A batch below the minimum, or past any of these caps, is refused when it is created and the message names the shortfall, rather than accepted and failed later.
-
-!!! note "The 100-request minimum is a quota default"
-    100 is the default of the Amazon Bedrock quota *Minimum number of records per batch inference job*, which is set **per model** and adjustable for some of them — see [Amazon Bedrock quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html). The gateway checks against that default, not against your account's own value, so a raised quota is enforced by Amazon Bedrock rather than here — a batch of 150 clears this check and is then refused by the backend — and a lowered one is not usable: fewer than 100 requests is still refused here.
-
-## Prerequisites
-
-The Batch API is disabled until the deployment declares an AWS IAM service role that Amazon Bedrock assumes to read the requests and write the results:
-
-- [`AWS_BEDROCK_BATCH_ROLE_ARN`](operations_configuration.md#aws-bedrock-batch-role-arn) — the service role.
-- [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) — the bucket holding the batch data.
-- [`AWS_S3_BATCHES_PREFIX`](operations_configuration.md#aws-s3-batches-prefix) — the prefix it is stored under.
-
-The permissions the role and the server need are listed in [IAM Permissions](operations_iam_permissions.md#batch-inference).
-While the role is unset, every batch endpoint answers `503`.
-
-## Billing
-
-Batched requests are billed at the published batch rate for the model, roughly half the on-demand rate. Usage is recorded once, when the batch ends. See [Cost Management](operations_cost_management.md#batch-inference).
-
-## See Also
-
-- [Files API](api_openai_files.md) — upload the requests, download the results
-- [Chat Completions API](api_openai_chat_completions.md) — the per-request body
-- [Embeddings API](api_openai_embeddings.md) — the per-request body of an embeddings batch
-- [Message Batches API](api_anthropic_batches.md) — the Anthropic-shaped equivalent
-- [Configuration](operations_configuration.md#aws-bedrock-batch-role-arn) — enabling batches
+Next: [Files API](api_openai_files.md) · [Chat Completions API](api_openai_chat_completions.md) · [Embeddings API](api_openai_embeddings.md) · [Message Batches API, the only surface with a delete endpoint](api_anthropic_batches.md)

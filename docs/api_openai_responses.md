@@ -8,25 +8,26 @@ keywords: responses API, OpenAI responses API, Amazon Bedrock responses, streami
 
 Generate model responses with Amazon Bedrock foundation models through an OpenAI Responses API-compatible interface. Supports text, images, tool calling, and streaming.
 
-## Why Choose the Responses API?
+## At a glance
 
-<div class="grid cards" markdown>
+- :material-tools: **Tools, with the full round trip.** Function tools in, `function_call` items out, `function_call_output` back in — plus [file search](#file-search) over Amazon Bedrock Knowledge Bases, [web search](#openai-gpt-web-search) and [image generation](#image-generation) as server-run tools.
+- :material-lightning-bolt: **Streaming across the whole lifecycle.** `response.created` through `response.completed`, with text and tool-argument deltas, reasoning deltas, web-search brackets and citation annotations as separate events.
+- :material-code-json: **Structured output** through `text.format`: `json_object` on every model, `json_schema` with schema validation on the models that support it.
+- :material-brain: **Extended reasoning** through `reasoning.effort`, with the encrypted reasoning returned when `include` asks for it.
+- :material-server-network: **State on the server, in your AWS account.** `store: true`, `previous_response_id`, [conversations](api_openai_conversations.md), [compaction](#conversation-compaction) and [input-token counting](#input-token-counting) are backed by Amazon Bedrock, not by the gateway.
+- :material-swap-horizontal: **Differs from OpenAI:** `store` defaults to `false` here, and response IDs are stdapi.ai's own — they carry the serving region and are not interchangeable with another provider's.
 
-- :material-tools: __Tool Calling__
-  <br>Define function tools and get structured tool calls back. Full round-trip support with `function_call_output`.
+```bash
+curl -X POST "$BASE/v1/responses" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-micro-v1:0",
+    "input": "Say hello world"
+  }'
+```
 
-- :material-code-json: __Structured Output__
-  <br>Request JSON object or JSON schema output via `text.format` to get machine-readable responses.
-
-- :material-lightning-bolt: __Streaming__
-  <br>Real-time token streaming with granular events for text deltas, tool calls, and lifecycle milestones.
-
-- :material-brain: __Extended Reasoning__
-  <br>Enable chain-of-thought reasoning on supported models via `reasoning.effort`.
-
-</div>
-
-## Available Endpoints
+## Endpoints { #available-endpoints }
 
 | Endpoint                                  | Method   | What It Does                                                             | Powered By                                | MCP Tool                       |
 |-------------------------------------------|----------|--------------------------------------------------------------------------|-------------------------------------------|--------------------------------|
@@ -38,7 +39,7 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 | `/v1/responses/{response_id}/cancel`      | `POST`   | Cancel a background response — see [Stored Responses](#stored-responses) | Amazon Bedrock Sessions · Bedrock Mantle     | `openai_response_cancel`       |
 | `/v1/responses/{response_id}/input_items` | `GET`    | List the input items of a stored response                                | Amazon Bedrock Sessions                      | `openai_response_input_items`  |
 
-## Feature Compatibility
+## Feature compatibility
 
 <div class="feature-table" markdown>
 
@@ -76,7 +77,7 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 | `custom` / `namespace` / `tool_search` / `apply_patch` tools          | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and dropped; no Bedrock equivalent                                  |
 | `programmatic_tool_calling` tool / `tool_choice`                      |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | No Converse equivalent — accepted and dropped, the model calls the declared tools directly (the `tool_choice` degrades to the model's default choice); forwarded upstream on Bedrock Mantle native models |
 | **Generation Control**                                                |                                         |                                                                              |
-| `max_output_tokens`                                                   |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Maps to Bedrock `maxTokens`; forwarded verbatim on Bedrock Mantle native models, which reject a value below 16 with `400` (a request converted from Chat Completions or Anthropic Messages instead has that value raised to 16 automatically — see [Chat Completions](api_openai_chat_completions.md#bedrock-mantle) / [Messages](api_anthropic_messages.md#bedrock-mantle)). Where the classic endpoint also serves the model (the GPT-5.6 family, by default), clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models) moves it there, where a budget of 1 is honored |
+| `max_output_tokens`                                                   |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Maps to Bedrock `maxTokens`; forwarded verbatim on Bedrock Mantle native models, which reject a value below 16 with `400` (a request converted from Chat Completions or Anthropic Messages instead has that value raised to 16 automatically — see [Chat Completions](api_openai_chat_completions.md#bedrock-mantle) / [Messages](api_anthropic_messages.md#bedrock-mantle)). Where the classic endpoint also serves the model (the GPT-5.6 family, by default), clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) moves it there, where a budget of 1 is honored |
 | `temperature`                                                         |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | 0–2 range; mapped to Bedrock inference config                                |
 | `top_p`                                                               |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | 0–1 range; nucleus sampling                                                  |
 | `top_logprobs`                                                        |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | 0–20 range accepted and echoed; log probabilities are never returned on Converse-served models; forwarded upstream on Bedrock Mantle native models |
@@ -85,7 +86,7 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 | `reasoning.context`                                                   |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted but ignored on Converse-served models — context scoping is not applied; forwarded upstream on Bedrock Mantle native models |
 | `reasoning.mode`                                                      |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted but ignored on Converse-served models — pro-mode reasoning selection is not applied; forwarded upstream on Bedrock Mantle native models |
 | `text.verbosity`                                                      |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted but ignored on Converse-served models; forwarded upstream on Bedrock Mantle native models |
-| `include`                                                             |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }   | `reasoning.encrypted_content` is honored; other values are accepted and ignored (forwarded upstream on Bedrock Mantle native models) |
+| `include`                                                             |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }   | `reasoning.encrypted_content` is honored, and `file_search_call.results` attaches the retrieved passages — see [File Search](#file-search); other values are accepted and ignored (forwarded upstream on Bedrock Mantle native models) |
 | `metadata`                                                            |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Forwarded to Bedrock `requestMetadata`                                       |
 | `prompt_cache_key`                                                    |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Cache prompts to reduce costs and latency                                    |
 | `prompt_cache_options`                                                |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | `mode: "explicit"` caches only the parts marked with `prompt_cache_breakpoint`; `ttl: "30m"` mapped to a 1 hour Amazon Bedrock retention on Anthropic models (other models use the default 5 minute TTL) when `prompt_cache_retention` is unset; echoed on the response; forwarded upstream on Bedrock Mantle native models |
@@ -143,14 +144,14 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 !!! note "Bedrock Mantle passthrough"
     On [Mantle](features.md#bedrock-mantle-models) models served natively by the upstream Responses API, the parameters that the Converse path accepts but ignores — `background`, `include` (values other than `reasoning.encrypted_content`), `stream_options`, `reasoning.summary`, `text.verbosity`, `client_metadata`, `top_logprobs` — the hosted tools (`file_search`, `code_interpreter`, `computer`, `mcp`, `image_generation`) and the `web_search` search options (`filters`, `search_context_size`, `user_location`) are forwarded verbatim upstream: the upstream API decides whether they take effect or return a clean error. Web access is the exception: on every Mantle model the server decides whether a search may reach the external web, and unless the deployment allows the override, a request asking for a different value is rejected with a `400` — see [OpenAI GPT web search](#openai-gpt-web-search), where the tool is served natively.
 
-## Model Support
+## Models { #model-support }
 
 All models supported by the Amazon Bedrock Converse and Converse Stream API are supported, plus every model served by [Bedrock Mantle](features.md#bedrock-mantle-models) when enabled — including OpenAI GPT-5.x, xAI Grok, and Google Gemma 4. Requests to Mantle models are passed through natively or converted automatically depending on the model's upstream API support.
 
 !!! note "Project attribution (`OpenAI-Project`)"
-    Mantle requests can be attributed to a Bedrock Project for cost tracking and observability with the `OpenAI-Project: <project-id>` header (a bare project ID such as `proj_abc123`, not an ARN). It is honored per-request only when [`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](operations_configuration.md#bedrock-allow-mantle-project-override) is `true`; otherwise the server default ([`AWS_BEDROCK_MANTLE_PROJECT`](operations_configuration.md#bedrock-mantle-project)) applies. This applies **only** to models served by the Bedrock Mantle endpoint — classic `bedrock-runtime` models ignore the header.
+    Mantle requests can be attributed to a Bedrock Project for cost tracking and observability with the `OpenAI-Project: <project-id>` header (a bare project ID such as `proj_abc123`, not an ARN). It is honored per-request only when [`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](operations_configuration_aws.md#bedrock-allow-mantle-project-override) is `true`; otherwise the server default ([`AWS_BEDROCK_MANTLE_PROJECT`](operations_configuration_aws.md#bedrock-mantle-project)) applies. This applies **only** to models served by the Bedrock Mantle endpoint — classic `bedrock-runtime` models ignore the header.
 
-## Advanced Features
+## Working with the Responses API { #advanced-features }
 
 ### System Prompt (`instructions`)
 
@@ -505,7 +506,7 @@ Following OpenAI semantics, `input_tokens` covers the **full** prompt: tokens re
 The `prompt` parameter references a prompt template stored in [Amazon Bedrock Prompt Management](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-management.html). Amazon Bedrock renders the template server-side, so the request body carries only the variable values.
 
 !!! warning "Disabled by Default"
-    `prompt` returns `400` unless the server operator sets [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](operations_configuration.md#bedrock-allow-prompt-arn) to `true`.
+    `prompt` returns `400` unless the server operator sets [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](operations_configuration_bedrock.md#bedrock-allow-prompt-arn) to `true`.
 
 ```bash
 curl -X POST "$BASE/v1/responses" \
@@ -682,7 +683,7 @@ runs one or more queries, and grounds its answer in what it finds.
     on the `bedrock-runtime` endpoint. The GPT-5.6 family is offered on both, and
     is served from Mantle by default so that `web_search` and `code_interpreter`
     work with no configuration —
-    [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models)
+    [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models)
     defaults to `openai.gpt-5.6` for that reason.
 
     That default is **a price change** for these models, because Mantle has no
@@ -690,7 +691,7 @@ runs one or more queries, and grounds its answer in what it finds.
     Sol, Terra and Luna cost **exactly 10% more per token** — input, output,
     cached and long-context rates alike — than the classic endpoint charges
     under its default Global routing; the per-million figures are in the
-    [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models)
+    [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models)
     reference. Alongside it, Amazon Bedrock Guardrails cannot apply to these
     models (configuring both is refused at startup),
     [input token counting](#input-token-counting) answers `400` for them, and
@@ -703,7 +704,7 @@ runs one or more queries, and grounds its answer in what it finds.
     **rejected with a `400`** rather than answered without a search. The
     `x-stdapi-service: bedrock-mantle` header routes a single request back to
     Mantle where
-    [`AWS_BEDROCK_MANTLE_SERVICE_HEADER`](operations_configuration.md#bedrock-mantle-service-header)
+    [`AWS_BEDROCK_MANTLE_SERVICE_HEADER`](operations_configuration_aws.md#bedrock-mantle-service-header)
     enables it — which a deployment configuring a guardrail cannot do, that
     combination being refused at startup too.
 
@@ -737,7 +738,7 @@ citation as a `response.output_text.annotation.added` event.
 !!! info "External web access"
     Searches are answered from the Amazon Bedrock web index and cache, and
     results are current and cited either way.
-    [`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](operations_configuration.md#bedrock-external-web-access)
+    [`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](operations_configuration_models.md#bedrock-external-web-access)
     controls whether a search *may* reach the external web, and it takes the
     `bedrock-websearch:ExternalWebAccess` permission as well — see
     [Web Search IAM](operations_iam_permissions.md#web-search-iam).
@@ -753,7 +754,7 @@ citation as a `response.output_text.annotation.added` event.
     A request may choose its own web access by sending `external_web_access` as
     an extra model parameter (a top-level field, or `extra_body` in the OpenAI
     SDK), and only when
-    [`AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE`](operations_configuration.md#bedrock-allow-external-web-access-override)
+    [`AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE`](operations_configuration_models.md#bedrock-allow-external-web-access-override)
     is enabled; otherwise a value differing from the configured one is rejected
     with a `400`. These are the models whose search takes the choice per
     request: everywhere else the parameter must match the server's value.
@@ -771,7 +772,7 @@ citation as a `response.output_text.annotation.added` event.
     Web search is available on the OpenAI GPT-5.x models in `us-east-1`,
     `us-east-2` and `us-west-2`. Each search runs in the Region that served the
     model call and is never routed to another Region, so keep one of the three
-    in [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions):
+    in [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions):
     a model served from anywhere else cannot search.
 
     It is billed per query on top of the model's
@@ -784,7 +785,7 @@ citation as a `response.output_text.annotation.added` event.
 The `image_generation` integrated tool works with **all text models** — Claude, Nova, and any future model. The gateway intercepts the tool, lets the LLM compose the image prompt and parameters via a synthetic function call, then generates the image against a configured Bedrock image model and returns an `image_generation_call` output item to the client. Intermediate `function_call` items are suppressed.
 
 !!! warning "Configuration Required"
-    Set the [`IMAGE_GENERATION_MODEL`](operations_configuration.md#image-generation-model) environment variable to a Bedrock image model ID (e.g. `amazon.nova-canvas-v1:0`). The tool definition may also specify a `model` field to override the default per request.
+    Set the [`IMAGE_GENERATION_MODEL`](operations_configuration_models.md#image-generation-model) environment variable to a Bedrock image model ID (e.g. `amazon.nova-canvas-v1:0`). The tool definition may also specify a `model` field to override the default per request.
 
 **Example — Generate an image:**
 
@@ -863,9 +864,9 @@ per-request value wins over them.
 - :material-check-circle:{ .success role="img" aria-label="Supported" } **Compatible parameters**: forwarded to the model and applied
 - :material-alert-circle:{ .warning } **Unsupported parameters**: the backend refuses the request, returned as a `400`
 - :material-alert-circle:{ .warning } **Reserved names**: `additional_request_fields`, `max_tokens`, `model_id`, `stop_sequences`, `temperature`, `top_logprobs` and `top_p` are the argument names the gateway binds when it builds the Bedrock call, so sending one as an extra is rejected with a `400` naming it instead of binding twice — use the declared `max_output_tokens`, `temperature`, `top_p` and `top_logprobs` fields
-- :material-alert-circle:{ .warning } **Client-side control fields**: names no provider treats as inference parameters (LiteLLM's `drop_params` among them) are dropped before the call. [`EXTRA_MODEL_PARAMS_DENYLIST`](operations_configuration.md#extra-model-params-denylist) extends that list, and [`EXTRA_MODEL_PARAMS_DROP_ALL`](operations_configuration.md#extra-model-params-drop-all) disables the passthrough entirely
+- :material-alert-circle:{ .warning } **Client-side control fields**: names no provider treats as inference parameters (LiteLLM's `drop_params` among them) are dropped before the call. [`EXTRA_MODEL_PARAMS_DENYLIST`](operations_configuration_models.md#extra-model-params-denylist) extends that list, and [`EXTRA_MODEL_PARAMS_DROP_ALL`](operations_configuration_models.md#extra-model-params-drop-all) disables the passthrough entirely
 
-## Input Token Counting
+### Input Token Counting
 
 Count input tokens without generating a response. Useful for estimating costs or checking context-window fit before making a full response call.
 
@@ -904,12 +905,13 @@ curl -X POST "$BASE/v1/responses/input_tokens" \
   }'
 ```
 
-!!! note "Limitations"
-    The `previous_response_id` and `conversation` parameters are not supported for token counting (they would change the count); `personality` (a token-counting-only schema field) and `reasoning.context` are accepted and ignored. Token counting is not available for models served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) (the request is rejected with a `400` error) — the **OpenAI GPT-5.6 family included**, since it is served from Mantle by default. Clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models) brings the family back to the classic endpoint, where it counts tokens.
+`conversation` is accepted, and the conversation's items are counted ahead of
+`input`. What token counting does not take is in
+[Limits and behaviour to know](#limits-and-behaviour-to-know).
 
-## Stored Responses
+### Stored Responses
 
-Set `store: true` to persist a response in [Amazon Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html): one AWS-managed session per stored response, encrypted at rest (optionally with [your own KMS key](operations_configuration.md#aws-bedrock-session-encryption-key-arn)), with no state on the server itself.
+Set `store: true` to persist a response in [Amazon Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html): one AWS-managed session per stored response, encrypted at rest (optionally with [your own KMS key](operations_configuration_bedrock.md#aws-bedrock-session-encryption-key-arn)), with no state on the server itself.
 
 ```bash
 curl -X POST "$BASE/v1/responses" \
@@ -934,12 +936,12 @@ The returned `id` then works with:
     - `POST /v1/responses/input_tokens` and `POST /v1/responses/compact` cannot reference a Mantle-stored response via `previous_response_id` — like input-item listings, Mantle native storage does not serve the stored items back.
     - On Amazon Bedrock session storage, `store=true` is ignored with `stream=true` (a warning is recorded in the request log). [Mantle](features.md#bedrock-mantle-models) models persist responses in Mantle native storage instead, where `store` works with streaming too.
     - Mantle models without native Responses storage (Messages- or Chat-Completions-bound) use Amazon Bedrock session storage like classic models. Only a `store=true` request answered through a mid-request API fallback (away from the upstream Responses API) is served without storage, with a warning recorded in the request log; its ID cannot be retrieved later. `previous_response_id` on such a fallback returns `400` instead — conversation history is never silently dropped.
-    - Sessions are created in the primary Bedrock region and persist until deleted through the API — see [operator guidance on cleaning up stale sessions](operations_configuration.md#bedrock-session-storage-optional).
+    - Sessions are created in the primary Bedrock region and persist until deleted through the API — see [operator guidance on cleaning up stale sessions](operations_configuration_bedrock.md#bedrock-session-storage-optional).
     - `GET /v1/responses/{response_id}` rejects `stream=true` with `400`; `include` and `starting_after` are accepted and ignored.
     - Amazon Bedrock session storage is offered in fewer regions than model inference. Where the primary Bedrock region does not provide it, `store=true` is ignored and a warning naming the region as the cause is recorded in the request log — the response itself is still returned. Configure a primary region that provides session storage to avoid this entirely.
     - Requires the Amazon Bedrock session management IAM permissions (`bedrock:CreateSession`, `bedrock:CreateInvocation`, `bedrock:PutInvocationStep`, `bedrock:GetInvocationStep`, `bedrock:ListInvocationSteps`, `bedrock:ListInvocations`, `bedrock:ListSessions`, `bedrock:ListTagsForResource`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`). Without them, `store=true` is ignored (with a request-log warning) and the response is not persisted.
 
-## Conversation Compaction
+### Conversation Compaction
 
 Compact a long conversation into a single `compaction` item to keep multi-turn sessions within the context window. The model summarizes the provided `input`; the summary comes back as an opaque item that you include in the `input` of later requests instead of the full history.
 
@@ -985,54 +987,9 @@ Continue the conversation by sending the compaction item back, followed by new m
 !!! note "Stateless compaction"
     The compaction content is fully self-contained (marker-prefixed and encoded, not encrypted): no conversation state is needed, and any server instance can expand it. Only compaction items produced by this server can be expanded — items encrypted by the upstream OpenAI API are rejected with `400`, and locally-produced items cannot be continued on a [Mantle](features.md#bedrock-mantle-models)-served model. `previous_response_id` may reference a [stored response](#stored-responses) to include its conversation in the compaction.
 
----
+### Model-Specific Features
 
-**Ready to build with AI?** Check out the [Models API](api_openai_models.md) to see all available foundation models!
-## Available Request Headers
-
-This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
-
-### Content Safety (Guardrails)
-
-| Header                               | Purpose                            | Valid Values                          |
-|--------------------------------------|------------------------------------|---------------------------------------|
-| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
-| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
-| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
-
-### Performance Optimization
-
-| Header                                     | Purpose                | Valid Values                  |
-|--------------------------------------------|------------------------|-------------------------------|
-| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `default`, `flex`, `priority`, `reserved` |
-| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`       |
-
-**Example with all headers:**
-
-```bash
-curl -X POST "$BASE/v1/responses" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -H "X-Amzn-Bedrock-GuardrailIdentifier: your-guardrail-id" \
-  -H "X-Amzn-Bedrock-GuardrailVersion: 1" \
-  -H "X-Amzn-Bedrock-Trace: enabled" \
-  -H "X-Amzn-Bedrock-Service-Tier: priority" \
-  -H "X-Amzn-Bedrock-PerformanceConfig-Latency: optimized" \
-  -d '{
-    "model": "amazon.nova-micro-v1:0",
-    "input": "Hello!"
-  }'
-```
-
-!!! info "Detailed Documentation"
-    For complete information about these headers, configuration options, and use cases, see:
-
-    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
-    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
-
-## Model-Specific Features
-
-### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
+#### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
 
 `twelvelabs.pegasus-1-2-v1:0` is a video-understanding model. Because Pegasus accepts exactly one video and one text prompt per call, this API adapts the conversation automatically:
 
@@ -1066,19 +1023,60 @@ curl -X POST "$BASE/v1/responses" \
   }'
 ```
 
-## Try It Now
+## Limits and behaviour to know
 
-**Basic response:**
+**What is rejected with a `400`.** `max_tool_calls`, `context_management`, `truncation: "auto"` (`disabled`, the OpenAI default, is the behavior served), `conversation` together with `previous_response_id`, `stream=true` on `GET /v1/responses/{response_id}`, and the `moderation` parameter on a [Mantle](features.md#bedrock-mantle-models)-served model.
+
+**What is accepted and ignored on Converse-served models.** `background` (execution is synchronous), `stream_options`, `reasoning.summary`, `reasoning.context`, `reasoning.mode`, `text.verbosity`, `client_metadata`, `top_logprobs`, `include` values other than the two honored ones, and `include` / `starting_after` on a stored-response retrieval. On Mantle-native models these are forwarded upstream instead — see [Bedrock Mantle passthrough](#feature-compatibility) above.
+
+**Tools with no backend equivalent are dropped, not refused.** `computer`, `mcp`, `local_shell`, `custom`, `programmatic_tool_calling` and the others leave the tool configuration before the request reaches the model, so the request succeeds and the model simply cannot call them; the full list, and what the model does instead, is under [Function Tool Calling](#function-tool-calling). `file_search` is the exception — it is served, from the vector stores the request names.
+
+**Token counting takes fewer parameters than a generation.** `previous_response_id` is not supported on `POST /v1/responses/input_tokens`, since resolving it would change the count; `personality` (a token-counting-only schema field) and `reasoning.context` are accepted and ignored. Token counting is not available at all for models served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models), which reject the request with a `400` — the **OpenAI GPT-5.6 family included**, since it is served from Mantle by default. Clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) brings the family back to the classic endpoint, where it counts tokens.
+
+## Request headers { #available-request-headers }
+
+This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
+
+### Content Safety (Guardrails)
+
+| Header                               | Purpose                            | Valid Values                          |
+|--------------------------------------|------------------------------------|---------------------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
+| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
+| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
+| `X-Amzn-Bedrock-GuardrailStreamProcessingMode` | Guardrail assessment timing on a streamed response | `sync`, `async` (streaming requests only) |
+
+### Performance Optimization
+
+| Header                                     | Purpose                | Valid Values                  |
+|--------------------------------------------|------------------------|-------------------------------|
+| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `default`, `flex`, `priority`, `reserved` |
+| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`       |
+
+**Example with all headers:**
 
 ```bash
 curl -X POST "$BASE/v1/responses" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
+  -H "X-Amzn-Bedrock-GuardrailIdentifier: your-guardrail-id" \
+  -H "X-Amzn-Bedrock-GuardrailVersion: 1" \
+  -H "X-Amzn-Bedrock-Trace: enabled" \
+  -H "X-Amzn-Bedrock-Service-Tier: priority" \
+  -H "X-Amzn-Bedrock-PerformanceConfig-Latency: optimized" \
   -d '{
     "model": "amazon.nova-micro-v1:0",
-    "input": "Say hello world"
+    "input": "Hello!"
   }'
 ```
+
+!!! info "Detailed Documentation"
+    For complete information about these headers, configuration options, and use cases, see:
+
+    - [Bedrock Guardrails Configuration](operations_configuration_bedrock.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration_bedrock.md#bedrock-service-tier-and-performance-configuration)
+
+## Try it { #try-it-now }
 
 **Streaming response:**
 
@@ -1124,3 +1122,6 @@ curl -X POST "$BASE/v1/responses" \
   }'
 ```
 
+## Next steps
+
+Next: [Conversations API](api_openai_conversations.md) · [Chat Completions API](api_openai_chat_completions.md) · [Models API](api_openai_models.md) · [Files API](api_openai_files.md)

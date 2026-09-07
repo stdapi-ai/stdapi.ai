@@ -171,7 +171,7 @@ _TAGS_PATH = f"{SETTINGS.ollama_routes_prefix}/api/tags"
 
 #: Fields the conversation subentry form has to offer.
 #:
-#: ``model`` is what the doc's step 4 asks a user to pick and ``llm_hass_api`` is
+#: ``model`` is what the doc's second dialog asks a user to pick and ``llm_hass_api`` is
 #: what turns the agent into a device controller, so a release that renamed
 #: either would leave the documentation wrong.
 _EXPECTED_SUBENTRY_FIELDS = frozenset({"name", "model", "prompt", "llm_hass_api"})
@@ -757,7 +757,7 @@ def assist_agent(home_assistant: httpx.Client, ollama_entry: dict[str, Any]) -> 
 
 
 class TestHomeAssistantConfigFlow:
-    """Step 1 to 3 of the documentation's Conversation Agent section.
+    """Both dialogs of the documentation's Conversation Agent section.
 
     Ref: https://www.home-assistant.io/integrations/ollama
          docs/use_cases_home_assistant.md

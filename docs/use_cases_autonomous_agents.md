@@ -8,17 +8,7 @@ keywords: autonomous agent AWS Bedrock, Hermes agent AWS, hermes-agent AWS Bedro
 
 Run autonomous agent CLIs against Amazon Bedrock models with stdapi.ai, using the same provider configuration you would point at OpenAI or Anthropic directly — three client-side changes: the base URL, the API key, and the model name, the last only where it differs from what the client already sends, now chosen from every provider in the catalogue rather than one vendor's list.
 
-## :material-information-outline: About Autonomous Agent CLIs
-
-Unlike IDE coding assistants, autonomous agent CLIs plan and execute multi-step tasks on their own—reading files, calling tools, and iterating toward a goal without a human approving each step. They typically run on infrastructure you control (a server, a container, a scheduled job) rather than inside an editor.
-
-**What you can build:**
-
-- **Personal assistants** - Agents that read, search, and act on your behalf from the command line
-- **Autonomous research and task loops** - Multi-turn tool-calling sessions that run unattended
-- **Self-hosted agent backends** - CLIs wired into cron jobs, CI pipelines, or your own orchestration
-
-## :material-help-circle-outline: Why Autonomous Agent CLIs + stdapi.ai?
+## :material-lightning-bolt: At a glance { #why-autonomous-agent-clis-stdapiai }
 
 <div class="grid cards" markdown>
 
@@ -43,13 +33,23 @@ flowchart LR
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
+## :material-information-outline: About Autonomous Agent CLIs
+
+Unlike IDE coding assistants, autonomous agent CLIs plan and execute multi-step tasks on their own—reading files, calling tools, and iterating toward a goal without a human approving each step. They typically run on infrastructure you control (a server, a container, a scheduled job) rather than inside an editor.
+
+**What you can build:**
+
+- **Personal assistants** - Agents that read, search, and act on your behalf from the command line
+- **Autonomous research and task loops** - Multi-turn tool-calling sessions that run unattended
+- **Self-hosted agent backends** - CLIs wired into cron jobs, CI pipelines, or your own orchestration
+
 ## :material-connection: Connect Your Own Instance
 
 Point Hermes or OpenClaw—wherever you run it—at your stdapi.ai gateway. Nothing below requires the AWS samples in [Part 2](#deploy-the-full-stack-on-aws).
 
 ### :material-check-circle: Prerequisites
 
-!!! info "What You'll Need"
+??? info "Before you start"
     - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md); see [Part 2](#deploy-the-full-stack-on-aws) for a Terraform-deployed option
     - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com` or `http://localhost:8000` for local
     - ✓ **Your API key** - From Terraform output or configuration (optional for local development)
@@ -74,7 +74,7 @@ sequenceDiagram
     G-->>A: 200
 ```
 
-The agent never needs to be told which identity provider you use, where its endpoints are, or which scopes to request — every one of those comes out of step 2 and 4. Enable it by setting [`OAUTH_RESOURCE_IDENTIFIER`](operations_configuration.md#oauth-resource-identifier) and [`OAUTH_AUTHORIZATION_SERVERS`](operations_configuration.md#oauth-authorization-servers) on the deployment.
+The agent never needs to be told which identity provider you use, where its endpoints are, or which scopes to request — every one of those comes out of step 2 and 4. Enable it by setting [`OAUTH_RESOURCE_IDENTIFIER`](operations_configuration_authentication.md#oauth-resource-identifier) and [`OAUTH_AUTHORIZATION_SERVERS`](operations_configuration_authentication.md#oauth-authorization-servers) on the deployment.
 
 !!! info "The agent still needs a client identity"
     Discovery tells the agent *where* to authenticate; the authorization server decides *who* may. With an Amazon Cognito user pool, register the agent as an app client in the pool and give it that client ID — Cognito supports neither dynamic client registration nor client-id metadata documents, so it cannot be skipped.
@@ -129,7 +129,7 @@ model:
 
 #### :material-swap-horizontal: Transport Selection
 
-`transport` is the standout setting: it picks which of stdapi.ai's three chat dialects the provider speaks, and `api` has to match the route serving it:
+`transport` is the standout setting: it picks which of the three chat routes below the provider speaks, and `api` has to match the route serving it:
 
 | `transport` | `api` base URL | API |
 |---|---|---|
@@ -169,7 +169,7 @@ Omit `--custom-api-key` to read the key from `CUSTOM_API_KEY` in the environment
 openclaw agent --model stdapi/anthropic.claude-fable-5
 ```
 
-`--custom-compatibility` is the standout setting here: one flag picks which of stdapi.ai's three chat dialects OpenClaw speaks, and `--custom-base-url` has to match the route serving it:
+`--custom-compatibility` is the standout setting here: one flag picks which of the three chat routes below OpenClaw speaks, and `--custom-base-url` has to match the route serving it:
 
 | `--custom-compatibility` | `--custom-base-url` | API |
 |---|---|---|
@@ -230,7 +230,7 @@ Two things are worth reading off the picture. stdapi.ai has no listener of its o
 | **Elastic Load Balancing** | Public entry point for the agent's own gateway API and dashboard/Control UI; never forwards to stdapi.ai | Terraform sample (`alb.tf`) |
 | **AWS Certificate Manager & Amazon Route 53** | Optional TLS certificate and DNS record for the ALB, created only when a custom domain is supplied | Terraform sample (`alb_domain_name`, `alb_route53_zone_name`) |
 | **AWS Cloud Map** | Private DNS namespace (`internal`) the agent uses to resolve stdapi.ai without a public endpoint | Terraform sample (`aws_service_discovery_private_dns_namespace "internal"`, `service_discovery_dns_name`) |
-| **Amazon Bedrock** | Serves the model calls the agent's chosen wire dialect sends through stdapi.ai | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon Bedrock** | Serves the model calls the agent's chosen wire dialect sends through stdapi.ai | [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions) |
 | **Amazon S3** | The gateway's own bucket for generated and temporary files; KMS-encrypted, versioned, lifecycle-managed | Module baseline (`storage.tf`) |
 | **AWS KMS** | Customer-managed key encrypting the gateway's S3 bucket; a separate key, created by the ECS module, encrypts the agent's EFS volumes and Fargate ephemeral storage | Terraform module baseline |
 | **Amazon EFS** | Persists the agent's own state (config, sessions, workspace) across redeployments. For Hermes it holds *all* state, including every SQLite database, which is why that service runs a single task | Terraform sample (`mount_points` in `hermes.tf`/`openclaw.tf`) |
@@ -243,7 +243,7 @@ Two things are worth reading off the picture. stdapi.ai has no listener of its o
 - **Encryption in transit** — HTTPS from the operator's browser to the ALB when a custom domain and ACM certificate are configured, plain HTTP otherwise; plain HTTP from the ALB to the agent container and from the agent to stdapi.ai, both confined to the private subnet; HTTPS with SigV4 from the gateway to Amazon Bedrock.
 - **Encryption at rest** — SSE-KMS on the gateway's S3 bucket, and a separate customer-managed key encrypting the EFS volumes that hold the agent's persistent state.
 - **Least privilege / task-role scoping** — the agent and the gateway each run under their own ECS task role; the gateway's role carries only the Bedrock/AI-service actions it calls, and the agent's task carries none of it — every model call still goes through the gateway. See [IAM permissions](operations_iam_permissions.md).
-- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) configured on the gateway applies to model calls regardless of which wire dialect the agent's provider settings select.
+- **Content policy** — a [Bedrock guardrail](operations_configuration_bedrock.md#bedrock-guardrails) configured on the gateway applies to model calls regardless of which wire dialect the agent's provider settings select.
 - **Cost / identity attribution** — [per-user cost attribution](operations_cost_management.md#per-user-attribution) turns a caller's declared identity into a billing boundary only under `AUTHENTICATION_MODE=cognito`; the API-key mode these samples use makes that identifier client-declared, so every call from a shared deployment is billed to the gateway's own identity.
 
 ### :material-robot: Hermes

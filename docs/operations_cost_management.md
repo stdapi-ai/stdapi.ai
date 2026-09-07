@@ -18,6 +18,17 @@ Running stdapi.ai bills into three independent buckets:
 
 stdapi.ai **adds no markup**: model usage is billed to you by AWS at the same rate as calling Bedrock directly.
 
+| You want to…                                                        | Read                                                                            | What it costs you                                                                                     |
+|:---------------------------------------------------------------------|:---------------------------------------------------------------------------------|:--------------------------------------------------------------------------------------------------------|
+| Compare model rates **before** routing traffic                       | [Knowing the Price Before You Call](#knowing-the-price-before-you-call)          | Nothing — `GET /model_pricing` on a running deployment, or the [Models](models.md) page without one    |
+| Understand the AWS Marketplace line on your bill                     | [Marketplace-Billed vs AWS-Billed Models](#marketplace-billed-vs-aws-billed-models) | Nothing to configure. Model choice, though: Marketplace-billed models spend real money on a credited account |
+| See what each request cost, in the logs                              | [Cost Tracking](#cost-tracking-real-time-aws-pricing)                            | `COST_TRACKING=true`, `pricing:GetProducts`, and an estimate rather than a bill                        |
+| Split the bill per user, team or customer                            | [AWS Cost Attribution](#aws-cost-attribution)                                    | Per-user attribution names a role session per caller; a tenant's own AWS credential moves the charge entirely off your bill |
+| Query aggregate usage and cost over an API                           | [Usage API Query Cost](#usage-api-cost)                                          | A paid CloudWatch `GetMetricData` read per query, plus stored metric series at rest                     |
+| Know what the gateway itself costs, idle                             | [Gateway Cost](#gateway-cost)                                                    | A fixed floor of container-hours, ALB and license — three worked tiers, from ~$17/month upward          |
+| Cut that floor                                                       | [Keeping It Low](#keeping-it-low)                                                | Scheduled hours, Spot and one task: availability and headroom traded for price                          |
+| Reconcile any of it against the real invoice                         | AWS Cost Explorer, grouped by service                                            | The only authority — everything on this page is estimated from published prices                          |
+
 ---
 
 ## :material-tag-search: Knowing the Price Before You Call
@@ -56,7 +67,7 @@ Some models on Amazon Bedrock are sold as third-party AWS Marketplace listings; 
 ### What stdapi.ai Does About It
 
 - **Both paths are priced.** [Cost tracking](#cost-tracking-real-time-aws-pricing) ingests Marketplace listings and native Bedrock rows alike, so a request log entry carries a cost regardless of how AWS bills it.
-- **Subscriptions are handled automatically.** AWS creates the Marketplace subscription on first invocation; stdapi.ai keeps a not-yet-subscribed listing in the catalogue so that call can happen, when [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](operations_configuration.md#bedrock-marketplace-auto-subscribe) is enabled (the default), and hides it otherwise. It requires `aws-marketplace:Subscribe` and `aws-marketplace:ViewSubscriptions` — see [IAM Permissions](operations_configuration.md#bedrock-iam). Without them, the first call to a third-party model fails with `AccessDeniedException`.
+- **Subscriptions are handled automatically.** AWS creates the Marketplace subscription on first invocation; stdapi.ai keeps a not-yet-subscribed listing in the catalogue so that call can happen, when [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](operations_configuration_models.md#bedrock-marketplace-auto-subscribe) is enabled (the default), and hides it otherwise. It requires `aws-marketplace:Subscribe` and `aws-marketplace:ViewSubscriptions` — see [IAM Permissions](operations_configuration.md#bedrock-iam). Without them, the first call to a third-party model fails with `AccessDeniedException`.
 - **Cost tracking does not separate the two lines.** Request logs report what a call cost, not which AWS invoice section it lands on. Use Cost Explorer, grouped by service, to see the Marketplace split.
 
 ---
@@ -74,7 +85,7 @@ Cost tracking is **opt-in and off by default**. When `COST_TRACKING=true` is ena
 5. **Fallback on a Missing Price**: Once the catalog has been fetched, if a specific model/dimension has no resolvable price in it, the cost field is omitted for that entry rather than blocking the request, and the request log carries a `warning`-level `error_detail` naming the model and unpriced dimensions (a hint to supply the missing price via `COST_PRICE_OVERRIDES`)
 
 !!! warning "Pricing is an estimate, not a bill"
-    stdapi.ai resolves prices from AWS's own Price List API and does its best to match every request to the right unit price — including tier, cache TTL, cross-region routing, region fallback, and image resolution/quality where applicable. This is still a **best-effort approximation**, not a guarantee: AWS's Price List API doesn't reliably map a Bedrock model ID to its own pricing rows, some pricing dimensions aren't modeled at all (see [Known Limitations](#known-limitations)), and fallbacks (regional, tier) substitute a nearby price when the exact one isn't published. For billing-critical use, always reconcile against AWS Cost Explorer or your actual invoice.
+    stdapi.ai resolves prices from AWS's own Price List API and does its best to match every request to the right unit price — including tier, cache TTL, cross-region routing, region fallback, and image resolution/quality where applicable. This is still a **best-effort approximation**, not a guarantee: AWS's Price List API doesn't reliably map a Bedrock model ID to its own pricing rows, some pricing dimensions aren't modeled at all (see [Limits and behaviour to know](#known-limitations)), and fallbacks (regional, tier) substitute a nearby price when the exact one isn't published. For billing-critical use, always reconcile against AWS Cost Explorer or your actual invoice.
 
 ### Configuration
 
@@ -139,11 +150,12 @@ When CloudWatch metrics are enabled, a `Cost` metric (unit: None) is emitted und
 
 ### Regional Price Fallback
 
-Some models — mostly older/deprecated ones — aren't published in every region's Price List (e.g. priced in `us-east-1` but not any EU region). A region with no price for a given model/dimension/tier always borrows one from a nearby region instead of omitting the cost:
+Some models — mostly older/deprecated ones — aren't published in every region's Price List (e.g. priced in `us-east-1` but not any EU region). A region with no price for a given model/dimension/tier borrows one from a nearby region instead of omitting the cost:
 
 1. Prefers another region in the same geography (`eu-west-3` tries other `eu-*` regions first)
 2. Falls back to `us-east-1`, `eu-west-1`, or `us-west-2` — the regions always fetched regardless of your configured Bedrock regions
-3. If neither is available, the cost is omitted as usual
+3. Never crosses a partition boundary, since a copied price keeps its source currency: a region in a sovereign partition with no in-partition source is left unpriced rather than borrowing a differently-denominated price
+4. If no source is available, the cost is omitted as usual
 
 This is a substitute price, not the actual published price for that region.
 
@@ -155,7 +167,7 @@ stdapi.ai detects currency from the AWS partition:
 - AWS US GovCloud: USD
 - AWS China: CNY
 
-Costs are **never summed across currencies** — this safety behavior is always on, regardless of settings. It matters when a single request's billed dimensions resolve to different currencies, which can happen with [regional fallback](#regional-price-fallback) crossing a partition boundary (e.g. a EUSC deployment falling back to a standard-AWS-priced region). A usage entry that spans more than one currency reports a `costs` map (instead of `cost`/`currency`) with every currency's own amount:
+Costs are **never summed across currencies** — this safety behavior is always on, regardless of settings. [Regional fallback](#regional-price-fallback) never crosses a partition boundary, precisely so that a copied price cannot report the wrong currency: a sovereign-partition region with no in-partition source is left unpriced instead. The remaining way a single request's billed dimensions resolve to different currencies is the Price List publishing more than one currency for the same region and model. A usage entry that spans more than one currency reports a `costs` map (instead of `cost`/`currency`) with every currency's own amount:
 
 ```json
 {
@@ -180,7 +192,7 @@ Falling back is normal, not a gap: where AWS publishes no distinct global rate f
 
 ### Service Tiers as a Cost Lever
 
-AWS prices each [service tier](operations_configuration.md#default-model-service-tiers-section) differently: `flex` trades latency for a lower rate, `priority` does the opposite. Two ways to apply one without changing client code: `DEFAULT_MODEL_SERVICE_TIERS` pins a tier per model, and a [model alias](operations_configuration.md#model-aliases-configuration) pins one per alias — publishing, say, a `flex` name for batch workloads and a `priority` name for interactive ones over the same model. Set [`AWS_BEDROCK_ALLOW_SERVICE_TIER_OVERRIDE`](operations_configuration.md#aws-bedrock-allow-service-tier-override) to `false` to stop clients selecting another tier, and the cost profile you configured holds. Both settings and the override gate cover models served through the Bedrock Converse and InvokeModel APIs; a Bedrock Mantle-served model runs on the tier its own request names.
+AWS prices each [service tier](operations_configuration_models.md#default-model-service-tiers-section) differently: `flex` trades latency for a lower rate, `priority` does the opposite. Two ways to apply one without changing client code: `DEFAULT_MODEL_SERVICE_TIERS` pins a tier per model, and a [model alias](operations_configuration_models.md#model-aliases-configuration) pins one per alias — publishing, say, a `flex` name for batch workloads and a `priority` name for interactive ones over the same model. Set [`AWS_BEDROCK_ALLOW_SERVICE_TIER_OVERRIDE`](operations_configuration_models.md#aws-bedrock-allow-service-tier-override) to `false` to stop clients selecting another tier, and the cost profile you configured holds. Both settings and the override gate cover models served through the Bedrock Converse and InvokeModel APIs; a Bedrock Mantle-served model runs on the tier its own request names.
 
 ### Batch Inference { #batch-inference }
 
@@ -200,13 +212,13 @@ To see what a credentialed tenant spends, read the *tenant's* AWS bill: Amazon B
 
 ### Vector Stores { #vector-stores }
 
-Indexing a file into a [vector store](api_openai_vector_stores.md) costs one embedding call per passage, and a search costs one per query. Those calls are recorded and priced like any other embedding usage, against the model in [`VECTOR_STORE_EMBEDDING_MODEL`](operations_configuration.md#vector-store-embedding-model) — a large file is many passages, so the cost of an attach scales with the file, not with the request.
+Indexing a file into a [vector store](api_openai_vector_stores.md) costs one embedding call per passage, and a search costs one per query. Those calls are recorded and priced like any other embedding usage, against the model in [`VECTOR_STORE_EMBEDDING_MODEL`](operations_configuration_storage.md#vector-store-embedding-model) — a large file is many passages, so the cost of an attach scales with the file, not with the request.
 
 Indexing runs after the response is sent, so its usage is reported on a `background` log event of its own rather than on the request that started it. Correlate the two through the `id` field they share.
 
-The **storage and request charges of the vector storage itself are not recorded**: like the bytes the [Files API](api_openai_files.md) stores, they appear on your AWS bill and not in the usage log. Read them from AWS Cost Explorer, filtered on Amazon S3 Vectors — the service holding [`AWS_S3_VECTORS_BUCKET`](operations_configuration.md#aws-s3-vectors-bucket).
+The **storage and request charges of the vector storage itself are not recorded**: like the bytes the [Files API](api_openai_files.md) stores, they appear on your AWS bill and not in the usage log. Read them from AWS Cost Explorer, filtered on Amazon S3 Vectors — the service holding [`AWS_S3_VECTORS_BUCKET`](operations_configuration_storage.md#aws-s3-vectors-bucket).
 
-A deployment that sets [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url) adds Amazon SQS requests to that bill — a handful per attached file, plus one long-poll receive per idle server every 20 seconds. It adds **no embedding cost**: a job replayed after a server was replaced skips whatever already completed, so a file is never embedded twice.
+A deployment that sets [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration_storage.md#aws-sqs-vector-store-queue-url) adds Amazon SQS requests to that bill — a handful per attached file, plus one long-poll receive per idle server every 20 seconds. It adds **no embedding cost**: a job replayed after a server was replaced skips whatever already completed, so a file is never embedded twice.
 
 A [knowledge base store](api_openai_vector_stores.md#knowledge-base-stores) is billed differently, because the retrieval happens inside Amazon Bedrock and no embedding call of this server's is involved:
 
@@ -270,7 +282,7 @@ A model served from an [Amazon SageMaker AI endpoint](features.md#sagemaker-endp
 
 **Unlike a Marketplace model endpoint, this path can cost nothing at rest.** An endpoint configured for [scale to zero](https://docs.aws.amazon.com/sagemaker/latest/dg/endpoint-auto-scaling-zero-instances.html) — inference components, a production variant with `MinInstanceCount: 0`, an Application Auto Scaling target with a minimum capacity of zero, and a step-scaling policy driven by a CloudWatch alarm on `NoCapacityInvocationFailures` — releases its instances when nothing is calling it, and provisions one again on the next request. Four things to budget for:
 
-- **The wake is a few minutes**, absorbed by [`AWS_SAGEMAKER_WARMUP_TIMEOUT`](operations_configuration.md#aws-sagemaker-warmup-timeout) so the caller sees a slow request rather than an error.
+- **The wake is a few minutes**, absorbed by [`AWS_SAGEMAKER_WARMUP_TIMEOUT`](operations_configuration_models.md#aws-sagemaker-warmup-timeout) so the caller sees a slow request rather than an error.
 - **The scale-in tail costs more than the wake.** AWS keeps the instance for a while after the last request, so one idle-to-idle cycle bills for noticeably longer than the traffic that caused it.
 - **The alarm outlives the traffic.** `NoCapacityInvocationFailures` stays in ALARM for its evaluation window after the last rejected request, and the step-scaling policy keeps acting on it — so an endpoint scaled in by hand comes straight back up, and a burst of requests against a cold endpoint bills for 10 to 15 instance-minutes after the last caller has gone. Let it settle by itself rather than writing the copy count against the policy that owns it.
 - **The CloudWatch alarm** that makes the wake happen at all lists at $0.10 per alarm-metric-month, inside CloudWatch's always-free allowance of ten alarms.
@@ -295,7 +307,7 @@ Some image-generation models (currently: Amazon Titan Image Generator G1/V2 and 
 
 Multimodal embedding inputs are billed by AWS per media unit on top of (or instead of) tokens: per input image (with a distinct "document image" rate where offered) and per second of audio/video. stdapi.ai records image counts directly and audio/video durations from the AWS-reported segment timings of the asynchronous (segmented) processing path, reported as `input_images`/`input_seconds` with their `*_by_spec` breakdowns. Rerank queries are recorded as `search_units` (one per query).
 
-### Known Limitations
+### Limits and behaviour to know { #known-limitations }
 
 - **Speech-modality tokens** (speech-to-speech models, including [Realtime API](api_openai_realtime.md#cost) sessions): speech and text tokens are recorded in separate buckets and priced at their own published rates, so no modality is priced as the other. Where a model publishes no speech rate at all, its speech tokens fall back to the text rate, which underestimates speech-heavy calls. A Realtime session bills continuously in both directions for as long as it is open, not per request; usage is recorded per answer, matching each `response.done` event in the request log.
 - **Asynchronous (segmented) embeddings**: AWS reports no token usage for this processing path (used automatically for large inputs), so segmented text embeddings report no token cost; audio/video durations are recovered from the AWS-reported segment timings and billed.
@@ -337,10 +349,10 @@ Cost tracking prices **each request** as it happens. AWS-side attribution answer
 | Dimension               | Mechanism                                                                                                                                            | Reported in                          | Setup                                                             |
 |:------------------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------|:-------------------------------------|:------------------------------------------------------------------|
 | **Service / gateway**   | [IAM principal attribution](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-mgmt-iam-principal-tracking.html) — AWS captures the caller identity | Cost Explorer, CUR 2.0               | Automatic; tag the execution role for finer breakdowns            |
-| **Application / workload** | [Bedrock Project/Workspace](operations_configuration.md#bedrock-mantle-project) (Bedrock Mantle models)                                            | Cost Explorer, CUR 2.0               | Set `AWS_BEDROCK_MANTLE_PROJECT`                                  |
+| **Application / workload** | [Bedrock Project/Workspace](operations_configuration_aws.md#bedrock-mantle-project) (Bedrock Mantle models)                                            | Cost Explorer, CUR 2.0               | Set `AWS_BEDROCK_MANTLE_PROJECT`                                  |
 | **End user**            | `stdapi-ai.user_id` request metadata and job tags                                                                                                     | stdapi.ai logs, Bedrock invocation logs | Clients send `safety_identifier` — `user` is a deprecated alias — (OpenAI) or `metadata.user_id` (Anthropic) |
 | **End user, on the AWS bill** | [Per-user role sessions](#per-user-attribution) — each user's model calls run under a session of their own                                       | Cost Explorer, CUR 2.0               | Set `AWS_BEDROCK_USER_ROLE_ARN` to a role you create                |
-| **Team / tenant**       | Request metadata attached by the [model alias](operations_configuration.md#model-aliases-configuration) the client names                               | Bedrock model invocation logs only   | Give each team its own alias with a `metadata` entry, then [enable and deliver model invocation logging](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html) |
+| **Team / tenant**       | Request metadata attached by the [model alias](operations_configuration_models.md#model-aliases-configuration) the client names                               | Bedrock model invocation logs only   | Give each team its own alias with a `metadata` entry, then [enable and deliver model invocation logging](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html) |
 
 !!! warning "Alias metadata is not a cost allocation tag"
     A model alias' `metadata` travels as Amazon Bedrock **request metadata**: it appears in [model invocation logs](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html), which you enable and deliver to S3 or CloudWatch Logs yourself, and which it can be filtered on. It never appears in the stdapi.ai request logs, in Cost Explorer or in CUR 2.0 — splitting the bill by team still needs one of the mechanisms above.
@@ -364,10 +376,10 @@ To split the **AWS bill itself** per end user, give each one an identity of thei
 
     | Setting | Purpose |
     |:--------|:--------|
-    | [`AWS_BEDROCK_USER_ROLE_ARN`](operations_configuration.md#aws-bedrock-user-role-arn) | The role each end user's calls run under. Enables the feature. |
-    | [`AWS_BEDROCK_USER_ROLE_TAG_KEY`](operations_configuration.md#aws-bedrock-user-role-tag-key) | Session tag key carrying the user identity (`user` by default). |
-    | [`AWS_BEDROCK_USER_ROLE_SESSION_DURATION`](operations_configuration.md#aws-bedrock-user-role-session-duration) | Session lifetime, 900–3600 seconds. Sessions are cached and reused. |
-    | [`AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY`](operations_configuration.md#aws-bedrock-user-role-require-identity) | Reject requests that identify no end user, instead of billing them to the gateway. |
+    | [`AWS_BEDROCK_USER_ROLE_ARN`](operations_configuration_bedrock.md#aws-bedrock-user-role-arn) | The role each end user's calls run under. Enables the feature. |
+    | [`AWS_BEDROCK_USER_ROLE_TAG_KEY`](operations_configuration_bedrock.md#aws-bedrock-user-role-tag-key) | Session tag key carrying the user identity (`user` by default). |
+    | [`AWS_BEDROCK_USER_ROLE_SESSION_DURATION`](operations_configuration_bedrock.md#aws-bedrock-user-role-session-duration) | Session lifetime, 900–3600 seconds. Sessions are cached and reused. |
+    | [`AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY`](operations_configuration_bedrock.md#aws-bedrock-user-role-require-identity) | Reject requests that identify no end user, instead of billing them to the gateway. |
 
     The role and the two IAM policies it needs are in [IAM Permissions](operations_iam_permissions.md#per-user-cost-attribution).
 
@@ -394,7 +406,7 @@ To split the **AWS bill itself** per end user, give each one an identity of thei
     The request log's `aws_role_session_name` field records the session each request was billed under, which is what correlates a log line with a CUR row.
 
 !!! warning "What is covered, and what is not"
-    Per-user sessions apply to **model invocations**, and to the guardrail applied during them. Everything else the gateway calls on your behalf — standalone guardrail evaluations, reranking, video generation jobs and their output files, speech, transcription and translation — stays on the gateway's own identity. The one exception is a real-time speech-to-speech session, which is refused rather than billed to the gateway once [`AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY`](operations_configuration.md#aws-bedrock-user-role-require-identity) is enabled. Two backends sign with the gateway's own credentials and carry no per-user session either, while still answering that same `400` to an unidentified request: [Bedrock Mantle](operations_configuration.md#bedrock-mantle-enabled), whose usage is attributed with [Projects](operations_configuration.md#bedrock-mantle-project) instead, and a [SageMaker AI endpoint](operations_configuration.md#aws-sagemaker-endpoints), billed by the instance-hour rather than per request.
+    Per-user sessions apply to **model invocations**, and to the guardrail applied during them. Everything else the gateway calls on your behalf — standalone guardrail evaluations, reranking, video generation jobs and their output files, speech, transcription and translation — stays on the gateway's own identity. The one exception is a real-time speech-to-speech session, which is refused rather than billed to the gateway once [`AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY`](operations_configuration_bedrock.md#aws-bedrock-user-role-require-identity) is enabled. Two backends sign with the gateway's own credentials and carry no per-user session either, while still answering that same `400` to an unidentified request: [Bedrock Mantle](operations_configuration_aws.md#bedrock-mantle-enabled), whose usage is attributed with [Projects](operations_configuration_aws.md#bedrock-mantle-project) instead, and a [SageMaker AI endpoint](operations_configuration_models.md#aws-sagemaker-endpoints), billed by the instance-hour rather than per request.
 
 !!! note "Cardinality"
     AWS multiplies CUR rows by the number of calling identities, and aggregates them per usage type per day. A deployment with a very large or unbounded user population gets a proportionally larger export, and still no per-request cost — the [request logs](#cost-tracking-real-time-aws-pricing) remain the per-request source.
@@ -403,7 +415,7 @@ To split the **AWS bill itself** per end user, give each one an identity of thei
 
 ## :material-chart-timeline-variant: Usage API Query Cost { #usage-api-cost }
 
-The [Organization Usage and Costs API](api_openai_organization_usage.md) answers from the metrics this deployment publishes to Amazon CloudWatch, and **CloudWatch bills both halves of that**: the metric series it stores every month, and every metric a query reads. This is the one feature on this page whose own cost can rival a small model workload, so it is [off by default](operations_configuration.md#usage-api) and priced here rather than discovered on an invoice.
+The [Organization Usage and Costs API](api_openai_organization_usage.md) answers from the metrics this deployment publishes to Amazon CloudWatch, and **CloudWatch bills both halves of that**: the metric series it stores every month, and every metric a query reads. This is the one feature on this page whose own cost can rival a small model workload, so it is [off by default](operations_configuration_observability.md#usage-api) and priced here rather than discovered on an invoice.
 
 Rates below are `us-east-1`, read from the AWS Price List API (`AmazonCloudWatch`) on 2026-08-26 and cross-checked against the [CloudWatch pricing page](https://aws.amazon.com/cloudwatch/pricing/). They differ by region and they move — price your own before enabling.
 
@@ -418,21 +430,23 @@ Rates below are `us-east-1`, read from the AWS Price List API (`AmazonCloudWatch
 
 ### What a Query Costs
 
-On a deployment serving ~79 models, one `group_by=model` query against `/v1/organization/usage/completions` reads roughly 108 series:
+On a deployment serving ~79 models — fewer than the [Models](models.md) page lists, because a deployment only serves the models its regions and account access give it — one `group_by=model` query against `/v1/organization/usage/completions` reads roughly 108 series:
 
 | Usage pattern                               | ~79 models                | A few hundred models        |
 |:--------------------------------------------|:--------------------------|:-----------------------------|
 | One query                                   | ≈ **$0.00108**            | ≈ $0.003–$0.010              |
 | One client polling once a minute, 30 days   | ≈ **$47/month**           | **$130–$430/month**          |
 
-That figure is **per polling client**: two dashboards on the same schedule cost twice as much, and a shorter poll interval scales it linearly until the [response cache](operations_configuration.md#usage-api-cache-ttl) absorbs it.
+That figure is **per polling client**: two dashboards on the same schedule cost twice as much, and a shorter poll interval scales it linearly until the [response cache](operations_configuration_observability.md#usage-api-cache-ttl) absorbs it.
+
+Count your own instead of scaling this one, because series follow traffic rather than catalogue size. A model contributes one series per endpoint operation it actually served (`chat.completions`, `completions`, `responses`, `messages` and `realtime` all feed the completions endpoint) for each usage quantity that carried a value — `InputTokens`, `OutputTokens` and `Requests` on any call, `CachedTokens` and `CacheWriteTokens` only where prompt caching applies. Multiply the model/operation pairs your deployment really serves by the quantities each reports, then by the `GetMetricData` rate above; a model in the catalogue that nobody calls costs nothing here.
 
 ### What Enabling It Costs at Rest
 
-Turning [`USAGE_API`](operations_configuration.md#usage-api) on also publishes the usage metrics under an additional `Model`+`Operation` dimension set, so the endpoints can answer per-model *and* per-endpoint. Those extra series are stored metrics, billed monthly whether or not a single query is ever made — roughly **$120–$180/month** on a 79-model deployment, scaling with the number of models actually used.
+Turning [`USAGE_API`](operations_configuration_observability.md#usage-api) on also publishes the usage metrics under an additional `Model`+`Operation` dimension set, so the endpoints can answer per-model *and* per-endpoint. Those extra series are stored metrics, billed monthly whether or not a single query is ever made — roughly **$120–$180/month** on a 79-model deployment, scaling with the number of models actually used.
 
 !!! warning "`CLOUDWATCH_METRICS_USER_DIMENSION` has no upper bound"
-    [`CLOUDWATCH_METRICS_USER_DIMENSION`](operations_configuration.md#cloudwatch-metrics-user-dimension) is what makes `group_by=user_id` answerable, and it adds one further series **per user × model × metric name**. Its cardinality is your caller population, so its cost is unbounded by anything the deployment controls. Enable it only where that population is small and known.
+    [`CLOUDWATCH_METRICS_USER_DIMENSION`](operations_configuration_observability.md#cloudwatch-metrics-user-dimension) is what makes `group_by=user_id` answerable, and it adds one further series **per user × model × metric name**. Its cardinality is your caller population, so its cost is unbounded by anything the deployment controls. Enable it only where that population is small and known.
 
 ### The Four Protections
 
@@ -440,10 +454,10 @@ Each is a setting, and each default is chosen to keep the bill predictable:
 
 | Protection                                                                          | Default | What it prevents                                                                                     |
 |:------------------------------------------------------------------------------------|:--------|:------------------------------------------------------------------------------------------------------|
-| [`USAGE_API`](operations_configuration.md#usage-api)                                | `false` | Everything above. While it is off the endpoints refuse and the extra series are not published.        |
-| [`USAGE_API_CACHE_TTL`](operations_configuration.md#usage-api-cache-ttl)            | `60` s  | A polling client billing every poll. Within the TTL an identical query is served from cache and costs nothing — and a client polling faster than the bucket width learns nothing new anyway. |
-| [`USAGE_API_MAX_METRICS`](operations_configuration.md#usage-api-max-metrics)        | `500`   | A wide `group_by` reading thousands of series. The query is refused **before** it is billed — see the caveat below. |
-| [`USAGE_API_MAX_RANGE_DAYS`](operations_configuration.md#usage-api-max-range-days)  | `92`    | A single call asking for a year of daily buckets.                                                     |
+| [`USAGE_API`](operations_configuration_observability.md#usage-api)                                | `false` | Everything above. While it is off the endpoints refuse and the extra series are not published.        |
+| [`USAGE_API_CACHE_TTL`](operations_configuration_observability.md#usage-api-cache-ttl)            | `60` s  | A polling client billing every poll. Within the TTL an identical query is served from cache and costs nothing — and a client polling faster than the bucket width learns nothing new anyway. |
+| [`USAGE_API_MAX_METRICS`](operations_configuration_observability.md#usage-api-max-metrics)        | `500`   | A wide `group_by` reading thousands of series. The query is refused **before** it is billed — see the caveat below. |
+| [`USAGE_API_MAX_RANGE_DAYS`](operations_configuration_observability.md#usage-api-max-range-days)  | `92`    | A single call asking for a year of daily buckets.                                                     |
 
 Lower `USAGE_API_MAX_METRICS` and raise `USAGE_API_CACHE_TTL` on a large catalogue; the defaults are a ceiling, not a target.
 
@@ -463,11 +477,13 @@ Secondary for most deployments — read this section if you run under a hard cos
 
 The gateway is a single small container. The Terraform module defaults to **ARM64, 0.25 vCPU and 512 MiB** — the smallest Fargate size — which keeps this bucket cheap, though it is still a floor you pay whether or not any request arrives.
 
+That default sizes the task for text generation and embeddings. Serving audio, video or inline file inputs holds bytes in memory and needs `memory` raised to `1024` or beyond, which raises this floor — see [the sizing note](operations_deploy_advanced.md#cost-optimized-deployment).
+
 The [Terraform module](operations_getting_started.md) provisions:
 
 | Component                         | Notes                                                                    |
 |:----------------------------------|:-------------------------------------------------------------------------|
-| **ECS Fargate** service           | The dominant infrastructure cost; 0.25 vCPU / 512 MiB ARM64 by default, times `autoscaling_min_capacity` |
+| **ECS Fargate** service           | The dominant infrastructure cost; 0.25 vCPU / 512 MiB ARM64 by default (text and embeddings; raise `memory` for media and file inputs), times `autoscaling_min_capacity` |
 | **Application Load Balancer**     | Hourly rate plus LCU; skipped when you attach your own                    |
 | **S3 buckets** (regional)         | Input files, generated media; see `AWS_S3_VIDEOS_EXPIRES_AFTER`           |
 | **S3 vector bucket** (optional)   | Created with `aws_s3_vectors_bucket_create`; billed on stored vectors and on the bytes each search reads — see [Vector Stores](#vector-stores) |
@@ -510,7 +526,7 @@ None of these include AI service usage (Bedrock, Polly, Transcribe, …), which 
 
 ### Model List Sharing { #model-list-sharing }
 
-[`MODEL_CACHE_SHARED`](operations_configuration.md#model-cache-shared) is the one optional feature whose own AWS cost is worth stating rather than rounding away. **Left off, or with no [`AWS_DYNAMODB_TABLE`](operations_configuration.md#aws-dynamodb-table) configured, it costs nothing**: no table is created, no request is made. The table alone, created but unused, is also $0 — DynamoDB on-demand has no idle charge, this table holds kilobytes, and its storage sits inside the 25 GB always-free allowance.
+[`MODEL_CACHE_SHARED`](operations_configuration_models.md#model-cache-shared) is the one optional feature whose own AWS cost is worth stating rather than rounding away. **Left off, or with no [`AWS_DYNAMODB_TABLE`](operations_configuration_storage.md#aws-dynamodb-table) configured, it costs nothing**: no table is created, no request is made. The table alone, created but unused, is also $0 — DynamoDB on-demand has no idle charge, this table holds kilobytes, and its storage sits inside the 25 GB always-free allowance.
 
 Enabled, it is not free. What it costs is the published list itself:
 

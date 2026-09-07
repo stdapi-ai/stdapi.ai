@@ -264,7 +264,7 @@ After deployment, add a target group pointing to port 8000, with a health check 
        ```
 
        !!! warning "Service discovery in an IPv6-enabled subnet needs a dual-stack listener"
-           The image listens on IPv4 only (`GRANIAN_HOST=0.0.0.0`), while ECS service discovery publishes an `AAAA` record for every task in an IPv6-enabled subnet. Clients that prefer that record — Node.js among them — then fail with `ECONNREFUSED` while Python clients fall back to the `A` record and hide the problem. Set `GRANIAN_HOST=::` in the task environment for a socket that answers both families; the module sets it for you when the VPC has IPv6 enabled. If `PROXY_TRUSTED_HOSTS` is also set, add the IPv4-mapped ranges alongside the plain ones — see [`PROXY_TRUSTED_HOSTS`](operations_configuration.md#proxy-trusted-hosts).
+           The image listens on IPv4 only (`GRANIAN_HOST=0.0.0.0`), while ECS service discovery publishes an `AAAA` record for every task in an IPv6-enabled subnet. Clients that prefer that record — Node.js among them — then fail with `ECONNREFUSED` while Python clients fall back to the `A` record and hide the problem. Set `GRANIAN_HOST=::` in the task environment for a socket that answers both families; the module sets it for you when the VPC has IPv6 enabled. If `PROXY_TRUSTED_HOSTS` is also set, add the IPv4-mapped ranges alongside the plain ones — see [`PROXY_TRUSTED_HOSTS`](operations_configuration_server.md#proxy-trusted-hosts).
 
     **Use cases:**
 
@@ -311,10 +311,13 @@ Most of those endpoints have an interface VPC endpoint service, so a deployment 
 com.amazonaws.<region>.bedrock-mantle
 ```
 
-Enable private DNS on it, so `bedrock-mantle.<region>.api.aws` resolves to the endpoint. When the Terraform module builds the VPC it provisions the interface endpoints itself — including `com.amazonaws.<region>.sqs` when the indexing queue lives in the deployment Region. Deploying into your own VPC (`subnet_ids`) makes every endpoint yours to create.
+Enable private DNS on it, so `bedrock-mantle.<region>.api.aws` resolves to the endpoint. When the Terraform module builds the VPC it provisions the interface endpoints itself — including `com.amazonaws.<region>.sqs` when the indexing queue lives in the deployment Region, and `com.amazonaws.<region>.s3vectors` when the vector bucket does. Deploying into your own VPC (`subnet_ids`) makes every endpoint yours to create.
 
-!!! warning "Amazon S3 Vectors is not among the endpoints the module creates"
-    A deployment with no internet egress and no route to `s3vectors.<region>.amazonaws.com` serves every other route normally and fails every vector store call. Confirm the service offers an interface endpoint in your Region before planning a fully private deployment on it, or keep egress to that one endpoint open.
+!!! warning "Bedrock Mantle is not among the endpoints the module creates"
+    `com.amazonaws.<region>.bedrock-mantle` is yours to create, even when the module builds the VPC. Bedrock Mantle is enabled by default, and a deployment with no internet egress and no route to `bedrock-mantle.<region>.api.aws` serves every other route normally while silently dropping every Mantle-served model from the catalogue. Create the endpoint with private DNS, or set `aws_bedrock_mantle_enabled = false` so the models are never advertised.
+
+!!! warning "A Region without an interface endpoint service fails at plan time"
+    The module looks the endpoint service up before creating it, so a fully private deployment in a Region that offers none for a service it needs — Amazon S3 Vectors, for instance — fails during `terraform plan` rather than at runtime. This is the same failure documented below for [Amazon Comprehend](#vpc-endpoint-error-couldnt-find-resource-for-amazon-comprehend); confirm the services your deployment enables offer an endpoint in your Region before planning a fully private deployment.
 
 ### Proxied deployments
 
@@ -524,6 +527,8 @@ For development, side projects, and non-critical workloads.
 
 **Trade-offs:** Spot interruptions possible, minimal observability, scheduled availability only
 
+**512 MiB covers text generation and embeddings only.** The paths that hold bytes in memory need more: audio and video go through the ffmpeg pipeline, inline input files are held up to [`MAX_INPUT_FILE_SIZE`](operations_configuration_server.md#max-input-file-size) each, and [`MAX_CONCURRENT_INPUT_DOWNLOADS`](operations_configuration_server.md#max-concurrent-input-downloads) of them are fetched at once. Raise the module's `memory` to `1024` or beyond before serving those, or the task is OOM-killed under load rather than answering slowly.
+
 ---
 
 ## :material-web-sync: WebSocket-Capable Deployment (Realtime API)
@@ -540,7 +545,7 @@ The ALB's idle timeout closes a connection with no traffic for that long — and
 
 ### Autoscale on CPU or memory, not request count
 
-`ALBRequestCountPerTarget` counts a WebSocket connection as **one request for its entire duration** — an hour of active voice traffic on a handful of long-lived connections looks identical, to that metric, to an idle target. A fleet serving real Realtime traffic can read as underloaded and scale in while it is actually busy. Scale ECS on CPU or memory utilization instead wherever the service handles Realtime sessions; those track the work a session actually does.
+`ALBRequestCountPerTarget` counts a WebSocket connection as **one request for its entire duration** — an hour of active voice traffic on a handful of long-lived connections looks identical, to that metric, to an idle target. A fleet serving real Realtime traffic can read as underloaded and scale in while it is actually busy. Scale ECS on CPU or memory utilization instead wherever the service handles Realtime sessions; those track the work a session actually does. The Terraform module creates the CPU policy by default; memory scaling is opt-in through `autoscaling_memory_target_percent`.
 
 ### A deploy truncates open sessions
 
@@ -564,7 +569,14 @@ The Realtime API's default transport is [the WebSocket](api_openai_realtime.md#t
 - The task gets a **public IP** and its security group opens a **UDP port range to the internet**, inbound and outbound — WebRTC media is UDP on ephemeral ports in both directions, and it must reach the exact task that answered the SDP offer, which no load balancer in front can guarantee. Egress is opened to the same source CIDRs as the ingress, plus the STUN and TURN ports the gateway is configured with. The range and the allowed CIDRs are variables; narrowing them to your callers' networks is the only way to shrink this exposure.
 - **The subnets carry that UDP path too**, and the module provisions it. A network ACL is stateless and evaluated before any security group, so the mode writes the media range and the STUN and TURN flows onto the application subnets' NACLs of the VPC it creates — nothing to supply, nothing refused at plan time. The exception is a VPC you bring through `subnet_ids`: the module cannot write rules in one it did not create, so widen those subnets' NACLs yourself for the UDP media range inbound and the ephemeral range `1024-65535` in both directions, or a call negotiates a media path the subnet then silently drops.
 - The gateway is configured with a **STUN server** to discover the public address that 1:1 NAT hides from the task, and, optionally, with the **TURN relay** you run for callers on UDP-blocking networks — AWS has no managed TURN.
-- **The service is pinned to one instance.** Calls live in the answering instance's memory, `hangup` and the sideband WebSocket must land on it, and the media path cannot drain: media mode is incompatible with autoscaling above one task, and every deployment, scale-in or Spot interruption drops the calls in flight. The signaling requests still ride the ALB unchanged.
+- **The service is pinned to one instance.** Calls live in the answering instance's memory, `hangup` and the sideband WebSocket must land on it, and the media path cannot drain: media mode is incompatible with autoscaling above one task, and every deployment, scale-in or Spot interruption drops the calls in flight. The signaling requests still ride the ALB unchanged. That single task is also replaced [stop-then-start](operations_resilience.md#multi-az-ecs-service-resilience) — the deployment is not zero-downtime.
+
+**Four combinations the module refuses at plan time.** The mode derives the settings it needs, so an explicit value that contradicts it fails the plan rather than being silently overridden:
+
+- `nat_gateways_allowed = true` — behind a NAT gateway the task has no public address, so the SDP answer advertises candidates no caller can reach and every call connects silently dead. Leave it unset and the mode turns it off for you.
+- `autoscaling_min_capacity` or `autoscaling_max_capacity` set to anything but `1` — for the reason above. Leave both unset and the mode pins them to `1`.
+- `compliance_vpc_endpoints_enabled = true` or `guardduty_vpc_endpoint_enabled = true` — the public task address makes the application subnets public, and an interface VPC endpoint needs a private subnet to place its network interface in; enabling both would destroy those endpoints without saying so. Both are recommended by [Best Practices for High-Compliance Deployments](operations_compliance.md#best-practices-for-high-compliance-deployments), so a deployment that follows that page cannot also terminate WebRTC media in the gateway — put the media terminator beside it instead (below).
+- `realtime_webrtc_turn_server`, `realtime_webrtc_turn_username` and `realtime_webrtc_turn_password` set in part — the three are required together.
 
 That shape — public task IP, open UDP range in both directions, single instance, subnet NACLs widened for it — is exactly what a Security Hub baseline flags, which is why it is opt-in and why the framework pattern below stays the recommendation for anything beyond a single-tenant assistant.
 
@@ -613,7 +625,9 @@ flowchart LR
 
 ### ECS Task Definition Example
 
-The example below uses ARM64 architecture, which requires the `-arm64` image tag. Replace `ARM64` with `X86_64` and `-arm64` with `-amd64` for AMD64. Use a version tag without an architecture suffix (e.g. `:1.15.0`) to let ECS select the architecture automatically via the multi-arch manifest.
+The example below uses ARM64 architecture, which requires the `-arm64` image tag. Replace `ARM64` with `X86_64` and `-arm64` with `-amd64` for AMD64. Drop the suffix and keep the version alone to let ECS select the architecture automatically via the multi-arch manifest.
+
+`{version}` is the release you deploy — there is no `latest` tag. The [AWS Marketplace listing](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) publishes the versions available to you, and the [release notes](roadmap.md) name the current one.
 
 ```json
 {
@@ -631,7 +645,7 @@ The example below uses ARM64 architecture, which requires the `-arm64` image tag
   "containerDefinitions": [
     {
       "name": "main",
-      "image": "709825985650.dkr.ecr.us-east-1.amazonaws.com/j-goutin/stdapi.ai:1.15.0-arm64",
+      "image": "709825985650.dkr.ecr.us-east-1.amazonaws.com/j-goutin/stdapi.ai:{version}-arm64",
       "essential": true,
       "readonlyRootFilesystem": true,
       "user": "65532:65532",
@@ -689,9 +703,11 @@ The example below uses ARM64 architecture, which requires the `-arm64` image tag
 ```
 
 !!! tip "Declare the image's own health probe"
-    ECS ignores the image's `HEALTHCHECK`, so the task definition must re-declare it — the `healthCheck` above is that same command. It requests `/health` on the container's own port with a `Host` header derived from [`TRUSTED_HOSTS`](operations_configuration.md#trusted-hosts), so it keeps working when Host validation is enabled. A hand-written `curl` or `urllib` probe sends an untrusted `Host` and is rejected with `400`.
+    ECS ignores the image's `HEALTHCHECK`, so the task definition must re-declare it — the `healthCheck` above is that same command. It requests `/health` on the container's own port with a `Host` header derived from [`TRUSTED_HOSTS`](operations_configuration_server.md#trusted-hosts), so it keeps working when Host validation is enabled. A hand-written `curl` or `urllib` probe sends an untrusted `Host` and is rejected with `400`.
 
     `"user": "65532:65532"` is the image's own non-root user, declared explicitly because Security Hub control ECS.20 reads the task definition rather than the image.
+
+`"memory": "512"` sizes the task for text generation and embeddings, where it holds little more than the request in flight. Raise it to `"1024"` or beyond — with a `"cpu"` value ECS accepts alongside it — before serving audio, video or inline file inputs: those hold bytes in memory through the ffmpeg pipeline and the [input download limits](operations_configuration_server.md#max-input-file-size), and the task is OOM-killed under load rather than answering slowly.
 
 **Note:** This is a minimal example. For production, configure:
 

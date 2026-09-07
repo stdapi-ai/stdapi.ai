@@ -8,21 +8,7 @@ keywords: LangChain AWS Bedrock, ChatOpenAI custom base URL, pydantic-ai AWS Bed
 
 Build Python applications and agents directly on Amazon Bedrock models with stdapi.ai, using the same LangChain, pydantic-ai and OpenAI Agents SDK client classes you would use against OpenAI or Anthropic directly—three client-side changes: the base URL, the API key, and — where the name differs from what the client already sends — the model name, now picked from every provider in the catalogue rather than one vendor's list.
 
-## :material-information-outline: About These Libraries
-
-**🔗 Links:** [LangChain](https://python.langchain.com/) | [pydantic-ai](https://ai.pydantic.dev/) | [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) | [Ollama Python](https://github.com/ollama/ollama-python)
-
-These are among the most widely used Python libraries for building LLM-backed applications and agents. Every one of them accepts a custom base URL and API key as constructor arguments—no plugin, wrapper, or extension needed.
-
-**What you can build:**
-
-- **Custom agents** - Tool-calling loops, structured output, and multi-turn conversations in your own Python code
-- **RAG applications** - Combine chat models with `OpenAIEmbeddings` for retrieval, see [RAG Pipelines](use_cases_rag.md)
-- **Stateful and voice agents** - Server-side conversations, hosted retrieval and spoken sessions through the OpenAI Agents SDK
-- **Internal services** - Backend applications and scripts that call Bedrock models without a UI or CLI in between
-- **Ollama-native code** - Applications already written against the Ollama client, repointed at the gateway without changing their calls
-
-## :material-help-circle-outline: Why Python Libraries + stdapi.ai?
+## :material-lightning-bolt: At a glance { #why-python-libraries-stdapiai }
 
 <div class="grid cards" markdown>
 
@@ -47,13 +33,27 @@ flowchart LR
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
+## :material-information-outline: About These Libraries
+
+**🔗 Links:** [LangChain](https://python.langchain.com/) | [pydantic-ai](https://ai.pydantic.dev/) | [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) | [Ollama Python](https://github.com/ollama/ollama-python)
+
+These are among the most widely used Python libraries for building LLM-backed applications and agents. Every one of them accepts a custom base URL and API key as constructor arguments—no plugin, wrapper, or extension needed.
+
+**What you can build:**
+
+- **Custom agents** - Tool-calling loops, structured output, and multi-turn conversations in your own Python code
+- **RAG applications** - Combine chat models with `OpenAIEmbeddings` for retrieval, see [RAG Pipelines](use_cases_rag.md)
+- **Stateful and voice agents** - Server-side conversations, hosted retrieval and spoken sessions through the OpenAI Agents SDK
+- **Internal services** - Backend applications and scripts that call Bedrock models without a UI or CLI in between
+- **Ollama-native code** - Applications already written against the Ollama client, repointed at the gateway without changing their calls
+
 ## :material-connection: Connect Your Own Instance
 
 Point any Python process—wherever it runs—at your stdapi.ai gateway. Nothing below requires the AWS sample in [Part 2](#deploy-the-gateway-on-aws).
 
 ### :material-check-circle: Prerequisites
 
-!!! info "What You'll Need"
+??? info "Before you start"
     - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md); see [Part 2](#deploy-the-gateway-on-aws) for a Terraform-deployed gateway
     - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com` or `http://localhost:8000` for local
     - ✓ **Your API key** - From Terraform output or configuration (optional for local development)
@@ -234,10 +234,10 @@ The official [`ollama`](https://github.com/ollama/ollama-python) client reaches 
     print(response.message.content)
     ```
 
-The host carries [`OLLAMA_ROUTES_PREFIX`](operations_configuration.md#ollama-routes-prefix) (`/ollama` by default): the client appends `/api/chat`, `/api/tags` and the rest itself. `client.generate()`, `client.embed()`, `client.list()`, `client.show()` and `client.ps()` all work against the same instance; `client.pull()` reports success immediately, because every model the gateway offers is hosted and available as soon as it appears in the model list.
+The host carries [`OLLAMA_ROUTES_PREFIX`](operations_configuration_server.md#ollama-routes-prefix) (`/ollama` by default): the client appends `/api/chat`, `/api/tags` and the rest itself. `client.generate()`, `client.embed()`, `client.list()`, `client.show()` and `client.ps()` all work against the same instance; `client.pull()` reports success immediately, because every model the gateway offers is hosted and available as soon as it appears in the model list.
 
 !!! warning "Models are not stored here"
-    `create`, `copy`, `push` and `delete` are refused with a `400`: the gateway serves hosted models and keeps no model store to write to. Reporting success would tell your code a model changed when it did not.
+    `create`, `copy`, `push` and `delete` are refused with a `403`: the gateway serves hosted models and keeps no model store to write to. Reporting success would tell your code a model changed when it did not.
 
 See [Ollama Chat API](api_ollama_chat.md), [Ollama Generate API](api_ollama_generate.md), [Ollama Embed API](api_ollama_embed.md) and [Ollama Models API](api_ollama_models.md) for the full parameter and model reference.
 
@@ -289,7 +289,7 @@ The solid path is the public one: an application outside the VPC has no route to
 | **Amazon ECS on AWS Fargate** | Runs the stdapi.ai gateway container, and — on the in-VPC path — your Python application as its own service | Terraform module (default) |
 | **Elastic Load Balancing** | Public entry point on the out-of-VPC path only; terminates TLS with an ACM certificate | `alb_enabled`, `alb_public` |
 | **AWS Cloud Map** | Private DNS name your in-VPC application resolves instead of a public endpoint | `service_discovery_dns_namespace_id`, `service_discovery_dns_name` |
-| **Amazon Bedrock** | Chat completions, embeddings, tool calling and reasoning for every client library on this page | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon Bedrock** | Chat completions, embeddings, tool calling and reasoning for every client library on this page | [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions) |
 | **Amazon S3** | Temporary storage for multimodal request and response payloads | Terraform module (default) |
 | **AWS KMS** | Customer-managed key encrypting the S3 bucket | Terraform module (default) |
 | **AWS Secrets Manager / SSM Parameter Store** | Holds the API key when one is generated or referenced | `api_key_create`, `api_key_ssm_parameter`, `api_key_secretsmanager_secret` |
@@ -302,7 +302,7 @@ The solid path is the public one: an application outside the VPC has no route to
 - **Encryption in transit** — HTTPS from an out-of-VPC application to the ALB; private-subnet HTTP from the ALB to the gateway container, or Cloud Map DNS with no ALB hop at all on the in-VPC path; HTTPS with SigV4 from the gateway to every AWS service it calls.
 - **Encryption at rest** — SSE-KMS on the S3 bucket that holds multimodal payloads, with a customer-managed key.
 - **Least privilege** — the gateway's ECS task role carries only the model and AI-service actions its configuration enables, not a blanket Bedrock or S3 grant.
-- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) configured on the gateway applies to every chat request your application sends, independent of which client library issued it.
+- **Content policy** — a [Bedrock guardrail](operations_configuration_bedrock.md#bedrock-guardrails) configured on the gateway applies to every chat request your application sends, independent of which client library issued it.
 - **Data handling** — the gateway is stateless and holds request bodies in memory only; no third party sits between your application and the models it calls, so a Bedrock request made through stdapi.ai carries no telemetry back to another vendor unless your own client library adds it — see the `set_tracing_disabled(True)` note under [OpenAI Agents SDK](#openai-agents-sdk) above.
 
 ### :material-gauge: What It Costs to Run
@@ -318,7 +318,7 @@ Read a model's price before your application sends anything to it with [`GET /mo
 
 ### :material-eye-outline: What to Watch
 
-The gateway writes one structured `request` event per call to CloudWatch, carrying the request id, path, status code, `execution_time_ms`, the model that served it, and the token counts AWS billed; streaming calls add a matching `request_stream` event. When [`OTEL_ENABLED=true`](operations_configuration.md#otel-enabled) and [`OTEL_EXPORTER_ENDPOINT`](operations_configuration.md#otel-exporter-endpoint) point at a collector, the gateway also exports OpenTelemetry traces for the same calls. Because your application is the client here, the most direct link between the two is the `x-request-id` response header: read it from every gateway response and log it alongside your own request handling, so a failure your application sees can be traced straight back to the gateway event that produced it.
+The gateway writes one structured `request` event per call to CloudWatch, carrying the request id, path, status code, `execution_time_ms`, the model that served it, and the token counts AWS billed; streaming calls add a matching `request_stream` event. When [`OTEL_ENABLED=true`](operations_configuration_observability.md#otel-enabled) and [`OTEL_EXPORTER_ENDPOINT`](operations_configuration_observability.md#otel-exporter-endpoint) point at a collector, the gateway also exports OpenTelemetry traces for the same calls. Because your application is the client here, the most direct link between the two is the `x-request-id` response header: read it from every gateway response and log it alongside your own request handling, so a failure your application sees can be traced straight back to the gateway event that produced it.
 
 ```sql
 fields id, path, model_id, status_code

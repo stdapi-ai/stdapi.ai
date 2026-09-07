@@ -6,33 +6,7 @@ keywords: OpenAI API documentation, Anthropic API documentation, Ollama API docu
 
 # :material-api: API Overview
 
-stdapi.ai provides OpenAI-, Anthropic-, Cohere- and Ollama-compatible APIs backed by Amazon Bedrock and AWS AI services. Any application that works with OpenAI, Anthropic, Cohere or Ollama works with stdapi.ai by simply changing the API endpoint.
-
-!!! tip "One catalog, discovered automatically"
-    Amazon Bedrock, Bedrock Mantle, Amazon Polly, Amazon Transcribe and Amazon Comprehend all surface as **models in a single catalog**. stdapi.ai discovers them from your AWS account at startup — there is no model list to declare or maintain, and a model AWS adds appears without a configuration change. They are interchangeable by name on a shared endpoint: [`GET /v1/models`](api_openai_models.md) lists them together, [`GET /search_models`](api_search_models.md) filters them by capability, and the endpoint routes to whichever AWS service backs the model you named — `POST /v1/audio/transcriptions` reaches Amazon Transcribe or a Bedrock audio model, and `POST /v1/moderations` reaches Bedrock Guardrails or Amazon Comprehend, from the same request, and the [Models](models.md) page shows the whole catalogue with prices and scores.
-
-!!! tip "Attachments, however large"
-    Every multimodal route takes its images, documents, audio and video as base64, a data URI, an HTTPS URL, an `s3://` URI or a Files API ID. On chat completions, messages and responses served by Amazon Bedrock — Bedrock Mantle models excepted — an attachment past what the chosen model reads inside a request is delivered by reference instead, with no change to the request, wherever that model reads that kind of attachment from storage; the models that read it inline only refuse it with `413`, stating the size they accept. See [Attachment Size](features.md#attachment-size).
-
-## :material-book-open-variant: Documentation & Tooling
-
-stdapi.ai provides multiple resources for exploring and testing the API—choose the one that fits your workflow:
-
-### :material-book-open-variant: Documentation Resources
-
-* **Per-endpoint guides** – The pages in this section (linked from the [endpoint tables below](#supported-endpoints)) with parameter details, feature tables, and examples
-* **[API Reference](api_reference.md)** – Browsable rendering of the full OpenAPI specification (request/response schemas for every endpoint)
-* **[OpenAPI Specification](openapi.yml)** – Full machine-readable schema for integration and tooling
-
-### :material-play-circle: Live API Playground
-
-**When running the server**, access these interactive interfaces (can be enabled via [configuration options](operations_configuration.md)):
-
-| Interface          | URL                             | Best For                                                                       |
-|--------------------|---------------------------------|--------------------------------------------------------------------------------|
-| **Swagger UI**     | `http://localhost/docs`         | Testing endpoints directly in your browser with live request/response examples |
-| **ReDoc**          | `http://localhost/redoc`        | Reading and searching through clean, organized documentation                   |
-| **OpenAPI Schema** | `http://localhost/openapi.json` | Generating client code or importing into API tools like Postman                |
+stdapi.ai provides OpenAI-, Anthropic-, Cohere- and Ollama-compatible APIs backed by Amazon Bedrock and AWS AI services. Any application that works with OpenAI, Anthropic, Cohere or Ollama works with stdapi.ai by simply changing the API endpoint. Every AWS service behind those endpoints — Amazon Bedrock, Bedrock Mantle, Amazon Polly, Amazon Transcribe and Amazon Comprehend — surfaces as models in a single catalog, discovered from your AWS account at startup.
 
 ## :material-api: Supported Endpoints
 
@@ -83,7 +57,7 @@ stdapi.ai provides multiple resources for exploring and testing the API—choose
 |                   | `GET /v1/organization/costs`      | Spend in time buckets, in your AWS partition's currency                     | [Organization Usage →](api_openai_organization_usage.md) |
 
 !!! info "The usage endpoints are an administrator surface"
-    `/v1/organization/...` reports the whole deployment's consumption and spend, so it is **disabled by default** — enable it with [`USAGE_API`](operations_configuration.md#usage-api) and read it with the deployment's own API key, or a token carrying every scope in [`USAGE_API_ADMIN_SCOPES`](operations_configuration.md#usage-api-admin-scopes). The retired `GET /v1/usage` endpoint is not served: it is absent from OpenAI's current API surface and from the `openai` SDK.
+    `/v1/organization/...` reports the whole deployment's consumption and spend, so it is **disabled by default** — enable it with [`USAGE_API`](operations_configuration_observability.md#usage-api) and read it with the deployment's own API key, or a token carrying every scope in [`USAGE_API_ADMIN_SCOPES`](operations_configuration_observability.md#usage-api-admin-scopes). The retired `GET /v1/usage` endpoint is not served: it is absent from OpenAI's current API surface and from the `openai` SDK.
 
 ### :material-magnify: stdapi.ai Native Extensions
 
@@ -118,23 +92,51 @@ stdapi.ai provides multiple resources for exploring and testing the API—choose
 
 | Category          | Endpoint              | Capability                                                   | Documentation                             |
 |-------------------|-----------------------|--------------------------------------------------------------|-------------------------------------------|
-| **💬 Chat**       | `POST /api/chat`      | Conversational responses with tools, images and thinking      | [Chat →](api_ollama_chat.md)              |
-| **✍️ Generate**   | `POST /api/generate`  | A response for a single prompt                                | [Generate →](api_ollama_generate.md)      |
-| **🧠 Embeddings** | `POST /api/embed`     | Vector embeddings for one or several inputs                   | [Embed →](api_ollama_embed.md)            |
-|                   | `POST /api/embeddings`| Legacy single-prompt embedding for older clients              | [Embed →](api_ollama_embed.md)            |
-| **📋 Models**     | `GET /api/tags`       | List the models this deployment serves                        | [Models →](api_ollama_models.md)          |
-|                   | `POST /api/show`      | A model's details and capabilities                            | [Models →](api_ollama_models.md)          |
-|                   | `GET /api/ps`         | Models loaded in memory — always empty, nothing is resident   | [Models →](api_ollama_models.md)          |
-|                   | `GET /api/version`    | The Ollama API version this deployment is compatible with     | [Models →](api_ollama_models.md)          |
-|                   | `POST /api/pull`      | Confirm a model is available for use                          | [Models →](api_ollama_models.md)          |
+| **💬 Chat**       | `POST /ollama/api/chat`      | Conversational responses with tools, images and thinking      | [Chat →](api_ollama_chat.md)              |
+| **✍️ Generate**   | `POST /ollama/api/generate`  | A response for a single prompt                                | [Generate →](api_ollama_generate.md)      |
+| **🧠 Embeddings** | `POST /ollama/api/embed`     | Vector embeddings for one or several inputs                   | [Embed →](api_ollama_embed.md)            |
+|                   | `POST /ollama/api/embeddings`| Legacy single-prompt embedding for older clients              | [Embed →](api_ollama_embed.md)            |
+| **📋 Models**     | `GET /ollama/api/tags`       | List the models this deployment serves                        | [Models →](api_ollama_models.md)          |
+|                   | `POST /ollama/api/show`      | A model's details and capabilities                            | [Models →](api_ollama_models.md)          |
+|                   | `GET /ollama/api/ps`         | Models loaded in memory — always empty, nothing is resident   | [Models →](api_ollama_models.md)          |
+|                   | `GET /ollama/api/version`    | The Ollama API version this deployment is compatible with     | [Models →](api_ollama_models.md)          |
+|                   | `POST /ollama/api/pull`      | Confirm a model is available for use                          | [Models →](api_ollama_models.md)          |
 
 Responses stream as newline-delimited JSON, the transport Ollama clients expect. The model management verbs that write to a local model store — `create`, `copy`, `push` and `delete` — are refused with `403`, since this deployment stores no models of its own.
+
+!!! tip "One catalog, discovered automatically"
+    Amazon Bedrock, Bedrock Mantle, Amazon Polly, Amazon Transcribe and Amazon Comprehend all surface as **models in a single catalog**. stdapi.ai discovers them from your AWS account at startup — there is no model list to declare or maintain, and a model AWS adds appears without a configuration change. They are interchangeable by name on a shared endpoint: [`GET /v1/models`](api_openai_models.md) lists them together, [`GET /search_models`](api_search_models.md) filters them by capability, and the endpoint routes to whichever AWS service backs the model you named — `POST /v1/audio/transcriptions` reaches Amazon Transcribe or a Bedrock audio model, and `POST /v1/moderations` reaches Bedrock Guardrails or Amazon Comprehend, from the same request, and the [Models](models.md) page shows the whole catalogue with prices and scores.
+
+!!! tip "Attachments, however large"
+    Every multimodal route takes its images, documents, audio and video as base64, a data URI, an HTTPS URL, an `s3://` URI or a Files API ID. On chat completions, messages and responses served by Amazon Bedrock — Bedrock Mantle models excepted — an attachment past what the chosen model reads inside a request is delivered by reference instead, with no change to the request, wherever that model reads that kind of attachment from storage; the models that read it inline only refuse it with `413`, stating the size they accept. See [Attachment Size](features.md#attachment-size).
+
+## :material-book-open-variant: Documentation & Tooling
+
+stdapi.ai provides multiple resources for exploring and testing the API—choose the one that fits your workflow:
+
+### :material-book-open-variant: Documentation Resources
+
+* **Per-endpoint guides** – The pages in this section (linked from the [endpoint tables above](#supported-endpoints)) with parameter details, feature tables, and examples
+* **[API Reference](api_reference.md)** – Browsable rendering of the full OpenAPI specification (request/response schemas for every endpoint)
+* **[OpenAPI Specification](openapi.yml)** – Full machine-readable schema for integration and tooling
+
+### :material-play-circle: Live API Playground
+
+**When running the server**, access these interactive interfaces (can be enabled via [configuration options](operations_configuration.md)):
+
+| Interface          | URL                             | Best For                                                                       |
+|--------------------|---------------------------------|--------------------------------------------------------------------------------|
+| **Swagger UI**     | `http://localhost/docs`         | Testing endpoints directly in your browser with live request/response examples |
+| **ReDoc**          | `http://localhost/redoc`        | Reading and searching through clean, organized documentation                   |
+| **OpenAPI Schema** | `http://localhost/openapi.json` | Generating client code or importing into API tools like Postman                |
 
 ## :material-tools: MCP (Model Context Protocol)
 
 When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, stdapi.ai exposes its endpoints as MCP tools. OpenAI-, Anthropic-, Cohere-, and Ollama-compatible tool names follow the pattern `provider_action`; the native extension tools use their bare names (`search_models`, `model_pricing`).
 
-Four Ollama operations are the exception: `ollama_create`, `ollama_copy`, `ollama_push` and `ollama_delete` always refuse, since this deployment stores no models, so a tool schema for a call that can never succeed would only mislead an agent. Name one in `MCP_INCLUDE_TOOLS` to publish it anyway.
+Nine operations are held back, because a tool schema for a call that can never succeed would only mislead an agent. `ollama_create`, `ollama_copy`, `ollama_push` and `ollama_delete` always refuse, since this deployment stores no models. The five WebRTC call operations — `openai_realtime_call_create`, `openai_realtime_call_accept`, `openai_realtime_call_reject`, `openai_realtime_call_refer` and `openai_realtime_call_hangup` — are held back too: an MCP agent has no peer connection to hold. Name one in `MCP_INCLUDE_TOOLS` to publish it anyway.
+
+The ten `openai_organization_usage_*` tools appear only while both [`USAGE_API`](operations_configuration_observability.md#usage-api) and [`CLOUDWATCH_METRICS`](operations_configuration_observability.md#cloudwatch-metrics) are enabled, and `openai_organization_costs` also needs [`COST_TRACKING`](operations_configuration_observability.md#cost-tracking). Without those settings every one of those calls answers `503`, so a deployment that has not enabled them spends no context window on their schemas.
 
 !!! tip "JSON body support for file and audio tools"
     MCP tools send JSON bodies — they cannot construct `multipart/form-data`. All file upload, audio, and upload-part tools therefore accept the file or audio content as a base64 string, data URI (`data:<mime>;base64,<data>`), HTTPS URL, or S3 URI in the `file` / `data` field instead of a binary attachment — as do the video generation tool's `input_reference` image, the moderation tool's `image_url` input, and the `openai_image_edit`/`openai_image_variation` tools' image inputs (also accepting a bare string in any of these forms, plus a Files API file ID). The full multipart upload workflow (`openai_upload` → `openai_upload_part` → `openai_upload_complete`) is fully MCP-compatible this way.
@@ -234,21 +236,21 @@ Four Ollama operations are the exception: `ollama_create`, `ollama_copy`, `ollam
 | `cohere_embed`                   | `POST /cohere/v2/embed`                     |
 | `cohere_embed_v1`                | `POST /cohere/v1/embed`                     |
 | **Ollama Tools**                 |                                             |
-| `ollama_chat`                    | `POST /api/chat`                            |
-| `ollama_generate`                | `POST /api/generate`                        |
-| `ollama_embed`                   | `POST /api/embed`                           |
-| `ollama_embeddings`              | `POST /api/embeddings`                      |
-| `ollama_tags`                    | `GET /api/tags`                             |
-| `ollama_show`                    | `POST /api/show`                            |
-| `ollama_ps`                      | `GET /api/ps`                               |
-| `ollama_version`                 | `GET /api/version`                          |
-| `ollama_pull`                    | `POST /api/pull`                            |
+| `ollama_chat`                    | `POST /ollama/api/chat`                     |
+| `ollama_generate`                | `POST /ollama/api/generate`                 |
+| `ollama_embed`                   | `POST /ollama/api/embed`                    |
+| `ollama_embeddings`              | `POST /ollama/api/embeddings`               |
+| `ollama_tags`                    | `GET /ollama/api/tags`                      |
+| `ollama_show`                    | `POST /ollama/api/show`                     |
+| `ollama_ps`                      | `GET /ollama/api/ps`                        |
+| `ollama_version`                 | `GET /ollama/api/version`                   |
+| `ollama_pull`                    | `POST /ollama/api/pull`                     |
 | **Native Extension Tools**       |                                             |
 | `search_models`                  | `GET /search_models`                        |
 | `model_pricing`                  | `GET /model_pricing`                        |
 
 !!! tip "Filtering MCP Tools"
-    Use `MCP_INCLUDE_TOOLS` or `MCP_EXCLUDE_TOOLS` environment variables to control which tools are exposed. Always include `search_models` so agents can discover the right model ID dynamically. See [Operations Configuration →](operations_configuration.md#mcp-model-context-protocol) for details.
+    Use `MCP_INCLUDE_TOOLS` or `MCP_EXCLUDE_TOOLS` environment variables to control which tools are exposed. Always include `search_models` so agents can discover the right model ID dynamically. See [HTTP Server and MCP → MCP](operations_configuration_server.md#mcp-model-context-protocol) for details.
 
 !!! warning "Token Usage for Complex API Tools"
     `anthropic_message`, `openai_chat_completion`, and `openai_response` map to large, complex APIs that may use many tokens (prompt, completion, and tool definitions). Select these tools only if your workflow requires the full API capabilities.
@@ -257,11 +259,11 @@ Four Ollama operations are the exception: `ollama_create`, `ollama_copy`, `ollam
 
 stdapi.ai speaks the OpenAI, Anthropic, Cohere and Ollama APIs unchanged. Any application built on one of them—chatbots, coding assistants, automation tools, custom scripts—runs against stdapi.ai once you point it at your deployment's base URL and give it that deployment's API key. The model name usually stays as it is, and changes only where it differs.
 
-That is because the Anthropic, OpenAI and Cohere models Bedrock serves are also published under the names their providers use, derived mechanically from the Bedrock identifier rather than curated by hand: `anthropic.claude-opus-5` answers to `claude-opus-5`, `openai.gpt-5.6-sol` to `gpt-5.6-sol`, `openai.gpt-oss-120b-1:0` to `gpt-oss-120b`, `cohere.embed-english-v3` to `embed-english-v3.0`, `cohere.rerank-v3-5:0` to `rerank-v3.5`. A client already asking for one of those names needs no model change at all. Where a name *does* differ — a model from another provider, or one named for a provider this deployment does not serve — [`MODEL_ALIASES`](operations_configuration.md#model-aliases) publishes a served model under the name your application already sends.
+That is because the Anthropic, OpenAI and Cohere models Bedrock serves are also published under the names their providers use, derived mechanically from the Bedrock identifier rather than curated by hand: `anthropic.claude-opus-5` answers to `claude-opus-5`, `openai.gpt-5.6-sol` to `gpt-5.6-sol`, `openai.gpt-oss-120b-1:0` to `gpt-oss-120b`, `cohere.embed-english-v3` to `embed-english-v3.0`, `cohere.rerank-v3-5:0` to `rerank-v3.5`. A client already asking for one of those names needs no model change at all. Where a name *does* differ — a model from another provider, or one named for a provider this deployment does not serve — [`MODEL_ALIASES`](operations_configuration_models.md#model-aliases) publishes a served model under the name your application already sends.
 
 What the base URL buys is the catalogue behind it. A model name is resolved against the catalogue your deployment actually serves — Amazon Bedrock, Bedrock Mantle, Polly, Transcribe and Comprehend, across every region you enable — so the choice spans providers instead of one vendor's list. A name the catalogue does not contain is answered with `404`: it is never mapped onto another vendor's model of roughly similar class, because that would serve you a different model than the one you asked for. Use [`GET /search_models`](api_search_models.md) to find one.
 
-Anywhere a request accepts a model name, it also accepts a glob pattern — `claude-sonnet-*`, say — and the server serves the most recently released model that matches. The response always names the concrete model that served the request, never the pattern. See [Model Wildcard Patterns](operations_configuration.md#model-wildcard-patterns) for the syntax and its rules, and [`GET /search_models`](api_search_models.md#query-parameters) to see everything a pattern matches before relying on it.
+Anywhere a request accepts a model name, it also accepts a glob pattern — `claude-sonnet-*`, say — and the server serves the most recently released model that matches. The response always names the concrete model that served the request, never the pattern. See [Model Wildcard Patterns](operations_configuration_models.md#model-wildcard-patterns) for the syntax and its rules, and [`GET /search_models`](api_search_models.md#query-parameters) to see everything a pattern matches before relying on it.
 
 ### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Using the OpenAI-Compatible API
 
@@ -269,7 +271,7 @@ Anywhere a request accepts a model name, it also accepts a glob pattern — `cla
 
 1. **Replace the OpenAI API URL** with your stdapi.ai deployment URL
 2. **Use the same authentication mechanism** (Bearer token in the `Authorization` header)
-3. **Check the model name against what this deployment serves** — OpenAI's own names for the models Bedrock offers (e.g., `gpt-5.6-sol`, `gpt-oss-120b`) resolve as they stand, as do Bedrock model IDs (e.g., `amazon.nova-micro-v1:0`) and any configured alias. A name Bedrock does not serve, such as `gpt-4o` or `dall-e-3`, returns `404` until you [alias](operations_configuration.md#model-aliases) it onto one it does
+3. **Check the model name against what this deployment serves** — OpenAI's own names for the models Bedrock offers (e.g., `gpt-5.6-sol`, `gpt-oss-120b`) resolve as they stand, as do Bedrock model IDs (e.g., `amazon.nova-micro-v1:0`) and any configured alias. A name Bedrock does not serve, such as `gpt-4o` or `dall-e-3`, returns `404` until you [alias](operations_configuration_models.md#model-aliases) it onto one it does
 
 That's it: the rest of the OpenAI SDK call is unchanged.
 
@@ -289,7 +291,7 @@ Anthropic names resolving on their own makes the base URL the only change for mo
 
 1. **Replace the Cohere API URL** (`https://api.cohere.com`) with your stdapi.ai deployment URL + `/cohere` (e.g., `https://your-endpoint.com/cohere`)
 2. **Use the same authentication mechanism** (Bearer token in the `Authorization` header)
-3. **Check the model name against what this deployment serves** — Cohere's own names for the models Bedrock offers (e.g., `embed-english-v3.0`, `embed-v4.0`, `rerank-v3.5`) resolve as they stand, as do Bedrock model IDs (e.g., `cohere.rerank-v3-5:0`, `cohere.embed-v4:0`) and any configured alias. A Cohere model Bedrock does not serve, such as `embed-english-light-v3.0`, returns `404` until you [alias](operations_configuration.md#model-aliases) it onto one it does
+3. **Check the model name against what this deployment serves** — Cohere's own names for the models Bedrock offers (e.g., `embed-english-v3.0`, `embed-v4.0`, `rerank-v3.5`) resolve as they stand, as do Bedrock model IDs (e.g., `cohere.rerank-v3-5:0`, `cohere.embed-v4:0`) and any configured alias. A Cohere model Bedrock does not serve, such as `embed-english-light-v3.0`, returns `404` until you [alias](operations_configuration_models.md#model-aliases) it onto one it does
 
 That's it: your Cohere rerank and embed integrations are otherwise unchanged.
 

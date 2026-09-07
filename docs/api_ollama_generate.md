@@ -6,45 +6,25 @@ keywords: Ollama generate API, Ollama compatible API, Amazon Bedrock generate, O
 
 # Generate API (Ollama Compatible)
 
-Generate text for a single prompt with Amazon Bedrock models through the Ollama `/api/generate` interface.
+Generate text for a single prompt with Amazon Bedrock models through the Ollama `/api/generate` interface. Served under `/ollama` by default; the examples below use `$BASE`, which includes that prefix.
 
-!!! warning "Route Prefix & Base URL"
-    By default, all Ollama-compatible routes are prefixed with `/ollama`. This means the Generate API is available at `/ollama/api/generate` instead of `/api/generate`. You can customize this prefix using the `OLLAMA_ROUTES_PREFIX` configuration variable documented in [Operations Configuration](operations_configuration.md#ollama-routes-prefix).
+## At a glance
 
-    The `curl` examples below use a `$BASE` variable that **must include this prefix** — set it to your scheme and host followed by `OLLAMA_ROUTES_PREFIX`:
+- :material-swap-horizontal: **Drop-in Ollama compatibility** — Follows the Ollama `/api/generate` request and response shape, including its newline-delimited JSON streaming transport, so an existing Ollama client works by changing the base URL.
+- :material-text-box-outline: **Single-prompt simplicity** — A minimal shape for clients that send one prompt at a time rather than a full conversation.
+- :material-code-json: **Structured output** — `format` accepts `"json"` or a full JSON Schema, and the answer is constrained to it.
+- :material-cloud-lock: **Private AWS backend** — Served entirely by Amazon Bedrock models in your own AWS account — no traffic to third-party endpoints.
+- :material-image-multiple: **Image input beyond base64** — `images` also takes a URL, a data URI or an `s3://` URI on models that read images.
+- :material-swap-horizontal: **Differs from the Ollama API:** `raw`, `suffix`, `template` and `context` are refused with `400` and `context` is never returned; models are never resident, so `keep_alive` holds nothing loaded — see [Limits and behaviour to know](#limitations).
+
+!!! info "Base URL and route prefix"
+    By default, all Ollama-compatible routes are prefixed with `/ollama`. This means the Generate API is available at `/ollama/api/generate` instead of `/api/generate`. You can customize this prefix using the `OLLAMA_ROUTES_PREFIX` configuration variable documented in [HTTP Server and MCP](operations_configuration_server.md#ollama-routes-prefix).
+
+    The `curl` examples on this page use a `$BASE` variable that **must include this prefix** — set it to your scheme and host followed by `OLLAMA_ROUTES_PREFIX`:
 
     ```bash
     export BASE="https://your-host/ollama"  # <scheme>://<host> + OLLAMA_ROUTES_PREFIX
     ```
-
-!!! tip "Prefer /api/chat"
-    [`/api/chat`](api_ollama_chat.md) is the endpoint to prefer for new integrations: it carries conversation history, tool calling and multi-turn thinking. `/api/generate` exists for clients that only speak the single-prompt Ollama Generate API.
-
-## Why Choose the Ollama Generate API?
-
-<div class="grid cards" markdown>
-
-- :material-swap-horizontal: __Drop-in Ollama Compatibility__
-  <br>Follows the Ollama `/api/generate` request and response shape, including its newline-delimited JSON streaming transport, so an existing Ollama client works by changing the base URL.
-
-- :material-text-box-outline: __Single-Prompt Simplicity__
-  <br>A minimal shape for clients that send one prompt at a time rather than a full conversation.
-
-- :material-code-json: __Structured Output__
-  <br>`format` accepts `"json"` or a full JSON Schema, and the answer is constrained to it.
-
-- :material-cloud-lock: __Private AWS Backend__
-  <br>Served entirely by Amazon Bedrock models in your own AWS account — no traffic to third-party endpoints.
-
-</div>
-
-## Available Endpoints
-
-| Endpoint        | Method | What It Does                                        | Powered By                | MCP Tool          |
-|------------------|--------|-------------------------------------------------------|----------------------------|-------------------|
-| `/api/generate`  | `POST` | Text generation for a single prompt, Ollama Generate API | Amazon Bedrock chat models | `ollama_generate` |
-
-**Example request:**
 
 ```bash
 curl -X POST "$BASE/api/generate" \
@@ -57,26 +37,21 @@ curl -X POST "$BASE/api/generate" \
   }'
 ```
 
-**Example response:**
+## Endpoints { #available-endpoints }
 
-```json
-{
-  "model": "amazon.nova-micro-v1:0",
-  "created_at": "2026-08-27T12:00:00.000000+00:00",
-  "response": "The sky is blue because of Rayleigh scattering...",
-  "done": true,
-  "done_reason": "stop",
-  "total_duration": 734567890,
-  "prompt_eval_count": 7,
-  "eval_count": 42
-}
-```
+| Endpoint        | Method | What It Does                                        | Powered By                | MCP Tool          |
+|------------------|--------|-------------------------------------------------------|----------------------------|-------------------|
+| `/api/generate`  | `POST` | Text generation for a single prompt, Ollama Generate API | Amazon Bedrock chat models | `ollama_generate` |
+
+`/api/generate` is served in full; new integrations usually pick [`/api/chat`](api_ollama_chat.md), which carries message history, tool calls and multi-turn thinking.
 
 ## Model Names
 
 Send the model names [`GET /api/tags`](api_ollama_models.md#get-apitags) publishes — those are the canonical identifiers this server resolves directly. A trailing `:latest` is accepted and stripped as a fallback when the exact name is not found. Short aliases accepted on this server's other APIs also work here even though `/api/tags` does not list them. A name learned from ollama.com (for example `llama3.2:3b`) is not available through this server and answers `404`. Every response echoes the model name exactly as the request spelled it, in `model`.
 
-## Feature Compatibility
+**Find compatible models:** Call [`/search_models`](api_search_models.md) with `route=ollama_generate` to discover model IDs that support this route, or call [`GET /api/tags`](api_ollama_models.md#get-apitags) for the Ollama-shaped listing.
+
+## Feature compatibility { #feature-compatibility }
 
 <div class="feature-table" markdown>
 
@@ -95,8 +70,8 @@ Send the model names [`GET /api/tags`](api_ollama_models.md#get-apitags) publish
 | `logprobs` / `top_logprobs`       | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with `400`                                                |
 | **Output**                        |                                          |                                                                    |
 | `response`                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Full support                                                       |
-| `thinking`                        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Follows [`CHAT_COMPLETIONS_REASONING_FIELD`](operations_configuration.md#chat-completions-reasoning-field); omitted when the operator sets that to `none` |
-| `done_reason`                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `stop` or `length`, the only two values Ollama itself emits         |
+| `thinking`                        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Follows [`CHAT_COMPLETIONS_REASONING_FIELD`](operations_configuration_observability.md#chat-completions-reasoning-field); omitted when the operator sets that to `none` |
+| `done_reason`                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `stop` or `length` on a generated answer; `load` or `unload` on a prompt-less request — see [Loading and Unloading](#loading-and-unloading) |
 | `context`                         | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Never returned — see [Fields Not Available](#fields-not-available) |
 | **Usage tracking**                |                                          |                                                                    |
 | `prompt_eval_count`, `eval_count` |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Real token counts                                                   |
@@ -154,7 +129,7 @@ A request with **no `prompt`** is upstream's way of making a model resident — 
 ```json
 {
   "model": "amazon.nova-micro-v1:0",
-  "created_at": "2026-01-01T00:00:00Z",
+  "created_at": "2026-01-01T00:00:00+00:00",
   "response": "",
   "done": true,
   "done_reason": "load"
@@ -163,7 +138,7 @@ A request with **no `prompt`** is upstream's way of making a model resident — 
 
 `done_reason` is `unload` when `keep_alive` is `0`, `load` otherwise. The answer is a single JSON object whatever `stream` says, as upstream's is.
 
-## Limitations
+## Limits and behaviour to know { #limitations }
 
 - `raw`, `suffix`, `template` and `context` are rejected with `400` — see [Fields Not Available](#fields-not-available).
 - `logprobs` and `top_logprobs` are rejected with `400` — log probabilities are not available.
@@ -171,3 +146,44 @@ A request with **no `prompt`** is upstream's way of making a model resident — 
 - Runner options inside `options` (`num_ctx`, `num_gpu`, `num_thread`, `num_batch`, `main_gpu`, `use_mmap`, `min_p`, and any other key a local runner would use) are accepted and ignored.
 - `load_duration` is never reported: there is no model-loading phase to measure, and a number there would be invented.
 - `prompt_eval_duration` and `eval_duration` are reported only when streaming. All duration and count fields are optional in the Ollama API, so a client computing tokens-per-second from a non-streamed response has no duration to divide by.
+- A model name learned from ollama.com — `llama3.2:3b`, for one — names nothing this server serves and answers `404`; send a name [`GET /api/tags`](api_ollama_models.md#get-apitags) publishes.
+
+## Request headers
+
+| Header          | Purpose         | Notes                                           |
+|-----------------|-----------------|-------------------------------------------------|
+| `Authorization` | Gateway API key | `Bearer <key>`, required like every other route |
+
+A local Ollama server needs no key; this one does, on every route.
+
+## Try it
+
+```bash
+curl -X POST "$BASE/api/generate" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-micro-v1:0",
+    "prompt": "Why is the sky blue?",
+    "stream": false
+  }'
+```
+
+**Example response:**
+
+```json
+{
+  "model": "amazon.nova-micro-v1:0",
+  "created_at": "2026-08-27T12:00:00.000000+00:00",
+  "response": "The sky is blue because of Rayleigh scattering...",
+  "done": true,
+  "done_reason": "stop",
+  "total_duration": 734567890,
+  "prompt_eval_count": 7,
+  "eval_count": 42
+}
+```
+
+## Next steps
+
+Next: [Chat API](api_ollama_chat.md) · [Embed API](api_ollama_embed.md) · [Models API](api_ollama_models.md) · [Search Models API](api_search_models.md)

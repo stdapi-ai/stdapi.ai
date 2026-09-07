@@ -66,7 +66,8 @@ class PriceRow(BaseModel):
             an AWS region (single-region inference), or "latency" for the
             latency-optimized price variant.
         spec: Media bucket (e.g. image "resolution:quality"), when applicable.
-        context: "long" for the beyond-200K-tokens prompt rate.
+        context: "long" for the prompt rate past the model's own short-context
+            boundary, 200K tokens for most and 272K for the GPT-5.6 family.
         unit_price: Exact plain-decimal price per ONE billed unit.
         currency: ISO currency code of the price.
     """

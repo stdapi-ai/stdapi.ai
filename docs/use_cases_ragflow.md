@@ -8,26 +8,12 @@ keywords: RAGFlow AWS, RAGFlow Bedrock, self-hosted RAG platform, RAGFlow OpenSe
 
 Run RAGFlow as a complete, self-hosted retrieval-augmented generation platform with Amazon Bedrock behind it. Document parsing, embeddings, reranking, and answer synthesis all reach Bedrock through stdapi.ai — and the models are already bound to the tenant before the first login.
 
-## :material-information-outline: About RAGFlow
-
-**🔗 Links:** [Website](https://ragflow.io/) | [GitHub](https://github.com/infiniflow/ragflow) | [Documentation](https://ragflow.io/docs/dev/)
-
-RAGFlow is an open-source (Apache-2.0) RAG engine built around deep document understanding. Rather than a library you assemble a pipeline from, it is a finished product: a web UI for knowledge bases, a document parser, a retrieval stack, a chat assistant with citations, and an agent builder.
-
-**Key Features:**
-
-- **Deep document parsing** - Layout-aware extraction from PDFs, office documents, and images, with chunk-level visual grounding
-- **Knowledge bases** - Upload, parse, chunk, and index documents through the UI, with per-base parsing and embedding settings
-- **Hybrid retrieval** - BM25 keyword scoring combined with vector similarity, then reranked before generation
-- **Grounded chat** - Answers cite the exact chunks they came from, so every claim is traceable to a source page
-- **Agents** - A visual builder for multi-step retrieval and tool workflows on top of the knowledge bases
-
-## :material-help-circle-outline: Why RAGFlow + stdapi.ai?
+## :material-lightning-bolt: At a glance { #why-ragflow-stdapiai }
 
 <div class="grid cards" markdown>
 
 - :material-layers-triple: __Every RAG Stage, One Gateway__
-  <br>Chat, embeddings, and reranking are three different API dialects. stdapi.ai serves all three from one deployment, so RAGFlow needs a single endpoint and a single key.
+  <br>Chat, embeddings, and reranking are three separate endpoint families, in two API dialects: chat and embeddings on the OpenAI routes, reranking on the Cohere ones. stdapi.ai serves all three from one deployment, so RAGFlow's three providers share a single host and a single key.
 
 - :material-aws: __Access Amazon Bedrock Models__
   <br>Nova and Claude for synthesis, Cohere Embed and Amazon Titan for indexing, Cohere Rerank for two-stage retrieval — all through Bedrock.
@@ -50,18 +36,35 @@ flowchart LR
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
+!!! note "How this page is checked"
+    Every other integration guide in this section has an automated test suite that drives the tool end to end against a live deployment. RAGFlow has none: this page and its sample were checked by hand, so a RAGFlow release can move ahead of them.
+
+## :material-information-outline: About RAGFlow
+
+**🔗 Links:** [Website](https://ragflow.io/) | [GitHub](https://github.com/infiniflow/ragflow) | [Documentation](https://ragflow.io/docs/dev/)
+
+RAGFlow is an open-source (Apache-2.0) RAG engine built around deep document understanding. Rather than a library you assemble a pipeline from, it is a finished product: a web UI for knowledge bases, a document parser, a retrieval stack, a chat assistant with citations, and an agent builder.
+
+**Key Features:**
+
+- **Deep document parsing** - Layout-aware extraction from PDFs, office documents, and images, with chunk-level visual grounding
+- **Knowledge bases** - Upload, parse, chunk, and index documents through the UI, with per-base parsing and embedding settings
+- **Hybrid retrieval** - BM25 keyword scoring combined with vector similarity, then reranked before generation
+- **Grounded chat** - Answers cite the exact chunks they came from, so every claim is traceable to a source page
+- **Agents** - A visual builder for multi-step retrieval and tool workflows on top of the knowledge bases
+
 ## :material-connection: Connect Your Own Instance
 
 Point any RAGFlow instance's model providers at stdapi.ai — the deployment underneath doesn't matter to RAGFlow.
 
 ### :material-check-circle: Prerequisites
 
-!!! info "What You'll Need"
+??? info "Before you start"
     - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md)
     - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com`
     - ✓ **Your API key** - From Terraform output or configuration
     - ✓ **RAGFlow instance** - Running or ready to deploy (see Deployment section below), on **x86_64** — RAGFlow publishes no arm64 image
-    - ✓ **A reranking region** - Bedrock serves `Rerank` from a subset of regions; keep one in [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) and stdapi.ai fails over to it automatically
+    - ✓ **A reranking region** - Bedrock serves `Rerank` from a subset of regions; keep one in [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions) and stdapi.ai fails over to it automatically
 
 ---
 
@@ -106,7 +109,7 @@ Hybrid BM25 + vector retrieval requires OpenSearch 2.10 or later and the `cluste
 
 ---
 
-### :material-alert-outline: Known Issues
+### :material-alert-outline: Limits and behaviour to know { #known-issues }
 
 RAGFlow `v0.26.4`'s behavior with the `opensearch` document engine carries a few gaps that are properties of the application, not of any particular deployment: **Agent Memory** is unavailable (RAGFlow only wires a message store for the Elasticsearch and Infinity engines), the Agent **"Code"** component is unavailable (it needs a Docker socket and gVisor that `DOC_ENGINE=opensearch` deployments typically don't have), and **Pagerank and the resume parser** branch on Elasticsearch upstream and do not apply here. See [Known Limitations](https://github.com/stdapi-ai/samples/blob/main/getting_started_ragflow/README.md#known-limitations) in the sample's README for the full list, with the code references that back each one.
 
@@ -165,7 +168,7 @@ Two things are worth reading off the picture. RAGFlow's documents and their vect
 | **Amazon ECS on AWS Fargate** | Runs RAGFlow (three containers: `main`, a TLS sidecar for Valkey, and a one-shot bootstrap) and the stdapi.ai gateway as separate services | `ragflow.tf`, Terraform sample |
 | **Elastic Load Balancing** | The only public entry point; forwards only to RAGFlow; TLS with an ACM certificate and a Route 53 alias record when a custom domain is configured, otherwise plain HTTP on the load balancer's own DNS name | `alb.tf` |
 | **AWS Cloud Map** | Private DNS name that lets RAGFlow reach the gateway without exposing it publicly | `main.tf` (`service_discovery_dns_name`) |
-| **Amazon Bedrock** | Chat completions for synthesis, embeddings for indexing, reranking for retrieval — RAGFlow never calls it directly | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon Bedrock** | Chat completions for synthesis, embeddings for indexing, reranking for retrieval — RAGFlow never calls it directly | [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions) |
 | **Amazon OpenSearch Service** | RAGFlow's document and vector index; a single-node VPC domain with fine-grained access control and enforced HTTPS | `opensearch.tf` |
 | **Amazon Aurora PostgreSQL** | RAGFlow's metadata database (knowledge bases, chat sessions, users); Serverless v2, initialized over the RDS Data API | `postgres.tf` |
 | **Amazon ElastiCache (Valkey)** | RAGFlow's cache and task queue (Redis Streams on database 1), reached through a `socat` sidecar that terminates TLS on loopback | `valkey.tf` |
@@ -181,7 +184,7 @@ Two things are worth reading off the picture. RAGFlow's documents and their vect
 - **Encryption in transit** — HTTPS from the browser to the ALB when a custom domain is configured (otherwise plain HTTP), private-VPC HTTP from the ALB to RAGFlow, and HTTPS with SigV4 from the gateway to Amazon Bedrock. The OpenSearch and Valkey hops carry their own caveats, covered in [Security Notes](#security-notes) below rather than repeated here.
 - **Encryption at rest** — SSE-KMS on the shared S3 bucket, and KMS-encrypted storage for OpenSearch, Aurora and Valkey.
 - **Least privilege** — RAGFlow's task role is scoped to its own S3 prefix and its own KMS key actions and carries no Bedrock permission; only the gateway's task role can call Amazon Bedrock.
-- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) configured on the gateway applies to chat, embeddings and reranking alike, since all three reach Bedrock through the same deployment.
+- **Content policy** — a [Bedrock guardrail](operations_configuration_bedrock.md#bedrock-guardrails) configured on the gateway applies to chat, embeddings and reranking alike, since all three reach Bedrock through the same deployment.
 - **Data handling** — the gateway is stateless and holds request bodies in memory only for the duration of a call; the documents themselves persist in S3 and OpenSearch, inside the account, and no third party sits between RAGFlow's users and the models it calls.
 
 ---

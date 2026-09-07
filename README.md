@@ -3,9 +3,9 @@
 
 # stdapi.ai
 
-**OpenAI, Anthropic & Cohere Compatible API Gateway for Amazon Bedrock and AWS AI Services**
+**OpenAI, Anthropic, Cohere & Ollama Compatible API Gateway for Amazon Bedrock and AWS AI Services**
 
-Run your favorite OpenAI, Anthropic, and Cohere-compatible applications on Amazon Bedrock. Access [100+ models](https://stdapi.ai/models/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) including Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
+Run your favorite OpenAI, Anthropic, Cohere and Ollama-compatible applications on Amazon Bedrock. Access [100+ models](https://stdapi.ai/models/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) including Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
 
 ---
 
@@ -32,6 +32,26 @@ Run your favorite OpenAI, Anthropic, and Cohere-compatible applications on Amazo
 
 ---
 
+## 🎯 Why stdapi.ai?
+
+- **🔌 Same API, wider catalogue** — Adoption is quick: standard OpenAI, Anthropic, Cohere and Ollama SDKs connect on the base URL alone, and hundreds of applications and tools build on them; the model you then name is drawn from every provider in [the catalogue](https://stdapi.ai/models/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces), not one vendor's list. Twenty-two clients are driven end to end against a live gateway by the [automated test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests): **Claude Code**, **Codex**, **pi**, **OpenClaw**, **Hermes**, **Qwen Code**, **n8n**, **Haystack**, **Open WebUI**, **wyoming-openai**, **Home Assistant**, **LangChain**, **Pydantic AI**, **LiteLLM**, **Docling Serve**, **OpenAI Agents SDK**, **LiveKit Agents**, **Pipecat**, **inspect-ai**, **Agno**, **LlamaIndex**, the official **ollama** client.
+- **🔒 Runs in your AWS account** — No third party sits between your users and your models. Amazon Bedrock does not share your prompts with model providers or use them for training — two models it serves today, Claude Fable 5 and Claude Fable 5.1, require your account to allow AWS's own human review of retained traffic; the compliance guide covers this in full. Configure region allow-lists to match your own requirements — AWS compliance certifications apply to the AWS services and regions you choose, and are not inherited by stdapi.ai or by your application. **[Compliance guide →](https://stdapi.ai/operations_compliance/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
+- **🌍 Add a region, add its quota** — Every AWS region has its own Bedrock quota, and every region you enable adds its own. Eligible throttling and availability failures retry in another enabled region, with no client changes. Streaming retries only before the stream opens, and asynchronous jobs stay in the region that accepted them. **[Resilience guide →](https://stdapi.ai/operations_resilience/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
+- **💰 Pay only what you use** — Amazon Bedrock rates with 0% markup: model usage is billed to you directly by AWS, with no minimum commitment. Each end user's model calls can run under their own short-lived role session, so AWS reports their spend separately in Cost Explorer and the CUR — from the invoice, not from an estimate. The gateway license itself is metered per container-hour.
+- **⚡ Advanced Bedrock features** — Reasoning modes (Claude, Nova), prompt caching, guardrails, service tiers, inference profiles, prompt routers, batch inference at the discounted batch price, server-side conversations continued by id—all through standard OpenAI and Anthropic API parameters.
+- **🧠 100+ models** — Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen, GLM, Nova, Llama, Stability AI, and more. Switch model by name — no vendor lock-in. When AWS retires a model, requests are transparently redirected to its replacement, so applications survive deprecations without code changes.
+- **🎨 Complete multi-modal API** — Chat, embeddings, image generation/editing/variations, video generation, audio speech/transcription/translation, live speech-to-speech over a WebSocket, content moderation. Amazon Bedrock, Bedrock Mantle, Polly, Transcribe and Comprehend are discovered automatically and surface as one catalog under OpenAI-compatible endpoints — and, for chat, generation and embeddings, under Ollama-compatible ones — no model list to maintain. Amazon Translate backs audio translation.
+- **🔎 Retrieval without a second stack** — Attach a file and it is chunked, embedded and indexed in a vector bucket in your own account, then searched by meaning; an Amazon Bedrock knowledge base you already run answers through the same endpoints. Hand the stores to any chat model on the Responses API with `file_search` and it runs the searches itself and cites the files it drew on.
+- **📊 Full observability** — OpenTelemetry integration, request/response logging, Swagger and ReDoc API documentation, and opt-in per-request cost tracking — off by default, and estimated from published AWS prices rather than read back from your invoice.
+- **🤖 Integrated MCP server** — Every API endpoint exposed as a Model Context Protocol tool. AI agents connect directly—no HTTP client code required. Streamable HTTP and SSE transports with configurable tool selection.
+- **🔑 Identity per caller** — Accept Amazon Cognito user pool tokens instead of, or alongside, the API key, and publish an OAuth 2.0 protected resource metadata document so an agent discovers how to authenticate on its own.
+
+**Measured, not asserted:** `<1 ms` gateway overhead (0.8 ms of gateway CPU on a 2.5 KB chat request) · **8,000+ automated test cases** run against real AWS services, at **95%+ branch coverage** · **22 third-party clients** driven end to end against a live gateway · **100+ API operations** exposed as MCP tools.
+
+**[See all features →](https://stdapi.ai/features/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)** · **[Browse every model →](https://stdapi.ai/models/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)** · **[Browse the test suite →](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests)**
+
+---
+
 ## ⚡ Try It Locally with Docker
 
 Run stdapi.ai locally with the free community image. Requires [AWS credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) configured (e.g. via `aws sso login` or access keys).
@@ -45,11 +65,15 @@ docker run --rm -p 8000:8000 \
   ghcr.io/stdapi-ai/stdapi.ai-community:latest
 ```
 
-> The image runs as the unprivileged user `nonroot` (uid/gid 65532); `--user` lets it read your own `~/.aws` files. Drop both flags when you pass credentials as environment variables instead.
->
-> **Never run this with `sudo`:** under `sudo`, `$(id -u):$(id -g)` resolves to `0:0`, and the container silently runs as root instead of `nonroot`. If your host has no `docker` group, add credentials as environment variables (below) instead of using `sudo` with `--user`.
->
-> **Podman on Fedora/RHEL (SELinux):** use `--userns=keep-id:uid=65532,gid=65532` in place of `--user`/`HOME`, and `:ro,z` instead of `:ro`
+<details>
+<summary>Running as your own user — and why not to use <code>sudo</code></summary>
+
+The image runs as the unprivileged user `nonroot` (uid/gid 65532); `--user` lets it read your own `~/.aws` files. Drop both flags when you pass credentials as environment variables instead.
+
+**Never run this with `sudo`:** under `sudo`, `$(id -u):$(id -g)` resolves to `0:0`, and the container silently runs as root instead of `nonroot`. If your host has no `docker` group, add credentials as environment variables (below) instead of using `sudo` with `--user`.
+
+**Podman on Fedora/RHEL (SELinux):** use `--userns=keep-id:uid=65532,gid=65532` in place of `--user`/`HOME`, and `:ro,z` instead of `:ro`
+</details>
 
 Open **[http://localhost:8000/docs](http://localhost:8000/docs)** in your browser — Swagger UI lets you explore all endpoints and send live requests without writing any code.
 
@@ -92,7 +116,7 @@ curl http://localhost:8000/anthropic/v1/messages \
   }'
 ```
 
-**Using the official SDKs?** Point `base_url` at `http://localhost:8000/v1` (OpenAI SDK), `http://localhost:8000/anthropic` (Anthropic SDK), or `http://localhost:8000/cohere` (Cohere SDK) — no other code changes.
+**Using the official SDKs?** Point `base_url` at `http://localhost:8000/v1` (OpenAI SDK), `http://localhost:8000/anthropic` (Anthropic SDK), or `http://localhost:8000/cohere` (Cohere SDK) — and the Ollama client's `host` at `http://localhost:8000/ollama` — no other code changes.
 
 **[Local development guide →](https://stdapi.ai/operations_getting_started_local/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
 
@@ -128,31 +152,11 @@ module "stdapi_ai" {
 }
 ```
 
-The default deploys one task per availability zone, so a 3-AZ region runs 3 containers (~$216/month in license at $0.10/container-hour), before ALB, NAT, Fargate and KMS costs.
+The default deploys one task per availability zone, so a 3-AZ region runs 3 containers (~$216/month in license at $0.10/container-hour), before ALB, NAT, Fargate and KMS costs; autoscaling can add up to 5× that under load by default, so size the ceiling in the [cost management guide](https://stdapi.ai/operations_cost_management/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces).
 
 **[Full deployment guide →](https://stdapi.ai/operations_getting_started/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)** · **[Advanced deployment →](https://stdapi.ai/operations_deploy_advanced/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)** · **[Cost management →](https://stdapi.ai/operations_cost_management/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
 
 Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) is available.
-
----
-
-## 🎯 Why stdapi.ai?
-
-- **🔌 Same API, wider catalogue** — Adoption is quick: standard OpenAI, Anthropic and Cohere SDKs connect on the base URL alone, and hundreds of applications and tools build on them; the model you then name is drawn from every provider in [the catalogue](https://stdapi.ai/models/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces), not one vendor's list. Twenty clients are driven end to end against a live gateway by the [automated test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests): **Claude Code**, **Codex**, **pi**, **OpenClaw**, **Hermes**, **Qwen Code**, **n8n**, **Haystack**, **Open WebUI**, **wyoming-openai**, **LangChain**, **Pydantic AI**, **LiteLLM**, **Docling Serve**, **OpenAI Agents SDK**, **LiveKit Agents**, **Pipecat**, **inspect-ai**, **Agno**, **LlamaIndex**.
-- **🔒 Runs in your AWS account** — No third party sits between your users and your models. Amazon Bedrock does not share your prompts with model providers or use them for training — two models it serves today, Claude Fable 5 and Claude Fable 5.1, require your account to allow AWS's own human review of retained traffic; the compliance guide covers this in full. Configure region allow-lists to match your own requirements — AWS compliance certifications apply to the AWS services and regions you choose, and are not inherited by stdapi.ai or by your application. **[Compliance guide →](https://stdapi.ai/operations_compliance/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
-- **🌍 Add a region, add its quota** — Every AWS region has its own Bedrock quota, and every region you enable adds its own. Eligible throttling and availability failures retry in another enabled region, with no client changes. Streaming retries only before the stream opens, and asynchronous jobs stay in the region that accepted them. **[Resilience guide →](https://stdapi.ai/operations_resilience/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
-- **💰 Pay only what you use** — Amazon Bedrock rates with 0% markup: model usage is billed to you directly by AWS, with no minimum commitment. Each end user's model calls can run under their own short-lived role session, so AWS reports their spend separately in Cost Explorer and the CUR — from the invoice, not from an estimate. The gateway license itself is metered per container-hour.
-- **⚡ Advanced Bedrock features** — Reasoning modes (Claude, Nova), prompt caching, guardrails, service tiers, inference profiles, prompt routers, batch inference at the discounted batch price, server-side conversations continued by id—all through standard OpenAI and Anthropic API parameters.
-- **🧠 100+ models** — Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen, GLM, Nova, Llama, Stability AI, and more. Switch model by name — no vendor lock-in. When AWS retires a model, requests are transparently redirected to its replacement, so applications survive deprecations without code changes.
-- **🎨 Complete multi-modal API** — Chat, embeddings, image generation/editing/variations, video generation, audio speech/transcription/translation, live speech-to-speech over a WebSocket, content moderation. Amazon Bedrock, Bedrock Mantle, Polly, Transcribe and Comprehend are discovered automatically and surface as one catalog under OpenAI-compatible endpoints — no model list to maintain. Amazon Translate backs audio translation.
-- **🔎 Retrieval without a second stack** — Attach a file and it is chunked, embedded and indexed in a vector bucket in your own account, then searched by meaning; an Amazon Bedrock knowledge base you already run answers through the same endpoints. Hand the stores to any chat model on the Responses API with `file_search` and it runs the searches itself and cites the files it drew on.
-- **📊 Full observability** — OpenTelemetry integration, request/response logging, Swagger and ReDoc API documentation, and opt-in per-request cost tracking — off by default, and estimated from published AWS prices rather than read back from your invoice.
-- **🤖 Integrated MCP server** — Every API endpoint exposed as a Model Context Protocol tool. AI agents connect directly—no HTTP client code required. Streamable HTTP and SSE transports with configurable tool selection.
-- **🔑 Identity per caller** — Accept Amazon Cognito user pool tokens instead of, or alongside, the API key, and publish an OAuth 2.0 protected resource metadata document so an agent discovers how to authenticate on its own.
-
-**Measured, not asserted:** `<1 ms` gateway overhead (0.8 ms of gateway CPU on a 2.5 KB chat request) · **6,000+ automated test cases** run against real AWS services, at **95%+ branch coverage** · **20 third-party clients** driven end to end against a live gateway · **80+ API operations** exposed as MCP tools.
-
-**[See all features →](https://stdapi.ai/features/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)** · **[Browse every model →](https://stdapi.ai/models/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)** · **[Browse the test suite →](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests)**
 
 ---
 

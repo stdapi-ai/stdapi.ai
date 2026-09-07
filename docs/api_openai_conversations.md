@@ -6,34 +6,28 @@ keywords: Conversations API, OpenAI conversations, conversation state, multi-tur
 
 # Conversations API
 
-Keep multi-turn state on the server. A conversation holds the items of an
-exchange — user messages, model output, reasoning and tool calls — so each new
-turn only has to send the new message. Pass a conversation ID as `conversation`
-on a [Responses](api_openai_responses.md) request and both the request input and
-the response output are added to it automatically.
+Keep multi-turn state on the server, in Amazon Bedrock session storage in your own
+AWS account. A conversation holds the items of an exchange — user messages, model
+output, reasoning and tool calls — so each new turn only has to send the new
+message.
 
-## Why Choose the Conversations API?
+## At a glance
 
-<div class="grid cards" markdown>
+- :material-chat-processing: **Send only the new turn.** Pass a conversation ID as `conversation` on a [Responses](api_openai_responses.md) request: the conversation's items become the input prefix, and both the request input and the response output are added back to it.
+- :material-playlist-plus: **Explicit item control.** Add, list, retrieve and delete items yourself, independently of any model call — 1 to 20 items per add request.
+- :material-tag-multiple: **Attached metadata.** Up to 16 key-value pairs per conversation, merged on update and removable key by key.
+- :material-format-list-bulleted: **Cursor pagination.** List items newest- or oldest-first, up to 100 per page, with the `after` cursor.
+- :material-server-network: **No gateway state.** The thread lives in your AWS account, not in a gateway instance, so any instance behind a load balancer serves any conversation.
+- :material-swap-horizontal: **Differs from OpenAI:** a conversation expires 30 days after it is created, the window Amazon Bedrock session storage sets.
 
-- :material-chat-processing: __Send Only the New Turn__
-  <br>The conversation's items become the input prefix of the next request, so a long exchange stays a one-message request.
+```bash
+curl -X POST "$BASE/v1/conversations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"metadata": {"topic": "travel"}}'
+```
 
-- :material-playlist-plus: __Explicit Item Control__
-  <br>Add, list, retrieve and delete items yourself, independently of any model call.
-
-- :material-tag-multiple: __Attached Metadata__
-  <br>Up to 16 key-value pairs per conversation, merged on update and removable key by key.
-
-- :material-format-list-bulleted: __Cursor Pagination__
-  <br>List items newest- or oldest-first with `limit` and the `after` cursor.
-
-- :material-server-network: __No Gateway State__
-  <br>The thread lives in your AWS account, not in a gateway instance, so any instance behind a load balancer serves any conversation.
-
-</div>
-
-## Available Endpoints
+## Endpoints { #available-endpoints }
 
 | Endpoint                                          | Method   | What It Does                        | MCP Tool                            |
 |---------------------------------------------------|----------|-------------------------------------|-------------------------------------|
@@ -46,7 +40,11 @@ the response output are added to it automatically.
 | `/v1/conversations/{conversation_id}/items/{item_id}` | `GET`    | Retrieve one item               | `openai_conversation_item_get`      |
 | `/v1/conversations/{conversation_id}/items/{item_id}` | `DELETE` | Delete one item                 | `openai_conversation_item_delete`   |
 
-## Feature Compatibility
+## Feature compatibility
+
+The Notes column says what happens to a field this API does not honor: *accepted
+and ignored* when the field only annotates the request, *rejected with `400`*
+when honoring it is the request.
 
 <div class="feature-table" markdown>
 
@@ -70,7 +68,7 @@ the response output are added to it automatically.
 | `first_id` / `last_id` / `has_more`       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Populated on every page; the server never auto-paginates                    |
 | **Lifecycle**                             |                                          |                                                                             |
 | Conversation lifetime                     |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | 30 days from creation, after which every route on it answers `404`. Amazon Bedrock session storage sets the window and it cannot be extended |
-| Adding and deleting items                 |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | 1,000 requests per conversation — see [Limits](#limits)                     |
+| Conversation length                       |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Adds and deletes keep succeeding, but a listing reads at most 1,000 invocation steps and stops early past that — see [Limits](#limits) |
 
 </div>
 
@@ -91,7 +89,99 @@ the response output are added to it automatically.
     [`POST /v1/responses/compact`](api_openai_responses.md#conversation-compaction),
     on the Responses API.
 
-## Quick Start
+## Working with conversations
+
+### Using a Conversation with the Responses API
+
+| Request                                    | Effect                                                                 |
+|--------------------------------------------|------------------------------------------------------------------------|
+| `conversation="conv-..."`                  | The conversation's items are prepended to `input`; the request input and the response output are appended to the conversation. |
+| `conversation={"id": "conv-..."}`          | Same; both forms are accepted.                                          |
+| `conversation=...`, `store=false`          | The conversation is still used as the input prefix, but nothing is added to it. |
+| `conversation=...`, `stream=true`          | Items are added once the stream has ended, and the terminal event carries the conversation. |
+| `conversation=...` and `previous_response_id=...` | Rejected with `400` (`mutually_exclusive_parameters`) — pick one way of continuing the exchange. |
+
+The response echoes the conversation it belongs to as `"conversation": {"id": "conv-..."}`.
+A response that fails before generating anything adds nothing to the conversation.
+
+`conversation` is also accepted on `/v1/responses/input_tokens`, where the
+conversation's items are counted ahead of `input`.
+
+### Items
+
+Items use the same shapes as the Responses API `input` and `output`: messages,
+reasoning items, function calls and their outputs.
+
+- **Item IDs are assigned by the server.** An `id` sent on a new item is ignored.
+- **Adding items returns the items that were added**, as a `list` envelope — not
+  the whole conversation.
+- **`item_reference` items** point at an item already in the conversation; a
+  reference to an item that is not there returns `404`.
+- **Deleting an item returns the conversation**, and the item disappears from
+  the listing.
+- `include=reasoning.encrypted_content` returns the encrypted content of
+  reasoning items; other `include` values are accepted and ignored.
+
+#### Listing
+
+| Parameter | Default  | Notes                                                        |
+|-----------|----------|--------------------------------------------------------------|
+| `order`   | `desc`   | `asc` is conversation order.                                 |
+| `limit`   | `20`     | Up to 100 items per page; `0` returns an empty page.         |
+| `after`   | —        | An item ID; only items strictly after it are returned. An ID that is not in the conversation returns `404`. |
+| `include` | —        | Extra item fields to return.                                 |
+
+Each page carries `first_id`, `last_id` and `has_more`. Pass the page's
+`last_id` as `after` to read the next page; the server never auto-paginates.
+
+### Metadata
+
+| Limit                        | Value |
+|------------------------------|-------|
+| Key-value pairs              | 16    |
+| Key length                   | 64    |
+| Value length                 | 512   |
+
+Updating **merges**: keys that are not sent keep their value, and a key sent as
+`null` is removed. `metadata` is required on update — omitting it returns `400`
+(`missing_required_parameter`), and sending `null` returns `400`
+(`invalid_type`).
+
+## Limits and behaviour to know { #limits }
+
+| Limit                                             | Value                  |
+|---------------------------------------------------|------------------------|
+| Items per add request                             | 20                     |
+| Invocation steps read when listing a conversation | 1,000 — a large item spans several, so a listing can stop early |
+| Conversation lifetime                             | 30 days after creation |
+
+Adding and deleting items is never rejected on a count: past 1,000 invocation
+steps a listing stops early instead, so it returns only part of the conversation
+and the prefix handed to the next Responses turn is truncated with it. Start a
+new conversation to continue an exchange that has reached the limit, and see
+[Troubleshooting](operations_troubleshooting.md)
+if a listing stops returning items earlier than expected.
+
+Past the 30-day lifetime every route on a conversation answers `404`, so an
+exchange that has to outlive the window keeps its own copy of the items.
+
+### Errors
+
+| Status | When                                                                 |
+|--------|----------------------------------------------------------------------|
+| `400`  | A malformed `conversation_id` or `item_id`, a metadata limit, an empty or oversized `items` list, or `conversation` combined with `previous_response_id`. |
+| `404`  | A well-formed identifier that names no conversation or item, including one created on another provider. |
+
+### Prerequisites
+
+Conversations are stored in Amazon Bedrock session storage in your own account.
+The gateway's IAM role needs the
+[Bedrock Session Storage permissions](operations_iam_permissions.md#bedrock-session-storage-optional);
+without them, conversation requests fail with `503`. Set
+[`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](operations_configuration_bedrock.md#aws-bedrock-session-encryption-key-arn)
+to encrypt conversation content with your own AWS KMS key.
+
+## Try it { #quick-start }
 
 ```python
 from openai import OpenAI
@@ -116,94 +206,6 @@ print(second.output_text)
 
 The second request carries no history: the conversation supplies it.
 
-## Using a Conversation with the Responses API
+## Next steps { #see-also }
 
-| Request                                    | Effect                                                                 |
-|--------------------------------------------|------------------------------------------------------------------------|
-| `conversation="conv-..."`                  | The conversation's items are prepended to `input`; the request input and the response output are appended to the conversation. |
-| `conversation={"id": "conv-..."}`          | Same; both forms are accepted.                                          |
-| `conversation=...`, `store=false`          | The conversation is still used as the input prefix, but nothing is added to it. |
-| `conversation=...`, `stream=true`          | Items are added once the stream has ended, and the terminal event carries the conversation. |
-| `conversation=...` and `previous_response_id=...` | Rejected with `400` (`mutually_exclusive_parameters`) — pick one way of continuing the exchange. |
-
-The response echoes the conversation it belongs to as `"conversation": {"id": "conv-..."}`.
-A response that fails before generating anything adds nothing to the conversation.
-
-`conversation` is also accepted on `/v1/responses/input_tokens`, where the
-conversation's items are counted ahead of `input`.
-
-## Items
-
-Items use the same shapes as the Responses API `input` and `output`: messages,
-reasoning items, function calls and their outputs.
-
-- **Item IDs are assigned by the server.** An `id` sent on a new item is ignored.
-- **Adding items returns the items that were added**, as a `list` envelope — not
-  the whole conversation.
-- **`item_reference` items** point at an item already in the conversation; a
-  reference to an item that is not there returns `404`.
-- **Deleting an item returns the conversation**, and the item disappears from
-  the listing.
-- `include=reasoning.encrypted_content` returns the encrypted content of
-  reasoning items; other `include` values are accepted and ignored.
-
-### Listing
-
-| Parameter | Default  | Notes                                                        |
-|-----------|----------|--------------------------------------------------------------|
-| `order`   | `desc`   | `asc` is conversation order.                                 |
-| `limit`   | `20`     | Up to 100 items per page; `0` returns an empty page.         |
-| `after`   | —        | An item ID; only items strictly after it are returned. An ID that is not in the conversation returns `404`. |
-| `include` | —        | Extra item fields to return.                                 |
-
-Each page carries `first_id`, `last_id` and `has_more`. Pass the page's
-`last_id` as `after` to read the next page; the server never auto-paginates.
-
-## Metadata
-
-| Limit                        | Value |
-|------------------------------|-------|
-| Key-value pairs              | 16    |
-| Key length                   | 64    |
-| Value length                 | 512   |
-
-Updating **merges**: keys that are not sent keep their value, and a key sent as
-`null` is removed. `metadata` is required on update — omitting it returns `400`
-(`missing_required_parameter`), and sending `null` returns `400`
-(`invalid_type`).
-
-## Limits
-
-| Limit                                             | Value                  |
-|---------------------------------------------------|------------------------|
-| Items per add request                             | 20                     |
-| Invocation steps read when listing a conversation | 1,000 — a large item spans several, so a listing can stop early |
-| Conversation lifetime                             | 30 days after creation |
-
-A response bound to a conversation counts as one adding request, whatever its
-number of output items. Start a new conversation to continue an exchange that
-has reached the limit, and see
-[Troubleshooting](operations_troubleshooting.md)
-if a conversation stops accepting items earlier than expected.
-
-## Errors
-
-| Status | When                                                                 |
-|--------|----------------------------------------------------------------------|
-| `400`  | A malformed `conversation_id` or `item_id`, a metadata limit, an empty or oversized `items` list, or `conversation` combined with `previous_response_id`. |
-| `404`  | A well-formed identifier that names no conversation or item, including one created on another provider. |
-
-## Prerequisites
-
-Conversations are stored in Amazon Bedrock session storage in your own account.
-The gateway's IAM role needs the
-[Bedrock Session Storage permissions](operations_iam_permissions.md#bedrock-session-storage-optional);
-without them, conversation requests fail with `503`. Set
-[`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](operations_configuration.md#aws-bedrock-session-encryption-key-arn)
-to encrypt conversation content with your own AWS KMS key.
-
-## See Also
-
-- [Responses API](api_openai_responses.md) — the `conversation` parameter and stored responses.
-- [Configuration](operations_configuration.md#bedrock-session-storage-optional) — session storage settings.
-- [IAM Permissions](operations_iam_permissions.md#bedrock-session-storage-optional) — the policy statement.
+Next: [Responses API](api_openai_responses.md) · [Session storage settings](operations_configuration_bedrock.md#bedrock-session-storage-optional) · [IAM permissions](operations_iam_permissions.md#bedrock-session-storage-optional)

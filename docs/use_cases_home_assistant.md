@@ -8,19 +8,7 @@ keywords: Home Assistant AI, Home Assistant voice assistant AWS, wyoming protoco
 
 Give Home Assistant's Assist voice pipeline speech-to-text and text-to-speech backed by Amazon Transcribe and Amazon Polly, through stdapi.ai's OpenAI-compatible audio routes.
 
-## :material-information-outline: About Home Assistant Assist and Wyoming
-
-**🔗 Links:** [Home Assistant Assist](https://www.home-assistant.io/voice_control/) | [wyoming-openai](https://github.com/roryeckel/wyoming_openai) | [Wyoming protocol](https://github.com/OHF-Voice/wyoming)
-
-Home Assistant's Assist voice pipeline speaks [Wyoming](https://github.com/OHF-Voice/wyoming), a lightweight protocol for local voice satellites and speech services—not the OpenAI or Anthropic APIs directly. [wyoming-openai](https://github.com/roryeckel/wyoming_openai) is an open-source proxy that bridges Wyoming to any OpenAI-compatible speech-to-text and text-to-speech backend, which is what lets Assist reach stdapi.ai.
-
-**What the proxy adds on top of the audio routes:**
-
-- **Wyoming discovery** - Advertises configured speech-to-text models and text-to-speech voices to Assist
-- **Streaming synthesis** - Speaks a response as it is generated, in overlapping chunks, rather than waiting for the whole sentence
-- **Format translation** - Reassembles the response as raw PCM frames for Assist's audio pipeline
-
-## :material-help-circle-outline: Why Home Assistant + stdapi.ai?
+## :material-lightning-bolt: At a glance { #why-home-assistant-stdapiai }
 
 <div class="grid cards" markdown>
 
@@ -47,13 +35,25 @@ flowchart LR
   stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Polly"]
 ```
 
+## :material-information-outline: About Home Assistant Assist and Wyoming
+
+**🔗 Links:** [Home Assistant Assist](https://www.home-assistant.io/voice_control/) | [wyoming-openai](https://github.com/roryeckel/wyoming_openai) | [Wyoming protocol](https://github.com/OHF-Voice/wyoming)
+
+Home Assistant's Assist voice pipeline speaks [Wyoming](https://github.com/OHF-Voice/wyoming), a lightweight protocol for local voice satellites and speech services—not the OpenAI or Anthropic APIs directly. [wyoming-openai](https://github.com/roryeckel/wyoming_openai) is an open-source proxy that bridges Wyoming to any OpenAI-compatible speech-to-text and text-to-speech backend, which is what lets Assist reach stdapi.ai.
+
+**What the proxy adds on top of the audio routes:**
+
+- **Wyoming discovery** - Advertises configured speech-to-text models and text-to-speech voices to Assist
+- **Streaming synthesis** - Speaks a response as it is generated, in overlapping chunks, rather than waiting for the whole sentence
+- **Format translation** - Reassembles the response as raw PCM frames for Assist's audio pipeline
+
 ## :material-connection: Connect Your Own Instance
 
 Point any Home Assistant instance's Wyoming bridge at stdapi.ai — the deployment underneath doesn't matter to Assist.
 
 ### :material-check-circle: Prerequisites
 
-!!! info "What You'll Need"
+??? info "Before you start"
     - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md)
     - ✓ **Your stdapi.ai URL** - reachable from wherever the proxy runs, e.g. `https://api.example.com`
     - ✓ **Your API key** - From Terraform output or configuration
@@ -101,7 +101,7 @@ Enables: recognizing a spoken command phrase by phrase, instead of after the who
     STT_STREAMING_MODELS=amazon.transcribe
     ```
 
-Only the models listed there are called in streaming mode, which is what makes the proxy ask stdapi.ai for a [streamed transcription](api_openai_audio_transcriptions.md#streaming). The gateway returns each phrase as it is recognized whenever the request names the language to expect; if the proxy sends none, set [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](operations_configuration.md#aws-transcribe-stream-languages) on stdapi.ai to the languages your satellites actually speak and those requests take the same fast path. Streamed transcription stages nothing, so it works on a deployment with no S3 bucket configured.
+Only the models listed there are called in streaming mode, which is what makes the proxy ask stdapi.ai for a [streamed transcription](api_openai_audio_transcriptions.md#streaming). The gateway returns each phrase as it is recognized whenever the request names the language to expect; if the proxy sends none, set [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](operations_configuration_storage.md#aws-transcribe-stream-languages) on stdapi.ai to the languages your satellites actually speak and those requests take the same fast path. Streamed transcription stages nothing, so it works on a deployment with no S3 bucket configured.
 
 !!! note "This is the streaming option to use, not the realtime one"
     stdapi.ai's [Realtime API](api_openai_realtime.md) serves speech-to-speech sessions, and a transcription-only session is requested through an [ephemeral client secret](api_openai_realtime.md#ephemeral-client-secrets) rather than on the socket — so a client that expects OpenAI's realtime *transcription* socket gets no transcript from it. Assist's pipeline is turn-based anyway: speech to text, then a conversation agent, then text to speech.
@@ -125,27 +125,30 @@ Naming the same model in both `TTS_MODELS` and `TTS_STREAMING_MODELS` puts its v
 
 Enables: the middle stage of the Assist pipeline — turning the recognized text into an answer and into device actions.
 
-The speech halves above use the Wyoming bridge; the conversation agent does not need one. Home Assistant's built-in **Ollama** integration talks to stdapi.ai directly through the [Ollama-compatible API](api_ollama_chat.md):
+The speech halves above use the Wyoming bridge; the conversation agent does not need one. Home Assistant's built-in **Ollama** integration talks to stdapi.ai directly through the [Ollama-compatible API](api_ollama_chat.md).
 
-Home Assistant 2026.4 and later splits this across **two dialogs**: the first adds the server, the second adds a conversation agent on it.
+Home Assistant 2026.4 and later splits this across **two dialogs**: the first adds the server, the second adds a conversation agent on it as a config subentry. Each numbered list below is one dialog, and the second one only opens once the first has been submitted.
 
-**Add the server** — **Settings → Devices & Services → Add Integration → Ollama**:
+!!! example "Dialog 1 — add the server"
+    **Settings → Devices & Services → Add Integration → Ollama**
 
-1. **URL**: your stdapi.ai deployment URL followed by [`OLLAMA_ROUTES_PREFIX`](operations_configuration.md#ollama-routes-prefix), e.g. `https://YOUR_STDAPI_URL/ollama` by default — Home Assistant appends `/api/chat` itself
-2. **API key**: your stdapi.ai key. A local Ollama needs no credentials, so this field is easy to skip; without it every request is refused with `401` and the dialog fails with an invalid-authentication error
+    1. **URL**: your stdapi.ai deployment URL followed by [`OLLAMA_ROUTES_PREFIX`](operations_configuration_server.md#ollama-routes-prefix), e.g. `https://YOUR_STDAPI_URL/ollama` by default — Home Assistant appends `/api/chat` itself
+    2. **API key**: your stdapi.ai key. A local Ollama needs no credentials, so this field is easy to skip; without it every request is refused with `401` and the dialog fails with an invalid-authentication error
 
-Submitting the dialog validates the connection with [`GET /api/tags`](api_ollama_models.md), so a wrong URL or a missing key is reported here rather than at the first spoken command.
+    Submitting the dialog validates the connection with [`GET /api/tags`](api_ollama_models.md), so a wrong URL or a missing key is reported here rather than at the first spoken command.
 
-**Add the conversation agent** — on the entry that dialog created, choose **Add conversation agent**:
+!!! example "Dialog 2 — add the conversation agent"
+    On the entry the first dialog created, choose **Add conversation agent**.
 
-3. **Model**: pick one from the list, which is what [`GET /api/tags`](api_ollama_models.md) publishes. The names a local Ollama would offer, such as `llama3.2:latest`, are not served here — and a name that is not on the list makes Home Assistant try to *download* it
-4. **Control Home Assistant**: select Assist to let the agent operate devices instead of only answering questions. This is what attaches Home Assistant's tool definitions to every request, so pick a model that supports tool calling
+    1. **Name**: what this agent, its device and its `conversation.*` entity are called; one server can carry several agents, each with its own model and settings
+    2. **Model**: pick one from the list, which is what [`GET /api/tags`](api_ollama_models.md) publishes. The names a local Ollama would offer, such as `llama3.2:latest`, are not served here — and a name that is not on the list makes Home Assistant try to *download* it
+    3. **Control Home Assistant**: select Assist to let the agent operate devices instead of only answering questions. This is what attaches Home Assistant's tool definitions to every request, so pick a model that supports tool calling
 
-Each conversation agent registers its own `conversation.*` entity. Select that entity as the conversation agent of your Assist pipeline.
+Each conversation agent registers its own `conversation.*` entity, named after the agent. Select that entity as the conversation agent of your Assist pipeline.
 
 ---
 
-### :material-alert-outline: Known Issues
+### :material-alert-outline: Limits and behaviour to know { #known-issues }
 
 The proxy speaks the Wyoming protocol over its own TCP port, not HTTP—there is no `/health` endpoint to check readiness with a plain web request. Wait for a successful Wyoming `describe` exchange (or check the container logs) rather than polling an HTTP path.
 
@@ -169,7 +172,8 @@ flowchart TB
   subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
     ha["<img src='../styles/logo_home_assistant.svg' style='height:40px;width:auto;vertical-align:middle;' /> Home Assistant<br/>ECS Fargate task"]
     wyoming["<img src='../styles/logo_wyoming.png' style='height:40px;width:40px;vertical-align:middle;' /> wyoming-openai<br/>sidecar in the same task"]
-    efs["<img src='../styles/logo_amazon_efs.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon EFS<br/>recorder DB · .storage · configuration.yaml<br/>encrypted · one task only"]
+    efs["<img src='../styles/logo_amazon_efs.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon EFS<br/>.storage · configuration.yaml<br/>encrypted · one task only"]
+    rds["Amazon RDS for PostgreSQL<br/>recorder database · Multi-AZ<br/>encrypted"]
     stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
     egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways<br/>one per Availability Zone"]
   end
@@ -177,10 +181,12 @@ flowchart TB
   subgraph regional["AWS service endpoints · your account, the regions you configure"]
     transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
     polly["<img src='../styles/logo_amazon_polly.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Polly"]
+    bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
     s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
     cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>container logs"]
     transcribe ~~~ s3
     polly ~~~ cw
+    bedrock ~~~ transcribe
   end
 
   user -->|"HTTPS · TLS 1.2+"| alb
@@ -188,15 +194,17 @@ flowchart TB
   ha -->|"Wyoming · TCP<br/>localhost, same task"| wyoming
   wyoming -->|"OpenAI API · API key<br/>private DNS, no public endpoint"| stdapi
   ha --> efs
+  ha -->|"PostgreSQL · TLS, verify-full"| rds
   ha -->|"HTTPS · SigV4<br/>seeds configuration.yaml, first boot only"| s3
   stdapi --> egress
   egress -->|"HTTPS · SigV4"| transcribe
   egress -->|"HTTPS · SigV4"| polly
+  egress -->|"HTTPS · SigV4"| bedrock
   egress -->|"HTTPS · SigV4<br/>stages audio for non-streaming transcription"| s3
   egress --> cw
 ```
 
-The ALB is the only public address in the picture, and it forwards only to Home Assistant — stdapi.ai has no listener of its own and is reached exclusively through AWS Cloud Map private DNS from the wyoming-openai sidecar. A household's state (recorder database, `.storage`, `configuration.yaml`) comes to rest on the single EFS volume mounted into the Home Assistant task, never on the gateway; the gateway itself is stateless and only its egress path crosses the VPC boundary, over HTTPS with SigV4, to Amazon Transcribe and Amazon Polly.
+The ALB is the only public address in the picture, and it forwards only to Home Assistant — stdapi.ai has no listener of its own and is reached exclusively through AWS Cloud Map private DNS from the wyoming-openai sidecar. A household's `.storage` and `configuration.yaml` come to rest on the single EFS volume mounted into the Home Assistant task, and the recorder history (state and long-term statistics) in a Multi-AZ Amazon RDS for PostgreSQL instance — neither on the gateway; the gateway itself is stateless and only its egress path crosses the VPC boundary, over HTTPS with SigV4, to Amazon Transcribe, Amazon Polly and Amazon Bedrock.
 
 #### What Each AWS Service Does Here
 
@@ -207,20 +215,22 @@ The ALB is the only public address in the picture, and it forwards only to Home 
 | **AWS Cloud Map** | Private DNS name wyoming-openai uses to reach the gateway, with no public endpoint | Terraform sample (`service_discovery_dns_name`) |
 | **Amazon Transcribe** | Speech-to-text behind `POST /v1/audio/transcriptions` | `STT_MODELS` (wyoming-openai) |
 | **Amazon Polly** | Text-to-speech behind `POST /v1/audio/speech`, streamed as concurrent per-sentence calls | `TTS_MODELS` / `TTS_STREAMING_MODELS` (wyoming-openai) |
-| **Amazon EFS** | Home Assistant's recorder database, `.storage`, and `configuration.yaml`; a second concurrent writer would corrupt it, so the task is pinned to exactly one | Terraform sample (`home_assistant.tf`, EFS mount point) |
+| **Amazon Bedrock** | Conversation-agent answers behind `POST /ollama/api/chat`, driving Assist's device tool calls | `home_assistant_conversation_model` variable (Terraform sample, `home_assistant.tf`) |
+| **Amazon EFS** | Home Assistant's `.storage` and `configuration.yaml`; a second concurrent writer would corrupt it, so the task is pinned to exactly one | Terraform sample (`home_assistant.tf`, EFS mount point) |
+| **Amazon RDS for PostgreSQL** | Home Assistant's recorder database — history and long-term statistics — as a Multi-AZ instance | Terraform sample (`postgres.tf`) |
 | **Amazon S3** | Seeds `configuration.yaml` on first boot through a read-only S3 Files mount, and on the gateway side stages audio for non-streaming transcription | Terraform sample (config seed) / gateway module default bucket |
-| **AWS KMS** | Customer-managed keys encrypting the EFS volume and the S3 buckets | ECS module and gateway module defaults |
+| **AWS KMS** | Customer-managed keys encrypting the EFS volume, the RDS instance and the S3 buckets | ECS module, `postgres.tf` and gateway module defaults |
 | **Amazon CloudWatch** | Container logs for both ECS services | ECS module and gateway module defaults |
-| **AWS IAM** | Separate task roles; the gateway's role grants only the Transcribe and Polly actions it invokes | [IAM permissions](operations_iam_permissions.md) |
+| **AWS IAM** | Separate task roles; the gateway's role carries the module's least-privilege policy for the AWS services it fronts — Transcribe, Polly and Bedrock in this flow | [IAM permissions](operations_iam_permissions.md) |
 
 #### Security Measures in This Flow
 
 - **Authentication** — wyoming-openai calls the gateway with a stdapi.ai [API key](operations_authentication_security.md#api-key-authentication) that Terraform generates (`api_key_create = true`) and injects as `STT_OPENAI_KEY`/`TTS_OPENAI_KEY` container secrets; the sample's ALB security group additionally restricts inbound traffic to the deploying operator's own IP address.
-- **Encryption in transit** — HTTPS from the browser to the ALB when a custom domain and certificate are configured; Wyoming stays inside the ECS task over localhost; HTTPS with SigV4 from the gateway to Amazon Transcribe and Amazon Polly.
-- **Encryption at rest** — the EFS volume backing Home Assistant's state and both S3 buckets (config seed, gateway staging) use customer-managed KMS keys.
-- **Least privilege** — the gateway's task role grants only the Transcribe and Polly actions it invokes; Home Assistant's task role carries none of them.
-- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails), if configured on the gateway, checks the text to synthesize as `INPUT` on `/v1/audio/speech` and the produced transcript as `OUTPUT` on `/v1/audio/transcriptions`, through the ApplyGuardrail API rather than a native chat-style integration.
-- **Data handling** — the gateway holds request audio in memory, or briefly in its own S3 bucket when staging a non-streaming transcription job, and does not persist it; Home Assistant's own recordings and conversation history stay on the EFS volume in your account.
+- **Encryption in transit** — HTTPS from the browser to the ALB when a custom domain and certificate are configured; Wyoming stays inside the ECS task over localhost; HTTPS with SigV4 from the gateway to Amazon Transcribe, Amazon Polly and Amazon Bedrock; PostgreSQL over TLS (`sslmode=verify-full`) from Home Assistant to the Amazon RDS instance.
+- **Encryption at rest** — the EFS volume backing Home Assistant's state, the Amazon RDS instance, and both S3 buckets (config seed, gateway staging) use customer-managed KMS keys.
+- **Least privilege** — the gateway's task role is scoped to the AWS services the module fronts, of which this flow exercises the Transcribe, Polly and Bedrock actions; Home Assistant's task role carries none of them.
+- **Content policy** — a [Bedrock guardrail](operations_configuration_bedrock.md#bedrock-guardrails), if configured on the gateway, checks the text to synthesize as `INPUT` on `/v1/audio/speech` and the produced transcript as `OUTPUT` on `/v1/audio/transcriptions`, through the ApplyGuardrail API rather than a native chat-style integration.
+- **Data handling** — the gateway holds request audio in memory, or briefly in its own S3 bucket when staging a non-streaming transcription job, and does not persist it; Home Assistant's own `.storage` and `configuration.yaml` stay on the EFS volume in your account, with its recorder history and long-term statistics in the Amazon RDS instance instead.
 
 ---
 
@@ -261,9 +271,11 @@ Nothing is left manual after `tofu apply`: a bootstrap container in the same ECS
 | stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | ECS Fargate | Two services — the Home Assistant + wyoming-openai task, pinned to exactly one, and the gateway, sized independently |
 | Load balancing and networking | One ALB, plus the NAT gateways — one per Availability Zone — the private subnets egress through |
-| Amazon EFS | Standing storage and throughput for the recorder database, `.storage`, and `configuration.yaml` |
+| Amazon EFS | Standing storage and throughput for `.storage` and `configuration.yaml` |
+| Amazon RDS for PostgreSQL | `db.t4g.micro`, Multi-AZ, storage scaling to the recorder's history and long-term statistics |
 | Amazon Polly | Billed per character of text synthesized, not per token |
 | Amazon Transcribe | Billed per second of audio transcribed, not per token |
+| Amazon Bedrock | Billed per input/output token for the conversation agent's answers (`home_assistant_conversation_model`) |
 
 Read a model's price before you send anything to it with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) additionally puts a per-request cost on each usage entry — estimated from published AWS prices, not read back from your invoice.
 

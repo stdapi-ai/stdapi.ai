@@ -8,59 +8,31 @@ keywords: OpenAI moderations API, content moderation AWS, Bedrock Guardrails API
 
 Classify content for harm with [Amazon Bedrock Guardrails](https://aws.amazon.com/bedrock/guardrails/), inline [guardrail checks](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html) (no guardrail resource needed), or [Amazon Comprehend toxicity detection](https://docs.aws.amazon.com/comprehend/latest/dg/trust-safety.html) through an OpenAI-compatible Moderations interface.
 
-## Why Choose the Moderations API?
+## At a glance
 
-<div class="grid cards" markdown>
-
-- :material-shield-check: __Configurable Content Safety__
-  <br>Bring your own Bedrock guardrail: categories, thresholds, denied topics, word filters, and sensitive-information policies are fully configurable in AWS.
-
-- :material-flash: __Works Out of the Box__
-  <br>Inline guardrail checks and Amazon Comprehend toxicity detection require no setup at all, so `/v1/moderations` works immediately on any deployment.
-
-- :material-swap-horizontal: __Drop-in OpenAI Compatibility__
-  <br>OpenAI moderation model names are accepted as aliases. Existing integrations work by changing the base URL.
-
-- :material-cloud-lock: __Private AWS Backend__
-  <br>Classifications run entirely in your own AWS account — no traffic to third-party endpoints.
-
-</div>
-
-## Available Endpoints
-
-| Endpoint          | Method | What It Does                                                | Powered By                                | MCP Tool            |
-|-------------------|--------|--------------------------------------------------------------|-------------------------------------------|---------------------|
-| `/v1/moderations` | `POST`   | Classify inputs with a guardrail, guardrail checks, or toxicity detection | Amazon Bedrock Guardrails / Amazon Comprehend | `openai_moderation` |
-
-**Example request:**
+- :material-shield-check: **Three backends behind one endpoint:** your own Bedrock guardrail (categories, thresholds, denied topics, word filters and sensitive-information policies configured in AWS), inline guardrail content filter checks, or Amazon Comprehend toxicity detection.
+- :material-flash: **Works out of the box.** Guardrail checks and Comprehend need no setup at all, so `/v1/moderations` answers on any deployment, with or without a guardrail configured.
+- :material-swap-horizontal: **OpenAI model names are aliases.** `omni-moderation-latest` and `text-moderation-latest` resolve to an AWS backend, so an existing integration changes its base URL and nothing else.
+- :material-image-multiple: **Text and images.** Every element of an `input` array is classified independently and gets its own entry in `results`; PNG and JPEG images are classified by guardrail-resource models.
+- :material-cloud-lock: **Classifications run in your own AWS account** — no traffic to third-party endpoints.
+- :material-swap-horizontal: **Differs from OpenAI:** only the five categories with an AWS counterpart are populated, and scores come back at the backend's own granularity rather than as continuous confidences on every backend.
 
 ```bash
 curl -X POST "$BASE/v1/moderations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "input": "Some text to classify"
+    "input": ["Some text to classify", "Another string to classify"]
   }'
 ```
 
-**Example response:**
+## Endpoints { #available-endpoints }
 
-```json
-{
-  "id": "modr-0f1b3c6e8d9a4b5c",
-  "model": "abcd1234efgh:1",
-  "results": [
-    {
-      "flagged": true,
-      "categories": {"hate": true, "harassment": false, "...": false},
-      "category_scores": {"hate": 0.75, "harassment": 0.25, "...": 0.0},
-      "category_applied_input_types": {"hate": ["text"], "harassment": ["text"], "...": ["text"]}
-    }
-  ]
-}
-```
+| Endpoint          | Method | What It Does                                                | Powered By                                | MCP Tool            |
+|-------------------|--------|--------------------------------------------------------------|-------------------------------------------|---------------------|
+| `/v1/moderations` | `POST`   | Classify inputs with a guardrail, guardrail checks, or toxicity detection | Amazon Bedrock Guardrails / Amazon Comprehend | `openai_moderation` |
 
-## Feature Compatibility
+## Feature compatibility
 
 <div class="feature-table" markdown>
 
@@ -97,7 +69,7 @@ curl -X POST "$BASE/v1/moderations" \
 
 </div>
 
-## Model Support
+## Models { #model-support }
 
 The moderation models appear in the [`/v1/models`](api_openai_models.md) and [`/search_models`](api_search_models.md) listings (`route=openai_moderation`) with their OpenAI aliases.
 
@@ -129,7 +101,7 @@ The moderation models appear in the [`/v1/models`](api_openai_models.md) and [`/
 | `moderation` request parameter | :material-check-circle:{ .success role="img" aria-label="Supported" } Applied to generations natively    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } Moderations API only | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } Moderations API only |
 | Input length              | ApplyGuardrail text unit limits                                             | InvokeGuardrailChecks text unit limits                 | Unlimited (split into 1 KB segments transparently)     |
 
-## Selecting the Model
+### Selecting the Model
 
 The `model` parameter selects the moderation model:
 
@@ -143,22 +115,16 @@ The `model` parameter selects the moderation model:
 | `<guardrail-id>` or `<guardrail-id>:<version>` | That guardrail (requires guardrail override to be allowed)                                     |
 | Guardrail ARN                                | That guardrail, applied in the region embedded in the ARN                                        |
 
-The server guardrail comes from [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER` / `AWS_BEDROCK_GUARDRAIL_VERSION`](operations_configuration.md#bedrock-guardrails), or from the `X-Amzn-Bedrock-GuardrailIdentifier` / `X-Amzn-Bedrock-GuardrailVersion` request headers when [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](operations_configuration.md#bedrock-guardrails) is enabled. Explicit guardrails in `model` also require that setting.
+The server guardrail comes from [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER` / `AWS_BEDROCK_GUARDRAIL_VERSION`](operations_configuration_bedrock.md#bedrock-guardrails), or from the `X-Amzn-Bedrock-GuardrailIdentifier` / `X-Amzn-Bedrock-GuardrailVersion` request headers when [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](operations_configuration_bedrock.md#bedrock-guardrails) is enabled. Explicit guardrails in `model` also require that setting.
 
-Guardrails are regional: a plain guardrail ID is applied in the primary Bedrock region, while an ARN selects its own region. Comprehend calls use [`AWS_COMPREHEND_REGION`](operations_configuration.md#aws-comprehend-region) (with multi-region failover otherwise).
+Guardrails are regional: a plain guardrail ID is applied in the primary Bedrock region, while an ARN selects its own region. Comprehend calls use [`AWS_COMPREHEND_REGION`](operations_configuration_aws.md#aws-comprehend-region) (with multi-region failover otherwise).
 
 Guardrail checks (`InvokeGuardrailChecks`) are available in a limited set of AWS regions only (currently `us-east-1`, `us-east-2`, `us-west-2`, `eu-west-2`, `eu-north-1`, `ap-northeast-1`, and `ap-southeast-2`): calls run in the configured Bedrock regions that offer the operation, in priority order with multi-region failover, and the backend is unavailable when none of them does.
-
-!!! note "`model` does not accept a wildcard pattern"
-    Unlike the routes that generate a response, `/v1/moderations` chooses the classification model before the request is examined, so `model` must name an exact value from the table above — a [wildcard pattern](operations_configuration.md#model-wildcard-patterns) is rejected.
-
-!!! note "Required IAM Permission"
-    Guardrail checks moderation requires the `bedrock:InvokeGuardrailChecks` IAM action. See [IAM Permissions](operations_configuration.md#iam-permissions). Deployments without it keep working: when guardrail checks are only reached as the default `omni-moderation-*` resolution, an `AccessDenied` response degrades the request to Comprehend toxicity detection with a logged warning.
 
 !!! tip "Moderating generations directly"
     The guardrail selection and category mapping also power the `moderation` request parameter of the [Chat Completions](api_openai_chat_completions.md) and [Responses](api_openai_responses.md) APIs: the guardrail is applied to the generation itself, and the classification of the input and output is reported in the response's `moderation` field — for Chat Completions on non-streaming requests only, and for Responses also on the terminal event when streaming. The `moderation` parameter requires a guardrail — Comprehend is not available there — and is rejected (`400`) on Amazon Bedrock Mantle-served models.
 
-## Category Mapping
+### Category Mapping
 
 **Amazon Bedrock Guardrails** — content policy filters map to the OpenAI moderation categories:
 
@@ -192,7 +158,9 @@ An input is flagged when its overall toxicity or any label score reaches `0.5`. 
 
 With either model, OpenAI sub-categories without a counterpart (e.g. `self-harm`, `sexual/minors`) are always `false`.
 
-## Inputs
+## Working with the Moderations API
+
+### Inputs
 
 Each input element is classified independently and yields one entry in `results`:
 
@@ -202,23 +170,9 @@ Each input element is classified independently and yields one entry in `results`
 
 Each result's `category_applied_input_types` reflects the classified element's modality: `["text"]` for every category on text inputs; on image inputs, `["image"]` for the categories that support images and `[]` for the text-only ones.
 
-An `input` array holds at most 2048 elements. Each element is classified — and billed — independently by a separate AWS call, so large arrays incur a proportional number of AWS calls.
-
 **MCP / AI agent usage:** `image_url.url` accepts an HTTPS URL, data URI (`data:<mime>;base64,<data>`), base64 string, or S3 URI — no binary upload needed.
 
-```bash
-curl -X POST "$BASE/v1/moderations" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "input": [
-      {"type": "text", "text": "Describe this image"},
-      {"type": "image_url", "image_url": {"url": "https://example.com/photo.png"}}
-    ]
-  }'
-```
-
-## Billing
+### Billing
 
 - **Guardrails** — AWS bills per text unit and per image processed by the ApplyGuardrail API, once for every policy the guardrail applies, each at that policy's own rate; see [Amazon Bedrock pricing](https://aws.amazon.com/bedrock/pricing/). No Bedrock model invocation is involved. The units AWS reports per policy appear in [usage logs and cost tracking](operations_logging_monitoring.md) as `text_units` and `input_images`, under one model per applied policy:
 
@@ -235,3 +189,93 @@ curl -X POST "$BASE/v1/moderations" \
     A guardrail applying several policies therefore produces several usage entries for one request, and its cost is their sum.
 - **Guardrail checks** — AWS bills per text unit and per requested check; the gateway requests the `contentFilter` check only. Billed text units appear in [usage logs and cost tracking](operations_logging_monitoring.md) as `text_units` under the `amazon.bedrock-runtime-guardrail-checks` model.
 - **Comprehend** — AWS bills toxicity detection per 100-character unit with a 3-unit minimum per call; see [Amazon Comprehend pricing](https://aws.amazon.com/comprehend/pricing/). Billed units appear in [usage logs and cost tracking](operations_logging_monitoring.md) as `comprehend_units` under the `amazon.comprehend-toxicity` model.
+
+## Limits and behaviour to know
+
+An `input` array holds at most 2048 elements. Each element is classified — and billed — independently by a separate AWS call, so large arrays incur a proportional number of AWS calls.
+
+`model` names an exact value from [Selecting the Model](#selecting-the-model): this route chooses the classification model before the request is examined, so a [wildcard pattern](operations_configuration_models.md#model-wildcard-patterns) is rejected, unlike on the routes that generate a response.
+
+Guardrail checks moderation calls the `bedrock:InvokeGuardrailChecks` IAM action; see [IAM Permissions](operations_iam_permissions.md). A deployment without that permission keeps working: where guardrail checks are only reached as the default `omni-moderation-*` resolution, an `AccessDenied` response degrades the request to Comprehend toxicity detection and records a warning in the log. A request that names `amazon.bedrock-runtime-guardrail-checks` explicitly is not degraded.
+
+## Request headers
+
+The Amazon Bedrock guardrail headers select the guardrail this endpoint classifies with. All headers are optional.
+
+### Content Safety (Guardrails)
+
+| Header                               | Purpose                            | Valid Values               |
+|--------------------------------------|------------------------------------|----------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier  |
+| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`) |
+
+Both headers are honoured only when [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](operations_configuration_bedrock.md#bedrock-guardrails) is enabled — otherwise the server guardrail applies, as described under [Selecting the model](#selecting-the-model). `X-Amzn-Bedrock-Trace` is accepted but has no effect on this route — categories and scores are read from the guardrail's assessments, which are always returned.
+
+**Example with headers:**
+
+```bash
+curl -X POST "$BASE/v1/moderations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "X-Amzn-Bedrock-GuardrailIdentifier: your-guardrail-id" \
+  -H "X-Amzn-Bedrock-GuardrailVersion: 1" \
+  -d '{
+    "input": "Some text to classify"
+  }'
+```
+
+!!! note "No performance headers on this route"
+    `X-Amzn-Bedrock-Service-Tier` and `X-Amzn-Bedrock-PerformanceConfig-Latency` have no effect here: classification calls ApplyGuardrail, guardrail checks or Amazon Comprehend, none of which invokes a Bedrock model.
+
+!!! info "Detailed Documentation"
+    For complete information about these headers, configuration options, and use cases, see:
+
+    - [Bedrock Guardrails Configuration](operations_configuration_bedrock.md#bedrock-guardrails)
+
+## Try it
+
+**Classify one string:**
+
+```bash
+curl -X POST "$BASE/v1/moderations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "Some text to classify"
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "id": "modr-0f1b3c6e8d9a4b5c",
+  "model": "abcd1234efgh:1",
+  "results": [
+    {
+      "flagged": true,
+      "categories": {"hate": true, "harassment": false, "...": false},
+      "category_scores": {"hate": 0.75, "harassment": 0.25, "...": 0.0},
+      "category_applied_input_types": {"hate": ["text"], "harassment": ["text"], "...": ["text"]}
+    }
+  ]
+}
+```
+
+**Classify text and an image together:**
+
+```bash
+curl -X POST "$BASE/v1/moderations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": [
+      {"type": "text", "text": "Describe this image"},
+      {"type": "image_url", "image_url": {"url": "https://example.com/photo.png"}}
+    ]
+  }'
+```
+
+## Next steps
+
+Next: [Guardrails configuration](operations_configuration_bedrock.md#bedrock-guardrails) · [Chat Completions API](api_openai_chat_completions.md) · [Responses API](api_openai_responses.md) · [Model pricing](api_model_pricing.md)

@@ -6,9 +6,26 @@ keywords: AWS Bedrock pricing API, model price comparison, token price API, AI a
 
 # Model Pricing API
 
-Query the exact AWS unit prices for one or more models, straight from the same AWS Price List catalog the server uses for [request cost tracking](operations_cost_management.md#cost-tracking-real-time-aws-pricing). Purpose-built for cost-aware model selection: shortlist models with [`search_models`](api_search_models.md), then compare their price cards in one call.
+Query the exact AWS unit prices for one or more models, straight from the same AWS Price List catalog the server uses for [request cost tracking](operations_cost_management.md#cost-tracking-real-time-aws-pricing). Native route, served without a dialect prefix.
 
-## Quick Start
+## At a glance
+
+- :material-currency-usd: **Exact published AWS prices** — one row per billed dimension, `unit_price` an exact decimal string per single unit (token, image, second, character, request, search unit).
+- :material-tune: **Every published axis** — region, service tier (`standard`, `flex`, `priority`, `batch`), prompt-cache write TTL, serving profile, media spec and the beyond-200K-token bucket.
+- :material-flash: **No AWS call on the request path** — prices are indexed eagerly at startup and answered from memory, so the endpoint is fast enough to call inline.
+- :material-robot: **Built for cost-aware model selection** — shortlist with [`search_models`](api_search_models.md), then compare price cards in one call; both are published as MCP tools.
+- :material-toggle-switch-off-outline: **Disabled by default:** this API answers `503` until [`COST_TRACKING=true`](operations_configuration_observability.md#cost-tracking) is set — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
+
+```bash
+export BASE="https://your-host"  # native routes carry no dialect prefix
+
+curl -G "$BASE/model_pricing" \
+  --data-urlencode "model=amazon.nova-pro-v1:0" \
+  --data-urlencode "variants=false" \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+## Endpoints { #quick-start }
 
 | Endpoint | Method | MCP Tool |
 |----------|--------|----------|
@@ -24,7 +41,7 @@ A few rates AWS publishes without a model — because one flat rate covers every
 
 Prices are indexed **eagerly**: models not currently accessible to your account can still be priced. An empty `prices` list means AWS publishes no rows for that model (or none match the filters). A missing variant row means AWS publishes no distinct rate for it — billing then falls back the same way cost tracking does.
 
-This endpoint responds without contacting AWS, so it is fast enough to call inline. It requires cost tracking to be enabled (`COST_TRACKING=true`), and returns a retry-later `503` while the price catalog is still loading after startup. To compare prices without a running server, the [Models](models.md) page publishes them side by side, per region and per service tier.
+This endpoint responds without contacting AWS, so it is fast enough to call inline. To compare prices without a running server, the [Models](models.md) page publishes them side by side, per region and per service tier.
 
 ## Query Parameters
 
@@ -50,7 +67,7 @@ One `ModelPricing` object per requested model, in request order (duplicates remo
 |-------|-------------|
 | `id` | The model ID as requested |
 | `service` | AWS service/API the prices apply to (e.g. `bedrock-runtime`). Note: this uses AWS API endpoint identifiers, a different vocabulary from the display names in the [`search_models`](api_search_models.md) `service` field — both match the code, but the values are not comparable |
-| `default_tier` | Service tier this server applies to the model by default ([`DEFAULT_MODEL_SERVICE_TIERS`](operations_configuration.md#default-model-service-tiers)) |
+| `default_tier` | Service tier this server applies to the model by default ([`DEFAULT_MODEL_SERVICE_TIERS`](operations_configuration_models.md#default-model-service-tiers)) |
 | `default_routings` | Serving profiles this server can use for the model across its configured regions, in configured-region order: `global`, geography prefixes (`eu`, `us`, …), or AWS regions |
 | `prices` | Price rows, sorted by region then remaining axes; empty when AWS publishes none |
 
@@ -68,7 +85,54 @@ Each row in `prices` (axes are omitted when not applicable):
 | `unit_price` | Exact plain-decimal price per **one** billed unit (no exponent, no trailing zeros) |
 | `currency` | ISO currency code (`USD` commercially, `EUR` on EUSC) |
 
-## Examples
+## Status Codes
+
+| Status | Cause |
+|--------|-------|
+| `200` | Success — a model with no published price, or no row matching the filters, still returns `200` with an empty `prices` list |
+| `400` | Unknown `tier`, `dimension`, `routing`, `context`, or `currency` filter value |
+| `503` | Model pricing is not available on this server, or the price catalog is not loaded yet (retry later) |
+
+## Using `model_pricing` as an MCP Tool
+
+When MCP is enabled, `model_pricing` is exposed as an MCP tool under the same name. The intended agent workflow:
+
+1. Call `search_models` to shortlist model IDs for the task.
+2. Call `model_pricing` with the shortlist and compare.
+3. Keep responses small: use `variants=false` and `dimension` filters.
+
+```json
+{
+  "tool": "model_pricing",
+  "arguments": {
+    "model": ["anthropic.claude-sonnet-4-5-20250929-v1:0", "amazon.nova-pro-v1:0"],
+    "variants": false,
+    "dimension": ["input_tokens", "output_tokens"]
+  }
+}
+```
+
+## Limits and behaviour to know
+
+**The API is disabled by default.** `COST_TRACKING` is `false` out of the box, because it needs the extra `pricing:GetProducts` IAM permission an existing deployment may not grant. Until [`COST_TRACKING=true`](operations_configuration_observability.md#cost-tracking) is set, every call answers `503`.
+
+**A `503` right after startup means the catalogue is still loading.** The price index is fetched in a background task that never delays readiness, so the first calls after a restart are retry-later rather than errors.
+
+**An empty `prices` list is a `200`.** AWS publishes no rows for that model, or none match the filters; a missing variant row means AWS publishes no distinct rate for it, and billing falls back the same way cost tracking does.
+
+**Enriched `routing` values cannot be filtered on.** Geography prefixes and AWS regions are added for display; filter on `region` for those. `routing` accepts only the published variants `global` and `latency`.
+
+**`service` is not comparable with the `search_models` field of the same name.** This one carries AWS API endpoint identifiers (`bedrock-runtime`); [`search_models`](api_search_models.md) carries display names. Both match the code; the values do not match each other.
+
+**Prices are strings on purpose.** `unit_price` values are exact decimal strings (`"0.000003"`), never floats — JSON floats cannot represent small per-token rates without exponent notation or rounding noise. Parse them with a decimal type for arithmetic.
+
+## Request headers
+
+| Header          | Purpose         | Notes                                           |
+|-----------------|-----------------|-------------------------------------------------|
+| `Authorization` | Gateway API key | `Bearer <key>`, required like every other route |
+
+## Try it { #examples }
 
 The `curl` examples below use a `$BASE` variable set to your scheme and host — native routes such as `/model_pricing` are not prefixed:
 
@@ -122,32 +186,6 @@ curl -G "$BASE/model_pricing" \
 ]
 ```
 
-## Status Codes
+## Next steps
 
-| Status | Cause |
-|--------|-------|
-| `200` | Success — a model with no published price, or no row matching the filters, still returns `200` with an empty `prices` list |
-| `400` | Unknown `tier`, `dimension`, `routing`, `context`, or `currency` filter value |
-| `503` | Model pricing is not available on this server, or the price catalog is not loaded yet (retry later) |
-
-## Using `model_pricing` as an MCP Tool
-
-When MCP is enabled, `model_pricing` is exposed as an MCP tool under the same name. The intended agent workflow:
-
-1. Call `search_models` to shortlist model IDs for the task.
-2. Call `model_pricing` with the shortlist and compare.
-3. Keep responses small: use `variants=false` and `dimension` filters.
-
-```json
-{
-  "tool": "model_pricing",
-  "arguments": {
-    "model": ["anthropic.claude-sonnet-4-5-20250929-v1:0", "amazon.nova-pro-v1:0"],
-    "variants": false,
-    "dimension": ["input_tokens", "output_tokens"]
-  }
-}
-```
-
-!!! tip "Prices are strings on purpose"
-    `unit_price` values are exact decimal strings (`"0.000003"`), never floats — JSON floats cannot represent small per-token rates without exponent notation or rounding noise. Parse them with a decimal type for arithmetic.
+Next: [Search Models API](api_search_models.md) · [Cost Management](operations_cost_management.md#cost-tracking-real-time-aws-pricing) · [`COST_TRACKING`](operations_configuration_observability.md#cost-tracking) · [Models catalogue](models.md)

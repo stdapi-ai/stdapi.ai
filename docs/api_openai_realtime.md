@@ -8,25 +8,47 @@ keywords: realtime API, speech to speech API, voice agent API AWS, WebSocket aud
 
 Hold a live, bidirectional speech-to-speech conversation over a single WebSocket, through the OpenAI Realtime API shape. Audio flows in both directions on the same connection: send the caller's speech as it is captured, and receive the model's spoken answer as it is generated — no request/response round trip per turn.
 
-## Why Choose the Realtime API?
+## At a glance
 
-<div class="grid cards" markdown>
+- :material-swap-horizontal: **The same client and server event vocabulary as the OpenAI Realtime API** — `client.realtime.connect(model=...)` works by changing the base URL — see [Feature compatibility](#feature-compatibility).
+- :material-incognito: **Ephemeral client secrets valid 10 to 7,200 seconds** — mint an `ek_...` credential server-side and hand it to an untrusted browser or mobile client; your API key never leaves your backend — see [Ephemeral client secrets](#ephemeral-client-secrets).
+- :material-server-off: **A signed token, not a server-side record** — any instance behind a load balancer verifies a secret minted by any other, with no shared session store — see [Ephemeral client secrets](#ephemeral-client-secrets).
+- :material-phone-in-talk: **24 kHz PCM by default, or G.711 at 8 kHz** — `audio/pcmu` and `audio/pcma` interoperate directly with telephony and SIP media — see [Feature compatibility](#feature-compatibility).
+- :material-lan-connect: **WebSocket always, WebRTC by operator opt-in, SIP never terminated here** — `POST /v1/realtime/calls` answers `404` until `REALTIME_WEBRTC_ENABLED` is set — see [Transports](#transports).
+- :material-timer-alert: **One session lasts at most 8 minutes** — the connection then closes with reason `session_expired`, and reconnecting continues the conversation — see [Session lifecycle and limits](#session-lifecycle-and-limits).
 
-- :material-swap-horizontal: __Drop-in OpenAI Compatibility__
-  <br>The same client event and server event vocabulary as the OpenAI Realtime API. `client.realtime.connect(model=...)` works by changing the base URL.
+```python
+import asyncio
 
-- :material-incognito: __Browser-Safe Ephemeral Secrets__
-  <br>Mint a short-lived credential server-side and hand it to an untrusted browser or mobile client — your API key never leaves your backend.
+from openai import AsyncOpenAI
 
-- :material-server-off: __Stateless at Any Scale__
-  <br>An ephemeral secret is a signed token, not a server-side record: any instance behind a load balancer verifies one minted by any other, with no shared session store.
+client = AsyncOpenAI(api_key="YOUR_API_KEY", base_url="https://your-gateway/v1")
 
-- :material-phone-in-talk: __Telephony-Ready Audio__
-  <br>24 kHz PCM by default, or G.711 (`audio/pcmu`, `audio/pcma`) at 8 kHz for direct interoperability with telephony and SIP media.
 
-</div>
+async def main() -> None:
+    async with client.realtime.connect(model="amazon.nova-2-sonic-v1:0") as connection:
+        await connection.conversation.item.create(
+            item={
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Say hello in one sentence."}
+                ],
+            }
+        )
+        await connection.response.create()
 
-## Available Endpoints
+        async for event in connection:
+            if event.type == "response.output_audio_transcript.delta":
+                print(event.delta, end="", flush=True)
+            elif event.type == "response.done":
+                break
+
+
+asyncio.run(main())
+```
+
+## Endpoints { #quick-start-available-endpoints }
 
 | Endpoint                     | Method | What It Does                                                    | Powered By      | MCP Tool                     |
 |-------------------------------|--------|-------------------------------------------------------------------|------------------|-------------------------------|
@@ -36,11 +58,11 @@ Hold a live, bidirectional speech-to-speech conversation over a single WebSocket
 | `/v1/realtime/calls/{call_id}/hangup` | `POST` | End an active WebRTC call                                  | Amazon Bedrock  | Not applicable — controls a media connection |
 
 !!! info "WebSocket always — WebRTC opt-in, SIP never"
-    Every deployment serves the WebSocket. `POST /v1/realtime/calls` answers WebRTC offers only when the operator enables [`REALTIME_WEBRTC_ENABLED`](operations_configuration.md#realtime-webrtc-enabled) — it needs a UDP media path the default deployment does not have — and answers `404` otherwise. Inbound SIP is never terminated here: the SIP-only verbs (`accept`, `reject`, `refer`) answer a clean `400` naming what serves telephony instead.
+    Every deployment serves the WebSocket. `POST /v1/realtime/calls` answers WebRTC offers only when the operator enables [`REALTIME_WEBRTC_ENABLED`](operations_configuration_bedrock.md#realtime-webrtc-enabled) — it needs a UDP media path the default deployment does not have — and answers `404` otherwise. Inbound SIP is never terminated here: the SIP-only verbs (`accept`, `reject`, `refer`) answer a clean `400` naming what serves telephony instead.
 
     [Transports](#transports) covers the whole picture: how a browser connects, what enabling WebRTC entails, and how to put a media framework or a phone line in front of this deployment.
 
-## Feature Compatibility
+## Feature compatibility
 
 <div class="feature-table" markdown>
 
@@ -151,11 +173,11 @@ The model generates speech faster than it is played, so a caller who interrupts 
 
 ### Guardrail coverage
 
-When the deployment configures an [Amazon Bedrock guardrail](operations_configuration.md#bedrock-guardrails), a realtime session is checked **per turn**: what the caller said (as the model transcribes it) as `INPUT`, and each completed answer as `OUTPUT`. A blocked turn ends the session with a terminal `error` event and close code `3000`.
+When the deployment configures an [Amazon Bedrock guardrail](operations_configuration_bedrock.md#bedrock-guardrails), a realtime session is checked **per turn**: what the caller said (as the model transcribes it) as `INPUT`, and each completed answer as `OUTPUT`. A blocked turn ends the session with a terminal `error` event and close code `3000`.
 
 Unlike a request/response route, the check cannot come before the content reaches the client: the model's speech is streamed while it is being generated and its transcript is only complete once the answer is over, so a blocked answer may already have been partly heard when the session ends. Written items sent with `conversation.item.create` are checked as `INPUT` **before** they reach the model, as on every other route.
 
-## Model Support
+## Models { #model-support }
 
 Every deployment's catalog differs, and a model's own name is never guaranteed stable across accounts. Find which models serve this route:
 
@@ -167,7 +189,7 @@ curl "$BASE/search_models?route=openai_realtime" \
 Pass the returned model ID as `model` on the WebSocket URL, or in the `session.model` field of an ephemeral secret's configuration. See the [Search Models API](api_search_models.md) for the full filter syntax.
 
 !!! note "`session.model` does not accept a wildcard pattern; the WebSocket's `model` does"
-    `POST /v1/realtime/client_secrets` fixes the model into the signed token before a connection exists, so `session.model` must name an exact model — a [wildcard pattern](operations_configuration.md#model-wildcard-patterns) is rejected. The `model` query parameter of `WS /v1/realtime` itself has no such constraint and accepts a pattern.
+    `POST /v1/realtime/client_secrets` fixes the model into the signed token before a connection exists, so `session.model` must name an exact model — a [wildcard pattern](operations_configuration_models.md#model-wildcard-patterns) is rejected. The `model` query parameter of `WS /v1/realtime` itself has no such constraint and accepts a pattern.
 
 ## Authentication
 
@@ -184,7 +206,7 @@ Either the deployment's own API key or an [ephemeral client secret](#ephemeral-c
 !!! warning "A refused credential is not an HTTP status"
     The WebSocket upgrade always completes first, so a rejected or expired credential is **not** answered with `401`/`403`. The connection opens, the first and only event is a terminal `error` with `code: "invalid_api_key"`, and the socket is then closed with close code `3000` and reason `invalid_request_error.invalid_api_key` — the same shape the upstream API uses. Instrument the `error` event and the close code, not the handshake status.
 
-## Ephemeral Client Secrets
+## Ephemeral client secrets
 
 `POST /v1/realtime/client_secrets` mints a short-lived credential — a value starting with `ek_` — that carries a session configuration. Hand it to a browser or mobile client so it can open a session directly, without ever holding the deployment's own API key.
 
@@ -217,21 +239,21 @@ curl -X POST "$BASE/v1/realtime/client_secrets" \
 
 - `expires_after.seconds` accepts **10 to 7,200** seconds, defaulting to **600** (10 minutes) when omitted. This bounds how long the secret can be used to *open* a session — a session already opened with it keeps running for its own [session limit](#session-lifecycle-and-limits).
 - `session` accepts the same configuration a client would otherwise send in a `session.update` event; it is applied to every session opened with the secret. It also accepts `{"type": "transcription"}`, which opens sessions that only transcribe the caller and never answer out loud — the only way to ask for one, since the socket itself takes no session type.
-- By default the carried configuration is a **default, not a constraint**: the client may name another model on the `?model=` query string and change the configuration with its own `session.update`, as it can upstream. Set [`REALTIME_ALLOW_SESSION_OVERRIDE=false`](operations_configuration.md#realtime-allow-session-override) to make the model, the `instructions` and `max_output_tokens` the secret was minted with final — a mismatching `?model=` is then refused at connect, and a `session.update` changing one of them answers an `error`.
+- By default the carried configuration is a **default, not a constraint**: the client may name another model on the `?model=` query string and change the configuration with its own `session.update`, as it can upstream. Set [`REALTIME_ALLOW_SESSION_OVERRIDE=false`](operations_configuration_bedrock.md#realtime-allow-session-override) to make the model, the `instructions` and `max_output_tokens` the secret was minted with final — a mismatching `?model=` is then refused at connect, and a `session.update` changing one of them answers an `error`.
 
 !!! warning "What a secret grants until it expires"
-    A secret cannot be revoked: rotating [`REALTIME_CLIENT_SECRET_KEY`](operations_configuration.md#realtime-client-secret-key) invalidates every outstanding one at once, and nothing else does. Until then it may open **any number of concurrent sessions**, each billed to the deployment — so keep `expires_after.seconds` as short as the flow allows.
+    A secret cannot be revoked: rotating [`REALTIME_CLIENT_SECRET_KEY`](operations_configuration_bedrock.md#realtime-client-secret-key) invalidates every outstanding one at once, and nothing else does. Until then it may open **any number of concurrent sessions**, each billed to the deployment — so keep `expires_after.seconds` as short as the flow allows.
 
     Its payload is signed, not encrypted: whoever holds the secret can read the session configuration it carries. Nothing confidential belongs in `instructions`.
 
 !!! info "Stateless, and signed"
     Nothing is stored server-side: the secret is the session configuration plus a signature, so **any instance behind a load balancer verifies a secret minted by any other** — no shared session store, no sticky routing required.
 
-    The signing key is derived from the deployment's configured API key by default. When the deployment runs with **no API key configured at all**, the signing key falls back to a random value generated **per process**: minted secrets then only verify on the instance that minted them, and stop working once a request reaches a different one. Set [`realtime_client_secret_key`](operations_configuration.md#realtime-client-secret-key) explicitly to fix a key shared by every instance regardless of the API key configuration.
+    The signing key is derived from the deployment's configured API key by default. When the deployment runs with **no API key configured at all**, the signing key falls back to a random value generated **per process**: minted secrets then only verify on the instance that minted them, and stop working once a request reaches a different one. Set [`realtime_client_secret_key`](operations_configuration_bedrock.md#realtime-client-secret-key) explicitly to fix a key shared by every instance regardless of the API key configuration.
 
 ## Transports
 
-Upstream offers a realtime session over three transports — WebSocket, WebRTC and SIP. **This API always serves the WebSocket; WebRTC is an operator opt-in; SIP is never terminated here.** `POST /v1/realtime/calls` trades an SDP offer for an answer once [`REALTIME_WEBRTC_ENABLED`](operations_configuration.md#realtime-webrtc-enabled) is set — see [WebRTC calls terminated by the gateway](#webrtc-calls) for what that transport delivers and what it demands of the deployment — and answers `404` otherwise.
+Upstream offers a realtime session over three transports — WebSocket, WebRTC and SIP. **This API always serves the WebSocket; WebRTC is an operator opt-in; SIP is never terminated here.** `POST /v1/realtime/calls` trades an SDP offer for an answer once [`REALTIME_WEBRTC_ENABLED`](operations_configuration_bedrock.md#realtime-webrtc-enabled) is set — see [WebRTC calls terminated by the gateway](#webrtc-calls) for what that transport delivers and what it demands of the deployment — and answers `404` otherwise.
 
 ### A browser connects to that same WebSocket
 
@@ -241,7 +263,7 @@ What the page owns in exchange is the media. Capturing the microphone, resamplin
 
 ### WebRTC calls terminated by the gateway { #webrtc-calls }
 
-With [`REALTIME_WEBRTC_ENABLED`](operations_configuration.md#realtime-webrtc-enabled) set — and the `webrtc` optional dependencies installed, which the container images ship — the gateway terminates the whole WebRTC media path itself: ICE, DTLS-SRTP and Opus. A browser (or any WebRTC client) posts its SDP offer and connects directly, with nothing in between:
+With [`REALTIME_WEBRTC_ENABLED`](operations_configuration_bedrock.md#realtime-webrtc-enabled) set — and the `webrtc` optional dependencies installed, which the container images ship — the gateway terminates the whole WebRTC media path itself: ICE, DTLS-SRTP and Opus. A browser (or any WebRTC client) posts its SDP offer and connects directly, with nothing in between:
 
 - **`POST /v1/realtime/calls`** accepts the offer as a raw `application/sdp` body — with `?model=<id>` on the query string, exactly as upstream's browser flow — or as `multipart/form-data` with an `sdp` field and an optional `session` JSON field. Either encoding authenticates with an [ephemeral client secret](#ephemeral-client-secrets) or the deployment's credentials; a secret whose session is [locked](#ephemeral-client-secrets) refuses a `session` field. A JSON body is refused with `unsupported_content_type`, which is what the upstream endpoint answers too. The response is `201` with the SDP answer as its body and the call's identifier in the `Location` header (`/v1/realtime/calls/rtc_...`).
 - **Audio rides the media tracks** as Opus, both directions — no base64, no `response.output_audio.delta` events. **Events ride a data channel** the client opens under the label `oai-events`, in exactly the WebSocket vocabulary: `session.created` arrives on it once the channel opens, `session.update`, `response.create` and the rest work unchanged. The session's audio formats are fixed by the media negotiation, so a `session.update` changing them is refused with an `error`.
@@ -251,8 +273,8 @@ With [`REALTIME_WEBRTC_ENABLED`](operations_configuration.md#realtime-webrtc-ena
 - **Call control follows the credential that opened the call.** A call opened under a [tenant API key](operations_authentication_security.md) can be ended or observed only with that tenant's key or the deployment's own credentials; any other caller is answered the same `404` as an unknown call.
 
 !!! warning "What a WebRTC call demands of the deployment"
-    - **A UDP path to the exact instance that answered.** ICE negotiates ephemeral UDP ports directly to the server process; an HTTP(S) load balancer cannot carry them. The [Terraform module's WebRTC media mode](operations_deploy_advanced.md#webrtc-and-sip-need-their-own-ingress) provisions the public task IP and UDP ingress this needs, off by default. Behind 1:1 NAT, set [`REALTIME_WEBRTC_STUN_SERVER`](operations_configuration.md#realtime-webrtc-stun-server) so the gateway advertises its public address; for callers on UDP-blocking networks, run a TURN relay (for example coturn) and set [`REALTIME_WEBRTC_TURN_SERVER`](operations_configuration.md#realtime-webrtc-turn-server) — AWS offers no managed TURN.
-    - **The caller must offer a publicly routable candidate.** An SDP offer names the addresses the gateway sends its ICE checks to, so candidates on addresses that are not globally routable — private, loopback, link-local — are dropped, and an offer left with none is refused with `invalid_offer`. Hostname and mDNS (`.local`) candidates are always dropped. For callers that legitimately share the deployment's network, set [`REALTIME_WEBRTC_ALLOW_PRIVATE_CANDIDATES`](operations_configuration.md#realtime-webrtc-allow-private-candidates).
+    - **A UDP path to the exact instance that answered.** ICE negotiates ephemeral UDP ports directly to the server process; an HTTP(S) load balancer cannot carry them. The [Terraform module's WebRTC media mode](operations_deploy_advanced.md#webrtc-and-sip-need-their-own-ingress) provisions the public task IP and UDP ingress this needs, off by default. Behind 1:1 NAT, set [`REALTIME_WEBRTC_STUN_SERVER`](operations_configuration_bedrock.md#realtime-webrtc-stun-server) so the gateway advertises its public address; for callers on UDP-blocking networks, run a TURN relay (for example coturn) and set [`REALTIME_WEBRTC_TURN_SERVER`, `REALTIME_WEBRTC_TURN_USERNAME` and `REALTIME_WEBRTC_TURN_PASSWORD`](operations_configuration_bedrock.md#realtime-webrtc-turn-server) — the three are required together, and a deployment that sets only some of them refuses to start, naming them. AWS offers no managed TURN.
+    - **The caller must offer a publicly routable candidate.** An SDP offer names the addresses the gateway sends its ICE checks to, so candidates on addresses that are not globally routable — private, loopback, link-local — are dropped, and an offer left with none is refused with `invalid_offer`. Hostname and mDNS (`.local`) candidates are always dropped. For callers that legitimately share the deployment's network, set [`REALTIME_WEBRTC_ALLOW_PRIVATE_CANDIDATES`](operations_configuration_bedrock.md#realtime-webrtc-allow-private-candidates).
     - **One instance, or routed call control.** A call lives in the memory of the instance that answered its offer. `hangup` and the sideband WebSocket answer `404` on any other instance; run a single instance, or route call-control requests to the answering instance yourself.
     - **The 8-minute session cap applies to calls too.** Amazon Nova Sonic ends a session at 480 seconds, so a call hard-stops at 8 minutes with the connection torn down — a real limit for the phone-length conversations WebRTC invites.
     - **Scale-in, deployments and Spot interruption end live calls.** The media path cannot drain: an instance that stops mid-call drops it.
@@ -276,7 +298,7 @@ session = AgentSession(
 )
 ```
 
-`base_url` also reads from the `OPENAI_BASE_URL` environment variable, and `api_key` from `OPENAI_API_KEY`. A base URL ending in `/v1` has `/realtime` appended for you; a deployment served under a non-default [`OPENAI_ROUTES_PREFIX`](operations_configuration.md#openai-routes-prefix) has to name the full path itself.
+`base_url` also reads from the `OPENAI_BASE_URL` environment variable, and `api_key` from `OPENAI_API_KEY`. A base URL ending in `/v1` has `/realtime` appended for you; a deployment served under a non-default [`OPENAI_ROUTES_PREFIX`](operations_configuration_server.md#openai-routes-prefix) has to name the full path itself.
 
 **Pipecat** takes the WebSocket URL whole, `/v1/realtime` included:
 
@@ -303,7 +325,15 @@ An HTTP request that returns an SDP answer is the small, visible part of WebRTC.
 
 That is also why a framework remains the shorter path for anything the [gateway-terminated transport](#webrtc-calls) does not cover — telephony, more than one instance, calls past 8 minutes, hostile networks without your own TURN. LiveKit and Pipecat already own a media stack, already run wherever your users are, and already speak this API on the other side. [WebRTC and SIP need their own ingress](operations_deploy_advanced.md#webrtc-and-sip-need-their-own-ingress) covers what terminating media costs a deployment, whichever process does it.
 
-## Session Lifecycle and Limits
+## Billing { #cost }
+
+A realtime session bills audio and text tokens continuously, in both directions, for as long as the connection is open — not per request. Usage is reported per answer, in each `response.done` event, and recorded in the gateway's usage log the same way, so a session that drops mid-conversation still accounts for everything spoken before it. Speech tokens are priced well above text tokens by AWS, and the two are recorded and priced separately here. See [Cost Management](operations_cost_management.md) for how usage becomes cost.
+
+## Limits and behaviour to know
+
+What a session refuses and how it ends. The event-level gaps are in the [feature compatibility](#feature-compatibility) table, and what a WebRTC call additionally demands is under [WebRTC calls](#webrtc-calls).
+
+### Session lifecycle and limits { #session-lifecycle-and-limits }
 
 - **Duration cap** — a session lasts at most **8 minutes**. When it is reached, the server closes the connection with WebSocket close code `1000` and reason `session_expired`; reconnect to continue the conversation. A [WebRTC call](#webrtc-calls) is under the same cap: at 8 minutes its session ends and the peer connection is torn down.
 - **Conversation ended by the model side** — when the model ends the conversation itself, the connection closes with close code `1000` and reason `session_ended`. Normal, and reconnecting starts a new session.
@@ -313,11 +343,31 @@ That is also why a framework remains the shorter path for anything the [gateway-
 - **Uncommitted audio** — under manual turns (`turn_detection: null`), at most **5.7 MB** of decoded audio may be buffered before an `input_audio_buffer.commit` (about 2 minutes of 24 kHz PCM, longer for G.711); past that the append answers an `error`. Commit each turn, or clear the buffer with `input_audio_buffer.clear`.
 - **Addressable items** — the session keeps its **200** most recent conversation items addressable, dropping the oldest past that. `conversation.item.truncate`, `.retrieve` and `.delete` answer an `error` for an item that has fallen out; the model's own memory of the conversation is unaffected.
 
-## Billing { #cost }
+## Request headers
 
-A realtime session bills audio and text tokens continuously, in both directions, for as long as the connection is open — not per request. Usage is reported per answer, in each `response.done` event, and recorded in the gateway's usage log the same way, so a session that drops mid-conversation still accounts for everything spoken before it. Speech tokens are priced well above text tokens by AWS, and the two are recorded and priced separately here. See [Cost Management](operations_cost_management.md) for how usage becomes cost.
+The Amazon Bedrock guardrail headers apply to a realtime session. Send them on the WebSocket handshake, or on `POST /v1/realtime/calls` for a [WebRTC call](#webrtc-calls). All headers are optional.
 
-## Try It Now
+### Content Safety (Guardrails)
+
+| Header                               | Purpose                            | Valid Values               |
+|--------------------------------------|------------------------------------|----------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier  |
+| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`) |
+
+The guardrail selected here is the one applied per turn, as described under [Guardrail coverage](#guardrail-coverage). Both headers are honoured only when [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](operations_configuration_bedrock.md#bedrock-guardrails) is enabled — otherwise the deployment's configured guardrail applies. `X-Amzn-Bedrock-Trace` is accepted but has no effect on this route — no guardrail trace is returned.
+
+!!! warning "These headers need the deployment's own credentials"
+    A connection opened with an [ephemeral client secret](#ephemeral-client-secrets) is client-held, so its headers are discarded and the deployment's configured guardrail applies. Only a connection authenticated with the deployment's API key can select a guardrail per session.
+
+!!! note "No performance headers on this route"
+    `X-Amzn-Bedrock-Service-Tier` and `X-Amzn-Bedrock-PerformanceConfig-Latency` have no effect here: a session runs on a bidirectional model stream, which carries neither a service tier nor a performance configuration.
+
+!!! info "Detailed Documentation"
+    For complete information about these headers, configuration options, and use cases, see:
+
+    - [Bedrock Guardrails Configuration](operations_configuration_bedrock.md#bedrock-guardrails)
+
+## Try it { #try-it-now }
 
 ### Python (server-side, with the official SDK)
 
@@ -401,6 +451,6 @@ ws.addEventListener("message", (event) => {
 });
 ```
 
----
+## Next steps
 
-**Ready to add voice to your application?** Find compatible models with the [Search Models API](api_search_models.md), or explore the full [audio suite](api_openai_audio_speech.md) for turn-based speech and transcription.
+Next: [Search Models API](api_search_models.md) · [Text to Speech API](api_openai_audio_speech.md) · [Transcriptions API](api_openai_audio_transcriptions.md) · [WebRTC and SIP ingress](operations_deploy_advanced.md#webrtc-and-sip-need-their-own-ingress)

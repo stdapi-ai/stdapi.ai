@@ -8,11 +8,31 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 **stdapi.ai is under active development** with regular feature releases.
 
-## :material-tag-multiple: Recent Releases
+## :material-tag-multiple: Version Index { #recent-releases }
 
-See [Release History below](#release-history) for the full changelog of all releases.
+**Latest: v1.16.1 — 2026-08-25.** See the [release notes](#v1160-conversations-batches-vector-stores-realtime-speech-per-user-identity-with-v1161-maintenance-update) below.
 
-**Latest: v1.16.1** – A maintenance update to v1.16.0, which added four new API surfaces — conversations, batches, vector stores and realtime speech — plus retrieval a model calls for itself, a vector store served from your own Amazon Bedrock knowledge base, long and streamed text-to-speech, live transcription, per-caller authentication, and end-user cost attribution on the AWS bill. See the [full release notes](#v1160-conversations-batches-vector-stores-realtime-speech-per-user-identity-with-v1161-maintenance-update) below.
+Every release, newest first. Each entry in the [Release History](#release-history) below opens with a five-bullet summary.
+
+| Version | Date | Theme | Release notes |
+|---|---|---|---|
+| **v1.16.0** (and v1.16.1) | 2026-08-21 (2026-08-25) | Conversations, batches, vector stores, realtime speech and per-user identity | [Read](#v1160-conversations-batches-vector-stores-realtime-speech-per-user-identity-with-v1161-maintenance-update) |
+| **v1.15.0** | 2026-08-03 | Reliability, performance and feature completeness | [Read](#v1150-reliability-performance-feature-completeness) |
+| **v1.14.0** | 2026-07-12 | Bedrock Mantle, video generation, Cohere APIs, moderation and stored conversations | [Read](#v1140-bedrock-mantle-video-generation-cohere-apis-moderation-stored-conversations) |
+| **v1.13.0** | 2026-07-03 | Terraform module compliance and security hardening | [Read](#v1130-terraform-module-compliance-security-hardening) |
+| **v1.12.0** | 2026-05-29 | Completions API, video understanding and file references | [Read](#v1120-completions-api-video-understanding-file-references) |
+| **v1.11.0** (through v1.11.4) | 2026-05-02 (2026-05-28) | MCP server, agent discovery and model search | [Read](#v1110-mcp-server-agent-discovery-model-search-with-v1111v1114-maintenance-updates) |
+| **v1.10.0** | 2026-04-17 | OpenAI Responses API | [Read](#v1100-openai-responses-api) |
+| **v1.9.0** | 2026-04-10 | Files API and a JSON body for the Images API | [Read](#v190-files-api-images-api-json-body) |
+| **v1.8.0** | 2026-04-04 | Broader model compatibility and structured output | [Read](#v180-broader-model-compatibility-structured-output) |
+| **v1.7.0** | 2026-03-20 | Automatic region routing, deprecated model fallback and resilience | [Read](#v170-automatic-region-routing-deprecated-model-fallback-resilience-improvements) |
+| **v1.6.0** | 2026-02-27 | Anthropic API compatibility and advanced Claude capabilities | [Read](#v160-anthropic-api-compatibility-advanced-claude-capabilities) |
+| **v1.5.0** (and v1.5.1–v1.5.2) | 2026-02-15 (2026-02-18) | Advanced reasoning and model compatibility | [Read](#v150-advanced-reasoning-model-compatibility-with-v151v152-maintenance-updates) |
+| **v1.4.0** | 2026-02-11 | Audio enhancements and model compatibility | [Read](#v140-audio-enhancements-model-compatibility) |
+| **v1.3.0** (through v1.3.5) | 2026-01-11 (2026-02-02) | Image editing and variation support | [Read](#v130-image-editing-variation-support-with-v131v135-maintenance-updates) |
+| **v1.2.0** | 2025-12-18 | Service tiers, system tools and performance | [Read](#v120-service-tiers-system-tools-performance-enhancements) |
+| **v1.1.0** | 2025-11-27 | Embeddings, prompt caching and advanced routing | [Read](#v110-embeddings-enhancement-prompt-caching-advanced-routing) |
+| **v1.0.0** | 2025-11-10 | Foundation release | [Read](#v100-foundation-release) |
 
 ---
 
@@ -24,23 +44,16 @@ Pending features and current deployment state are tracked on the [GitHub Project
 
 ## :material-history: Release History
 
-### v1.17.0 – In development
+### v1.16.0 – 2026-08-21 – Conversations, Batches, Vector Stores, Realtime Speech & Per-User Identity (with v1.16.1 maintenance update, 2026-08-25) { #v1160-conversations-batches-vector-stores-realtime-speech-per-user-identity-with-v1161-maintenance-update }
 
-Any request that names a model can now name a [wildcard pattern](operations_configuration.md#model-wildcard-patterns) instead — `claude-sonnet-*`, say — and the server serves the most recently released model that matches, refusing ambiguous ties rather than guessing one; [`GET /search_models`](api_search_models.md) gained a `model=` filter to see everything a pattern matches, newest first, before relying on it.
+!!! abstract "At a glance"
+    - **Conversations and batches** — [Conversations](api_openai_conversations.md) keep a thread server-side so a client continues it by id; the OpenAI [Batch API](api_openai_batches.md) and the Anthropic [Message Batches API](api_anthropic_batches.md) run large request sets at the discounted batch price.
+    - **Vector stores** — [index and search files by meaning](api_openai_vector_stores.md), or address [a knowledge base you already run](api_openai_vector_stores.md#knowledge-base-stores), with a model reaching either for itself through [`file_search`](api_openai_responses.md#file-search).
+    - **Realtime speech** — the [Realtime API](api_openai_realtime.md) holds a spoken conversation over one WebSocket, with a transcript of both sides, turn detection and barge-in.
+    - **Speech and audio** — 100,000-character [synthesis](api_openai_audio_speech.md#long-input) spoken as it is produced, [live transcription](api_openai_audio_transcriptions.md#streaming) needing no bucket, and [Amazon Nova Sonic](api_openai_audio_transcriptions.md#amazon-nova-sonic) as a speech-to-text backend.
+    - **Identity per caller** — [Amazon Cognito tokens](operations_configuration_authentication.md#cognito-authentication) alongside or instead of the API key, [published discovery](operations_configuration_authentication.md#oauth-discovery), and [per-user cost attribution](operations_cost_management.md#per-user-attribution) read from the AWS invoice. New IAM permissions are required, and five features stay inert until you create the resource they need.
 
-!!! warning "Behavior Changes"
-    Review these before upgrading — they may change what existing clients observe, and what AWS charges you:
-
-    - **Three responses now name the model that actually served the request, rather than echoing the string the caller sent.** The Anthropic Messages response (`/anthropic/v1/messages`, streaming and not), the batch object returned by `GET /v1/batches/{id}`, and the `model` field inside Anthropic batch result lines — so a request naming `claude-opus-5` now comes back naming `anthropic.claude-opus-5`. This matches what the OpenAI chat, Responses, embeddings and video responses already did, and affects existing callers who use aliases, not only callers using the new wildcard patterns.
-    - **A price change for the OpenAI GPT-5.6 family.** GPT-5.6 Sol, Terra and Luna are now served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) by default, so their [`web_search`](api_openai_responses.md#openai-gpt-web-search) and `code_interpreter` tools work with no configuration — Bedrock serves those on Mantle alone. Mantle has no cross-region inference profiles, so these models stop riding the Global profile and its discount and pay the In-Region rate: **exactly 10% more per token**, on input, output, cached and long-context rates alike. Per million input / output tokens that is $4.40 / $22.00 for Sol, $2.20 / $13.20 for Terra and $0.22 / $1.32 for Luna, against $4.00 / $20.00, $2.00 / $12.00 and $0.20 / $1.20 before. A deployment that had already disabled [`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL`](operations_configuration.md#cross-region-global) pays what it paid. Setting [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models) to an empty value restores the previous routing, and the previous price, for every dual-homed model.
-    - **A guardrail and Mantle routing can no longer be configured together.** Amazon Bedrock Guardrails do not apply to Mantle-served requests, so a model routed there under a configured guardrail would be served unfiltered with nothing able to report it. A deployment configuring both — including through a `MODEL_ALIASES` guardrail — now **stops at startup**, naming the routed models and the way out, instead of degrading silently. Because `AWS_BEDROCK_MANTLE_PREFERRED_MODELS` now has a default, a guardrailed deployment meets this without having changed anything: clear that setting to keep the guardrail.
-    - **Input token counting is unavailable for the GPT-5.6 family.** [`POST /v1/responses/input_tokens`](api_openai_responses.md#input-token-counting) answers `400` for the models Mantle serves, which now includes that family. Clearing `AWS_BEDROCK_MANTLE_PREFERRED_MODELS` brings it back.
-    - **GPT-5.6 usage is reported and billed under Bedrock Mantle**, attributed by [project](operations_configuration.md#bedrock-mantle-project) rather than by IAM principal, and runs on Mantle's own throughput quotas. Batch inference, prompt caching and response IDs stored before the upgrade are unaffected.
-    - **The community container image moves from Alpine to a standard Debian base.** glibc is what the WebRTC media stack needs — `aiortc` publishes no musl wheel for any version — so the community image now ships every capability the commercial one does. It declares `python` as the image entry point and runs as an unprivileged user with **uid/gid 65532** instead of 1000. The API, its endpoints and the audio formats it accepts are unchanged, and deployments through the Terraform module are unaffected — the task definition already pinned 65532. Two things change for anyone running the image by hand: arguments after the image name are passed to the Python interpreter rather than run as a program, and a mounted `~/.aws` needs `--user "$(id -u):$(id -g)" -e HOME=/home/nonroot` — or `--userns=keep-id:uid=65532,gid=65532` on rootless Podman — to stay readable. It is also a larger image, built from the distribution's own packages; the hardened, minimal one is the [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) edition. See [Local Development](operations_getting_started_local.md#run-it).
-
-### v1.16.0 – Conversations, Batches, Vector Stores, Realtime Speech & Per-User Identity (with v1.16.1 maintenance update)
-
-This release adds four API surfaces and finishes the speech story. **New APIs**: [**Conversations**](api_openai_conversations.md) keep a thread server-side, so a client continues it by id instead of resending the history; the OpenAI [**Batch API**](api_openai_batches.md) and Anthropic [**Message Batches API**](api_anthropic_batches.md) run large request sets asynchronously at the discounted batch price; [**Vector Stores**](api_openai_vector_stores.md) index and search files by meaning — or address [a knowledge base you already run](api_openai_vector_stores.md#knowledge-base-stores) — with a model reaching either kind for itself through [`file_search`](api_openai_responses.md#file-search); and the [**Realtime API**](api_openai_realtime.md) holds a spoken conversation over one WebSocket. **Speech**: 100,000-character [synthesis](api_openai_audio_speech.md#long-input) spoken as it is produced, [live transcription](api_openai_audio_transcriptions.md#streaming) needing no bucket, and [**Amazon Nova Sonic**](api_openai_audio_transcriptions.md#amazon-nova-sonic) as the lowest-cost speech-to-text backend here. **Identity per caller**: [Amazon Cognito tokens](operations_configuration.md#cognito-authentication) alongside or instead of the API key, [published discovery](operations_configuration.md#oauth-discovery) so an agent authenticates itself, and [per-user cost attribution](operations_cost_management.md#per-user-attribution) reporting each end user's spend from the AWS invoice rather than an estimate.
+This release adds four API surfaces and finishes the speech story. **New APIs**: [**Conversations**](api_openai_conversations.md) keep a thread server-side, so a client continues it by id instead of resending the history; the OpenAI [**Batch API**](api_openai_batches.md) and Anthropic [**Message Batches API**](api_anthropic_batches.md) run large request sets asynchronously at the discounted batch price; [**Vector Stores**](api_openai_vector_stores.md) index and search files by meaning — or address [a knowledge base you already run](api_openai_vector_stores.md#knowledge-base-stores) — with a model reaching either kind for itself through [`file_search`](api_openai_responses.md#file-search); and the [**Realtime API**](api_openai_realtime.md) holds a spoken conversation over one WebSocket. **Speech**: 100,000-character [synthesis](api_openai_audio_speech.md#long-input) spoken as it is produced, [live transcription](api_openai_audio_transcriptions.md#streaming) needing no bucket, and [**Amazon Nova Sonic**](api_openai_audio_transcriptions.md#amazon-nova-sonic) as the lowest-cost speech-to-text backend here. **Identity per caller**: [Amazon Cognito tokens](operations_configuration_authentication.md#cognito-authentication) alongside or instead of the API key, [published discovery](operations_configuration_authentication.md#oauth-discovery) so an agent authenticates itself, and [per-user cost attribution](operations_cost_management.md#per-user-attribution) reporting each end user's spend from the AWS invoice rather than an estimate.
 
 !!! warning "New Required IAM Permissions"
     v1.16.0 adds one action every deployment needs, a handful that belong to statements you may already grant, and one statement per optional feature. See [IAM Permissions](operations_iam_permissions.md) for the policies in full.
@@ -66,33 +79,33 @@ This release adds four API surfaces and finishes the speech story. **New APIs**:
     - [**Batch inference**](operations_iam_permissions.md#batch-inference) — `bedrock:CreateModelInvocationJob`, `GetModelInvocationJob` and `StopModelInvocationJob` on the server's role, plus `iam:PassRole` conditioned on `bedrock.amazonaws.com`. The service role Amazon Bedrock assumes carries its own policy: `s3:GetObject`, `s3:PutObject` and `s3:ListBucket` on the batch prefix, and `bedrock:InvokeModel` on the models you batch.
     - [**Per-user cost attribution**](operations_iam_permissions.md#per-user-cost-attribution) — `sts:AssumeRole` and `sts:TagSession` on the server's role *and* in the end user role's trust policy (both actions: without `TagSession`, every tagged session is denied), and `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` and `bedrock:ApplyGuardrail` on the end user role itself, since AWS authorizes those against the caller of the invocation.
     - [**Web search**](operations_iam_permissions.md#web-search-iam) — `bedrock-websearch:InvokeSearch` and `bedrock-websearch:InvokeFetch`, plus `bedrock-websearch:ExternalWebAccess` only where a request may reach the open internet. Leaving that last one out is what keeps every search inside the AWS boundary. A missing web-search permission produces no error and no server log entry: the model answers without having searched, so check these before suspecting the model.
-    - [**Transcription output encryption**](operations_iam_permissions.md#speech-to-text-optional) — `kms:GenerateDataKey` and `kms:Decrypt` on the key named by [`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](operations_configuration.md#aws-transcribe-output-encryption-key-arn), in the key policy as well as on the role.
-    - [**Durable vector store indexing**](operations_iam_permissions.md#durable-vector-store-indexing) — `sqs:SendMessage`, `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility` and `sqs:GetQueueAttributes`, on the single queue named by [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url) and never on `*`. Needed only if you configure that queue; leave it unset and nothing here applies. No queue is ever created, deleted or reconfigured, so none of those actions is granted.
+    - [**Transcription output encryption**](operations_iam_permissions.md#speech-to-text-optional) — `kms:GenerateDataKey` and `kms:Decrypt` on the key named by [`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](operations_configuration_storage.md#aws-transcribe-output-encryption-key-arn), in the key policy as well as on the role.
+    - [**Durable vector store indexing**](operations_iam_permissions.md#durable-vector-store-indexing) — `sqs:SendMessage`, `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility` and `sqs:GetQueueAttributes`, on the single queue named by [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration_storage.md#aws-sqs-vector-store-queue-url) and never on `*`. Needed only if you configure that queue; leave it unset and nothing here applies. No queue is ever created, deleted or reconfigured, so none of those actions is granted.
 
     !!! note "Five features stay inert until you create the resource they need"
         Nothing in this release is breaking — but these five answer `503`, or stay off, until the resource exists in your own account:
 
-        - **Batches** — an IAM service role Amazon Bedrock assumes to read the requests and write the results ([`AWS_BEDROCK_BATCH_ROLE_ARN`](operations_configuration.md#aws-bedrock-batch-role-arn)), plus the bucket it reads and writes.
-        - **Vector stores** — an [Amazon S3 vector bucket](operations_configuration.md#aws-s3-vectors-bucket) you create yourself, and the [Region](operations_configuration.md#aws-s3-vectors-region) it lives in.
-        - **Knowledge base vector stores** — an allowlist of the knowledge bases this deployment may address ([`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids)), empty by default. One that is not on it answers exactly as a store that does not exist, so the setting cannot be probed for what a deployment holds.
-        - **Cognito authentication** — a user pool and its app clients ([`AWS_COGNITO_USER_POOL_ID`](operations_configuration.md#aws-cognito-user-pool-id)); until then the API key remains the only method, exactly as before.
-        - **Per-user cost attribution** — a role for the end user sessions ([`AWS_BEDROCK_USER_ROLE_ARN`](operations_configuration.md#aws-bedrock-user-role-arn)); off by default, and every call keeps being billed to the deployment's own identity until it is set.
+        - **Batches** — an IAM service role Amazon Bedrock assumes to read the requests and write the results ([`AWS_BEDROCK_BATCH_ROLE_ARN`](operations_configuration_bedrock.md#aws-bedrock-batch-role-arn)), plus the bucket it reads and writes.
+        - **Vector stores** — an [Amazon S3 vector bucket](operations_configuration_storage.md#aws-s3-vectors-bucket) you create yourself, and the [Region](operations_configuration_storage.md#aws-s3-vectors-region) it lives in.
+        - **Knowledge base vector stores** — an allowlist of the knowledge bases this deployment may address ([`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration_storage.md#aws-bedrock-knowledge-base-ids)), empty by default. One that is not on it answers exactly as a store that does not exist, so the setting cannot be probed for what a deployment holds.
+        - **Cognito authentication** — a user pool and its app clients ([`AWS_COGNITO_USER_POOL_ID`](operations_configuration_authentication.md#aws-cognito-user-pool-id)); until then the API key remains the only method, exactly as before.
+        - **Per-user cost attribution** — a role for the end user sessions ([`AWS_BEDROCK_USER_ROLE_ARN`](operations_configuration_bedrock.md#aws-bedrock-user-role-arn)); off by default, and every call keeps being billed to the deployment's own identity until it is set.
 
-        Conversations, the Realtime API and streamed transcription need no new resource. Long speech input needs a [bucket for the serving region](operations_configuration.md#aws-s3-regional-buckets), which is the same one the rest of the gateway already uses — except on generative voices, which speak up to 20,000 characters without one.
+        Conversations, the Realtime API and streamed transcription need no new resource. Long speech input needs a [bucket for the serving region](operations_configuration_storage.md#aws-s3-regional-buckets), which is the same one the rest of the gateway already uses — except on generative voices, which speak up to 20,000 characters without one.
 
 !!! warning "Behavior Changes"
     Review these before upgrading — they may change what existing clients or dashboards observe:
 
     - **A missing deployment permission is no longer reported as the caller's.** An `AccessDeniedException` on the gateway's own AWS calls reached clients as `403 permission_error` — which every OpenAI and Anthropic SDK reads as *their* key being refused. Every route now answers `503` `feature_unavailable`, with the server log naming the operation, model and permission. Clients matching `403` for a backend permission error should match `503`/`feature_unavailable` instead; a `403` now means only that [per-user attribution](operations_cost_management.md#per-user-attribution) is on and *that end user's* role was denied.
-    - **Built-in web search now appears in usage and cost reporting.** Queries were recorded as nothing at all, so a measured turn under-reported its cost by 58%. Nothing AWS charges changed; what the gateway reports does. Web access is also an operator setting now ([`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](operations_configuration.md#bedrock-external-web-access)), defaulting to the previous behaviour.
+    - **Built-in web search now appears in usage and cost reporting.** Queries were recorded as nothing at all, so a measured turn under-reported its cost by 58%. Nothing AWS charges changed; what the gateway reports does. Web access is also an operator setting now ([`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](operations_configuration_models.md#bedrock-external-web-access)), defaulting to the previous behaviour.
     - **A request that would be answered without what it asked for is refused.** A `/v1/responses` `web_search` restricting its sources (`filters.allowed_domains`, `user_location`) was accepted and dropped, so answers came back sourced from domains the caller had excluded. Now a `400` on models that cannot serve it; [Bedrock Mantle](features.md#bedrock-mantle-models) models receive the options unchanged. The same rule governs [file search](api_openai_responses.md#file-search) filters and score thresholds.
     - **Two output-shaping hints that returned `400` now succeed.** `prediction` and `verbosity` on chat completions are accepted and dropped, as the Responses surface already did; `truncation="disabled"` is likewise accepted, while `truncation="auto"` is still refused.
-    - **`/v1/responses` forwards undeclared request fields to the model**, as chat completions and messages already did, so the backend may refuse one it does not recognise. Conversely, client-side control fields no provider treats as parameters (LiteLLM's `drop_params` among them) are dropped rather than forwarded. Both are governed by [`EXTRA_MODEL_PARAMS_DENYLIST`](operations_configuration.md#extra-model-params-denylist) and [`EXTRA_MODEL_PARAMS_DROP_ALL`](operations_configuration.md#extra-model-params-drop-all).
+    - **`/v1/responses` forwards undeclared request fields to the model**, as chat completions and messages already did, so the backend may refuse one it does not recognise. Conversely, client-side control fields no provider treats as parameters (LiteLLM's `drop_params` among them) are dropped rather than forwarded. Both are governed by [`EXTRA_MODEL_PARAMS_DENYLIST`](operations_configuration_models.md#extra-model-params-denylist) and [`EXTRA_MODEL_PARAMS_DROP_ALL`](operations_configuration_models.md#extra-model-params-drop-all).
     - **Attachments are measured against what the model actually accepts.** The old guard compared raw bytes where the backend enforces base64 length, so it was ~33% too permissive. Oversized attachments are now staged and referenced where the model reads from storage, or refused with `413` naming the size it accepts. Smaller attachments are unaffected — see [Attachment Size](features.md#attachment-size).
     - **The server's own connections follow the proxy environment.** `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` were honoured by the AWS SDK and ignored by everything else, so a proxied deployment saw no [Bedrock Mantle](features.md#bedrock-mantle-models) models. Two connections deliberately still bypass it: container metadata, and the fetch of a caller-supplied URL, where a proxy would defeat address validation. See [proxied deployments](operations_deploy_advanced.md#proxied-deployments).
     - **A declared upload checksum is now verified.** The value was stored and never looked at, so a corrupted upload completed like a clean one. It covers the file's contents, **not** the storage layer's multipart identifier — declaring the latter is now refused.
     - **An unknown model name answers with a sentence, not the catalogue.** The `404` body carried every served identifier, roughly 2,500 characters. Clients that parsed it for a model list should call [`/v1/models`](api_openai_models.md).
-    - **Bedrock Mantle is only probed in the Regions that serve it**, so a deployment listing others no longer warns at every start. An explicit [`AWS_BEDROCK_MANTLE_REGIONS`](operations_configuration.md#bedrock-mantle-regions) list is still used exactly as given.
+    - **Bedrock Mantle is only probed in the Regions that serve it**, so a deployment listing others no longer warns at every start. An explicit [`AWS_BEDROCK_MANTLE_REGIONS`](operations_configuration_aws.md#bedrock-mantle-regions) list is still used exactly as given.
     - **The container health probe's command changed.** Deployments that re-declare the probe instead of running the image's own — an [ECS task definition](operations_deploy_advanced.md#ecs-task-definition-example) among them — should take the command from the image.
 
 #### :material-api: New APIs
@@ -109,7 +122,7 @@ This release adds four API surfaces and finishes the speech story. **New APIs**:
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**  | [`POST /v1/realtime/client_secrets`](api_openai_realtime.md#ephemeral-client-secrets) – mint a short-lived, browser-safe credential carrying a session configuration; signed and stateless, so any instance verifies one minted by any other | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Amazon Nova Sonic |
 
 !!! note "Limits worth knowing before building on these"
-    **Realtime**: a session lasts at most 8 minutes and calls no tools, and a spoken answer is guardrail-checked once complete, so a blocked one may already have been partly heard ([coverage](api_openai_realtime.md#guardrail-coverage)). **WebRTC and SIP are not served** — put [LiveKit Agents or Pipecat](api_openai_realtime.md#transports) in front for a browser media path or a phone line. The [compatibility table](api_openai_realtime.md#feature-compatibility) lists every event the session does not emit.
+    **Realtime**: a session lasts at most 8 minutes and calls no tools, and a spoken answer is guardrail-checked once complete, so a blocked one may already have been partly heard ([coverage](api_openai_realtime.md#guardrail-coverage)). **WebRTC and SIP are not served in this release** — put [LiveKit Agents or Pipecat](api_openai_realtime.md#transports) in front for a browser media path or a phone line. Superseded in [v1.17.0](#v1170-your-own-models-your-own-tenants-your-own-spend), which added the gateway-terminated WebRTC transport as an operator opt-in; SIP is still never terminated here. The [compatibility table](api_openai_realtime.md#feature-compatibility) lists every event the session does not emit.
 
     **Knowledge-base stores** address a knowledge base that already exists and refuse, naming why, anything that would reshape it — creating, deleting, renaming, expiry, chunking strategy, attribute rewrites and the file-batch routes. Attaching needs a **custom** data source. Retrieval scores are reported as the backend states them rather than rescaled into similarities, and unknown values are reported unknown rather than invented. See [Knowledge Base Stores](api_openai_vector_stores.md#knowledge-base-stores).
 
@@ -121,39 +134,39 @@ This release adds four API surfaces and finishes the speech story. **New APIs**:
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**  | [`/v1/audio/speech`](api_openai_audio_speech.md#long-input) – long input is spoken as it is synthesized instead of after a whole job finishes; generative voices reach 20,000 characters with no bucket at all, and each request takes whichever path can serve it, so long input is no longer tied to one voice | ![Amazon Polly](styles/logo_amazon_polly.svg){: style="height:20px;width:20px"} Amazon Polly |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**  | [`/v1/audio/transcriptions`](api_openai_audio_transcriptions.md#amazon-nova-sonic) – naming Amazon Nova Sonic transcribes at the lowest cost available here, streamed as it is recognized; `json` and `text` only, up to 10 minutes, no timestamps. No existing request is re-routed | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Amazon Nova Sonic |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**  | [`/v1/audio/translations`](api_openai_audio_translations.md) – Amazon Nova Sonic translates speech to English itself, in one request                 | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Amazon Nova Sonic |
-| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**  | [`/v1/audio/transcriptions`](api_openai_audio_transcriptions.md#streaming) – `stream=true` returns each phrase as it is recognized, whenever the request names the language to expect; needs no bucket. `gpt-live-transcribe` is now an alias, and requests naming no language are unchanged unless [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](operations_configuration.md#aws-transcribe-stream-languages) says which to expect | ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){: style="height:20px;width:20px"} Amazon Transcribe |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**  | [`/v1/audio/transcriptions`](api_openai_audio_transcriptions.md#streaming) – `stream=true` returns each phrase as it is recognized, whenever the request names the language to expect; needs no bucket. `gpt-live-transcribe` is now an alias, and requests naming no language are unchanged unless [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](operations_configuration_storage.md#aws-transcribe-stream-languages) says which to expect | ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){: style="height:20px;width:20px"} Amazon Transcribe |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**  | [`/v1/audio/transcriptions`](api_openai_audio_transcriptions.md) – per-language custom vocabularies and language models, so a request identifying between several languages can apply the right resources to each one instead of being refused. Accepted only where the backend would use them: alongside a single fixed language, where they would apply to nothing, they are still refused | ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){: style="height:20px;width:20px"} Amazon Transcribe |
-| **stdapi.ai**                                                                    | [`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](operations_configuration.md#aws-transcribe-output-encryption-key-arn) – encrypt a transcription's output with a key you name rather than the bucket's own. The job's request identifiers travel as the encryption context, so a key policy can be scoped to this workload instead of to the whole bucket | ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){: style="height:20px;width:20px"} Amazon Transcribe, AWS KMS |
+| **stdapi.ai**                                                                    | [`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](operations_configuration_storage.md#aws-transcribe-output-encryption-key-arn) – encrypt a transcription's output with a key you name rather than the bucket's own. The job's request identifiers travel as the encryption context, so a key policy can be scoped to this workload instead of to the whole bucket | ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){: style="height:20px;width:20px"} Amazon Transcribe, AWS KMS |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**  | [`/v1/audio/translations`](api_openai_audio_translations.md) – the supported language pairs are read once at startup and checked before the call, so a pair that cannot be served is named as the request problem it is instead of surfacing as a failure after the audio was transcribed. The permission that reads them is optional: without it the check stays off and everything else works | ![AWS Translate](styles/logo_amazon_translate.svg){: style="height:20px;width:20px"} AWS Translate |
 
 #### :material-account-key: Identity & Cost Attribution
 
 | Provider                                                                        | Endpoint/Feature                                                                                                                      | AWS Backend                                                                                                                 |
 |----------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------|
-| **stdapi.ai**                                                                    | [Amazon Cognito user pool tokens](operations_configuration.md#cognito-authentication) – accept access tokens instead of, or alongside, the API key, so each caller reaches the API with their own credential; validated in-process against the pool's published keys, with no AWS call on the request path | ![Amazon Cognito](styles/logo_amazon_cognito.svg){: style="height:20px;width:20px"} Amazon Cognito |
-| **stdapi.ai**                                                                    | [`AUTHENTICATION_MODE`](operations_configuration.md#authentication-mode) – assert the posture rather than infer it: the server refuses to start when the selected method is not configured, or when a configured method would be silently ignored | ![Amazon Cognito](styles/logo_amazon_cognito.svg){: style="height:20px;width:20px"} Amazon Cognito |
-| **stdapi.ai**                                                                    | [Authentication discovery for agents](operations_configuration.md#oauth-discovery) – an OAuth 2.0 protected resource metadata document, pointed at by every unauthorized response, so an MCP client finds the authorization server and the scope it needs without being configured for this deployment; published only once an authorization server is declared | ![Amazon Cognito](styles/logo_amazon_cognito.svg){: style="height:20px;width:20px"} Amazon Cognito, or any OAuth 2.0 authorization server |
-| **stdapi.ai**                                                                    | [Per-user cost attribution](operations_cost_management.md#per-user-attribution) – model calls issued under a short-lived role session tagged with the caller, so AWS reports each end user's spend in Cost Explorer and the Cost and Usage Report, from the invoice rather than an estimate. Off by default; a deployment can also [require](operations_configuration.md#aws-bedrock-user-role-require-identity) every call to name its end user rather than bill it to the deployment | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock, AWS STS |
+| **stdapi.ai**                                                                    | [Amazon Cognito user pool tokens](operations_configuration_authentication.md#cognito-authentication) – accept access tokens instead of, or alongside, the API key, so each caller reaches the API with their own credential; validated in-process against the pool's published keys, with no AWS call on the request path | ![Amazon Cognito](styles/logo_amazon_cognito.svg){: style="height:20px;width:20px"} Amazon Cognito |
+| **stdapi.ai**                                                                    | [`AUTHENTICATION_MODE`](operations_configuration_authentication.md#authentication-mode) – assert the posture rather than infer it: the server refuses to start when the selected method is not configured, or when a configured method would be silently ignored | ![Amazon Cognito](styles/logo_amazon_cognito.svg){: style="height:20px;width:20px"} Amazon Cognito |
+| **stdapi.ai**                                                                    | [Authentication discovery for agents](operations_configuration_authentication.md#oauth-discovery) – an OAuth 2.0 protected resource metadata document, pointed at by every unauthorized response, so an MCP client finds the authorization server and the scope it needs without being configured for this deployment; published only once an authorization server is declared | ![Amazon Cognito](styles/logo_amazon_cognito.svg){: style="height:20px;width:20px"} Amazon Cognito, or any OAuth 2.0 authorization server |
+| **stdapi.ai**                                                                    | [Per-user cost attribution](operations_cost_management.md#per-user-attribution) – model calls issued under a short-lived role session tagged with the caller, so AWS reports each end user's spend in Cost Explorer and the Cost and Usage Report, from the invoice rather than an estimate. Off by default; a deployment can also [require](operations_configuration_bedrock.md#aws-bedrock-user-role-require-identity) every call to name its end user rather than bill it to the deployment | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock, AWS STS |
 | **stdapi.ai**                                                                    | [Vector store cost reporting](operations_cost_management.md#vector-stores) – a search against a Bedrock-managed knowledge base is recorded and priced like every other billed unit; what cannot be accounted for is stated rather than approximated | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Knowledge Bases |
 
 #### Platform Features
 
 | Feature                                | Description                                                                                                                                                                             |
 |----------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| [Aliases that carry configuration](operations_configuration.md#model-aliases-configuration) | A `MODEL_ALIASES` entry may map a public name to the target model *plus* the service tier, guardrail, metadata and extra parameters applied to requests naming it, so one model is published under several names with different policies. The plain-string form is unchanged, and a malformed alias stops startup naming itself rather than failing once per request |
+| [Aliases that carry configuration](operations_configuration_models.md#model-aliases-configuration) | A `MODEL_ALIASES` entry may map a public name to the target model *plus* the service tier, guardrail, metadata and extra parameters applied to requests naming it, so one model is published under several names with different policies. The plain-string form is unchanged, and a malformed alias stops startup naming itself rather than failing once per request |
 | [Attachment size policy](features.md#attachment-size) | On the multimodal routes served by Amazon Bedrock, an attachment is measured before the request is built and travels inline or by reference according to the limits each model class declares. Staging is per model and per media kind: of the families measured, only the Amazon Nova families and TwelveLabs Pegasus accept a reference |
-| Ephemeral secret signing key           | [`REALTIME_CLIENT_SECRET_KEY`](operations_configuration.md#realtime-client-secret-key) signs the Realtime API's client secrets. A deployment with an API key already shares one and needs nothing; one running with no API key at all should set it, or a secret minted by one instance fails to verify on another |
+| Ephemeral secret signing key           | [`REALTIME_CLIENT_SECRET_KEY`](operations_configuration_bedrock.md#realtime-client-secret-key) signs the Realtime API's client secrets. A deployment with an API key already shares one and needs nothing; one running with no API key at all should set it, or a secret minted by one instance fails to verify on another |
 | Dual-stack container listener          | The image's bind address moved out of its command into `GRANIAN_HOST`, so a deployment that needs a dual-stack socket — an ECS service whose discovery record includes an AAAA record, for instance — sets one variable instead of replacing the whole command. The IPv4-only default is unchanged |
 | Faster container health probe          | The probe ships as a module of the application itself, byte-compiled with the rest of the package and covered by the linters and the test suite; it speaks HTTP over a socket rather than pulling in 123 modules per probe, cutting roughly 250 ms of import work per run in the community image and halving its peak memory |
 | OpenAI Daybreak models                 | Daybreak Red (GPT-5.6 Cyber) and Daybreak Blue (GPT-5.6 Sol) are served and priced with the rest of the GPT-5.6 family, image input included. Both answer on the Responses API through Bedrock's next-generation inference endpoint, in US East (Ohio) only, and both are gated on enrollment with OpenAI's Daybreak programme — an account without it does not see them in the catalogue at all |
 | Capability discovery                   | The [model catalogue](api_search_models.md) advertises what this release added — speech to speech, its transcription and translation, the search surfaces, and whether a model can be used with the Batch API — filterable over HTTP and through the same tool an agent reads before it calls anything. Web search is credited to every model that provides it, not only to the family the last release added it for |
-| [Durable vector store indexing](api_openai_vector_stores.md#durable-indexing) | [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url) hands indexing to an Amazon SQS queue you create, so a file keeps being indexed — and finishes — when the server that accepted it is replaced. Off by default; needs a standard queue with a dead-letter queue and the [durable indexing permissions](operations_iam_permissions.md#durable-vector-store-indexing) ([resilience](operations_resilience.md#vector-store-indexing)) |
+| [Durable vector store indexing](api_openai_vector_stores.md#durable-indexing) | [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration_storage.md#aws-sqs-vector-store-queue-url) hands indexing to an Amazon SQS queue you create, so a file keeps being indexed — and finishes — when the server that accepted it is replaced. Off by default; needs a standard queue with a dead-letter queue and the [durable indexing permissions](operations_iam_permissions.md#durable-vector-store-indexing) ([resilience](operations_resilience.md#vector-store-indexing)) |
 | End-to-end client coverage             | The suite driving complete, unmodified third-party clients against a live gateway gains five: **LiteLLM**, **Docling Serve**'s vision pipeline, the **OpenAI Agents SDK** (realtime voice, conversations, web search, vector-store retrieval), and **LiveKit Agents** and **Pipecat** running the exact [WebRTC and telephony configurations](api_openai_realtime.md#transports) this documentation prints. Deployment guides follow for [LobeHub](use_cases_lobehub.md) and [RAGFlow](use_cases_ragflow.md) |
 
 #### :material-bug: Fixes { #fixes-3 }
 
 - **Vector store durability**: an attached file whose indexing was interrupted is now reported `failed` with a `last_error` instead of sitting `in_progress` for ever; a detached file leaves every listing and search immediately and is gone only once its passages are, so a server replaced mid-delete no longer leaves a deleted document answering searches; indexing is bounded for the whole server rather than per request, so memory and embedding quota no longer scale with the number of callers; and deployments that would rather the work finished than reported can [hand indexing to a queue](api_openai_vector_stores.md#durable-indexing)
-- **Work a request left running is finished before the server stops**: a deployment, scale-in or Spot interruption used to drop temporary file cleanups, vector store indexing and live audio session releases with nothing in the logs. Shutdown now waits under [`SHUTDOWN_DRAIN_TIMEOUT`](operations_configuration.md#shutdown-drain-timeout) (10 seconds by default), settles whatever the deadline leaves, and counts it in the `stop` event. Raise it together with your container runtime's kill delay, never one alone
+- **Work a request left running is finished before the server stops**: a deployment, scale-in or Spot interruption used to drop temporary file cleanups, vector store indexing and live audio session releases with nothing in the logs. Shutdown now waits under [`SHUTDOWN_DRAIN_TIMEOUT`](operations_configuration_server.md#shutdown-drain-timeout) (10 seconds by default), settles whatever the deadline leaves, and counts it in the `stop` event. Raise it together with your container runtime's kill delay, never one alone
 - **Streamed responses run the work they scheduled**: the drain was attached before the body produced a byte, so three leaks followed — a vector store searched only through streamed answers could expire mid-query, an expired store left a paid index behind, and a streamed transcription falling back to a job left its audio, transcript and job record behind on every request
 - **Realtime speaks the released vocabulary, not the beta one**: item events were unparsable, the caller's transcript event was dropped for a missing field, and the item lifecycle clients wait on was never emitted. Barge-in did not work at all — the session refused truncation precisely while an answer was playing, the only moment it is ever sent. Truncate, retrieve and delete now work against the tracked conversation, a written turn is answered instead of timing out, and every answer reports the six response fields upstream always sends
 - **Batch API**: listing a batch neither settled nor published it, so a client that only ever listed never had its usage recorded; every validation failure at submission was reported as an unsupported model, quota and role failures included; and the batch record was written only after the jobs started, leaving billable work running with nothing on disk to stop it
@@ -162,19 +175,28 @@ This release adds four API surfaces and finishes the speech story. **New APIs**:
 - **Reasoning and web search reach the models that serve them**: Amazon Nova 2 and DeepSeek V3 refused the token budget the Anthropic dialect requires, leaving [extended thinking](api_anthropic_messages.md#extended-thinking) unreachable on that route while the identical ask worked elsewhere; and a `web_search` sent to a GPT-5.6 model resolved to its non-Mantle twin travelled as an ordinary function tool, so no search ran and nothing said so — now a `400` naming both ways to route the model to the endpoint that serves it
 - **The Messages surface reports what an answer cost and why it stopped**: refusals carry the policy category, the reasoning-token breakdown is reported, and service tier and per-TTL cache-creation counts are populated — most visibly on a batch, which claimed no tier while being billed as one
 - **Audio, embeddings and attachments are bounded correctly**: inline audio was measured against raw bytes where the backend enforces the encoded length, so files between ~18.75 MB and 25 MB passed and were refused downstream; long text-to-speech now answers with the length a bucket-less deployment can honour; and models that embed one input per call no longer open a connection per chunk
-- **The interactive documentation pages render with no outbound access**: [`/docs` and `/redoc`](operations_configuration.md#enable-docs) pulled the icon, Swagger UI, ReDoc and a web font from three third parties — blank pages in an air-gapped VPC, and elsewhere a report to those hosts of who was reading this API and when, running whatever a floating major version tag resolved to that day. Both are now served whole from the image, pinned to exact releases verified by SHA-256 at build time, with upstream licences beside them
-- **MCP tools return what they produce**: every route answering with bytes was published as a tool an agent could call and then could not use. An image now arrives as an image and audio as audio, anything the protocol cannot carry arrives as a reference rather than failing, and the 4 MiB body cap that blocked image edits now follows [`MAX_INPUT_FILE_SIZE`](operations_configuration.md#max-input-file-size)
-- **Addresses and listings are the ones this deployment serves**: a custom [route prefix](operations_configuration.md#openai-routes-prefix) still quoted default paths to [`search_models`](api_search_models.md) and to video job polling, neither recoverable client-side; and a file's `created_at` and its place in a listing came from two different clocks, so a [multipart upload](api_openai_files.md#uploads-api) sat among older files reporting a later time. The [Anthropic listing](api_anthropic_files.md#list-files) also answered oldest first, hiding every recent file, and now runs newest first as upstream does
-- **Diagnostics name their cause**: an unreachable Region rendered six different conditions as one identical sentence, and the slow startup beside it was the container metadata lookup retrying, unreported; a request abandoned mid-flight left its OpenTelemetry trace current, so later work was recorded under a closed request's trace id; and behind a proxy, `client_ip` recorded the load balancer whatever [`PROXY_TRUSTED_HOSTS`](operations_configuration.md#proxy-trusted-hosts) allowed
+- **The interactive documentation pages render with no outbound access**: [`/docs` and `/redoc`](operations_configuration_server.md#enable-docs) pulled the icon, Swagger UI, ReDoc and a web font from three third parties — blank pages in an air-gapped VPC, and elsewhere a report to those hosts of who was reading this API and when, running whatever a floating major version tag resolved to that day. Both are now served whole from the image, pinned to exact releases verified by SHA-256 at build time, with upstream licences beside them
+- **MCP tools return what they produce**: every route answering with bytes was published as a tool an agent could call and then could not use. An image now arrives as an image and audio as audio, anything the protocol cannot carry arrives as a reference rather than failing, and the 4 MiB body cap that blocked image edits now follows [`MAX_INPUT_FILE_SIZE`](operations_configuration_server.md#max-input-file-size)
+- **Addresses and listings are the ones this deployment serves**: a custom [route prefix](operations_configuration_server.md#openai-routes-prefix) still quoted default paths to [`search_models`](api_search_models.md) and to video job polling, neither recoverable client-side; and a file's `created_at` and its place in a listing came from two different clocks, so a [multipart upload](api_openai_files.md#uploads-api) sat among older files reporting a later time. The [Anthropic listing](api_anthropic_files.md#list-files) also answered oldest first, hiding every recent file, and now runs newest first as upstream does
+- **Diagnostics name their cause**: an unreachable Region rendered six different conditions as one identical sentence, and the slow startup beside it was the container metadata lookup retrying, unreported; a request abandoned mid-flight left its OpenTelemetry trace current, so later work was recorded under a closed request's trace id; and behind a proxy, `client_ip` recorded the load balancer whatever [`PROXY_TRUSTED_HOSTS`](operations_configuration_server.md#proxy-trusted-hosts) allowed
 - **The API describes itself, not the service behind it**: a synthesis limit credited to the service enforcing it, prices credited to their catalogue and a moderation route naming the engine underneath all shipped in the OpenAPI document and in the tool descriptions agents read before calling
 
 #### Fixes & Maintenance (v1.16.1)
 
 - Update `cryptography` to 50.0.1, rebuilt against OpenSSL 4.0.2
 
-### v1.15.0 – Reliability, Performance & Feature Completeness
+---
 
-This release focuses on making the whole gateway better rather than just bigger. **Reliability and quality**: the largest correctness pass to date — three successive deep audits plus an independent full-branch review closed hundreds of fidelity gaps across all three API dialects, every fix pinned by tests and the whole surface validated by **real, unmodified client applications**. **Performance**: hot paths now run in compiled native code and independent work in parallel, [measurably cutting the gateway's processing overhead](features.md#performance). **Feature completeness**: existing capabilities are rounded out end to end — [**explicit prompt caching**](api_openai_chat_completions.md#prompt-caching), operator [**reasoning controls**](operations_configuration.md#chat-completions-reasoning-field), the Responses API [`prompt` parameter](operations_configuration.md#bedrock-allow-prompt-arn) from **Amazon Bedrock Prompt Management**, native mid-conversation system messages on Claude 4.8+, richer speech and transcription (Polly speech marks, Transcribe/Translate extras, generic Converse speech-to-text), Cohere `embedding_types` and Rerank v1 structured documents, guardrail enforcement on every route, and an inline guardrail-checks moderation backend.
+### v1.15.0 – 2026-08-03 – Reliability, Performance & Feature Completeness { #v1150-reliability-performance-feature-completeness }
+
+!!! abstract "At a glance"
+    - **The largest correctness pass to date** — three successive deep audits plus an independent full-branch review closed hundreds of fidelity gaps across all three API dialects, every fix pinned by tests.
+    - **Performance** — hot paths run in compiled native code and independent work runs in parallel, [cutting the gateway's processing overhead](features.md#performance).
+    - **Explicit prompt caching** — [placement and lifetime control](api_openai_chat_completions.md#prompt-caching) on the OpenAI dialect, plus fixes to the caching plumbing that already existed.
+    - **Reasoning and prompt controls** — operator [reasoning controls](operations_configuration_observability.md#chat-completions-reasoning-field), the Responses API [`prompt` parameter](operations_configuration_bedrock.md#bedrock-allow-prompt-arn) from Amazon Bedrock Prompt Management, and native mid-conversation system messages on Claude 4.8+.
+    - **Verified with real clients** — compatibility claims are backed by a test tier running complete, unmodified third-party client software against a live gateway. Behavior changes: unsupported parameters are now accepted and ignored, and a configured guardrail applies to every route.
+
+This release focuses on making the whole gateway better rather than just bigger. **Reliability and quality**: the largest correctness pass to date — three successive deep audits plus an independent full-branch review closed hundreds of fidelity gaps across all three API dialects, every fix pinned by tests and the whole surface validated by **real, unmodified client applications**. **Performance**: hot paths now run in compiled native code and independent work in parallel, [measurably cutting the gateway's processing overhead](features.md#performance). **Feature completeness**: existing capabilities are rounded out end to end — [**explicit prompt caching**](api_openai_chat_completions.md#prompt-caching), operator [**reasoning controls**](operations_configuration_observability.md#chat-completions-reasoning-field), the Responses API [`prompt` parameter](operations_configuration_bedrock.md#bedrock-allow-prompt-arn) from **Amazon Bedrock Prompt Management**, native mid-conversation system messages on Claude 4.8+, richer speech and transcription (Polly speech marks, Transcribe/Translate extras, generic Converse speech-to-text), Cohere `embedding_types` and Rerank v1 structured documents, guardrail enforcement on every route, and an inline guardrail-checks moderation backend.
 
 !!! warning "Behavior Changes"
     Review these before upgrading — they may change what existing clients observe:
@@ -184,11 +206,11 @@ This release focuses on making the whole gateway better rather than just bigger.
     - **Speech output quality**: `wav`/`flac`/`aac` are now encoded from lossless PCM instead of Ogg Vorbis, and the default `pcm` output is resampled to 24 kHz for OpenAI parity (pass an explicit `SampleRate` to keep Polly's native rate). Same formats, different — better — bytes.
     - **Error responses no longer expose backend internals.** Server-side (`5xx`) error messages are generic with details kept in the server log, and Anthropic error types now match the official SDK exactly.
     - **Comprehend-backed moderation always analyses text as English** — the only language the AWS API accepts at runtime.
-    - **A configured guardrail now applies to every route.** Embeddings, rerank, images, videos, and the audio routes enforce it through the ApplyGuardrail API ([route coverage](operations_configuration.md#route-coverage)) — requests that silently bypassed the guardrail on v1.14 may now return `400` (code `content_filter`) or masked text, and each check is billed as guardrail text units.
-    - **SSRF protection covers every non-globally-reachable address.** With [`SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS`](operations_configuration.md#ssrf-protection-block-private-networks) enabled (the default), a user-supplied URL resolving to shared address space (100.64.0.0/10, used by EKS custom networking and Hybrid Nodes) or another special-purpose range is now rejected with `403`, alongside the RFC 1918 ranges.
+    - **A configured guardrail now applies to every route.** Embeddings, rerank, images, videos, and the audio routes enforce it through the ApplyGuardrail API ([route coverage](operations_configuration_bedrock.md#route-coverage)) — requests that silently bypassed the guardrail on v1.14 may now return `400` (code `content_filter`) or masked text, and each check is billed as guardrail text units.
+    - **SSRF protection covers every non-globally-reachable address.** With [`SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS`](operations_configuration_server.md#ssrf-protection-block-private-networks) enabled (the default), a user-supplied URL resolving to shared address space (100.64.0.0/10, used by EKS custom networking and Hybrid Nodes) or another special-purpose range is now rejected with `403`, alongside the RFC 1918 ranges.
     - **Usage reporting is additive but richer**: cached-token buckets are folded into `prompt_tokens` with `prompt_tokens_details` on every surface, and the Anthropic API now reports `cache_creation_input_tokens` (it was always `null` on v1.14).
     - **Two request-body keys are reserved.** `model_id` and `additional_request_fields` (plus `stop_sequences` on the legacy `/v1/completions`, where `stop` is the parameter to use) collide with the gateway's own request-building parameters: instead of being forwarded to Bedrock as [provider extras](api_openai_chat_completions.md#provider-specific-parameters), they return a `400 invalid_request_error` naming the key.
-    - **The container health probe now respects `TRUSTED_HOSTS`.** The image's `HEALTHCHECK` requests `/health` with a `Host` header derived from [`TRUSTED_HOSTS`](operations_configuration.md#trusted-hosts) — a correct list keeps the container healthy with no extra entry. Deployments that re-declare the probe, such as an [ECS task definition](operations_deploy_advanced.md#ecs-task-definition-example), should run the image's own command. Note that a load balancer health check still sends the target's IP address as the `Host` and is rejected with `400` when the allow-list is enabled.
+    - **The container health probe now respects `TRUSTED_HOSTS`.** The image's `HEALTHCHECK` requests `/health` with a `Host` header derived from [`TRUSTED_HOSTS`](operations_configuration_server.md#trusted-hosts) — a correct list keeps the container healthy with no extra entry. Deployments that re-declare the probe, such as an [ECS task definition](operations_deploy_advanced.md#ecs-task-definition-example), should run the image's own command. Note that a load balancer health check still sends the target's IP address as the `Host` and is rejected with `400` when the allow-list is enabled.
 
 #### :material-cached: Explicit Prompt Caching
 
@@ -203,17 +225,17 @@ Prompt caching itself is not new — this release adds *explicit placement and l
 
 | Provider                                                                        | Endpoint/Feature                                                                                                                      | AWS Backend                                                                                                                 |
 |----------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------|
-| **stdapi.ai**                                                                    | [`CHAT_COMPLETIONS_REASONING_FIELD`](operations_configuration.md#chat-completions-reasoning-field) – return thinking text under `reasoning_content`, `reasoning`, or suppress it with `none`; applied identically to streamed deltas and final messages | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Converse API & Mantle |
+| **stdapi.ai**                                                                    | [`CHAT_COMPLETIONS_REASONING_FIELD`](operations_configuration_observability.md#chat-completions-reasoning-field) – return thinking text under `reasoning_content`, `reasoning`, or suppress it with `none`; applied identically to streamed deltas and final messages | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Converse API & Mantle |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**  | OpenRouter-style `reasoning` request object accepted on chat completions (`effort`, `max_tokens`, `enabled`, `exclude`)               | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Converse API & Mantle |
 
 #### :material-api: New API Features
 
 | Provider                                                                        | Endpoint/Feature                                                                                                                      | AWS Backend                                                                                                                 |
 |----------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------|
-| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**  | Responses API `prompt` parameter – serve prompts stored in Bedrock Prompt Management, with versions and variables (opt-in, [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](operations_configuration.md#bedrock-allow-prompt-arn)) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Prompt Management |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**  | Responses API `prompt` parameter – serve prompts stored in Bedrock Prompt Management, with versions and variables (opt-in, [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](operations_configuration_bedrock.md#bedrock-allow-prompt-arn)) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Prompt Management |
 | ![Anthropic](styles/logo_anthropic.svg){: style="height:20px;width:20px"} **Anthropic** / ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | Mid-conversation system messages forwarded natively on Claude 4.8+ and Claude 5 family models instead of being folded into the system prompt | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Converse API & Mantle |
 | **stdapi.ai**                                                                    | Guardrail asynchronous stream processing via the `X-Amzn-Bedrock-GuardrailStreamProcessingMode` request header                        | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Guardrails |
-| **stdapi.ai**                                                                    | Configured guardrails enforced on every route: embeddings, rerank, images, videos, and audio now apply them via the ApplyGuardrail API ([route coverage](operations_configuration.md#route-coverage)) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Guardrails |
+| **stdapi.ai**                                                                    | Configured guardrails enforced on every route: embeddings, rerank, images, videos, and audio now apply them via the ApplyGuardrail API ([route coverage](operations_configuration_bedrock.md#route-coverage)) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Guardrails |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**  | [Moderations](api_openai_moderations.md) `amazon.bedrock-runtime-guardrail-checks` model – inline guardrail content filter checks with no guardrail resource required, the new default fallback for `omni-moderation-*` in supported regions | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Guardrails |
 
 #### :material-microphone: Speech & Audio
@@ -237,7 +259,7 @@ Prompt caching itself is not new — this release adds *explicit placement and l
 
 | Feature                                | Description                                                                                                                                                                             |
 |----------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Stateless MCP transport                | The [MCP server](operations_configuration.md#mcp-model-context-protocol) can serve `/mcp` without server-side sessions ([`MCP_STATELESS_HTTP`](operations_configuration.md#mcp-stateless-http)), so any replica may answer any request, alongside a `GET /ping` health probe kept out of request logs                                                                              |
+| Stateless MCP transport                | The [MCP server](operations_configuration_server.md#mcp-model-context-protocol) can serve `/mcp` without server-side sessions ([`MCP_STATELESS_HTTP`](operations_configuration_server.md#mcp-stateless-http)), so any replica may answer any request, alongside a `GET /ping` health probe kept out of request logs                                                                              |
 | `Retry-After` on `429`                 | Throttled responses advertise the region router's computed backoff, so well-behaved clients retry exactly when capacity returns                                                          |
 | AWS request-ID correlation             | Request logs record every AWS API call's request ID (and incoming ALB/CloudFront trace headers), so a gateway request ties directly to CloudTrail and AWS support cases                  |
 | Programmatic tool calling types        | The OpenAI SDK's programmatic tool calling type surface parses on every request union, accepted and ignored on models without the capability                                              |
@@ -248,7 +270,7 @@ Prompt caching itself is not new — this release adds *explicit placement and l
 
 #### :material-robot-happy: Verified with Real Clients
 
-Compatibility claims in this release are backed by a new test tier that runs **complete, unmodified third-party client software against a live gateway** — not just HTTP assertions. Coding agents (Claude Code, Codex, pi, Qwen Code), the n8n workflow platform, Open WebUI, Home Assistant's voice bridge, a Haystack RAG pipeline, and the LangChain and pydantic-ai libraries drive real multi-turn tool-calling, retrieval, and speech sessions across dozens of models and all three API dialects, in isolated sandboxes. Alongside them, every served model is **empirically probed** for the parameters it genuinely honours, with the results recorded and pinned by tests. See [Quality Assurance](features.md#quality-assurance) for the full methodology.
+Compatibility claims in this release are backed by a new test tier that runs **complete, unmodified third-party client software against a live gateway** — not just HTTP assertions. Coding agents (Claude Code, Codex, pi, Qwen Code), the n8n workflow platform, Open WebUI, Home Assistant's voice bridge, a Haystack RAG pipeline, and the LangChain and pydantic-ai libraries drive real multi-turn tool-calling, retrieval, and speech sessions across dozens of models and all three API dialects, in isolated sandboxes. Alongside them, every served model is **empirically probed** for the parameters it genuinely honours, with the results recorded and pinned by tests. See [Quality Assurance](compare.md#quality-assurance) for the full methodology.
 
 #### :material-bug: Fixes { #fixes-2 }
 
@@ -263,7 +285,16 @@ Three audit passes and an independent full-branch review closed over a hundred f
 - **Responses API parity**: the type surface is synchronized with the current OpenAI SDK (tool fields, error codes, tool-call `caller` provenance); Anthropic `count_tokens` counts exactly what generation sends, and error bodies carry the `request_id`
 - **Audio & images**: the transcoding pipeline is fully bounded — a stalled or failed encode returns a clean error instead of holding the connection open; multipart forms bind every list field the OpenAI SDK sends; `size="auto"` works on generation, edits, and variations; `zh-TW`/`pt-PT` stay distinct in translation; PII-redacted transcripts are read from the key Amazon Transcribe actually writes; Polly voice auto-selection is deterministic; batch-purpose files apply the documented 30-day default expiry, and an expired file now disappears from [file listings](api_openai_files.md#upload-with-expiry) instead of being listed with an entry that 404s on retrieve
 
-### v1.14.0 – Bedrock Mantle, Video Generation, Cohere APIs, Moderation & Stored Conversations
+---
+
+### v1.14.0 – 2026-07-12 – Bedrock Mantle, Video Generation, Cohere APIs, Moderation & Stored Conversations { #v1140-bedrock-mantle-video-generation-cohere-apis-moderation-stored-conversations }
+
+!!! abstract "At a glance"
+    - **Amazon Bedrock Mantle, enabled by default** — [the models served by the Mantle endpoint](features.md#bedrock-mantle-models) (OpenAI GPT-5.4/5.5/5.6, xAI Grok 4.3, Google Gemma 4, Qwen3, GLM, DeepSeek, MiniMax, Kimi, Nemotron and more) become available through all four text APIs, with independent throughput quotas.
+    - **A Cohere-compatible API** — [Rerank](api_cohere_rerank.md) and [Embed](api_cohere_embed.md), making this a three-dialect gateway.
+    - **Videos and moderation** — the OpenAI-compatible [Videos API](api_openai_videos.md) for asynchronous video generation, and [content moderation](api_openai_moderations.md) backed by Amazon Bedrock Guardrails or Amazon Comprehend toxicity detection.
+    - **Stored conversations** — `store=true`, `previous_response_id` continuation and a full lifecycle on Amazon Bedrock session storage, plus [conversation compaction](api_openai_responses.md#conversation-compaction) and Responses API [extended reasoning](api_openai_responses.md#extended-reasoning).
+    - **Operations** — a [model pricing API](api_model_pricing.md), multi-region failover for every AWS AI service, fault-tolerant startup, real AWS-billed usage and costs in request logs, and a [security hardening pass](#security-hardening). Two new IAM permissions are required.
 
 This release adds enabled-by-default [**Amazon Bedrock Mantle** support](features.md#bedrock-mantle-models) — models served by the Bedrock Mantle endpoint (OpenAI GPT-5.4/5.5/5.6, xAI Grok 4.3, Google Gemma 4, Qwen3, GLM, DeepSeek, MiniMax, Kimi, Nemotron, and more) become available through all four text APIs, with transparent API conversion, native stored conversations, and independent throughput quotas. It also turns stdapi.ai into a three-dialect gateway with the new **Cohere-compatible API** ([Rerank](api_cohere_rerank.md) and [Embed](api_cohere_embed.md)), adds the OpenAI-compatible [**Videos API**](api_openai_videos.md) for asynchronous video generation, [**content moderation**](api_openai_moderations.md) backed by Amazon Bedrock Guardrails or Amazon Comprehend toxicity detection, **stored responses and chat completions** with `store=true`, `previous_response_id` multi-turn continuation, and a full list/retrieve/update/delete lifecycle on Amazon Bedrock session storage, and [**conversation compaction**](api_openai_responses.md#conversation-compaction). The Responses API gains [**extended reasoning**](api_openai_responses.md#extended-reasoning): Bedrock `reasoningContent` now surfaces as native reasoning output items, both non-streaming and streamed, with signatures and redacted payloads round-tripping through an `encrypted_content` envelope. A broader compatibility pass brings request/response parity closer to the OpenAI SDK — hosted and agent tool types (web search, computer use, custom tools) are now accepted and ignored instead of rejected, streams correctly terminate with `response.incomplete`/`response.failed`, cached tokens are counted in `input_tokens`, and citation annotations are emitted with their streaming events — validated end-to-end against the OpenAI Codex CLI as an agent client. Operations gain a [model pricing API](api_model_pricing.md), multi-region failover for every AWS AI service, fault-tolerant startup, real AWS-billed usage and costs in request logs (optionally exported as CloudWatch metrics), and a [security hardening pass](#security-hardening) covering SSRF protection, input validation, and log/error redaction.
 
@@ -276,19 +307,19 @@ This release adds enabled-by-default [**Amazon Bedrock Mantle** support](feature
     Ensure your IAM role or user policy includes both statements before upgrading to v1.14.0.
 
     !!! note "Session storage and Comprehend permissions already covered"
-        The IAM permissions for [stored responses/chat completions](operations_configuration.md#bedrock-session-storage-optional) (`bedrock:CreateSession` and related session actions) and [Comprehend-based moderation](operations_configuration.md#iam-permissions) (`comprehend:DetectToxicContent`) were already added to the official [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) ahead of this release. Deployments using a hand-written policy still need to add those statements if they haven't already. Without the session permissions, `store=true` (previously accepted and ignored) is still ignored — a warning is recorded in the request log instead of failing the request.
+        The IAM permissions for [stored responses/chat completions](operations_configuration_bedrock.md#bedrock-session-storage-optional) (`bedrock:CreateSession` and related session actions) and [Comprehend-based moderation](operations_configuration.md#iam-permissions) (`comprehend:DetectToxicContent`) were already added to the official [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) ahead of this release. Deployments using a hand-written policy still need to add those statements if they haven't already. Without the session permissions, `store=true` (previously accepted and ignored) is still ignored — a warning is recorded in the request log instead of failing the request.
 
 #### :material-layers-triple: Amazon Bedrock Mantle
 
-Enabled-by-default support ([`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration.md#bedrock-mantle-enabled)) for models served by the **Amazon Bedrock Mantle** endpoint — OpenAI GPT-5.4/5.5/5.6 (Sol, Terra, Luna), xAI Grok 4.3, Google Gemma 4, Qwen3, GLM 4.x/5, DeepSeek V3.x, MiniMax M2.x, Kimi K2.5, Nemotron, and more — alongside the classic Bedrock Converse catalog:
+Enabled-by-default support ([`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration_aws.md#bedrock-mantle-enabled)) for models served by the **Amazon Bedrock Mantle** endpoint — OpenAI GPT-5.4/5.5/5.6 (Sol, Terra, Luna), xAI Grok 4.3, Google Gemma 4, Qwen3, GLM 4.x/5, DeepSeek V3.x, MiniMax M2.x, Kimi K2.5, Nemotron, and more — alongside the classic Bedrock Converse catalog:
 
 - All four text APIs (chat completions, responses, messages, legacy completions) are served for every Mantle model — native passthrough where the model supports the API upstream, transparent conversion otherwise
-- Models available on both bedrock-runtime and Mantle are served by bedrock-runtime by default; [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models) or the opt-in `x-stdapi-service` request header ([`AWS_BEDROCK_MANTLE_SERVICE_HEADER`](operations_configuration.md#bedrock-mantle-service-header)) route them through Mantle instead — e.g. to tap Mantle's independent throughput quotas
+- Models available on both bedrock-runtime and Mantle are served by bedrock-runtime by default; [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) or the opt-in `x-stdapi-service` request header ([`AWS_BEDROCK_MANTLE_SERVICE_HEADER`](operations_configuration_aws.md#bedrock-mantle-service-header)) route them through Mantle instead — e.g. to tap Mantle's independent throughput quotas
 - Native Mantle stored conversations on `/v1/responses` (`store`, `previous_response_id`, retrieval and deletion) — 30-day retention, region-local, project-scoped
-- Multi-region failover and quota backoff across [`AWS_BEDROCK_MANTLE_REGIONS`](operations_configuration.md#bedrock-mantle-regions), matching classic Bedrock region routing
+- Multi-region failover and quota backoff across [`AWS_BEDROCK_MANTLE_REGIONS`](operations_configuration_aws.md#bedrock-mantle-regions), matching classic Bedrock region routing
 - Authentication via short-term bearer tokens derived from the server's AWS credential chain — no static secrets
 - Usage recorded and priced at bedrock-mantle rates, including cached tokens and service tiers
-- Optional Bedrock Project/Workspace attribution for cost tracking via [`AWS_BEDROCK_MANTLE_PROJECT`](operations_configuration.md#bedrock-mantle-project), with per-request override ([`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](operations_configuration.md#bedrock-allow-mantle-project-override)) through the `OpenAI-Project` / `anthropic-workspace` header
+- Optional Bedrock Project/Workspace attribution for cost tracking via [`AWS_BEDROCK_MANTLE_PROJECT`](operations_configuration_aws.md#bedrock-mantle-project), with per-request override ([`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](operations_configuration_aws.md#bedrock-allow-mantle-project-override)) through the `OpenAI-Project` / `anthropic-workspace` header
 
 [:octicons-arrow-right-24: Bedrock Mantle Models](features.md#bedrock-mantle-models)
 
@@ -383,11 +414,18 @@ The Responses API request/response surface was audited and hardened against the 
 - Setting `log_level` to `disabled` now suppresses all log output as documented, instead of publishing every event
 - Server startup no longer fails when the ECS container metadata endpoint answers slowly, which could prevent small Fargate tasks from starting: the lookup is retried, then falls back to the STS caller identity with a startup warning
 - Multipart upload parts are numbered from the parts already stored in S3 instead of a per-instance counter: with several server instances behind a load balancer, two parts of one upload could be given the same number, overwriting each other and failing the upload
-- Multi-region failover now covers a region that does not offer the service at all: with no [`AWS_COMPREHEND_REGION`](operations_configuration.md#aws-comprehend-region) set, a Bedrock region without Amazon Comprehend moves on to the next one as documented, instead of failing language detection and Comprehend moderation
+- Multi-region failover now covers a region that does not offer the service at all: with no [`AWS_COMPREHEND_REGION`](operations_configuration_aws.md#aws-comprehend-region) set, a Bedrock region without Amazon Comprehend moves on to the next one as documented, instead of failing language detection and Comprehend moderation
 
 ---
 
-### v1.13.0 – Terraform Module Compliance & Security Hardening
+### v1.13.0 – 2026-07-03 – Terraform Module Compliance & Security Hardening { #v1130-terraform-module-compliance-security-hardening }
+
+!!! abstract "At a glance"
+    - **A Terraform-module release** — the [stdapi-ai module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) and its VPC, KMS and ECS Fargate children, with no server change.
+    - **Security Hub FSBP control documentation** — every module README now carries a full Foundational Security Best Practices control mapping.
+    - **Compliance gaps closed** — default security group lockdown, ALB access logging, and EFS POSIX user enforcement with native backups.
+    - **Optional network integrations** — compliance VPC endpoints, a GuardDuty VPC endpoint, Route 53 Resolver DNS Firewall, and VPC Flow Logs retention.
+    - **Tagging and token cost** — all four modules accept a `tags` variable, and MCP tool descriptions were shrunk, lowering the token cost of every agent session.
 
 This release focuses on the [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) and its child modules — [VPC](https://github.com/JGoutin/terraform-aws-vpc), [KMS](https://github.com/JGoutin/terraform-aws-kms-key), and [ECS Fargate](https://github.com/JGoutin/terraform-aws-ecs-fargate) — adding detailed AWS Security Hub control documentation and closing several compliance gaps: default security group lockdown, ALB access logging, EFS POSIX user enforcement with native backups, and optional compliance/GuardDuty/DNS Firewall VPC integrations. All four modules now also accept a `tags` variable for custom resource tagging.
 
@@ -428,7 +466,14 @@ This release focuses on the [stdapi-ai Terraform module](https://github.com/stda
 
 ---
 
-### v1.12.0 – Completions API, Video Understanding & File References
+### v1.12.0 – 2026-05-29 – Completions API, Video Understanding & File References { #v1120-completions-api-video-understanding-file-references }
+
+!!! abstract "At a glance"
+    - **[`/v1/completions`](api_openai_completions.md)** — the OpenAI text completion endpoint, for text-first coding agents and legacy completion clients.
+    - **Video understanding** — TwelveLabs Pegasus analyses `video/*` inputs in chat completions, honouring `service_tier` and guardrail configuration.
+    - **Input token counting** — `/v1/responses/input_tokens` for the Responses API.
+    - **The `file-id:` URI scheme** — reference a Files API upload anywhere a URL is accepted: embeddings, transcription, chat, images and messages.
+    - **Settings and compatibility** — `DEFAULT_MODEL_SERVICE_TIERS` applies a per-model service tier automatically, reasoning can be explicitly enabled or disabled, and the Anthropic `/v1/messages` route accepts `system`-role messages.
 
 This release adds the OpenAI-compatible [`/v1/completions`](api_openai_completions.md) endpoint for text-first coding agents and legacy completion clients, **TwelveLabs Pegasus** video understanding for analyzing `video/*` inputs in chat completions, and an input token counting endpoint for the Responses API. Files uploaded through the Files API can now be referenced anywhere a URL is accepted using the new `file-id:` URI scheme. The Anthropic Messages API now accepts `system`-role messages (merged into the system prompt for compatibility), reasoning can be explicitly enabled or disabled, and a new `DEFAULT_MODEL_SERVICE_TIERS` setting applies per-model service tiers automatically.
 
@@ -461,7 +506,14 @@ This release adds the OpenAI-compatible [`/v1/completions`](api_openai_completio
 
 ---
 
-### v1.11.0 – MCP Server, Agent Discovery & Model Search (with v1.11.1–v1.11.4 maintenance updates)
+### v1.11.0 – 2026-05-02 – MCP Server, Agent Discovery & Model Search (with v1.11.1–v1.11.4 maintenance updates, through 2026-05-28) { #v1110-mcp-server-agent-discovery-model-search-with-v1111v1114-maintenance-updates }
+
+!!! abstract "At a glance"
+    - **An MCP server** — every API endpoint is exposed as an MCP tool, over Streamable HTTP and SSE transports that are independently enabled and selectively restricted.
+    - **`/search_models`** — filter models by route, MCP tool name, input and output modalities, region, streaming support and legacy status.
+    - **Agent discovery** — RFC 8288 Link headers on `/`, an RFC 9727 API catalog at `/.well-known/api-catalog`, an MCP Server Card, and `robots.txt` content signals.
+    - **JSON bodies for binary endpoints** — audio transcription, audio translation and image edits accept `application/json` with files as base64, data URI, HTTP URL or S3 URI.
+    - **Maintenance (v1.11.1–v1.11.4)** — `max_tokens` made optional on Anthropic `/v1/messages`, MCP dependencies added to the container image, and Starlette upgraded for CVE-2026-48710.
 
 This release introduces a **Model Context Protocol (MCP) server**, making all stdapi.ai API endpoints directly accessible as MCP tools for AI agents and agentic workflows. A new `/search_models` endpoint enables precise discovery of models by route, MCP tool, region, streaming support, and legacy status. Agent-friendly discovery metadata is now exposed via RFC 8288 Link headers and an RFC 9727 machine-readable API catalog at `/.well-known/api-catalog`. Endpoints that previously required binary `multipart/form-data` uploads now also accept an `application/json` body for MCP and HTTP client compatibility. The Anthropic Messages API now accepts `xhigh` as a `reasoning_effort` value.
 
@@ -522,7 +574,14 @@ This release introduces a **Model Context Protocol (MCP) server**, making all st
 
 ---
 
-### v1.10.0 – OpenAI Responses API
+### v1.10.0 – 2026-04-17 – OpenAI Responses API { #v1100-openai-responses-api }
+
+!!! abstract "At a glance"
+    - **[`/v1/responses`](api_openai_responses.md)** — OpenAI's API for agents and multi-step workflows, drop-in compatible with the OpenAI SDK.
+    - **Every Converse-compatible model** — it works with all Amazon Bedrock Converse-compatible models, streaming included.
+    - **Built-in tools** — `web_search` / `web_search_preview`, `code_interpreter` and `image_generation`.
+    - **Function tools, extended reasoning and structured output** on the same surface.
+    - **Fixes** — prompt caching with tool-related content, an optional `signature` field in Anthropic message types, and model legacy detection when the end-of-life date falls before the next cache refresh.
 
 This release adds support for the OpenAI [`/v1/responses`](api_openai_responses.md) endpoint—OpenAI's next-generation API designed for building agents and multi-step AI workflows. Drop-in compatible with the OpenAI SDK, it works with all Amazon Bedrock Converse-compatible models and supports streaming, function tools, built-in tools (web search, code interpreter, image generation), extended reasoning, and structured output.
 
@@ -543,7 +602,14 @@ This release adds support for the OpenAI [`/v1/responses`](api_openai_responses.
 
 ---
 
-### v1.9.0 – Files API & Images API JSON Body
+### v1.9.0 – 2026-04-10 – Files API & Images API JSON Body { #v190-files-api-images-api-json-body }
+
+!!! abstract "At a glance"
+    - **A Files API backed by Amazon S3** — `/v1/files` CRUD on both the OpenAI-compatible and Anthropic-compatible interfaces, sharing one store.
+    - **Incremental uploads** — `/v1/uploads`, the OpenAI multipart uploads API, for large files.
+    - **File IDs as model inputs** — a stored file is usable as a document or image input in chat completions and in messages.
+    - **A JSON body for image editing** — `/v1/images/edits` and `/v1/images/variations` accept `application/json` referencing Files API IDs or URLs, so pipeline steps chain without re-uploading.
+    - **New required configuration** — `AWS_S3_BUCKET` must be set, with read, write, delete and list permissions on it.
 
 This release introduces a Files API backed by Amazon S3, available through both the OpenAI-compatible and Anthropic-compatible interfaces. Files uploaded via either API share the same S3 storage and can be referenced across both interfaces. Large files can be uploaded incrementally using the OpenAI multipart uploads API. Stored files can be referenced by ID directly in image edit and variation requests (JSON body), as well as in chat completion messages as document or image inputs. The image edits endpoint now also accepts an `application/json` body as an alternative to multipart form-data, making it easier to chain pipeline steps without re-uploading files.
 
@@ -578,7 +644,14 @@ This release introduces a Files API backed by Amazon S3, available through both 
 
 ---
 
-### v1.8.0 – Broader Model Compatibility & Structured Output
+### v1.8.0 – 2026-04-04 – Broader Model Compatibility & Structured Output { #v180-broader-model-compatibility-structured-output }
+
+!!! abstract "At a glance"
+    - **Structured output** — `response_format` with JSON object and JSON schema on OpenAI chat completions.
+    - **Request metadata** — `metadata` is forwarded to Bedrock, and the request context (`request_id`, `server_id`, `user_id`) is tagged onto every Bedrock and Amazon Transcribe job.
+    - **Tool handling** — Amazon Nova's grounding tool maps to `web_search` content blocks, with multi-turn support, and the broken `systemTool_` auto-promotion was removed.
+    - **Region routing** — region-restricted models always get non-global inference profiles, and the case where no region is usable is handled gracefully.
+    - **New required IAM permissions** — `bedrock:TagResource` and `transcribe:TagResource`; `AWS_BEDROCK_LEGACY` now defaults to `false`.
 
 This release focuses on improving reliability and compatibility across a wide variety of models. Structured response formats (JSON object and JSON schema) are now supported on OpenAI chat completions, and request metadata can be forwarded to Bedrock. Tool handling has been significantly improved—both for model-specific system tools and for Amazon Nova's grounding tool, including multi-turn support. Region routing is now more robust, correctly enforcing non-global inference profiles for region-restricted models and handling edge cases gracefully.
 
@@ -622,7 +695,14 @@ This release focuses on improving reliability and compatibility across a wide va
 
 ---
 
-### v1.7.0 – Automatic Region Routing, Deprecated Model Fallback & Resilience Improvements
+### v1.7.0 – 2026-03-20 – Automatic Region Routing, Deprecated Model Fallback & Resilience Improvements { #v170-automatic-region-routing-deprecated-model-fallback-resilience-improvements }
+
+!!! abstract "At a glance"
+    - **Automatic multi-region routing** — Bedrock requests are distributed across the configured AWS regions, failing over on quota limits or unavailability.
+    - **More quota by adding regions** — each region carries its own quota, so adding one multiplies the effective tokens-per-minute and daily limits.
+    - **Deprecated model fallback** — deprecated model IDs are transparently rerouted to their replacements, with an extensible mapping, so clients survive AWS model retirements unchanged.
+    - **A configurable AI response timeout**, so a model call cannot hang indefinitely.
+    - **S3 URLs for file inputs** across all relevant endpoints, alongside HTTP URLs, data URIs and base64, with memory-efficiency improvements.
 
 The headline feature of v1.7 is **automatic multi-region routing**: stdapi.ai now intelligently distributes requests across your configured AWS regions, failing over automatically on quota limits or unavailability—and because each region carries its own independent quota, adding regions directly multiplies your effective tokens-per-minute and daily limits. Alongside this, deprecated model IDs are transparently redirected to their replacements so clients survive AWS model retirements without any code changes. This release also adds S3 URL support for file inputs across all relevant endpoints, a configurable AI response timeout, and memory efficiency improvements.
 
@@ -643,7 +723,14 @@ The headline feature of v1.7 is **automatic multi-region routing**: stdapi.ai no
 
 ---
 
-### v1.6.0 – Anthropic API Compatibility & Advanced Claude Capabilities
+### v1.6.0 – 2026-02-27 – Anthropic API Compatibility & Advanced Claude Capabilities { #v160-anthropic-api-compatibility-advanced-claude-capabilities }
+
+!!! abstract "At a glance"
+    - **A full Anthropic-compatible API** — `/v1/messages` and `/v1/messages/count_tokens`, usable straight from the Anthropic SDK.
+    - **Anthropic-format model discovery** — `/v1/models` and `/v1/models/{model_id}`.
+    - **Claude server tools** — bash, text editor, computer and memory, on both the Messages surface and OpenAI chat completions; Amazon Nova's `web_search` maps to `nova_grounding`.
+    - **Configurable route prefixes** — `ANTHROPIC_ROUTES_PREFIX` and `OPENAI_ROUTES_PREFIX`, plus Anthropic beta flag filtering to prevent Bedrock `ValidationException` errors.
+    - **Real usage tracking** — token counts sourced directly from AWS billing data instead of tiktoken estimation, and Claude model name aliases resolved to Bedrock identifiers.
 
 Introduces a full Anthropic-compatible API layer, enabling direct use of the Anthropic SDK and Claude-native tools with Amazon Bedrock. Adds Claude server tools support via OpenAI chat completions, token count estimation, automatic Anthropic beta flag filtering, and configurable route prefixes.
 
@@ -681,7 +768,14 @@ Introduces a full Anthropic-compatible API layer, enabling direct use of the Ant
 
 ---
 
-### v1.5.0 – Advanced Reasoning & Model Compatibility (with v1.5.1–v1.5.2 maintenance updates)
+### v1.5.0 – 2026-02-15 – Advanced Reasoning & Model Compatibility (with v1.5.1–v1.5.2 maintenance updates, through 2026-02-18) { #v150-advanced-reasoning-model-compatibility-with-v151v152-maintenance-updates }
+
+!!! abstract "At a glance"
+    - **Amazon Nova 2 reasoning** implemented on chat completions.
+    - **Claude 4.6+ adaptive reasoning** configuration.
+    - **System prompt handling for models that do not support one**, widening model compatibility.
+    - **v1.5.1** — Amazon Nova Canvas image editing falls back to the `TEXT_IMAGE` task type when no mask is provided.
+    - **v1.5.2** — a `/` route so the root endpoint stops answering `404`, and empty system content blocks are handled for Converse API compatibility.
 
 Introduces advanced reasoning capabilities with Amazon Nova 2 and Anthropic Claude 4.6+ adaptive reasoning, enhanced system prompt handling for broader model compatibility.
 
@@ -706,7 +800,14 @@ Introduces advanced reasoning capabilities with Amazon Nova 2 and Anthropic Clau
 
 ---
 
-### v1.4.0 – Audio Enhancements & Model Compatibility
+### v1.4.0 – 2026-02-11 – Audio Enhancements & Model Compatibility { #v140-audio-enhancements-model-compatibility }
+
+!!! abstract "At a glance"
+    - **Mistral Voxtral** joins the audio models.
+    - **Speaker diarization** — the `diarized_json` format on `/v1/audio/transcriptions`.
+    - **Audio formats on chat completions**, with extended Bedrock finish-reason mapping.
+    - **Prompt caching TTL support** on chat completions.
+    - **Model aliasing** — OpenAI-style model names resolved for seamless compatibility.
 
 Expands audio capabilities with Mistral Voxtral support, speaker diarization, audio formats for chat completions, and introduces prompt caching TTL and model aliasing for better OpenAI compatibility.
 
@@ -738,7 +839,14 @@ Expands audio capabilities with Mistral Voxtral support, speaker diarization, au
 
 ---
 
-### v1.3.0 – Image Editing & Variation Support (with v1.3.1–v1.3.5 maintenance updates)
+### v1.3.0 – 2026-01-11 – Image Editing & Variation Support (with v1.3.1–v1.3.5 maintenance updates, through 2026-02-02) { #v130-image-editing-variation-support-with-v131v135-maintenance-updates }
+
+!!! abstract "At a glance"
+    - **`/v1/images/edits`** — OpenAI-compatible image editing backed by Amazon Bedrock.
+    - **`/v1/images/variations`** — OpenAI-compatible image variations.
+    - **`DEFAULT_TTS_LANGUAGE` (v1.3.2)** — a configurable default language for text-to-speech, plus `image[]` array-style notation for image edits.
+    - **Tool-call and streaming fixes (v1.3.1, v1.3.3–v1.3.5)** — robust JSON parsing and validation of tool arguments, no premature `contentBlockStop` in streamed chat completions, and empty content blocks skipped in assistant responses.
+    - **A deprecation mapping (v1.3.4)** — `amazon.titan-image-generator-v2:0` to `amazon.nova-canvas-v1:0`.
 
 Adds support for OpenAI's image editing and variation endpoints, enabling image manipulation capabilities backed by Amazon Bedrock. Includes maintenance updates for content block handling, tool call validation, streaming fixes, and TTS optimization.
 
@@ -782,7 +890,14 @@ Adds support for OpenAI's image editing and variation endpoints, enabling image 
 
 ---
 
-### v1.2.0 – Service Tiers, System Tools & Performance Enhancements
+### v1.2.0 – 2025-12-18 – Service Tiers, System Tools & Performance Enhancements { #v120-service-tiers-system-tools-performance-enhancements }
+
+!!! abstract "At a glance"
+    - **Service tiers** — the `service_tier` parameter on chat completions, with latency headers on all Bedrock routes.
+    - **Bedrock-specific system tools** — Amazon Nova grounding on `/v1/chat/completions`.
+    - **GPT5.2 API update** — `reasoning_effort=xhigh` accepted.
+    - **A configuration flag for guardrail override allow**, controlling what a request may override on Amazon Bedrock Guardrails.
+    - **Python 3.14** with performance optimization, and direct `aiobotocore` usage replacing `aioboto3`.
 
 Introduces service tiers and latency headers for all Bedrock routes, Bedrock-specific system tools (Nova grounding), GPT5.2 API compatibility, configurable guardrail overrides, and Python 3.14 optimization.
 
@@ -814,7 +929,14 @@ Introduces service tiers and latency headers for all Bedrock routes, Bedrock-spe
 
 ---
 
-### v1.1.0 – Embeddings Enhancement, Prompt Caching & Advanced Routing
+### v1.1.0 – 2025-11-27 – Embeddings Enhancement, Prompt Caching & Advanced Routing { #v110-embeddings-enhancement-prompt-caching-advanced-routing }
+
+!!! abstract "At a glance"
+    - **Multimodal embeddings** — Amazon Nova multimodal models and TwelveLabs Marengo V3.
+    - **Intelligent embedding plumbing** — S3 multimodal upload and sync/async Bedrock invocation chosen per request.
+    - **Prompt caching** — `prompt_cache_key` on `/v1/chat/completions`, plus the GPT5.1 API update (`reasoning_effort=none`).
+    - **Advanced routing** — Amazon Bedrock application inference profiles and prompt routers.
+    - **ARN handling** — server-side ARN mapping, with optional client-side ARN passing.
 
 Expands multimodal embedding capabilities, adds prompt caching support, and introduces advanced routing with application inference profiles and prompt routers.
 
@@ -850,7 +972,14 @@ Expands multimodal embedding capabilities, adds prompt caching support, and intr
 
 ---
 
-### v1.0.0 – Foundation Release
+### v1.0.0 – 2025-11-10 – Foundation Release { #v100-foundation-release }
+
+!!! abstract "At a glance"
+    - **Chat completions** — `/v1/chat/completions` on every model supporting the Converse and ConverseStream APIs, with DeepSeek `reasoning_content` and Qwen thinking parameters.
+    - **Embeddings** — `/v1/embeddings` on Cohere Embed V3 and V4, TwelveLabs Marengo V2, and Amazon Titan Embed V1 and V2.
+    - **Speech and audio** — `/v1/audio/speech`, `/v1/audio/transcriptions` and `/v1/audio/translations`, on Amazon Polly, Amazon Transcribe and Amazon Translate.
+    - **Image generation** — `/v1/images/generations` on Amazon Nova Canvas, Amazon Titan Image Generator and Stability AI models.
+    - **Platform** — Amazon Bedrock Guardrails, cross-region inference and multi-region failover, Amazon S3 file storage, static token authentication from SSM Parameter Store or Secrets Manager, AWS X-Ray tracing and CloudWatch structured logging.
 
 The initial release establishes core OpenAI API compatibility with Amazon Bedrock backing.
 
@@ -860,7 +989,7 @@ The initial release establishes core OpenAI API compatibility with Amazon Bedroc
 |--------------------------------------------------------------------------------------|----------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**       | `/v1/chat/completions`                             | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 |                                                                                      | All models supporting Converse/ConverseStream APIs | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Converse API      |
-| ![Deepseek](styles/logo_deepSeek.svg){: style="height:20px;width:20px"} **Deepseek** | `/v1/chat/completions` `reasoning_content`         | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![DeepSeek](styles/logo_deepSeek.svg){: style="height:20px;width:20px"} **DeepSeek** | `/v1/chat/completions` `reasoning_content`         | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Qwen](styles/logo_qwen.svg){: style="height:20px;width:20px"} **Qwen**             | `enable_thinking` + `thinking_budget` parameter    | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Qwen](styles/logo_qwen.svg){: style="height:20px;width:20px"} **Qwen**             | `top_k` parameter                                  | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 
@@ -869,9 +998,9 @@ The initial release establishes core OpenAI API compatibility with Amazon Bedroc
 | Provider                                                                                     | Endpoint/Feature      | AWS Backend                                                                                                           |
 |----------------------------------------------------------------------------------------------|-----------------------|-----------------------------------------------------------------------------------------------------------------------|
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**               | `/v1/embeddings`      | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - embedding models |
-| ![Cohere](styles/logo_cohere.svg){: style="height:20px;width:20px"} **Cohere**               | Embed V3 & V4  models |                                                                                                                       |
-| ![Twelve Labs](styles/logo_twelvelabs.svg){: style="height:20px;width:20px"} **Twelve Labs** | Marengo V2  models    |                                                                                                                       |
-| ![Amazon](styles/logo_amazon.svg){: style="height:20px;width:20px"} **Amazon Titan**         | Embed V1 & V2  models |                                                                                                                       |
+| ![Cohere](styles/logo_cohere.svg){: style="height:20px;width:20px"} **Cohere**               | Embed V3 & V4 models  |                                                                                                                       |
+| ![Twelve Labs](styles/logo_twelvelabs.svg){: style="height:20px;width:20px"} **Twelve Labs** | Marengo V2 models     |                                                                                                                       |
+| ![Amazon](styles/logo_amazon.svg){: style="height:20px;width:20px"} **Amazon Titan**         | Embed V1 & V2 models  |                                                                                                                       |
 
 #### :material-microphone: Speech & Audio
 
@@ -887,8 +1016,8 @@ The initial release establishes core OpenAI API compatibility with Amazon Bedroc
 |-------------------------------------------------------------------------------------------------|-----------------------------------------|-------------------------------------------------------------------------------------------------------------------|
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**                  | `/v1/images/generations`                | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - image models |
 | ![Amazon Nova](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} **Amazon Nova**   | Canvas V1 models                        |                                                                                                                   |
-| ![Amazon](styles/logo_amazon.svg){: style="height:20px;width:20px"} **Amazon Titan**            | Image Generator V1 & V2  models         |                                                                                                                   |
-| ![Stability AI](styles/logo_stabilityai.svg){: style="height:20px;width:20px"} **Stability AI** | Image Core, Ultra et SD3.5 Large models |                                                                                                                   |
+| ![Amazon](styles/logo_amazon.svg){: style="height:20px;width:20px"} **Amazon Titan**            | Image Generator V1 & V2 models          |                                                                                                                   |
+| ![Stability AI](styles/logo_stabilityai.svg){: style="height:20px;width:20px"} **Stability AI** | Image Core, Ultra and SD3.5 Large models |                                                                                                                   |
 
 #### :material-format-list-bulleted: Model Discovery
 

@@ -9,9 +9,9 @@ hide:
 # Trademarks
 
 This page lists the third-party names and logos that appear anywhere in the
-stdapi.ai documentation, together with the owner each one belongs to. Every page
-of this site also carries, in its footer, the subset of these marks that the page
-itself uses.
+stdapi.ai documentation, together with the owner each one belongs to. Every other
+page of this site carries, in its footer, the subset of these marks that the page
+itself uses; this one carries the whole list instead.
 
 ## :material-scale-balance: How these marks are used
 

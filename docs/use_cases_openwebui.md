@@ -8,22 +8,7 @@ keywords: Open WebUI AWS, private ChatGPT, ChatGPT alternative, self-hosted Chat
 
 Connect Open WebUI to stdapi.ai as an OpenAI-compatible backend. Access Amazon Bedrock models through Open WebUI's chat interface—it works out of the box as a private ChatGPT alternative running on your AWS infrastructure.
 
-## :material-information-outline: About Open WebUI
-
-**🔗 Links:** [Website](https://openwebui.com/) | [GitHub](https://github.com/open-webui/open-webui) | [Documentation](https://docs.openwebui.com/)
-
-Open WebUI is the leading open-source ChatGPT alternative. It provides a feature-rich, self-hosted web interface that operates entirely under your control, offering a ChatGPT-like experience while maintaining complete data privacy.
-
-**Key Features:**
-
-- ⭐ **140,000+ GitHub stars** - Most popular open-source AI chat interface
-- **ChatGPT-like UI** - Familiar interface your team already knows
-- **Multi-modal capabilities** - Text, voice, images, and document processing
-- **RAG & embeddings** - Upload documents, search with semantic understanding
-- **Extensible platform** - Plugins, custom functions, and community tools
-- **Complete privacy** - Self-hosted, all data stays in your infrastructure
-
-## :material-help-circle-outline: Why Open WebUI + stdapi.ai?
+## :material-lightning-bolt: At a glance { #why-open-webui-stdapiai }
 
 <div class="grid cards" markdown>
 
@@ -53,13 +38,28 @@ flowchart LR
   stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Polly"]
 ```
 
+## :material-information-outline: About Open WebUI
+
+**🔗 Links:** [Website](https://openwebui.com/) | [GitHub](https://github.com/open-webui/open-webui) | [Documentation](https://docs.openwebui.com/)
+
+Open WebUI is the leading open-source ChatGPT alternative. It provides a feature-rich, self-hosted web interface that operates entirely under your control, offering a ChatGPT-like experience while maintaining complete data privacy.
+
+**Key Features:**
+
+- ⭐ **140,000+ GitHub stars** - Most popular open-source AI chat interface
+- **ChatGPT-like UI** - Familiar interface your team already knows
+- **Multi-modal capabilities** - Text, voice, images, and document processing
+- **RAG & embeddings** - Upload documents, search with semantic understanding
+- **Extensible platform** - Plugins, custom functions, and community tools
+- **Complete privacy** - Self-hosted, all data stays in your infrastructure
+
 ## :material-connection: Connect Your Own Instance
 
 Point any running Open WebUI instance—wherever you host it—at your stdapi.ai gateway. Nothing below requires the AWS sample in [Part 2](#deploy-the-full-stack-on-aws).
 
 ### :material-check-circle: Prerequisites
 
-!!! info "What You'll Need"
+??? info "Before you start"
     - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md)
     - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com`
     - ✓ **Your API key** - From Terraform output or configuration
@@ -68,15 +68,6 @@ Point any running Open WebUI instance—wherever you host it—at your stdapi.ai
 ### :material-cog: Configuration
 
 Open WebUI is configured entirely through environment variables. The sections below focus on the stdapi.ai integration. Use the same stdapi.ai key for all `*_OPENAI_API_KEY` entries. For more details on Open WebUI settings, refer to the official [Open WebUI Environment Variable Configuration](https://docs.openwebui.com/getting-started/env-configuration/) documentation.
-
-!!! warning "Each section needs its own connection settings"
-    Open WebUI does not fall back from `RAG_OPENAI_*`, `IMAGES_OPENAI_*`, or `AUDIO_*_OPENAI_*` to the core `OPENAI_API_*` pair — a missing pair disables that feature instead of inheriting the Core Connection. Set the base URL, key, and model explicitly for every section you enable.
-
-!!! warning "These settings are read once, on first boot"
-    Open WebUI reads its connection settings from the environment only the first time it starts against a given data directory, then stores them in its own database. Changing an environment variable afterwards has no effect until you either update the setting from the admin UI or start from a fresh `DATA_DIR`.
-
-!!! note "Model choice"
-    In every section below, pick any Bedrock-available model that matches the operation's modality — a chat model for the Core Connection, an embedding model for RAG Embeddings, and so on.
 
 #### :material-connection: Core Connection
 
@@ -91,6 +82,12 @@ Enables: Chat completions and Open WebUI background tasks (titles, summarization
 
 Use a fast, low-cost chat model for `TASK_MODEL_EXTERNAL`. Open WebUI calls `POST /v1/chat/completions` for chat and background tasks (see [Chat Completions API](api_openai_chat_completions.md)).
 
+!!! note "These settings are read once, on first boot"
+    Open WebUI reads its connection settings from the environment only the first time it starts against a given data directory, then stores them in its own database. Change one later by editing it in the admin UI or by starting from a fresh `DATA_DIR`.
+
+!!! note "Model choice"
+    In every section below, pick any Bedrock-available model that matches the operation's modality — a chat model for the Core Connection, an embedding model for RAG Embeddings, and so on.
+
 #### :material-connection: Ollama Connection (alternative)
 
 Enables: The same chat completions, through Open WebUI's Ollama connection type instead of its OpenAI one.
@@ -102,7 +99,7 @@ Enables: The same chat completions, through Open WebUI's Ollama connection type 
     OLLAMA_API_CONFIGS={"0":{"key":"YOUR_STDAPI_KEY"}}
     ```
 
-The base URL carries [`OLLAMA_ROUTES_PREFIX`](operations_configuration.md#ollama-routes-prefix) (`/ollama` by default): Open WebUI appends `/api/tags` and `/api/chat` itself (see [Ollama Chat API](api_ollama_chat.md)). The key goes in `OLLAMA_API_CONFIGS` rather than a variable of its own, because a local Ollama needs no credentials.
+The base URL carries [`OLLAMA_ROUTES_PREFIX`](operations_configuration_server.md#ollama-routes-prefix) (`/ollama` by default): Open WebUI appends `/api/tags` and `/api/chat` itself (see [Ollama Chat API](api_ollama_chat.md)). The key goes in `OLLAMA_API_CONFIGS` rather than a variable of its own, because a local Ollama needs no credentials.
 
 Both connection types can be enabled at once. They serve the same catalogue, so give the Ollama one a `prefix_id` — otherwise both connections offer the same model identifiers and the model picker keeps only one of them:
 
@@ -125,7 +122,7 @@ Enables: Document ingestion and semantic search for RAG.
     RAG_EMBEDDING_MODEL=cohere.embed-v4:0
     ```
 
-Open WebUI calls `POST /v1/embeddings` (see [Embeddings API](api_openai_embeddings.md)).
+Open WebUI calls `POST /v1/embeddings` (see [Embeddings API](api_openai_embeddings.md)). The `RAG_OPENAI_*` pair does not fall back to the core `OPENAI_API_*` one: leaving it unset disables RAG instead of inheriting the Core Connection, so set the base URL, key and model explicitly here.
 
 #### :material-sort-variant: RAG Reranking
 
@@ -143,7 +140,7 @@ Enables: Hybrid search, with retrieved documents reordered by relevance before t
 Open WebUI's external reranker speaks the Cohere dialect, so it targets the Cohere-compatible route instead of `/v1` (see [Cohere Rerank API](api_cohere_rerank.md)). Give the full endpoint path: Open WebUI sends the request to the URL as-is and appends nothing.
 
 !!! tip "Regional availability"
-    Amazon Bedrock serves reranking from a subset of regions only. Keep at least one of them in [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions); stdapi.ai fails over to it automatically.
+    Amazon Bedrock serves reranking from a subset of regions only. Keep at least one of them in [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions); stdapi.ai fails over to it automatically.
 
 Without an external reranker, Open WebUI falls back to a local Sentence-Transformers cross-encoder that it downloads from Hugging Face at startup—unavailable when `OFFLINE_MODE` is enabled.
 
@@ -163,7 +160,7 @@ Enables: Text-to-image creation inside chats.
     IMAGE_GENERATION_MODEL=stability.stable-image-core-v1:1
     ```
 
-Open WebUI calls `POST /v1/images/generations` (see [Images Generations API](api_openai_images_generations.md)).
+Open WebUI calls `POST /v1/images/generations` (see [Images Generations API](api_openai_images_generations.md)). The `IMAGES_OPENAI_*` pair does not fall back to the core `OPENAI_API_*` one: leaving it unset disables image generation instead of inheriting the Core Connection.
 
 #### :material-image-edit: Image Editing
 
@@ -194,7 +191,7 @@ Enables: Voice input and audio transcription.
     AUDIO_STT_MODEL=amazon.transcribe
     ```
 
-Open WebUI calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)).
+Open WebUI calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)). The `AUDIO_STT_OPENAI_*` pair does not fall back to the core `OPENAI_API_*` one: leaving it unset disables voice input instead of inheriting the Core Connection.
 
 !!! tip "A cheaper transcription model"
     Setting `AUDIO_STT_MODEL=amazon.nova-2-sonic-v1:0` transcribes through [Amazon Nova Sonic](api_openai_audio_transcriptions.md#amazon-nova-sonic), the lowest-cost option here, punctuated and in the language spoken. It returns plain text with no timestamps and takes recordings up to 10 minutes — ample for chat voice input, but keep `amazon.transcribe` if you also transcribe long meeting recordings from the same setting.
@@ -211,7 +208,7 @@ Enables: Spoken responses from chat outputs.
     AUDIO_TTS_MODEL=amazon.polly-neural
     ```
 
-Open WebUI calls `POST /v1/audio/speech` (see [Audio Speech API](api_openai_audio_speech.md)).
+Open WebUI calls `POST /v1/audio/speech` (see [Audio Speech API](api_openai_audio_speech.md)). The `AUDIO_TTS_OPENAI_*` pair does not fall back to the core `OPENAI_API_*` one: leaving it unset disables spoken responses instead of inheriting the Core Connection.
 
 !!! warning "TTS language detection"
     Open WebUI generates audio in small chunks, which makes language auto-detection inconsistent. Disable auto-detection by setting the stdapi.ai environment variable `DEFAULT_TTS_LANGUAGE` to a fixed language (for example, `en-US`).
@@ -228,7 +225,7 @@ Open WebUI supports MCP servers over Streamable HTTP (v0.6.31 and later), the tr
     MCP_INCLUDE_TOOLS=openai_video_generation,openai_video_get,search_models
     ```
 
-Every endpoint is exposed as a tool by default. Restrict the list with [`MCP_INCLUDE_TOOLS`](operations_configuration.md#mcp-include-tools) so models see only the tools they need, and keep the ones already wired natively—chat, images, speech, embeddings—out of it.
+Every endpoint is exposed as a tool by default. Restrict the list with [`MCP_INCLUDE_TOOLS`](operations_configuration_server.md#mcp-include-tools) so models see only the tools they need, and keep the ones already wired natively—chat, images, speech, embeddings—out of it.
 
 Then register the server in Open WebUI. MCP connections are admin-only and configured in the interface, not through environment variables:
 
@@ -240,7 +237,7 @@ Then register the server in Open WebUI. MCP connections are admin-only and confi
 
 See [MCP tools](api_overview.md#mcp-model-context-protocol) for the full tool list.
 
-### :material-alert-outline: Known Issues
+### :material-alert-outline: Limits and behaviour to know { #known-issues }
 
 !!! warning "The model selector lists every model, not only the chat ones"
     Open WebUI populates its selector from `GET /v1/models`, and that endpoint
@@ -254,7 +251,7 @@ See [MCP tools](api_overview.md#mcp-model-context-protocol) for the full tool li
     capabilities rather than just its name.
 
 !!! note "Per-user cost attribution needs an identifier Open WebUI does not send"
-    Open WebUI identifies the signed-in user to its backend with `X-OpenWebUI-User-*` headers (`ENABLE_FORWARD_USER_INFO_HEADERS`), not with the OpenAI `safety_identifier` field. [Per-user attribution](operations_cost_management.md#per-user-attribution) reads that field, or an authenticated caller — neither of which one shared connection provides — so every chat is billed to the deployment's own identity. Where the split matters, give each team its own [model alias](operations_configuration.md#model-aliases-configuration) as a separate Open WebUI connection, and read the totals from Amazon Bedrock model invocation logs.
+    Open WebUI identifies the signed-in user to its backend with `X-OpenWebUI-User-*` headers (`ENABLE_FORWARD_USER_INFO_HEADERS`), not with the OpenAI `safety_identifier` field. [Per-user attribution](operations_cost_management.md#per-user-attribution) reads that field, or an authenticated caller — neither of which one shared connection provides — so every chat is billed to the deployment's own identity. Where the split matters, give each team its own [model alias](operations_configuration_models.md#model-aliases-configuration) as a separate Open WebUI connection, and read the totals from Amazon Bedrock model invocation logs.
 
 ## :material-rocket-launch: Deploy the Full Stack on AWS
 
@@ -317,7 +314,7 @@ Two properties of this topology are worth reading off the picture. The gateway h
 | **Amazon ECS on AWS Fargate** | Runs Open WebUI, the stdapi.ai gateway, SearXNG and Playwright as separate services with independent auto-scaling | Terraform sample |
 | **Elastic Load Balancing** | The single public entry point; terminates TLS with an ACM certificate and forwards only to Open WebUI | Terraform sample |
 | **AWS Cloud Map** | Private DNS name that lets Open WebUI reach the gateway without exposing it | Terraform sample (`service_discovery_dns_name`) |
-| **Amazon Bedrock** | Chat completions, embeddings, reranking, image generation and editing | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon Bedrock** | Chat completions, embeddings, reranking, image generation and editing | [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions) |
 | **Amazon Transcribe** | Voice input, behind `POST /v1/audio/transcriptions` | `AUDIO_STT_MODEL` (above) |
 | **Amazon Polly** | Spoken replies, behind `POST /v1/audio/speech` | `AUDIO_TTS_MODEL` (above) |
 | **Amazon Aurora PostgreSQL** | Open WebUI's own database, and the pgvector store its RAG pipeline queries; Serverless v2, two instances across Availability Zones, storage encrypted, TLS enforced (`rds.force_ssl`) | Terraform sample |
@@ -334,7 +331,7 @@ Two properties of this topology are worth reading off the picture. The gateway h
 - **Encryption in transit** — HTTPS from the browser to the ALB, whose listener supports TLS 1.2 and 1.3; private-VPC traffic from the ALB to the container; HTTPS with SigV4 from the gateway to each AWS service.
 - **Encryption at rest** — SSE-KMS on the S3 bucket, encrypted Aurora storage, and TLS plus an auth token on the Valkey connection.
 - **Least privilege** — each ECS task assumes its own role; the gateway's role carries no permission for the Aurora cluster, and Open WebUI's role carries none for Amazon Bedrock.
-- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) configured on the gateway applies to each route Open WebUI uses, not only to chat, and stays in force unless the deployment explicitly allows a per-request override.
+- **Content policy** — a [Bedrock guardrail](operations_configuration_bedrock.md#bedrock-guardrails) configured on the gateway applies to each route Open WebUI uses, not only to chat, and stays in force unless the deployment explicitly allows a per-request override.
 - **Data handling** — the gateway is stateless and holds request bodies in memory only; CloudWatch receives request metadata, not prompts, unless payload logging is explicitly turned on for debugging.
 
 ### :material-cube-outline: What's Included

@@ -12,34 +12,46 @@ query, with the file they came from and a similarity score. There is no
 embedding pipeline, chunker or vector database to run — attach a file and
 search it.
 
-## Why Choose the Vector Stores API?
+## At a glance
 
-<div class="grid cards" markdown>
+- :material-magnify: **A score between `0` and `1`, best first** — a search
+  returns the closest passages with the file they came from, in one complete
+  page — see [Searching](#searching).
+- :material-file-upload: **Indexing runs in the background** — attaching a file
+  returns `status="in_progress"`; poll the file or the store until it settles —
+  see [Indexing is asynchronous](#indexing-is-asynchronous).
+- :material-filter-variant: **16 attributes per file, eight comparison
+  operators** — tag a file and restrict a search to the ones that match — see
+  [Filters](#filters).
+- :material-package-variant-closed: **2000 files per file batch** — attach them
+  in one request and follow their progress under a single identifier — see
+  [Endpoints](#available-endpoints).
+- :material-timer-sand: **Expire a store after a number of days without a
+  search** — only a search refreshes `last_active_at` — see
+  [Expiration](#expiration).
+- :material-shield-lock: **Stored in an Amazon S3 vector bucket you own** —
+  documents, passages and vectors stay in your AWS account — see
+  [Prerequisites](#prerequisites).
+- :material-database-arrow-right: **An Amazon Bedrock knowledge base is
+  addressed as `vs_kb_<knowledgeBaseId>`** — the same endpoints serve it, and
+  the requests it refuses are listed — see
+  [Knowledge base stores](#knowledge-base-stores).
+- :material-file-alert: **A store this server owns indexes text only** — a PDF
+  or office document settles as `failed` unless it is sent to a knowledge base
+  store — see [Supported files](#supported-files).
 
-- :material-magnify: __Search by Meaning__
-  <br>A query finds the passages that answer it, not the ones sharing its words.
+```python
+from openai import OpenAI
 
-- :material-file-upload: __Attach and Forget__
-  <br>Upload a file with the [Files API](api_openai_files.md), attach it, and it becomes searchable — indexing runs in the background.
+client = OpenAI(base_url="https://your-gateway/v1", api_key="YOUR_API_KEY")
 
-- :material-filter-variant: __Attribute Filters__
-  <br>Tag files with up to 16 attributes and restrict a search to the ones that match.
+for result in client.vector_stores.search(
+    "vs_...", query="How much parental leave do I get?", max_num_results=5
+):
+    print(result.score, result.filename, result.content[0].text)
+```
 
-- :material-package-variant-closed: __File Batches__
-  <br>Attach many files in one request and follow their progress with a single identifier.
-
-- :material-timer-sand: __Expiration Policies__
-  <br>Expire a store after a number of days without a search, so scratch stores do not accumulate.
-
-- :material-shield-lock: __Your Own Account__
-  <br>Documents, passages and vectors are stored in your AWS account, and never leave it.
-
-- :material-database-arrow-right: __Bring Your Own Knowledge Base__
-  <br>Address an [Amazon Bedrock knowledge base](#knowledge-base-stores) you already run as a vector store, through the same endpoints.
-
-</div>
-
-## Available Endpoints
+## Endpoints { #available-endpoints }
 
 | Endpoint                                                             | Method   | What It Does                        | MCP Tool                                     |
 |----------------------------------------------------------------------|----------|-------------------------------------|----------------------------------------------|
@@ -60,7 +72,7 @@ search it.
 | `/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/cancel` | `POST`   | Cancel a file batch                 | `openai_vector_store_file_batch_cancel`      |
 | `/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files`  | `GET`    | List a file batch's files           | `openai_vector_store_file_batch_file_list`   |
 
-## Feature Compatibility
+## Feature compatibility
 
 A store this server owns and a [knowledge base store](#knowledge-base-stores)
 answer the same endpoints, but not always the same way. Where the two differ,
@@ -117,7 +129,7 @@ the row says which one it is talking about.
 
 </div>
 
-## Model Support
+## Models
 
 No request field names a model: a store embeds with the model it was built with,
 and a search embeds its query with that same one. Which model that is depends on
@@ -125,7 +137,7 @@ the kind of store.
 
 | Store                                          | Embeds with                                                                 |
 |------------------------------------------------|-------------------------------------------------------------------------------|
-| One this server owns                           | [`VECTOR_STORE_EMBEDDING_MODEL`](operations_configuration.md#vector-store-embedding-model), recorded on the store when it is created |
+| One this server owns                           | [`VECTOR_STORE_EMBEDDING_MODEL`](operations_configuration_storage.md#vector-store-embedding-model), recorded on the store when it is created |
 | A [knowledge base store](#knowledge-base-stores) | The embedding model of the knowledge base itself — the setting above is not used, and the knowledge base embeds the query on its side |
 
 Any model this deployment serves that produces embeddings is eligible. To
@@ -142,48 +154,39 @@ time.
     managed knowledge base may rerank inside its own retrieval, which is its
     behaviour rather than this server's.
 
-## Listing Order
+## Prerequisites
 
-Every listing — stores, a store's files, a batch's files — is ordered by the
-`created_at` it reports for each object, **most recent first**; `order=asc`
-reverses it. Objects sharing a second are ordered by identifier, so the sequence
-is stable from one page to the next.
+Vector stores are stored in your own AWS account, in an
+[Amazon S3 vector bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors.html)
+you create yourself. Set
+[`AWS_S3_VECTORS_BUCKET`](operations_configuration_storage.md#aws-s3-vectors-bucket) to
+its name and [`AWS_S3_VECTORS_REGION`](operations_configuration_storage.md#aws-s3-vectors-region)
+to its Region; the endpoints answer `503` until both a vector bucket and
+[`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket) are configured. The
+gateway's IAM role needs the
+[Vector Stores permissions](operations_iam_permissions.md#vector-stores-optional).
 
-| Object | `created_at` is                                                                 |
-|--------|-----------------------------------------------------------------------------------|
-| Store  | When the store was created.                                                       |
-| File   | When the file was **attached to that store** — not when it was uploaded. Attaching the same file again moves it to the newest end. |
+The model that turns text into vectors is
+[`VECTOR_STORE_EMBEDDING_MODEL`](operations_configuration_storage.md#vector-store-embedding-model).
+It is recorded on each store when the store is created, so changing the setting
+only affects stores created afterwards — existing stores keep answering with the
+model they were built with.
 
-The `after` and `before` cursors are positions in that order: `after` returns the
-objects that follow the named one, `before` the page that ends just before it,
-both in the direction `order` asks for. Neither restarts the listing from the
-top when the object it names has since been deleted.
+Indexing survives a server being replaced only when
+[`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration_storage.md#aws-sqs-vector-store-queue-url)
+names an Amazon SQS queue you created, with the
+[durable indexing permissions](operations_iam_permissions.md#durable-vector-store-indexing)
+on it — see [Durable indexing](#durable-indexing).
 
-## Quick Start
+[Knowledge base stores](#knowledge-base-stores) need none of the above: they need
+[`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration_storage.md#aws-bedrock-knowledge-base-ids),
+the [knowledge base permissions](operations_iam_permissions.md#knowledge-base-vector-stores),
+and a knowledge base in the first
+[`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions) entry.
+They bring their own storage and their own embedding model, and they are listed
+and served even when no vector bucket is configured.
 
-```python
-import time
-
-from openai import OpenAI
-
-client = OpenAI(base_url="https://your-gateway/v1", api_key="YOUR_API_KEY")
-
-uploaded = client.files.create(file=open("handbook.txt", "rb"), purpose="assistants")
-store = client.vector_stores.create(name="handbook", file_ids=[uploaded.id])
-
-# Indexing is asynchronous: wait until the store reports it finished.
-deadline = time.monotonic() + 300
-while client.vector_stores.retrieve(store.id).status == "in_progress":
-    assert time.monotonic() < deadline, "indexing did not finish"
-    time.sleep(2)
-
-for result in client.vector_stores.search(
-    store.id, query="How much parental leave do I get?"
-):
-    print(result.score, result.filename, result.content[0].text)
-```
-
-## Indexing Is Asynchronous
+## Indexing is asynchronous
 
 Attaching a file returns immediately with `status="in_progress"`. Poll the file,
 or the store, until it settles:
@@ -206,10 +209,10 @@ refused. A poll always terminates: a file whose indexing was interrupted and
 cannot be resumed settles as `failed` with `last_error.code="server_error"`,
 and attaching it again indexes it.
 
-### Durable Indexing { #durable-indexing }
+### Durable indexing { #durable-indexing }
 
 Whether an interruption costs you anything depends on one deployment setting,
-[`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url):
+[`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration_storage.md#aws-sqs-vector-store-queue-url):
 
 | Setting | What happens when the server indexing a file is replaced |
 |---|---|
@@ -223,7 +226,7 @@ never bills twice — work that already completed is not redone.
 Ask your administrator which of the two your deployment runs before designing a
 client around it.
 
-## Supported Files
+## Supported files
 
 Files must be **text**: plain text, Markdown, source code, CSV, JSON, XML,
 YAML and anything else whose bytes decode as UTF-8 and whose content type is
@@ -273,7 +276,7 @@ A file is split into overlapping passages before it is indexed. Send a
 `"type": "auto"` inherits the store's own strategy — the one given when it was
 created — which also applies to every file attached without a strategy at all.
 A store created without one falls back to the server default, which comes from
-[`VECTOR_STORE_CHUNK_SIZE_TOKENS`](operations_configuration.md#vector-store-chunk-size-tokens).
+[`VECTOR_STORE_CHUNK_SIZE_TOKENS`](operations_configuration_storage.md#vector-store-chunk-size-tokens).
 
 !!! note "Chunk sizes are approximate"
     The chunk size is applied as a text-length budget, and a cut is moved back
@@ -366,12 +369,29 @@ expiration a store reads back with `status="expired"` and returns no search
 result; its indexed content is released and a search never brings it back. Send
 `"expires_after": null` on an update to remove the policy.
 
-## Knowledge Base Stores { #knowledge-base-stores }
+## Listing order
+
+Every listing — stores, a store's files, a batch's files — is ordered by the
+`created_at` it reports for each object, **most recent first**; `order=asc`
+reverses it. Objects sharing a second are ordered by identifier, so the sequence
+is stable from one page to the next.
+
+| Object | `created_at` is                                                                 |
+|--------|-----------------------------------------------------------------------------------|
+| Store  | When the store was created.                                                       |
+| File   | When the file was **attached to that store** — not when it was uploaded. Attaching the same file again moves it to the newest end. |
+
+The `after` and `before` cursors are positions in that order: `after` returns the
+objects that follow the named one, `before` the page that ends just before it,
+both in the direction `order` asks for. Neither restarts the listing from the
+top when the object it names has since been deleted.
+
+## Knowledge base stores { #knowledge-base-stores }
 
 A vector store can also be served by an
 [Amazon Bedrock knowledge base](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base.html)
 you already created. Allowlist it in
-[`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids)
+[`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration_storage.md#aws-bedrock-knowledge-base-ids)
 and it is addressed as the vector store `vs_kb_<knowledgeBaseId>` — the knowledge
 base identifier is ten alphanumeric characters — on every `/v1/vector_stores`
 endpoint, and returned by `GET /v1/vector_stores` next to the stores the server
@@ -421,7 +441,7 @@ for result in client.vector_stores.search(
     print(result.score, result.filename, result.content[0].text)
 ```
 
-### What Works
+### What works
 
 | Request                                              | On a `vs_kb_...` store                                                                                     |
 |------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
@@ -437,7 +457,7 @@ for result in client.vector_stores.search(
 `gte`, `lt`, `lte`, `in`, `nin`) and both combinators (`and`, `or`), over any
 metadata key, with no schema to declare beforehand.
 
-### What Is Refused
+### What is refused
 
 | Request                                                              | Answer                                                                                                              |
 |------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------|
@@ -474,7 +494,7 @@ so a result may name a document of a corpus this API never wrote to. Its
 answers for it, wherever in the knowledge base it lives. Removing it is the one
 thing refused — that corpus is maintained where it comes from.
 
-### Document Formats
+### Document formats
 
 Files are indexed as they stand, with no conversion step:
 
@@ -491,7 +511,7 @@ the formats **this** store takes — rather than accepted and then reported as
 `failed`. A file that is attached and then fails is one of a format the store
 does take, so it settles with `last_error.code="server_error"`.
 
-### Where the Two Kinds Differ { #two-kinds }
+### Where the two kinds differ { #two-kinds }
 
 Only two things differ from the client's point of view:
 
@@ -519,7 +539,9 @@ through an embedding model of the server's:
 Everything left unreported is on your AWS bill and readable from AWS Cost
 Explorer. Full detail in [Cost Management](operations_cost_management.md#vector-stores).
 
-## Limits
+## Limits and behaviour to know { #limits }
+
+### Caps
 
 | Limit                             | Value                                      |
 |-----------------------------------|--------------------------------------------|
@@ -527,13 +549,17 @@ Explorer. Full detail in [Cost Management](operations_cost_management.md#vector-
 | Queries per search                | 16                                         |
 | Results per search                | 50                                         |
 | Store `metadata`                  | 16 pairs, 64-character keys, 512-character values |
-| File size                         | 100 MiB, or [`MAX_INPUT_FILE_SIZE`](operations_configuration.md#max-input-file-size) when it is lower |
+| File size                         | 100 MiB, or [`MAX_INPUT_FILE_SIZE`](operations_configuration_server.md#max-input-file-size) when it is lower |
 
 A file above the size limit is not rejected at request time: it settles as
 `status="failed"` with `last_error.code="invalid_file"`, like any other file
 that cannot be indexed.
 
-## Errors
+The per-file attribute budget is in [Attributes](#attributes), and the requests
+a [knowledge base store](#knowledge-base-stores) refuses are listed under
+[What is refused](#what-is-refused).
+
+### Errors
 
 | Status | When                                                                             |
 |--------|-----------------------------------------------------------------------------------|
@@ -542,42 +568,30 @@ that cannot be indexed.
 | `409`  | The store is being updated concurrently by another request; retry it.              |
 | `503`  | The deployment has no vector storage configured.                                   |
 
-## Prerequisites
+## Try it { #quick-start }
 
-Vector stores are stored in your own AWS account, in an
-[Amazon S3 vector bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors.html)
-you create yourself. Set
-[`AWS_S3_VECTORS_BUCKET`](operations_configuration.md#aws-s3-vectors-bucket) to
-its name and [`AWS_S3_VECTORS_REGION`](operations_configuration.md#aws-s3-vectors-region)
-to its Region; the endpoints answer `503` until both a vector bucket and
-[`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) are configured. The
-gateway's IAM role needs the
-[Vector Stores permissions](operations_iam_permissions.md#vector-stores-optional).
+```python
+import time
 
-The model that turns text into vectors is
-[`VECTOR_STORE_EMBEDDING_MODEL`](operations_configuration.md#vector-store-embedding-model).
-It is recorded on each store when the store is created, so changing the setting
-only affects stores created afterwards — existing stores keep answering with the
-model they were built with.
+from openai import OpenAI
 
-Indexing survives a server being replaced only when
-[`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url)
-names an Amazon SQS queue you created, with the
-[durable indexing permissions](operations_iam_permissions.md#durable-vector-store-indexing)
-on it — see [Durable indexing](#durable-indexing).
+client = OpenAI(base_url="https://your-gateway/v1", api_key="YOUR_API_KEY")
 
-[Knowledge base stores](#knowledge-base-stores) need none of the above: they need
-[`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids),
-the [knowledge base permissions](operations_iam_permissions.md#knowledge-base-vector-stores),
-and a knowledge base in the first
-[`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) entry.
-They bring their own storage and their own embedding model, and they are listed
-and served even when no vector bucket is configured.
+uploaded = client.files.create(file=open("handbook.txt", "rb"), purpose="assistants")
+store = client.vector_stores.create(name="handbook", file_ids=[uploaded.id])
 
-## See Also
+# Indexing is asynchronous: wait until the store reports it finished.
+deadline = time.monotonic() + 300
+while client.vector_stores.retrieve(store.id).status == "in_progress":
+    assert time.monotonic() < deadline, "indexing did not finish"
+    time.sleep(2)
 
-- [Files API](api_openai_files.md) — uploading the files you attach.
-- [RAG Pipelines](use_cases_rag.md) — using a vector store as the retrieval stage.
-- [Embeddings API](api_openai_embeddings.md) — embedding text yourself instead.
-- [Configuration](operations_configuration.md#vector-stores-optional) — the settings above.
-- [Cost Management](operations_cost_management.md) — what indexing and searching cost.
+for result in client.vector_stores.search(
+    store.id, query="How much parental leave do I get?"
+):
+    print(result.score, result.filename, result.content[0].text)
+```
+
+## Next steps { #see-also }
+
+Next: [Files API](api_openai_files.md) · [RAG Pipelines](use_cases_rag.md) · [Embeddings API](api_openai_embeddings.md) · [Cost Management](operations_cost_management.md)

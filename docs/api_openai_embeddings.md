@@ -8,31 +8,31 @@ keywords: embeddings API, vector embeddings AWS, semantic search API, RAG embedd
 
 Generate vector embeddings for semantic search and RAG applications with Amazon Bedrock embedding models through an OpenAI-compatible interface.
 
-## Why Choose the Embeddings API?
+## At a glance
 
-<div class="grid cards" markdown>
+- :material-magnify: **Vectors from the Amazon Bedrock embedding models** — Amazon Titan Embed, Amazon Nova, Cohere Embed and TwelveLabs Marengo — for semantic search, RAG and recommendation.
+- :material-image-multiple: **Multimodal on the same route.** Images, video, audio and PDF pages go in as base64 data URIs, `s3://` URIs or `file-id:` references, for cross-modal search against the same vector space.
+- :material-puzzle: **`dimensions` and `encoding_format`.** Vectors come back as floats or base64-encoded float32; models that support dimension reduction honor `dimensions`, trading accuracy for storage and compute.
+- :material-format-list-group: **Batches, on and off the request path.** One request embeds an array of inputs; a whole corpus goes through the [Batch API](api_openai_batches.md) at the published batch rate.
+- :material-swap-horizontal: **Differs from OpenAI:** an array of token integers is rejected — send strings — and unrecognized top-level fields are forwarded to the model as provider-specific parameters instead of being ignored.
 
-- :material-magnify: __Semantic Search__
-  <br>Find content based on meaning and context, not just exact words. For knowledge bases and document retrieval.
+```bash
+curl -X POST "$BASE/v1/embeddings" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "input": "Semantic search transforms how we find information"
+  }'
+```
 
-- :material-lightning-bolt: __High Performance__
-  <br>Amazon Bedrock embedding models deliver fast vectors optimized for production workloads. Batch processing for large-scale operations.
-
-- :material-puzzle: __Flexible Dimensions__
-  <br>Choose vector dimensions that match your needs. Balance accuracy and storage/compute costs with model-specific dimension control.
-
-- :material-image-multiple: __Multimodal Embeddings__
-  <br>Process images, videos, audio, and PDF documents alongside text. Unified embeddings for cross-modal search using base64 data URI input.
-
-</div>
-
-## Available Endpoints
+## Endpoints { #available-endpoints }
 
 | Endpoint         | Method | What It Does                                                | Powered By                   | MCP Tool           |
 |------------------|--------|-------------------------------------------------------------|------------------------------|--------------------|
 | `/v1/embeddings` | `POST`   | Transform text and multimodal content into semantic vectors | Amazon Bedrock Embedding Models | `openai_embedding` |
 
-## Feature Compatibility
+## Feature compatibility
 
 <div class="feature-table" markdown>
 
@@ -66,7 +66,7 @@ Generate vector embeddings for semantic search and RAG applications with Amazon 
 
 </div>
 
-## Model Support
+## Models { #model-support }
 
 Any Amazon Bedrock model that produces embeddings answers on this route — the Amazon Titan Embed and Amazon Nova embedding families, Cohere Embed, and TwelveLabs Marengo. A model that produces something else is refused with `400`, naming it.
 
@@ -82,7 +82,7 @@ Cohere models carry the dotted version their own API publishes, so the name you 
 - `embed-v4.0` → `cohere.embed-v4:0`
 - `embed-english-v3.0` → `cohere.embed-english-v3`
 
-## Advanced Features
+## Working with embeddings { #advanced-features }
 
 ### Embedding a Corpus in Bulk
 
@@ -148,11 +148,11 @@ export DEFAULT_MODEL_PARAMS='{
 - :material-check-circle:{ .success role="img" aria-label="Supported" } **Compatible parameters**: Forwarded to the model and applied
 - :material-alert-circle:{ .warning } **Unsupported parameters**: Return HTTP 400 with an error message
 
-## Multimodal Embeddings
+### Multimodal Embeddings
 
-Go beyond text! Supported models can process images, videos, and audio through base64 data URI input. This enables powerful cross-modal search and similarity features.
+Supported models embed images, videos and audio alongside text, for cross-modal search and similarity in one vector space.
 
-### Input Format
+#### Input Format
 
 Multimodal content is passed as base64-encoded data URIs:
 
@@ -160,7 +160,7 @@ Multimodal content is passed as base64-encoded data URIs:
 data:<mime-type>;base64,<base64-encoded-content>
 ```
 
-### Example: Image Embedding
+#### Example: Image Embedding
 
 ```bash
 # First, encode your image to base64
@@ -176,7 +176,7 @@ curl -X POST "$BASE/v1/embeddings" \
   }"
 ```
 
-### Example: Video Embedding
+#### Example: Video Embedding
 
 **Option 1: Base64-encoded video (for small files)**
 
@@ -197,13 +197,7 @@ curl -X POST "$BASE/v1/embeddings" \
 !!! info "Automatic S3 Upload"
     When you provide Base64-encoded data that exceeds the model's size limit (or Bedrock's 25 MB quota), the server automatically stages it in S3 so the request still succeeds.
 
-    To allow this behavior, configure regional S3 buckets via `AWS_S3_REGIONAL_BUCKETS` in the same region as your Bedrock model. See [configuration guide](operations_configuration.md#aws-s3-regional-buckets).
-
-!!! warning "Usage Not Available for Large Inputs"
-    Amazon Nova models report no token usage for large inputs (those exceeding the model's inline size limit): the `usage` field then reports zero tokens.
-
-!!! warning "Large Base64 Files and Memory Configuration"
-    While passing large files as Base64 is supported, ensure your server has sufficient memory configured. Large Base64-encoded files (especially videos) can consume significant memory during processing. Consider using S3 URLs directly for very large files, or adjust your server's memory limits accordingly.
+    To allow this behavior, configure regional S3 buckets via `AWS_S3_REGIONAL_BUCKETS` in the same region as your Bedrock model. See [configuration guide](operations_configuration_storage.md#aws-s3-regional-buckets).
 
 **Option 2: S3 URL (for large files)**
 
@@ -217,13 +211,6 @@ curl -X POST "$BASE/v1/embeddings" \
     "input": "s3://my-bucket/path/to/video.mp4"
   }'
 ```
-
-!!! warning "S3 URL Requirements"
-    When using S3 URLs directly:
-
-    - S3 bucket **must be in the same AWS region** as the Bedrock model
-    - The stdapi.ai server **must have read access** to the S3 object
-    - For TwelveLabs Marengo models: S3 bucket **must be in the same AWS account** as the stdapi.ai server
 
 **Option 3: Files API reference (`file-id:`)**
 
@@ -239,7 +226,7 @@ curl -X POST "$BASE/v1/embeddings" \
   }'
 ```
 
-### Example: PDF Document Embedding
+#### Example: PDF Document Embedding
 
 For PDFs, convert each page to an image and send via inputs along with page metadata (e.g., file_name, entities) in adjacent text parts. **For RAG applications, smaller chunks often improve retrieval accuracy and reduce costs.**
 
@@ -270,9 +257,6 @@ curl -X POST "$BASE/v1/embeddings" \
 
 **![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Marengo v3** (requires exactly one text + one image per request):
 
-!!! warning "Usage Not Available"
-    TwelveLabs Marengo models do not return token usage information. The `usage` field in the response will always report zero tokens.
-
 !!! info "Text+Image Pairing for Marengo v3"
     When using `twelvelabs.marengo-embed-3-0-v1:0`, if you provide exactly **2 inputs** where one is text and one is image, they are automatically combined into a single `text_image` embedding. This creates a unified multimodal representation of the text-image pair.
 
@@ -293,7 +277,7 @@ curl -X POST "$BASE/v1/embeddings" \
   }"
 ```
 
-### Mixed-Content Batching
+#### Mixed-Content Batching
 
 Combine text and multimodal inputs in a single request:
 
@@ -311,7 +295,7 @@ curl -X POST "$BASE/v1/embeddings" \
   }"
 ```
 
-### Use Cases
+#### Use Cases
 
 - **Visual Search**: Find images similar to a query image or text description
 - **Video Analysis**: Search and retrieve video content based on visual similarity or text descriptions
@@ -320,10 +304,15 @@ curl -X POST "$BASE/v1/embeddings" \
 - **Cross-Modal Recommendations**: Recommend images, videos, or audio based on text queries and vice versa
 - **Content Moderation**: Analyze and classify multimodal content at scale
 
----
+## Limits and behaviour to know
 
-**Build smarter search and recommendations!** Explore available embedding models in the [Models API](api_openai_models.md).
-## Available Request Headers
+**An `s3://` input has three requirements.** The bucket is in the same AWS region as the Bedrock model, the stdapi.ai server has read access to the object, and — for TwelveLabs Marengo models — the bucket is in the same AWS account as the server.
+
+**Token usage is reported only where Amazon Bedrock returns it.** Amazon Nova models report no token count for inputs above their inline size limit, and TwelveLabs Marengo models report none at all: the `usage` field then reports zero tokens.
+
+**Base64 input is decoded in memory.** A large inline file, a video especially, can consume significant memory while it is processed, so size the server's memory limit for the largest input you send — or pass an `s3://` URI instead of inlining the bytes.
+
+## Request headers { #available-request-headers }
 
 This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
 
@@ -359,24 +348,12 @@ curl -X POST "$BASE/v1/embeddings" \
 !!! info "Detailed Documentation"
     For complete information about these headers, configuration options, and use cases, see:
 
-    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
-    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
+    - [Bedrock Guardrails Configuration](operations_configuration_bedrock.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration_bedrock.md#bedrock-service-tier-and-performance-configuration)
 
-## Try It Now
+## Try it { #try-it-now }
 
-**Single text embedding:**
-
-```bash
-curl -X POST "$BASE/v1/embeddings" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "amazon.nova-2-multimodal-embeddings-v1:0",
-    "input": "Semantic search transforms how we find information"
-  }'
-```
-
-**Batch processing with base64 encoding:**
+**Batch inputs, base64-encoded vectors:**
 
 ```bash
 curl -X POST "$BASE/v1/embeddings" \
@@ -389,3 +366,6 @@ curl -X POST "$BASE/v1/embeddings" \
   }'
 ```
 
+## Next steps
+
+Next: [Batch API](api_openai_batches.md) · [Files API](api_openai_files.md) · [Cohere Embed API](api_cohere_embed.md) · [Models API](api_openai_models.md)

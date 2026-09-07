@@ -8,31 +8,41 @@ keywords: text to speech API, TTS API AWS, AWS Polly API, voice synthesis API, O
 
 Generate natural-sounding speech from text with Amazon Polly through an OpenAI-compatible interface.
 
-## Why Choose the Text to Speech API?
+## At a glance
 
-<div class="grid cards" markdown>
+- :material-earth: **Four Amazon Polly engines** — Standard, Neural, Long-Form and
+  Generative, each registered as its own model with its own voice set, see
+  [Models](#model-support).
+- :material-account-voice: **60+ voices across 30+ languages** — name a Polly
+  voice ID directly, or send an OpenAI voice name and let one be picked for you,
+  see [Feature compatibility](#feature-compatibility).
+- :material-auto-fix: **Language detected from the first 500 characters** —
+  Amazon Comprehend reads that much of the input to choose the voice behind an
+  OpenAI voice name, see [Working with Amazon Polly](#advanced-features).
+- :material-xml: **SSML markup accepted** — pronunciation, emphasis, pauses and
+  prosody, up to 6,000 characters including the markup, which is not billed, see
+  [Working with Amazon Polly](#advanced-features).
+- :material-plus-circle: **Up to 100,000 input characters against OpenAI's
+  4,096** — 3,000 with no bucket configured, 20,000 on a generative voice, see
+  [Long Input](#long-input).
+- :material-close-circle: **`instructions` is accepted and ignored, `speed` is
+  rejected with SSML input** — see
+  [Limits and behaviour to know](#limits-and-behaviour-to-know).
 
-- :material-earth: __Global Support__
-  <br>30+ languages supported. Choose from Neural, Generative, and Long-Form engines.
+```bash
+curl -OJ -X POST "$BASE/v1/audio/speech" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "amazon.polly-neural", "voice": "Amy", "input": "Hello from Amazon Polly."}'
+```
 
-- :material-account-voice: __60+ Voices__
-  <br>Professional narration to conversational voices. Use OpenAI voice names with automatic language detection or specify any Polly voice ID directly.
-
-- :material-auto-fix: __Automatic Language Detection__
-  <br>Using OpenAI voice names? Amazon Comprehend automatically detects your content's language and selects an appropriate Polly voice—matching language, gender, and quality.
-
-- :material-xml: __Advanced Control with SSML__
-  <br>Fine-tune pronunciation, emphasis, pauses, and prosody with SSML markup for complex audio requirements.
-
-</div>
-
-## Available Endpoints
+## Endpoints { #quick-start-available-endpoint }
 
 | Endpoint            | Method | What It Does                           | Powered By                       | MCP Tool           |
 |---------------------|--------|----------------------------------------|----------------------------------|--------------------|
 | `/v1/audio/speech`  | `POST` | Turn text into natural-sounding speech | Amazon Polly + Amazon Comprehend | `openai_audio_speech` |
 
-## Feature Compatibility
+## Feature compatibility
 
 <div class="feature-table" markdown>
 
@@ -76,7 +86,7 @@ Generate natural-sounding speech from text with Amazon Polly through an OpenAI-c
 
 </div>
 
-## Model Support
+## Models { #model-support }
 
 ### ![Amazon Polly](styles/logo_amazon_polly.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Polly Models
 
@@ -95,18 +105,17 @@ Each engine supports a different subset of voices and languages — see the [Pol
     - `tts-1` → `amazon.polly-standard`
     - `tts-1-hd` → `amazon.polly-neural`
 
-    These aliases enable seamless compatibility with OpenAI-based tools and applications without any configuration changes. You can also [customize or override these aliases](operations_configuration.md#model-aliases) to suit your needs.
+    These aliases let an OpenAI-based tool reach these models under the names it already sends, with no configuration change. You can also [customize or override these aliases](operations_configuration_models.md#model-aliases) to suit your needs.
 
-## Advanced Features
+## Working with Amazon Polly { #advanced-features }
 
 ### ![Amazon Polly](styles/logo_amazon_polly.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Polly Features
 
-- **SSML Support** :material-star-circle:{ .highlight }: Fine-grained control over pronunciation, emphasis, pauses, and prosody — [SSML docs](https://docs.aws.amazon.com/polly/latest/dg/ssml.html). With SSML input, the `speed` parameter is rejected: set the speaking rate with SSML `<prosody>` instead.
+- **SSML Support** :material-star-circle:{ .highlight }: Fine-grained control over pronunciation, emphasis, pauses, and prosody — [SSML docs](https://docs.aws.amazon.com/polly/latest/dg/ssml.html)
 - **Flexible Formats**: mp3, ogg, wav, flac, aac, opus, pcm
-- **Streaming Options**: Raw bytes (default) or SSE events with `stream_format: "sse"` — once an SSE stream is accepted, a synthesis failure at any point is reported as a terminal `error` event inside the `200` response, and `speech.audio.done` is then omitted
+- **Streaming Options**: Raw bytes (default) or SSE events with `stream_format: "sse"`
 - **Speed Control**: Adjust playback from 0.2x to 2.0x
 - **Speech Marks**: Word, sentence, viseme, and SSML timing metadata with `SpeechMarkTypes` (returned as JSON instead of audio)
-- **Character-Based Billing**: Usage tracks character counts—the native billing unit for Amazon Polly and Amazon Comprehend—rather than OpenAI-style tokens
 
 !!! tip "Performance Tips: Optimize Speed & Cost"
     - **Prefer mp3 or ogg** for the lowest latency; `pcm` is returned at OpenAI's 24 kHz contract unless you request an explicit `SampleRate` (see [Sample Rate](#provider-specific-parameters))
@@ -138,21 +147,21 @@ A single request accepts up to **3,000 characters** (6,000 including SSML markup
 
 **Generative voices** (`amazon.polly-generative`) speak up to **20,000 characters** without any further configuration, and the audio starts arriving while the rest is still being spoken. Two cases keep the behaviour described below instead: an `input` written as an SSML document, and a request using `SpeechMarkTypes`.
 
-**Every other voice**, and generative input longer than 20,000 characters, is synthesized into an S3 bucket co-located with the serving region, so longer input requires a bucket in a region that can serve the request: a [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) entry for that region, or [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) when the region is the first [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) entry — the only region `AWS_S3_BUCKET` covers. With [`AWS_POLLY_REGION`](operations_configuration.md#aws-polly-region) pinned to any other region, a regional-bucket entry is the only option. The audio object is written under [`AWS_S3_TMP_PREFIX`](operations_configuration.md#aws-s3-tmp-prefix) and deleted once the request ends. On a request that ends before Amazon Polly has finished — a timeout, a failure, or a client that disconnected — the deletion is issued while the synthesis is still running, so an object written after it is **not** removed by the request: the recommended lifecycle rule on that prefix is what expires it, and it must be in place.
+**Every other voice**, and generative input longer than 20,000 characters, is synthesized into an S3 bucket co-located with the serving region, so longer input requires a bucket in a region that can serve the request: a [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration_storage.md#aws-s3-regional-buckets) entry for that region, or [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket) when the region is the first [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions) entry — the only region `AWS_S3_BUCKET` covers. With [`AWS_POLLY_REGION`](operations_configuration_aws.md#aws-polly-region) pinned to any other region, a regional-bucket entry is the only option. The audio object is written under [`AWS_S3_TMP_PREFIX`](operations_configuration_storage.md#aws-s3-tmp-prefix) and deleted once the request ends. On a request that ends before Amazon Polly has finished — a timeout, a failure, or a client that disconnected — the deletion is issued while the synthesis is still running, so an object written after it is **not** removed by the request: the recommended lifecycle rule on that prefix is what expires it, and it must be in place.
 
-- **With a bucket configured**: up to **100,000 characters** (200,000 including SSML markup), against OpenAI's 4,096-character limit. Expect roughly one extra second per 1,000 characters, bounded by [`AI_RESPONSE_TIMEOUT`](operations_configuration.md#ai-response-timeout).
+- **With a bucket configured**: up to **100,000 characters** (200,000 including SSML markup), against OpenAI's 4,096-character limit. Expect roughly one extra second per 1,000 characters, bounded by [`AI_RESPONSE_TIMEOUT`](operations_configuration_server.md#ai-response-timeout).
 - **Without one**: a generative voice still speaks up to 20,000 characters; every other request above 3,000 characters is rejected, however long, with the length the server does accept — so callers can split their text.
 
 !!! tip "Same response either way"
     Nothing else changes: the response is the complete audio file in the requested `response_format`, and `stream_format: "sse"` still delivers `speech.audio.delta` events.
 
 !!! warning "A configured guardrail caps the input first"
-    When a [guardrail](operations_configuration.md#aws-bedrock-guardrail-identifier) applies to the request, the whole `input` is checked in a single [Amazon Bedrock `ApplyGuardrail`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html) call, which has a maximum input size of its own: a [Service Quotas](https://docs.aws.amazon.com/bedrock/latest/userguide/quotas.html) value per guardrail policy, counted in text units of 1,000 characters, that **differs between AWS Regions** — as low as 25 text units (25,000 characters) in some, 1,000 in others.
+    When a [guardrail](operations_configuration_bedrock.md#aws-bedrock-guardrail-identifier) applies to the request, the whole `input` is checked in a single [Amazon Bedrock `ApplyGuardrail`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html) call, which has a maximum input size of its own: a [Service Quotas](https://docs.aws.amazon.com/bedrock/latest/userguide/quotas.html) value per guardrail policy, counted in text units of 1,000 characters, that **differs between AWS Regions** — as low as 25 text units (25,000 characters) in some, 1,000 in others.
 
     The reachable input length is therefore the smaller of the two: the limit above, and the quota in the guardrail's Region. Beyond the quota the request fails with `429` before any audio is synthesized, so raise the *maximum input size* quotas for the policies your guardrail applies, or keep requests under them.
 
 !!! warning "Long input is billed on acceptance"
-    Amazon Polly bills the whole input as soon as it accepts a long request, before the audio is produced. A request that then reaches [`AI_RESPONSE_TIMEOUT`](operations_configuration.md#ai-response-timeout), fails, or is abandoned by the client is charged in full and still counted in the [request usage and cost](operations_cost_management.md#cost-tracking-real-time-aws-pricing) records — retrying it pays for the text twice.
+    Amazon Polly bills the whole input as soon as it accepts a long request, before the audio is produced. A request that then reaches [`AI_RESPONSE_TIMEOUT`](operations_configuration_server.md#ai-response-timeout), fails, or is abandoned by the client is charged in full and still counted in the [request usage and cost](operations_cost_management.md#cost-tracking-real-time-aws-pricing) records — retrying it pays for the text twice.
 
 ### Provider-Specific Parameters
 
@@ -267,7 +276,24 @@ The following parameters from the Amazon Polly [SynthesizeSpeech API](https://do
 - `LanguageCode` (string): Language code for bilingual voices only (e.g., `en-IN`, `hi-IN`)
 - `SpeechMarkTypes` (list): Timing marks to return instead of audio — `sentence`, `ssml`, `viseme`, `word`
 
-## Available Request Headers
+## Limits and behaviour to know
+
+- `instructions` is accepted and ignored. Amazon Polly has no equivalent
+  parameter, so the audio comes back as if the field had not been sent — use
+  SSML, or a different voice, to get the delivery you want.
+- `speed` is rejected with SSML input, because SSML carries a speaking rate of
+  its own: set it with `<prosody>` instead.
+- Usage is counted in characters, the native billing unit of Amazon Polly and
+  Amazon Comprehend, rather than in OpenAI-style tokens. No output token count
+  is reported.
+- Once an SSE stream is accepted, a synthesis failure can no longer be an HTTP
+  status: it arrives as a terminal `error` event inside the `200` response, and
+  `speech.audio.done` is then omitted.
+- Input above 3,000 characters needs an S3 bucket unless the voice is
+  generative, and a long request is billed the moment Amazon Polly accepts it —
+  both are detailed under [Long Input](#long-input).
+
+## Request headers
 
 This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
 
@@ -302,9 +328,9 @@ curl -X POST "$BASE/v1/audio/speech" \
 !!! info "Detailed Documentation"
     For complete information about these headers, configuration options, and use cases, see:
 
-    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
+    - [Bedrock Guardrails Configuration](operations_configuration_bedrock.md#bedrock-guardrails)
 
-## Try It Now
+## Try it { #try-it-now }
 
 **Stream audio as bytes (default):**
 
@@ -335,6 +361,6 @@ curl -N -X POST "$BASE/v1/audio/speech" \
   }'
 ```
 
----
+## Next steps
 
-**Ready to add voice to your application?** Explore available voices and models in the [Models API](api_openai_models.md).
+Next: [Models API](api_openai_models.md) · [Speech to Text API](api_openai_audio_transcriptions.md) · [Model aliases for `tts-1` and `tts-1-hd`](operations_configuration_models.md#model-aliases) · [Text-to-speech IAM permissions, including long input](operations_iam_permissions.md#text-to-speech-optional)

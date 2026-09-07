@@ -10,6 +10,20 @@ Report what this deployment consumed and what it cost, in time buckets, through
 the OpenAI Administration [Usage](https://platform.openai.com/docs/api-reference/usage)
 and [Costs](https://platform.openai.com/docs/api-reference/usage/costs) API.
 
+## At a glance
+
+- :material-api: **Eleven endpoints** — ten `/v1/organization/usage/*` families
+  reporting tokens, characters, seconds of audio, images and tool calls, plus
+  `/v1/organization/costs` for what AWS bills — see [Endpoints](#endpoints).
+- :material-group: **Grouped by model, source, tenant API key or user** — the
+  keys that are served, and the ones refused with an explanation, are listed
+  under [Grouping](#grouping).
+- :material-clock-alert: **`1m` buckets for 15 days, `1h` and `1d` for 455** —
+  a query past the boundary is refused rather than answered at a coarser
+  resolution, see [Bucket width](#retention).
+- :material-toggle-switch: **Off by default** — the surface is served only when
+  [`usage_api`](operations_configuration_observability.md#usage-api) is enabled.
+
 ```python
 from openai import OpenAI
 
@@ -26,28 +40,10 @@ for bucket in page.data:
 !!! warning "Administrator endpoints, disabled by default"
     These endpoints report the whole deployment, not the calling client, and
     every query is billed by Amazon CloudWatch. They are served only when
-    [`usage_api`](operations_configuration.md#usage-api) is enabled, and only to
+    [`usage_api`](operations_configuration_observability.md#usage-api) is enabled, and only to
     administrator credentials — see [Who may call it](#authorization).
 
-## :material-toggle-switch: Enabling the Surface
-
-| Setting | Needed for |
-|---|---|
-| [`cloudwatch_metrics`](operations_configuration.md#cloudwatch-metrics) | Publishing the usage the endpoints read back. Nothing is reported for the period before it was enabled. |
-| [`usage_api`](operations_configuration.md#usage-api) | Serving the endpoints at all, and publishing usage per endpoint. |
-| [`cost_tracking`](operations_configuration.md#cost-tracking) | `/v1/organization/costs` only. |
-
-With `usage_api` disabled every endpoint answers `503`. Enabling `usage_api`
-without `cloudwatch_metrics` fails at startup instead, rather than serving
-endpoints that could never answer — the server log names the missing setting.
-
-The server role needs `cloudwatch:GetMetricData` and `cloudwatch:ListMetrics` —
-see [Usage API IAM permissions](operations_iam_permissions.md#usage-api-iam) —
-and the queries are billed per metric read, which
-[Usage API query cost](operations_cost_management.md#usage-api-cost) puts a
-number on.
-
-## :material-api: Endpoints
+## Endpoints
 
 | Endpoint | Reports |
 |---|---|
@@ -71,7 +67,25 @@ buckets rather than a `404`: the endpoint exists, and no measurement was taken.
     surface and from the `openai` package, so there is no shape to mirror. Use
     the `/v1/organization/usage/*` family above.
 
-## :material-format-list-bulleted: Query Parameters
+## Enabling the surface
+
+| Setting | Needed for |
+|---|---|
+| [`cloudwatch_metrics`](operations_configuration_observability.md#cloudwatch-metrics) | Publishing the usage the endpoints read back. Nothing is reported for the period before it was enabled. |
+| [`usage_api`](operations_configuration_observability.md#usage-api) | Serving the endpoints at all, and publishing usage per endpoint. |
+| [`cost_tracking`](operations_configuration_observability.md#cost-tracking) | `/v1/organization/costs` only. |
+
+With `usage_api` disabled every endpoint answers `503`. Enabling `usage_api`
+without `cloudwatch_metrics` fails at startup instead, rather than serving
+endpoints that could never answer — the server log names the missing setting.
+
+The server role needs `cloudwatch:GetMetricData` and `cloudwatch:ListMetrics` —
+see [Usage API IAM permissions](operations_iam_permissions.md#usage-api-iam) —
+and the queries are billed per metric read, which
+[Usage API query cost](operations_cost_management.md#usage-api-cost) puts a
+number on.
+
+## Query parameters
 
 Every endpoint takes:
 
@@ -93,16 +107,16 @@ bucket may be earlier than the one asked for.
 `/v1/organization/usage/images` additionally takes `sources`
 (`image.generation`, `image.edit`, `image.variation`).
 
-## :material-group: Grouping { #grouping }
+## Grouping { #grouping }
 
 | `group_by` | Served |
 |---|---|
 | `model` | :material-check: On every model-backed endpoint. |
 | `source` | :material-check: On `images`. |
 | `api_key_id` | :material-check: When [tenant API keys](operations_authentication_security.md) are issued. Otherwise refused: the deployment has one key, which identifies itself rather than a caller. |
-| `user_id` | :material-check: When [`cloudwatch_metrics_user_dimension`](operations_configuration.md#cloudwatch-metrics-user-dimension) is enabled. Otherwise refused: consumption is not recorded per user by default, because that is one stored metric series per user. |
+| `user_id` | :material-check: When [`cloudwatch_metrics_user_dimension`](operations_configuration_observability.md#cloudwatch-metrics-user-dimension) is enabled. Otherwise refused: consumption is not recorded per user by default, because that is one stored metric series per user. |
 | `project_id` | :material-close: There are no projects here, so usage is never attributed to one. |
-| `batch` | :material-close: Batch API usage is not reported by these endpoints at all — see [Differences from Upstream](#differences-from-upstream). |
+| `batch` | :material-close: Batch API usage is not reported by these endpoints at all — see [Limits and behaviour to know](#differences-from-upstream). |
 | `service_tier` | :material-close: The service tier a request ran under is not reported apart. |
 | `size` | :material-close: The size of a generated image is not reported. |
 | `context_level` | :material-close: The context size of a web search is not reported. |
@@ -122,7 +136,7 @@ sent as an explicit `null`. The `openai` SDK reads it back as `None` either
 way, so only a client parsing the raw JSON sees the difference — read such a
 key with `result.get("model")`, never `result["model"]`.
 
-## :material-clock-alert: Bucket Width and How Far Back { #retention }
+## Bucket width and how far back { #retention }
 
 Narrow buckets are only kept for so long:
 
@@ -138,7 +152,7 @@ silently changes resolution mid-range is a number that ends up in a
 spreadsheet. Ask for a later `start_time`, or a wider `bucket_width`.
 
 The span between `start_time` and `end_time` is additionally bounded by
-[`usage_api_max_range_days`](operations_configuration.md#usage-api-max-range-days),
+[`usage_api_max_range_days`](operations_configuration_observability.md#usage-api-max-range-days),
 92 days by default.
 
 !!! warning "A model idle for two weeks stops being reported"
@@ -155,7 +169,7 @@ The span between `start_time` and `end_time` is additionally bounded by
     [request logs](operations_logging_monitoring.md), which are written per
     request and retained for as long as their log group is.
 
-## :material-cash: Costs { #costs }
+## Costs { #costs }
 
 `/v1/organization/costs` reports the cost of the work in daily buckets, one
 result per currency:
@@ -182,19 +196,21 @@ result per currency:
 Amounts are never summed across currencies: a deployment spanning partitions
 reports one result per currency.
 
-## :material-shield-account: Who May Call It { #authorization }
+## Who may call it { #authorization }
 
 | Credential | Accepted |
 |---|---|
 | The deployment's own API key | :material-check: It is the operator's own credential. |
-| An Amazon Cognito token | :material-check: Only when it carries **every** scope in [`usage_api_admin_scopes`](operations_configuration.md#usage-api-admin-scopes). With that list empty, no token is accepted. |
+| An Amazon Cognito token | :material-check: Only when it carries **every** scope in [`usage_api_admin_scopes`](operations_configuration_observability.md#usage-api-admin-scopes). With that list empty, no token is accepted. |
 | A tenant API key | :material-close: A per-customer credential is never an administrator credential. |
 
 Anything else answers `403`. Upstream gates the same endpoints on a separate
 administrator credential; this is the closest equivalent a deployment can
 express.
 
-## :material-alert-circle: Differences from Upstream
+## Limits and behaviour to know { #differences-from-upstream }
+
+Where this surface answers differently from the upstream Administration API:
 
 - Only the grouping keys and filters in [Grouping](#grouping) are served; the
   rest are refused with an explanation rather than ignored.
@@ -231,13 +247,28 @@ express.
   running significant batch traffic, usage and costs therefore do not
   reconcile, by the whole batch workload.
 - Usage is reported from a single region — see
-  [`cloudwatch_metrics_region`](operations_configuration.md#cloudwatch-metrics-region).
+  [`cloudwatch_metrics_region`](operations_configuration_observability.md#cloudwatch-metrics-region).
   A deployment publishing from more than one region reports the one it reads.
 - `next_page` is this server's own cursor and is only meaningful to it.
 
-## :material-arrow-right: Next Steps
+How far back a bucket width is answered, and the two-week metric index behind
+every answer, are covered in
+[Bucket width and how far back](#retention).
 
-- [Configuration](operations_configuration.md#usage-api) — the settings behind this surface
-- [Cost Management](operations_cost_management.md#usage-api-cost) — what a query costs
-- [Logging & Monitoring](operations_logging_monitoring.md) — the metrics it reads
-- [IAM Permissions](operations_iam_permissions.md#usage-api-iam) — the two actions it needs
+## Try it
+
+Report the last seven days of token usage per model, with administrator
+credentials:
+
+```bash
+curl -G "https://your-gateway/v1/organization/usage/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -d start_time=1756000000 \
+  -d bucket_width=1d \
+  -d limit=7 \
+  -d group_by=model
+```
+
+## Next steps
+
+Next: [Configuration](operations_configuration_observability.md#usage-api) · [Cost Management](operations_cost_management.md#usage-api-cost) · [Logging & Monitoring](operations_logging_monitoring.md) · [IAM Permissions](operations_iam_permissions.md#usage-api-iam)

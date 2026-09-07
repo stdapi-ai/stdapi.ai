@@ -8,31 +8,45 @@ keywords: audio translation API, speech translation, AWS Translate API, multilin
 
 Translate audio from any language to English text with Amazon Transcribe + Translate or Amazon Bedrock audio-capable models through an OpenAI-compatible interface.
 
-## Why Choose the Speech to English API?
+## At a glance
 
-<div class="grid cards" markdown>
+- :material-earth-arrow-right: **No source language to declare** — Amazon
+  Transcribe identifies the language spoken and Amazon Translate renders it in
+  English, see
+  [Working with Amazon Transcribe and Amazon Translate](#advanced-features).
+- :material-account-network: **Two ways to English** — `amazon.transcribe` runs
+  the transcribe-then-translate pipeline; a Bedrock model that accepts the
+  `SPEECH` modality, such as Amazon Nova Sonic, answers in English in a single
+  request, see [Models](#model-support).
+- :material-file-multiple: **Five output formats** — `text`, `json`,
+  `verbose_json`, `srt` and `vtt`, the last three on Amazon Transcribe, see
+  [Feature compatibility](#feature-compatibility).
+- :material-subtitles: **Subtitle cues keep their original timing** — SRT and
+  VTT carry the timings Amazon Transcribe produced, with English text in them,
+  see
+  [Working with Amazon Transcribe and Amazon Translate](#advanced-features).
+- :material-plus-circle: **Amazon Translate glossaries and formality per
+  request** — `TerminologyNames` and `Settings` travel in the JSON body beside
+  the OpenAI fields, see
+  [Provider-Specific Parameters](#provider-specific-parameters).
+- :material-close-circle: **`amazon.transcribe` rejects `prompt` and
+  `temperature`, and a source language Amazon Translate does not cover is
+  refused** — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
 
-- :material-earth-arrow-right: __Automatic Language Detection__
-  <br>Upload audio in any language. AWS automatically detects the source language and translates to English text.
+```bash
+curl -X POST "$BASE/v1/audio/translations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -F file=@spanish-interview.mp3 \
+  -F model=amazon.transcribe
+```
 
-- :material-account-network: __Multiple Translation Options__
-  <br>Choose Amazon Transcribe + Translate for a traditional pipeline, or use Bedrock audio models with built-in translation capabilities.
-
-- :material-file-multiple: __Multiple Output Formats__
-  <br>Choose from text, JSON, verbose JSON with timestamps, or translated subtitle files (SRT/VTT).
-
-- :material-subtitles: __Subtitle Translation__
-  <br>Generate translated SRT and VTT subtitle files directly with precise timing for international video content.
-
-</div>
-
-## Available Endpoints
+## Endpoints { #quick-start-available-endpoint }
 
 | Endpoint                 | Method | What It Does                                     | Powered By                                                   | MCP Tool                    |
 |--------------------------|--------|--------------------------------------------------|--------------------------------------------------------------|-----------------------------|
 | `/v1/audio/translations` | `POST` | Transcribe any language and translate to English | Amazon Transcribe + Translate or Amazon Bedrock Audio Models | `openai_audio_translation` |
 
-## Feature Compatibility
+## Feature compatibility
 
 <div class="feature-table" markdown>
 
@@ -71,7 +85,7 @@ Translate audio from any language to English text with Amazon Transcribe + Trans
 
 </div>
 
-## Model Support
+## Models { #model-support }
 
 ### ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
 
@@ -115,17 +129,17 @@ Any Amazon Bedrock model that accepts the `SPEECH` input modality through the Co
 !!! tip "Audio Input Formats on Bedrock Models"
     Uploads in the formats the Bedrock Converse audio block accepts — `aac`, `flac`, `m4a`, `mka`, `mkv`, `mp3`, `mp4`, `mpeg`, `mpga`, `ogg`, `opus`, `pcm`, `wav`, `webm`, and `x-aac` — are sent through as-is. Any other audio or video upload is automatically converted to FLAC before translation (requires FFmpeg on the server), including the audio track of a video container. An upload that is neither audio nor video is rejected with the list of accepted formats; an audio or video file whose track cannot be decoded is rejected as carrying no decodable audio.
 
-## Advanced Features
+## Working with Amazon Transcribe and Amazon Translate { #advanced-features }
 
 ### ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Transcribe Features
 
 **Model & Features:**
 
 - Use `amazon.transcribe` with the same interface as OpenAI's Whisper API
-- **Or use OpenAI model names directly**: `whisper-1`, `gpt-transcribe`, `gpt-4o-transcribe`, and `gpt-4o-mini-transcribe` work out of the box (they map to `amazon.transcribe`)
+- **Or use OpenAI model names directly**: `whisper-1`, `gpt-transcribe`, `gpt-live-transcribe`, `gpt-4o-transcribe`, and `gpt-4o-mini-transcribe` work out of the box (they map to `amazon.transcribe`)
 - Automatic transcription + translation pipeline in one request
 - Multiple output formats: `text`, `json`, `verbose_json`, `srt`, `vtt`
-- Automatic source language detection (zero configuration)
+- Automatic source language detection — no parameter to set
 - **Smart Subtitle Translation** :material-translate:{ .highlight }: Subtitle timing is preserved during translation
 
 !!! tip "OpenAI Model Compatibility"
@@ -133,15 +147,11 @@ Any Amazon Bedrock model that accepts the `SPEECH` input modality through the Co
 
     - `whisper-1` → `amazon.transcribe`
     - `gpt-transcribe` → `amazon.transcribe`
+    - `gpt-live-transcribe` → `amazon.transcribe`
     - `gpt-4o-transcribe` → `amazon.transcribe`
     - `gpt-4o-mini-transcribe` → `amazon.transcribe`
 
-    These aliases enable seamless compatibility with OpenAI-based tools and applications without any configuration changes (the realtime-oriented `gpt-live-transcribe` is not aliased: it belongs to a streaming API this route does not emulate). You can also [customize or override these aliases](operations_configuration.md#model-aliases) to suit your needs.
-
-**Note:** With `amazon.transcribe`, the `prompt` and `temperature` parameters are rejected with an error to ensure consistent translation accuracy. Bedrock audio models accept both.
-
-!!! warning "Source languages Amazon Translate does not cover"
-    Amazon Transcribe recognises more languages than Amazon Translate can translate into English. When the detected source language is not one of [Amazon Translate's supported languages](https://docs.aws.amazon.com/translate/latest/dg/what-is-languages.html), the request returns HTTP 400 listing the supported language codes instead of a partial result. Transcribe the audio with [`/v1/audio/transcriptions`](api_openai_audio_transcriptions.md) to keep it in its original language.
+    These aliases let an OpenAI-based tool reach these models under the names it already sends, with no configuration change. You can also [customize or override these aliases](operations_configuration_models.md#model-aliases) to suit your needs.
 
 ### Provider-Specific Parameters
 
@@ -178,7 +188,20 @@ Both settings apply consistently to the primary translated text and, for `respon
 
 Invalid `Settings` values (e.g. an unsupported `Formality`) are rejected with HTTP 400 before any partial translation occurs.
 
-## Available Request Headers
+## Limits and behaviour to know
+
+- With `amazon.transcribe`, the `prompt` and `temperature` parameters are
+  rejected with an error to ensure consistent translation accuracy. Bedrock
+  audio models accept both.
+- `verbose_json` translates the transcript twice, once whole and once per
+  segment, so it costs roughly double the Amazon Translate characters of `text`
+  or `json` for the same audio — see
+  [Provider-Specific Parameters](#provider-specific-parameters).
+
+!!! warning "Source languages Amazon Translate does not cover"
+    Amazon Transcribe recognises more languages than Amazon Translate can translate into English. When the detected source language is not one of [Amazon Translate's supported languages](https://docs.aws.amazon.com/translate/latest/dg/what-is-languages.html), the request returns HTTP 400 listing the supported language codes instead of a partial result. Transcribe the audio with [`/v1/audio/transcriptions`](api_openai_audio_transcriptions.md) to keep it in its original language.
+
+## Request headers
 
 This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
 
@@ -215,10 +238,10 @@ curl -X POST "$BASE/v1/audio/translations" \
 !!! info "Detailed Documentation"
     For complete information about these headers, configuration options, and use cases, see:
 
-    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
-    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
+    - [Bedrock Guardrails Configuration](operations_configuration_bedrock.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration_bedrock.md#bedrock-service-tier-and-performance-configuration)
 
-## Try It Now
+## Try it { #try-it-now }
 
 **Translate foreign audio to English text:**
 
@@ -279,6 +302,6 @@ curl -OJ -X POST "$BASE/v1/audio/translations" \
   -F response_format=srt
 ```
 
----
+## Next steps
 
-**Ready to translate multilingual audio?** Explore available models in the [Models API](api_openai_models.md).
+Next: [Models API](api_openai_models.md) · [Speech to Text API](api_openai_audio_transcriptions.md) · [`AWS_TRANSCRIBE_S3_BUCKET`, where jobs are staged](operations_configuration_storage.md#aws-transcribe-s3-bucket) · [Speech-to-text IAM permissions](operations_iam_permissions.md#speech-to-text-optional) · [Text-translation IAM permissions](operations_iam_permissions.md#text-translation-optional)

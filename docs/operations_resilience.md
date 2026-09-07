@@ -58,7 +58,7 @@ Set the strategy with `AWS_BEDROCK_REGION_ROUTING`:
 
 | Strategy | Description | Prompt Caching | Default |
 |---|---|---|---|
-| `ordered` | Try regions in the order listed in `AWS_BEDROCK_REGIONS`, skipping any that are currently blocked | :material-check: Compatible | :material-check: Yes |
+| `ordered` | Try regions in the order listed in `AWS_BEDROCK_REGIONS`, demoting any that are currently blocked to last resort | :material-check: Compatible | :material-check: Yes |
 | `lowest_latency` | Prefer the region with the lowest measured round-trip latency | :material-check: Compatible | |
 | `round_robin` | Distribute requests evenly across available regions | :material-close: Not compatible | |
 | `disabled` | No routing; each model uses its primary region only | :material-check: Compatible | |
@@ -117,7 +117,7 @@ export AWS_BEDROCK_REGION_ROUTING_UNAVAILABLE_BACKOFF_SECONDS=30
 
 1. **Model discovery** — At startup, stdapi.ai discovers which models are available in each configured region.
 2. **Region selection** — When a request arrives, the router picks the best region for that model based on the active strategy and current region health.
-3. **Automatic failover** — For synchronous and streaming requests without S3 inputs, the retry loop walks the regions in priority order and stops once every candidate has been tried, or once `AWS_BEDROCK_MAX_RETRIES` retries are spent — whichever comes first. A region is never attempted twice within the same request: it is still blocked by the backoff its failure just recorded, and a second error there would only deepen that backoff. All retryable errors escalate to the next region immediately, except a read timeout ([`AI_RESPONSE_TIMEOUT`](operations_configuration.md#ai-response-timeout)): the model has already been invoked and is billed by AWS whatever the client does, so the request fails with a `503` rather than paying a second region for the same generation. When S3 inputs are present, the region is pinned and botocore's adaptive retries handle resilience within that region (see [S3-Aware Region Selection](#s3-aware-region-selection)).
+3. **Automatic failover** — For synchronous and streaming requests without S3 inputs, the retry loop walks the regions in priority order and stops once every candidate has been tried, or once `AWS_BEDROCK_MAX_RETRIES` retries are spent — whichever comes first. A region is never attempted twice within the same request: it is still blocked by the backoff its failure just recorded, and a second error there would only deepen that backoff. All retryable errors escalate to the next region immediately, except a read timeout ([`AI_RESPONSE_TIMEOUT`](operations_configuration_server.md#ai-response-timeout)): the model has already been invoked and is billed by AWS whatever the client does, so the request fails with a `503` rather than paying a second region for the same generation. When S3 inputs are present, the region is pinned and botocore's in-region retries handle resilience within that region — `standard` mode by default, `adaptive` when [`AWS_ADAPTIVE_RETRY=true`](operations_configuration_aws.md#aws-adaptive-retry), bounded by `AWS_BEDROCK_MAX_RETRIES` + 1 attempts (see [S3-Aware Region Selection](#s3-aware-region-selection)).
 4. **Backoff tracking** — Regions that produce errors are temporarily deprioritized. Quota errors use exponential backoff (base interval doubles per consecutive error, capped at 1 hour); unavailability errors use a fixed backoff. Once the backoff expires, regions rejoin the rotation.
 5. **Client-side backoff hint** — If every attempt is exhausted, the resulting `429` response carries a `retry-after` header set to the shortest quota backoff applied during the request, i.e. the delay after which the first blocked region rejoins the rotation. OpenAI, Anthropic and Cohere SDKs honour it natively, so clients wait exactly as long as needed instead of applying a blind exponential backoff — note that all three cap a server-supplied delay at 60 s and fall back to their own backoff beyond that, so an escalated quota backoff is only partly respected. The header is omitted when no quota backoff was recorded (for example on a single-region deployment, where no routing state exists).
 
@@ -148,8 +148,8 @@ flowchart LR
 
 | API Style | Failover Behavior |
 |---|---|
-| Synchronous (Converse, InvokeModel) | Automatic failover across regions within the same request, each candidate tried once; S3-pinned requests stay on the pinned region with botocore adaptive retries |
-| Streaming (ConverseStream, InvokeModelWithResponseStream) | Failover across regions **before** the stream opens, each candidate tried once; once streaming begins the region is locked. S3-pinned requests stay on the pinned region with botocore adaptive retries. |
+| Synchronous (Converse, InvokeModel) | Automatic failover across regions within the same request, each candidate tried once; S3-pinned requests stay on the pinned region with botocore's in-region retries |
+| Streaming (ConverseStream, InvokeModelWithResponseStream) | Failover across regions **before** the stream opens, each candidate tried once; once streaming begins the region is locked. S3-pinned requests stay on the pinned region with botocore's in-region retries. |
 | Asynchronous (StartAsyncInvoke) | Region is selected once at job start; no mid-job failover |
 
 ---
@@ -174,7 +174,7 @@ Every request log includes a `model_regions` field (a set) showing which AWS reg
 
 ### :material-bucket-outline: S3 Data Handling
 
-Many Bedrock operations accept S3 URIs as input (e.g. images, PDFs) or produce S3 output (e.g. async invocations). stdapi.ai includes several features to handle S3 data seamlessly across regions.
+Many Bedrock operations accept S3 URIs as input (e.g. images, PDFs) or produce S3 output (e.g. async invocations). stdapi.ai includes several features to handle S3 data across regions.
 
 #### S3-Aware Region Selection
 
@@ -282,7 +282,7 @@ Keys are Bedrock model IDs (or prefixes). Values are ordered lists of allowed re
 
 When a client sends a request using a model ID that has been retired or superseded, stdapi.ai can transparently reroute it to the recommended replacement — no client changes needed.
 
-This is controlled by [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](operations_configuration.md#bedrock-deprecated-model-fallback) (default: `true`).
+This is controlled by [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](operations_configuration_models.md#bedrock-deprecated-model-fallback) (default: `true`).
 
 #### How It Works
 
@@ -296,13 +296,13 @@ This is controlled by [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](operations_confi
 
 #### Legacy Model Warnings
 
-Using a **legacy** model (one AWS has scheduled for end-of-life) also emits a `warning`-level log entry, including the EOL date when known:
+With [`AWS_BEDROCK_LEGACY`](operations_configuration_models.md#bedrock-legacy) enabled — legacy models are otherwise dropped from the catalogue and never served at all — using a **legacy** model (one AWS has scheduled for end-of-life) emits a `warning`-level log entry on every request, including the EOL date when known:
 
 ```text
 Model 'anthropic.claude-haiku-4-5-20251001-v1:0' is legacy and will reach end-of-life on 2027-06-19. Please migrate to a supported model.
 ```
 
-Models whose EOL date falls within the current cache window are **proactively excluded** at cache refresh time, so they are never served to clients even if AWS has not yet removed them from the available models list. See [which models are marked legacy](models.md).
+Models whose EOL date falls within the current cache window are **proactively excluded** at cache refresh time whatever `AWS_BEDROCK_LEGACY` says, so they are never served to clients even if AWS has not yet removed them from the available models list. The setting only reaches models that are marked legacy, or whose legacy date has passed, ahead of end-of-life. See [which models are marked legacy](models.md).
 
 #### Strict Mode
 
@@ -314,31 +314,31 @@ The model `amazon.titan-text-lite-v1` does not exist or you do not have access t
 
 #### Extending the Registry
 
-The built-in deprecation registry covers all models listed in the [Amazon Bedrock model lifecycle](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html). Use [`AWS_BEDROCK_DEPRECATED_MODELS`](operations_configuration.md#bedrock-deprecated-models) to add custom mappings or override existing ones.
+The built-in deprecation registry covers all models listed in the [Amazon Bedrock model lifecycle](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html). Use [`AWS_BEDROCK_DEPRECATED_MODELS`](operations_configuration_models.md#bedrock-deprecated-models) to add custom mappings or override existing ones.
 
 ---
 
 ### :material-account-voice: Other AWS Services Failover
 
-Amazon Polly, Transcribe, Translate, and Comprehend follow the same regional-failover pattern as Bedrock. Each service has its own region setting — [`AWS_POLLY_REGION`](operations_configuration.md#aws-polly-region), [`AWS_TRANSCRIBE_REGION`](operations_configuration.md#aws-transcribe-region), [`AWS_TRANSLATE_REGION`](operations_configuration.md#aws-translate-region), [`AWS_COMPREHEND_REGION`](operations_configuration.md#aws-comprehend-region) — and when left unset, every region in `AWS_BEDROCK_REGIONS` becomes a candidate, tried in order with automatic failover on region-level errors:
+Amazon Polly, Transcribe, Translate, and Comprehend follow the same regional-failover pattern as Bedrock. Each service has its own region setting — [`AWS_POLLY_REGION`](operations_configuration_aws.md#aws-polly-region), [`AWS_TRANSCRIBE_REGION`](operations_configuration_aws.md#aws-transcribe-region), [`AWS_TRANSLATE_REGION`](operations_configuration_aws.md#aws-translate-region), [`AWS_COMPREHEND_REGION`](operations_configuration_aws.md#aws-comprehend-region) — and when left unset, every region in `AWS_BEDROCK_REGIONS` becomes a candidate, tried in order with automatic failover on region-level errors:
 
 - **Polly** — voice availability is discovered per engine (Standard, Neural, Long-form, Generative) across all candidate regions at startup; each synthesis call routes to a region offering the requested engine and voice.
-- **Transcribe** — candidate regions are restricted to those with a co-located S3 bucket ([`AWS_TRANSCRIBE_S3_BUCKET`](operations_configuration.md#aws-transcribe-s3-bucket) or a regional bucket in [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)); on a region-level error the audio is copied to the next candidate's bucket and the job restarts there.
+- **Transcribe** — candidate regions are restricted to those with a co-located S3 bucket ([`AWS_TRANSCRIBE_S3_BUCKET`](operations_configuration_storage.md#aws-transcribe-s3-bucket) or a regional bucket in [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration_storage.md#aws-s3-regional-buckets)); on a region-level error the audio is copied to the next candidate's bucket and the job restarts there.
 - **Translate** and **Comprehend** — calls try each candidate region in order and fail over on throttling, service unavailability, or network errors.
 
-When several regions are candidates, per-region SDK retries are capped by [`AWS_FAILOVER_MAX_RETRIES`](operations_configuration.md#failover-max-retries) so that failover across regions replaces deep in-region retrying.
+When several regions are candidates, per-region SDK retries are capped by [`AWS_FAILOVER_MAX_RETRIES`](operations_configuration_aws.md#failover-max-retries) so that failover across regions replaces deep in-region retrying.
 
 Setting an explicit region for any of these services pins it to that single region, disabling failover.
 
 ### :material-rocket-launch-outline: Fault-Tolerant Startup
 
-A Bedrock region that cannot be reached at startup (invalid region for the account, network issue, throttling) does not block the server from starting: it is skipped with an `unreachable_bedrock_regions` warning, its models are served from the remaining regions, and the region is retried automatically on the next model list refresh ([`MODEL_CACHE_SECONDS`](operations_configuration.md#model-cache-seconds)). Startup only fails when **every** configured region is unreachable, or when **every** per-model availability check errors — see [Unreachable Region Tolerance](operations_configuration.md#aws-bedrock-regions).
+A Bedrock region that cannot be reached at startup (invalid region for the account, network issue, throttling) does not block the server from starting: it is skipped with an `unreachable_bedrock_regions` warning, its models are served from the remaining regions, and the region is retried automatically on the next model list refresh ([`MODEL_CACHE_SECONDS`](operations_configuration_models.md#model-cache-seconds)). Startup only fails when **every** configured region is unreachable, or when **every** per-model availability check errors — see [Unreachable Region Tolerance](operations_configuration_aws.md#aws-bedrock-regions).
 
-A region AWS refuses is tolerated the same way, but reported apart under `bedrock_regions_missing_iam_permission`, naming the IAM action that was denied. Retrying cannot fix a denial, so the two states never share a warning — see [Denied Region Reporting](operations_configuration.md#aws-bedrock-regions). Where the refused call is only an enrichment, the region is kept rather than skipped: a denied `bedrock:ListProvisionedModelThroughputs` costs its provisioned-only models, not its whole catalogue.
+A region AWS refuses is tolerated the same way, but reported apart under `bedrock_regions_missing_iam_permission`, naming the IAM action that was denied. Retrying cannot fix a denial, so the two states never share a warning — see [Denied Region Reporting](operations_configuration_aws.md#aws-bedrock-regions). Where the refused call is only an enrichment, the region is kept rather than skipped: a denied `bedrock:ListProvisionedModelThroughputs` costs its provisioned-only models, not its whole catalogue.
 
 ### :material-refresh-auto: Model List Refresh { #model-list-refresh }
 
-The list of models a server offers is discovered from Amazon Bedrock across every configured region and kept for [`MODEL_CACHE_SECONDS`](operations_configuration.md#model-cache-seconds) (default 15 minutes). What happens when it expires is what decides whether a request pays for the refresh.
+The list of models a server offers is discovered from Amazon Bedrock across every configured region and kept for [`MODEL_CACHE_SECONDS`](operations_configuration_models.md#model-cache-seconds) (default 15 minutes). What happens when it expires is what decides whether a request pays for the refresh.
 
 #### No Request Waits for a Refresh
 
@@ -347,11 +347,11 @@ Once the list has expired, the request that notices is answered from the list al
 | Cache state | What the request gets |
 |---|---|
 | Within `MODEL_CACHE_SECONDS` | The cached list, at the cost of one comparison |
-| Expired, under [`MODEL_CACHE_MAX_STALE_SECONDS`](operations_configuration.md#model-cache-max-stale-seconds) | The cached list immediately; one refresh starts in the background |
+| Expired, under [`MODEL_CACHE_MAX_STALE_SECONDS`](operations_configuration_models.md#model-cache-max-stale-seconds) | The cached list immediately; one refresh starts in the background |
 | Expired, at or beyond that age | Waits for a successful refresh |
 | No list at all (a server that started without one) | Waits for a successful refresh |
 
-However many requests arrive at once, exactly **one** refresh runs per server; the rest are answered from the list in memory. A refresh still running when the server is asked to stop is awaited with the rest of the deferred work, within [`SHUTDOWN_DRAIN_TIMEOUT`](operations_configuration.md#shutdown-drain-timeout).
+However many requests arrive at once, exactly **one** refresh runs per server; the rest are answered from the list in memory. A refresh still running when the server is asked to stop is awaited with the rest of the deferred work, within [`SHUTDOWN_DRAIN_TIMEOUT`](operations_configuration_server.md#shutdown-drain-timeout).
 
 A refresh that fails reaches no client: it is recorded in the server log and retried shortly rather than raised at whoever happened to trigger it. Once the list is more than two `MODEL_CACHE_SECONDS` old, those entries are raised to `error` — which is the signal that the list is drifting toward the ceiling above.
 
@@ -369,7 +369,7 @@ This is the same guarantee the API has always made: [the catalogue advertises, t
 
 #### Sharing One List Across a Fleet
 
-By default each server discovers the catalogue for itself: *N* servers means *N* discovery passes per interval, and a server that starts is not useful until its own pass finishes. Setting [`MODEL_CACHE_SHARED`](operations_configuration.md#model-cache-shared) with an [`AWS_DYNAMODB_TABLE`](operations_configuration.md#aws-dynamodb-table) changes that: one server refreshes and publishes the list, the others read it.
+By default each server discovers the catalogue for itself: *N* servers means *N* discovery passes per interval, and a server that starts is not useful until its own pass finishes. Setting [`MODEL_CACHE_SHARED`](operations_configuration_models.md#model-cache-shared) with an [`AWS_DYNAMODB_TABLE`](operations_configuration_storage.md#aws-dynamodb-table) changes that: one server refreshes and publishes the list, the others read it.
 
 - **One refresh per fleet.** A server whose list has expired first claims a short lease in the table; the one that wins it refreshes and publishes, the rest keep serving what they have and pick up the published list on their next check. A server that crashes mid-refresh only holds the lease until it expires.
 - **Faster scale-out.** A starting server reads the published list instead of discovering, so it is ready in a couple of table reads rather than a full multi-region pass — which matters most where tasks start often (autoscaling, rolling deployments).
@@ -407,7 +407,7 @@ The Terraform module deploys stdapi.ai following AWS best practices for high ava
   <br>New tasks become healthy in under 30 seconds, minimizing the recovery window after any failure
 
 - :material-update: __Zero-Downtime Updates__
-  <br>Rolling deployments and ALB connection draining let in-flight requests finish on the outgoing task before it is deregistered
+  <br>Rolling deployments and ALB connection draining let in-flight requests finish on the outgoing task before it is deregistered — [a service pinned to one task](#multi-az-ecs-service-resilience) is replaced stop-then-start instead
 
 </div>
 
@@ -454,23 +454,25 @@ flowchart TB
 
 **Multi-AZ spread.** The Terraform module places ECS tasks across all available Availability Zones in the region. If an AZ experiences a partial or full failure, tasks in the remaining AZs continue to process requests without interruption. The default configuration maintains at least one task per Availability Zone, so capacity remains in the other AZs during a task replacement event.
 
-**Auto-scaling.** Task count scales automatically based on CPU utilization, memory utilization, and ALB request count — whichever metric signals pressure first. Fargate Spot is optionally available for cost-sensitive deployments — see [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) for the trade-offs.
+**Auto-scaling.** Task count scales automatically on CPU utilization out of the box, and on memory utilization or ALB request count per target once you ask for them. Fargate Spot is optionally available for cost-sensitive deployments — see [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) for the trade-offs.
 
 !!! info "Terraform Module"
-    Minimum capacity defaults to the number of deployed Availability Zones (one task per AZ, via `autoscaling_min_capacity`). Maximum capacity is configurable (`autoscaling_max_capacity`, default: `null` — uses the AWS Application Auto Scaling default). Auto-scaling targets CPU and memory utilization as well as ALB request count per target, so the service scales out under any of these pressure signals.
+    Minimum capacity defaults to the number of deployed Availability Zones (one task per AZ, via `autoscaling_min_capacity`), and maximum capacity defaults to five times that minimum (`autoscaling_max_capacity`). The only scaling policy created by default is CPU target tracking at 70% (`autoscaling_cpu_target_percent`). Memory and request-volume scaling are opt-in: set `autoscaling_memory_target_percent` or `autoscaling_alb_target_requests_per_target` — the latter tracks the load the gateway actually carries more closely than CPU does, since the gateway spends most of its time awaiting AWS responses.
 
 **Fast startup.** The stdapi.ai container image is optimized for minimal startup time — a new task typically becomes healthy in under 30 seconds. Fast startup is critical for recovery: when ECS detects a failed task it launches a replacement immediately, keeping the degraded window short and ensuring the service restores full capacity without manual intervention.
 
 **Zero-downtime updates.** ECS rolling deployments start the new container version and wait for it to pass health checks before draining the old task. The ALB connection draining period lets in-flight requests complete on the outgoing task before it is deregistered, so an application update does not cut off calls that are already under way — provided they finish within the draining window.
 
+**A service that can only run one task is replaced stop-then-start.** With `autoscaling_max_capacity = 1`, ECS has no room to start a replacement beside the running task, so the module lowers the deployment's minimum healthy percent to 0: the old task is stopped first and **the service answers nothing until the replacement passes its health checks**. Every deployment, and every task the platform replaces, is therefore a short outage rather than a rolling update. This is the shape the [WebRTC media mode](operations_deploy_advanced.md#webrtc-and-sip-need-their-own-ingress) pins for you; anywhere else, keeping `autoscaling_max_capacity` at 2 or more restores the rolling behaviour above.
+
 #### :material-tray-arrow-down: Work That Outlives Its Request { #vector-store-indexing }
 
-Vector store [indexing](api_openai_vector_stores.md#indexing-is-asynchronous) runs in the background rather than on the request path, so a task replaced while it is in flight interrupts it. A task asked to stop finishes what it can first — under [`SHUTDOWN_DRAIN_TIMEOUT`](operations_configuration.md#shutdown-drain-timeout) — but that grace period is short by design, since ECS sends `SIGKILL` 30 seconds after `SIGTERM` by default, so it is a courtesy rather than a guarantee. Nothing is stranded when it runs out:
+Vector store [indexing](api_openai_vector_stores.md#indexing-is-asynchronous) runs in the background rather than on the request path, so a task replaced while it is in flight interrupts it. A task asked to stop finishes what it can first — under [`SHUTDOWN_DRAIN_TIMEOUT`](operations_configuration_server.md#shutdown-drain-timeout) — but that grace period is short by design, since ECS sends `SIGKILL` 30 seconds after `SIGTERM` by default, so it is a courtesy rather than a guarantee. Nothing is stranded when it runs out:
 
 -   A file left `in_progress` with nothing indexing it any more is settled as `failed`, with `last_error` saying the indexing was interrupted, the next time the file, the store, or its file list is read. Attach the file again to index it — no store is left reporting `in_progress` for good, and no client polls forever.
 -   Deleting a file from a vector store removes its passages from the index **before** the record that names them, so a task lost mid-delete leaves the deletion to be finished by the next read rather than leaving content searchable. Either way the file stops being searchable and stops being listed the moment the API answers.
 
-**Hand the work to a queue instead.** Set [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url) and indexing stops depending on the task that accepted it: another task finishes the job.
+**Hand the work to a queue instead.** Set [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration_storage.md#aws-sqs-vector-store-queue-url) and indexing stops depending on the task that accepted it: another task finishes the job.
 
 -   Attaching a file records the work on your Amazon SQS queue **before the response is sent**, once every record it names is already durable in S3. There is no window in which the client has been told the file is attached and the work has not been handed over.
 -   Every task reads that queue, so the fleet you already run is the pool of consumers — no extra service, no extra container-hour, and consumer redundancy across Availability Zones for free.

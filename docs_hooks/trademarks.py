@@ -29,7 +29,7 @@ class _Entry(NamedTuple):
         marks: Individual marks listed on the trademarks page.
         owner: Legal owner, exactly as it must be attributed everywhere.
         pattern: Regex whose match in a page's Markdown means the page uses a mark.
-        assets: Stems of ``docs/styles/logo_<stem>.svg`` files covered by this entry.
+        assets: Stems of ``docs/styles/logo_<stem>.*`` files covered by this entry.
     """
 
     label: str
@@ -129,11 +129,27 @@ _REGISTRY: tuple[_Entry, ...] = (
         assets=("anthropic", "anthropic_claude"),
     ),
     _Entry(
+        label="Cline", marks=("Cline",), owner="Cline Bot Inc.", pattern=r"\bCline\b"
+    ),
+    _Entry(
         label="Cohere",
         marks=("Cohere",),
         owner="Cohere Inc.",
         pattern=r"\bCohere\b",
         assets=("cohere",),
+    ),
+    _Entry(
+        label="Continue",
+        marks=("Continue",),
+        owner="Continue Dev, Inc.",
+        pattern=r"\bContinue\.dev\b|\bContinue Dev\b",
+    ),
+    _Entry(
+        label="Cursor",
+        marks=("Cursor",),
+        owner="Anysphere, Inc.",
+        # The API reference also uses "Cursor" for pagination, which is not the mark.
+        pattern=r"\bCursor\b(?!-based|\s+(?:for|from)\b)",
     ),
     _Entry(
         label="DeepSeek",
@@ -177,7 +193,7 @@ _REGISTRY: tuple[_Entry, ...] = (
         marks=("Home Assistant", "Wyoming"),
         owner="the Open Home Foundation",
         pattern=r"\bHome Assistant\b|\bWyoming\b",
-        assets=("home_assistant",),
+        assets=("home_assistant", "wyoming"),
     ),
     _Entry(
         label="Kubernetes",
@@ -379,8 +395,13 @@ _TRADEMARKS_PAGE: str = "trademarks.md"
 #: Placeholder in the trademarks page replaced by the generated registry table.
 _TABLE_MARKER: str = "<!-- trademarks-table -->"
 
+#: File extensions a brand logo asset may use.
+_ASSET_SUFFIXES: frozenset[str] = frozenset({".svg", ".png", ".webp", ".jpg", ".jpeg"})
+
 #: Matches a reference to a brand logo asset, capturing its stem.
-_ASSET_RE: re.Pattern[str] = re.compile(r"styles/logo_([A-Za-z0-9_]+)\.svg")
+_ASSET_RE: re.Pattern[str] = re.compile(
+    rf"styles/logo_([A-Za-z0-9_]+)(?:{'|'.join(map(re.escape, sorted(_ASSET_SUFFIXES)))})"
+)
 
 #: Registry entries keyed by the logo asset stems they cover.
 _ENTRY_BY_ASSET: dict[str, _Entry] = {
@@ -472,9 +493,13 @@ def on_post_build(config: Any) -> None:  # noqa: ANN401
     Args:
         config: MkDocs configuration object.
     """
-    for asset in sorted(Path(config["docs_dir"], "styles").glob("logo*.svg")):
+    for asset in sorted(Path(config["docs_dir"], "styles").glob("logo*.*")):
         stem = asset.stem.removeprefix("logo_")
-        if asset.name not in _OWN_ASSETS and stem not in _ENTRY_BY_ASSET:
+        if (
+            asset.suffix.lower() in _ASSET_SUFFIXES
+            and asset.name not in _OWN_ASSETS
+            and stem not in _ENTRY_BY_ASSET
+        ):
             _LOG.warning(
                 "Brand logo asset 'styles/%s' has no trademark registry entry; "
                 "add one to docs_hooks/trademarks.py",

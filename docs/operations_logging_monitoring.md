@@ -27,7 +27,7 @@ stdapi.ai emits structured JSON logs for every request, stream, and background t
   <br>All events for a request share the same `id` (returned as `x-request-id`). Track full request lifecycle across logs and traces.
 
 - :material-aws: __AWS-Native Integration__
-  <br>Works seamlessly with CloudWatch Logs, X-Ray, and service metrics. ECS auto-forwards STDOUT to CloudWatch.
+  <br>Works with CloudWatch Logs, X-Ray, and service metrics. ECS auto-forwards STDOUT to CloudWatch.
 
 - :material-graphql: __OpenTelemetry Tracing__
   <br>Enable `OTEL_ENABLED=true` to export spans to AWS X-Ray, Jaeger, Tempo, or any OTLP-compatible backend.
@@ -76,7 +76,7 @@ export ENABLE_PROXY_HEADERS=true  # When behind ALB/CloudFront
     - The `client_ip` field is added to request logs
     - The client IP is added as `client.address` attribute to OpenTelemetry spans (when `OTEL_ENABLED=true`)
 
-    To log the real client IP address (instead of the proxy IP), also enable `ENABLE_PROXY_HEADERS=true` when running behind AWS ALB, CloudFront, or other reverse proxies. See the [Configuration Guide](operations_configuration.md#client-ip-logging) for details.
+    To log the real client IP address (instead of the proxy IP), also enable `ENABLE_PROXY_HEADERS=true` when running behind AWS ALB, CloudFront, or other reverse proxies. See the [Configuration Guide](operations_configuration_observability.md#client-ip-logging) for details.
 
 !!! tip "CloudWatch best practice"
     JSON to STDOUT is optimal for CloudWatch Logs Insights. In AWS ECS, the task's log driver forwards container STDOUT to CloudWatch Logs automatically.
@@ -121,14 +121,16 @@ Each event shares core fields and may add type‑specific ones.
 |                           `model_regions` | request                             | AWS region(s) that handled the request; may contain multiple values when failover occurred  |
 |       `request_user_id`, `request_org_id` | request                             | Propagated identifiers (if applicable)                                                      |
 |                  `aws_role_session_name` | request                             | Session the request's model usage was billed under, with [per-user cost attribution](operations_cost_management.md#per-user-attribution) enabled; the same value AWS reports as the caller identity |
+|                     `aws_tenant_key_id` | request                             | Key ID of the tenant whose own AWS account the model invocations were billed to, with [tenant AWS credentials](operations_authentication_security.md#tenant-aws-credentials); pair it with the `billed_to` usage field to reconcile against that tenant's bill |
 |                          `request_params` | request                             | Sanitized request payload (if `LOG_REQUEST_PARAMS=true`)                                    |
 |                        `request_response` | request                             | Sanitized response payload (if `LOG_REQUEST_PARAMS=true`)                                   |
 | `amzn_trace_id`, `apigw_request_id`, `cloudfront_request_id` | request          | Edge correlation IDs copied from the `X-Amzn-Trace-Id`, `x-amz-apigw-id` and `X-Amz-Cf-Id` request headers (when present) |
 |                            `aws_requests` | request, request_stream, background | AWS-side request IDs of downstream AWS API calls (see [AWS Service Correlation Metadata](#aws-service-correlation-metadata)) |
 |                                   `event` | background                          | Background operation name                                                                   |
 | `server_start_time_ms`, `server_warnings` | start                               | Startup metrics and warnings                                                                |
+|                       `region_latencies` | start                               | `latency_ms` and `stddev_ms` per Bedrock region, lowest first — the startup probe the [`lowest_latency`](operations_resilience.md#lowest-latency) routing strategy ordered the regions by. Present only under that strategy |
 |                        `server_uptime_ms` | stop                                | Uptime at shutdown                                                                          |
-|             `abandoned_background_tasks` | stop                                | Background tasks cancelled unfinished at shutdown, counted per kind; present only when some were, and the event is then `warning` (see [`SHUTDOWN_DRAIN_TIMEOUT`](operations_configuration.md#shutdown-drain-timeout)) |
+|             `abandoned_background_tasks` | stop                                | Background tasks cancelled unfinished at shutdown, counted per kind; present only when some were, and the event is then `warning` (see [`SHUTDOWN_DRAIN_TIMEOUT`](operations_configuration_server.md#shutdown-drain-timeout)) |
 
 !!! note "Understanding warnings and errors"
     - For `request` events, default log levels are derived from the final HTTP status: 4xx → `warning`, 5xx → `error`. Unexpected server crashes (like HTTP 500) may appear as `critical`.
@@ -152,13 +154,16 @@ Usage is reported as a nested `usage` list on `request` / `request_stream` event
 | `region`                    | str | AWS region that served the request (part of the aggregation key)                                       |
 | `tier`                      | str | Service tier that actually served the call (AWS-reported when available, else as requested): `standard`, `flex`, `priority`, `batch` |
 | `routing`                   | str | Serving profile, present as `"global"` (cross-region global routing) or `"latency"` (latency-optimized) |
-| `context`                   | str | Present as `"long"` only when the call's prompt (input + cache read/write tokens) exceeded 200K tokens — billed at the long-context rate where AWS publishes one |
-| `cost`                      | str | Exact cost as plain-decimal text (no exponent, no trailing zeros, e.g. `"0.000015"`)                   |
+| `context`                   | str | Present as `"long"` only when the call's prompt (input + cache read/write tokens) exceeded the boundary that model publishes — 200K tokens for most models, 272K for the OpenAI GPT-5.6 family; billed at the [long-context rate](operations_cost_management.md#long-context-pricing) where AWS publishes one |
+| `billed_to`                 | str | Present as `"tenant"` only when AWS billed another account for the call — a tenant that registered [its own AWS credential](operations_authentication_security.md#tenant-aws-credentials). Such entries carry quantities but **no `cost`**, and are excluded from the request total and the `Cost` metric |
+| `cost`                      | str | Full-precision cost as plain-decimal text (no exponent, no trailing zeros, e.g. `"0.000015"`)          |
 | `currency`                  | str | ISO currency code for `cost`                                                                            |
-| `costs`                     | dict| Per-currency exact cost text, replacing `cost`/`currency` when dimensions span multiple currencies      |
+| `costs`                     | dict| Per-currency full-precision cost text, replacing `cost`/`currency` when dimensions span multiple currencies |
 | `requests`                  | int | Number of billed backend invocations aggregated into this entry                                        |
 | `input_tokens`              | int | Real input token count (Converse, InvokeModel, embeddings)                                            |
+| `input_tokens_by_spec`      | dict| Input tokens keyed by modality bucket (e.g., `{"speech": 1200}`), for models AWS charges per modality  |
 | `output_tokens`             | int | Real output token count (Converse, InvokeModel)                                                        |
+| `output_tokens_by_spec`     | dict| Output tokens keyed by modality bucket (e.g., `{"speech": 800}`), for models AWS charges per modality  |
 | `total_tokens`              | int | Real total tokens (Converse provides this directly)                                                    |
 | `cached_tokens`             | int | Real cached read tokens from Converse prompt caching                                                   |
 | `cache_write_tokens`        | int | Real cache write tokens from Converse prompt caching                                                   |
@@ -178,7 +183,7 @@ Usage is reported as a nested `usage` list on `request` / `request_stream` event
 | `text_units`                | int | Bedrock Guardrails text units (1,000 characters each), as reported by ApplyGuardrail, per applied policy |
 
 !!! warning "Guardrail cost coverage"
-    Guardrail units are recorded only on routes that enforce the guardrail through the ApplyGuardrail API, which reports the units each policy consumed. Chat routes use Bedrock's native guardrail integration, whose responses carry no unit counts, so their guardrail cost is absent from these entries even though AWS charges it — see [route coverage](operations_configuration.md#route-coverage).
+    Guardrail units are recorded only on routes that enforce the guardrail through the ApplyGuardrail API, which reports the units each policy consumed. Chat routes use Bedrock's native guardrail integration, whose responses carry no unit counts, so their guardrail cost is absent from these entries even though AWS charges it — see [route coverage](operations_configuration_bedrock.md#route-coverage).
 
 !!! note "Usage field placement"
     - **Non-streaming requests**: Usage appears on the `request` event
@@ -244,10 +249,10 @@ Each billed usage entry generates one EMF JSON line:
 
 #### Dimension Sets Added by the Usage API { #usage-api-dimension-sets }
 
-With [`USAGE_API`](operations_configuration.md#usage-api) enabled, every metric above is published a second time under a `[Model, Operation]` dimension set, **alongside** the `Model` roll-up rather than in place of it — that per-endpoint breakdown is what the [organization usage endpoints](api_openai_organization_usage.md) read. Two more sets follow the caller:
+With [`USAGE_API`](operations_configuration_observability.md#usage-api) enabled, every metric above is published a second time under a `[Model, Operation]` dimension set, **alongside** the `Model` roll-up rather than in place of it — that per-endpoint breakdown is what the [organization usage endpoints](api_openai_organization_usage.md) read. Two more sets follow the caller:
 
 - Where the request carried a tenant API key, the quantities are also published under `[Model, Operation, ApiKey]`, and `Cost` additionally under `[Model, Currency, ApiKey]`.
-- With [`CLOUDWATCH_METRICS_USER_DIMENSION`](operations_configuration.md#cloudwatch-metrics-user-dimension) enabled, the quantities are also published under `[Model, Operation, User]`.
+- With [`CLOUDWATCH_METRICS_USER_DIMENSION`](operations_configuration_observability.md#cloudwatch-metrics-user-dimension) enabled, the quantities are also published under `[Model, Operation, User]`.
 
 `Operation` takes one of a fixed set of values, never a caller-supplied string:
 
@@ -274,7 +279,7 @@ A route outside that set publishes no `Operation` dimension.
 
 ## :material-currency-usd: Cost Tracking and Attribution { #cost-tracking-real-time-aws-pricing }
 
-Real-time cost computation (`COST_TRACKING`), the price catalog and its accuracy caveats, the `Cost` EMF metric, and AWS-side cost attribution now live on their own page.
+Pricing each request from published AWS prices is covered on the [Cost Management](operations_cost_management.md) page: what `COST_TRACKING` (off by default) adds to the request log line and to the `Cost` EMF metric, where the price catalog comes from and how far an estimate can drift from your bill, the regional and multi-currency fallbacks, and how to attribute spend on the AWS side — by IAM principal or per end user. Go there to answer "what did this request cost?" rather than "what did this request do?".
 
 [:octicons-arrow-right-24: Cost Management](operations_cost_management.md)
 
@@ -311,7 +316,7 @@ Real-time cost computation (`COST_TRACKING`), the price catalog and its accuracy
 
 ## :material-filter: Controlling Log Verbosity
 
-The `LOG_LEVEL` environment variable controls which log events are written to STDOUT. Set it to filter out lower-severity events. For detailed configuration options, see the [Logging Level](operations_configuration.md#logging-level) section in the Configuration Guide.
+The `LOG_LEVEL` environment variable controls which log events are written to STDOUT. Set it to filter out lower-severity events. For detailed configuration options, see the [Logging Level](operations_configuration_observability.md#logging-level) section in the Configuration Guide.
 
 - **`info`** (default): All events are logged (info, warning, error, critical)
 - **`warning`**: Only warnings and higher severity (warning, error, critical) - recommended for production
@@ -327,7 +332,7 @@ export LOG_LEVEL=warning
 !!! tip "Reducing CloudWatch Costs"
     In high-traffic production environments, setting `LOG_LEVEL=warning` or `LOG_LEVEL=error` can significantly reduce CloudWatch Logs ingestion and storage costs by filtering out routine `info`-level events. This is especially effective when combined with appropriate retention policies.
 
-    Additionally, infrastructure routes are automatically excluded from logging to reduce noise: `/`, `/docs`, `/favicon.ico`, `/health`, `/openapi.json`, `/ping`, `/redoc`, `/robots.txt`, `/.well-known/api-catalog`, and `/.well-known/mcp/server-card.json`.
+    Additionally, infrastructure routes are automatically excluded from logging to reduce noise: `/`, `/docs`, `/favicon.ico`, `/health`, `/openapi.json`, `/ping`, `/redoc`, `/robots.txt`, `/.well-known/api-catalog`, `/.well-known/mcp/server-card.json`, and `/.well-known/oauth-protected-resource`. The browser assets the documentation pages load, served under `/docs-assets/`, are excluded on the same grounds.
 
 ---
 
@@ -477,7 +482,7 @@ Coverage and how to use it varies by service:
 
 - **Bedrock — synchronous inference** (every chat, embedding, image and audio route served by `bedrock-runtime`): identifiers are embedded in the invocation request — both the `Converse` and the `InvokeModel` families, streaming included — and appear in Bedrock invocation log records when [model invocation logging](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html) is enabled. Filter by `requestMetadata.stdapi-ai\.request_id` in CloudWatch Logs Insights to join a Bedrock record with its stdapi.ai event.
 - **Bedrock — asynchronous batch jobs**: identifiers are attached as resource tags on the job, visible in the AWS Console and searchable via the CLI/API.
-- **Bedrock Mantle**: the Mantle endpoint accepts no request metadata. Attribute those requests with a [Project/Workspace](operations_configuration.md#bedrock-mantle-project) instead.
+- **Bedrock Mantle**: the Mantle endpoint accepts no request metadata. Attribute those requests with a [Project/Workspace](operations_configuration_aws.md#bedrock-mantle-project) instead.
 - **Transcribe — audio transcription**: identifiers are attached as job tags. stdapi.ai deletes completed transcription jobs automatically, so tags are only available while the job is still running.
 
 Correlation also works in the other direction — from a stdapi.ai log event to the exact AWS API calls it made:
@@ -505,7 +510,7 @@ Correlation also works in the other direction — from a stdapi.ai log event to 
 
     **CloudWatch Alarms**
 
-    The module can trigger a CloudWatch alarm whenever an `error` or `critical` log event is detected. Enable with `alarms_enabled = true` and provide `sns_topic_arn` to receive notifications via SNS (email, Slack, PagerDuty, etc.). When enabled, a metric filter scans the ECS log group for any line containing `error` or `critical` and fires the alarm as soon as the count exceeds zero in a 5-minute window.
+    The module can trigger a CloudWatch alarm whenever an `error` or `critical` log event is detected. Enable with `alarms_enabled = true` and provide `sns_topic_arn` to receive notifications via SNS (email, Slack, PagerDuty, etc.). When enabled, a metric filter scans the ECS log group for any line containing `error` or `critical` and fires the alarm as soon as the count exceeds zero in a 1-minute period, evaluated over a single period.
 
     **ALB and WAF Logs**
 

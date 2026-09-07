@@ -8,43 +8,24 @@ keywords: Ollama embed API, Ollama compatible API, Amazon Bedrock embeddings, Ol
 
 Generate vector embeddings for semantic search and RAG applications with Amazon Bedrock embedding models through the Ollama `/api/embed` interface.
 
-This is an alternate route to the [OpenAI-compatible Embeddings API](api_openai_embeddings.md): both are served by the same embedding backends and models.
+This is an alternate route to the [OpenAI-compatible Embeddings API](api_openai_embeddings.md): both are served by the same embedding backends and models. Served under `/ollama` by default; the examples below use `$BASE`, which includes that prefix.
 
-!!! warning "Route Prefix & Base URL"
-    By default, all Ollama-compatible routes are prefixed with `/ollama`. This means the Embed API is available at `/ollama/api/embed` instead of `/api/embed`. You can customize this prefix using the `OLLAMA_ROUTES_PREFIX` configuration variable documented in [Operations Configuration](operations_configuration.md#ollama-routes-prefix).
+## At a glance
 
-    The `curl` examples below use a `$BASE` variable that **must include this prefix** — set it to your scheme and host followed by `OLLAMA_ROUTES_PREFIX`:
+- :material-swap-horizontal: **Drop-in Ollama compatibility** — Follows the Ollama `/api/embed` request and response shape, so an existing Ollama embedding client works by changing the base URL.
+- :material-magnify: **Semantic search** — Turn one or several texts into dense vectors for similarity search that understands meaning, not just keywords.
+- :material-book-open-page-variant: **Higher RAG quality** — Build retrieval pipelines on the same high-quality embedding models served by the [OpenAI-compatible Embeddings API](api_openai_embeddings.md).
+- :material-cloud-lock: **Private AWS backend** — Served entirely by Amazon Bedrock embedding models in your own AWS account — no traffic to third-party endpoints.
+- :material-swap-horizontal: **Differs from the Ollama API:** `truncate`, `keep_alive` and `options` are accepted and ignored, and `load_duration` is never reported — see [Limits and behaviour to know](#limitations).
+
+!!! info "Base URL and route prefix"
+    By default, all Ollama-compatible routes are prefixed with `/ollama`. This means the Embed API is available at `/ollama/api/embed` instead of `/api/embed`. You can customize this prefix using the `OLLAMA_ROUTES_PREFIX` configuration variable documented in [HTTP Server and MCP](operations_configuration_server.md#ollama-routes-prefix).
+
+    The `curl` examples on this page use a `$BASE` variable that **must include this prefix** — set it to your scheme and host followed by `OLLAMA_ROUTES_PREFIX`:
 
     ```bash
     export BASE="https://your-host/ollama"  # <scheme>://<host> + OLLAMA_ROUTES_PREFIX
     ```
-
-## Why Choose the Ollama Embed API?
-
-<div class="grid cards" markdown>
-
-- :material-swap-horizontal: __Drop-in Ollama Compatibility__
-  <br>Follows the Ollama `/api/embed` request and response shape, so an existing Ollama embedding client works by changing the base URL.
-
-- :material-magnify: __Semantic Search__
-  <br>Turn one or several texts into dense vectors for similarity search that understands meaning, not just keywords.
-
-- :material-book-open-page-variant: __Higher RAG Quality__
-  <br>Build retrieval pipelines on the same high-quality embedding models served by the [OpenAI-compatible Embeddings API](api_openai_embeddings.md).
-
-- :material-cloud-lock: __Private AWS Backend__
-  <br>Served entirely by Amazon Bedrock embedding models in your own AWS account — no traffic to third-party endpoints.
-
-</div>
-
-## Available Endpoints
-
-| Endpoint          | Method | What It Does                                        | Powered By                       | MCP Tool             |
-|--------------------|--------|-------------------------------------------------------|------------------------------------|-----------------------|
-| `/api/embed`       | `POST` | Embed one or several inputs, in request order         | Amazon Bedrock embedding models    | `ollama_embed`        |
-| `/api/embeddings`  | `POST` | Legacy single-prompt embed, deprecated upstream        | Amazon Bedrock embedding models    | `ollama_embeddings`   |
-
-**Example request:**
 
 ```bash
 curl -X POST "$BASE/api/embed" \
@@ -56,16 +37,12 @@ curl -X POST "$BASE/api/embed" \
   }'
 ```
 
-**Example response:**
+## Endpoints { #available-endpoints }
 
-```json
-{
-  "model": "amazon.titan-embed-text-v2:0",
-  "embeddings": [[0.012, -0.034, ...], [0.041, 0.007, ...]],
-  "total_duration": 214567890,
-  "prompt_eval_count": 4
-}
-```
+| Endpoint          | Method | What It Does                                        | Powered By                       | MCP Tool             |
+|--------------------|--------|-------------------------------------------------------|------------------------------------|-----------------------|
+| `/api/embed`       | `POST` | Embed one or several inputs, in request order         | Amazon Bedrock embedding models    | `ollama_embed`        |
+| `/api/embeddings`  | `POST` | Legacy single-prompt embed, deprecated upstream        | Amazon Bedrock embedding models    | `ollama_embeddings`   |
 
 ## Model Names
 
@@ -73,7 +50,7 @@ Send the model names [`GET /api/tags`](api_ollama_models.md#get-apitags) publish
 
 **Find compatible models:** Call [`/search_models`](api_search_models.md) with `route=ollama_embed` to discover model IDs that support embeddings.
 
-## Feature Compatibility
+## Feature compatibility { #feature-compatibility }
 
 <div class="feature-table" markdown>
 
@@ -86,6 +63,7 @@ Send the model names [`GET /api/tags`](api_ollama_models.md#get-apitags) publish
 | `truncate`             | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted and ignored                                                |
 | `keep_alive`           | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted and ignored — models are never resident                   |
 | `options`              | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted and ignored — no runner options apply to embeddings        |
+| Extra model-specific params | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra fields are forwarded as additional model request parameters  |
 | **Output**             |                                          |                                                                    |
 | `embeddings`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | One vector per input, in request order                             |
 | `total_duration`       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Real wall-clock time                                                |
@@ -101,6 +79,7 @@ Send the model names [`GET /api/tags`](api_ollama_models.md#get-apitags) publish
 * :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with the Ollama API
 * :material-cog:{ .model-dep role="img" aria-label="Model-dependent" } **Available on Select Models** — Check your model's capabilities
 * :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond the Ollama API
 
 </div>
 
@@ -129,8 +108,44 @@ curl -X POST "$BASE/api/embeddings" \
 
 Requests are served by the same embedding backends and models as the [OpenAI-compatible Embeddings API](api_openai_embeddings.md) — anything supported there through `model` is reachable here through the same identifier.
 
-## Limitations
+## Limits and behaviour to know { #limitations }
 
 - `truncate`, `keep_alive` and `options` are accepted and ignored.
 - `load_duration` is never reported: there is no model-loading phase to measure, and a number there would be invented.
 - `/api/embeddings` never reports `prompt_eval_count` or `total_duration` — it only ever returns the vector, matching Ollama's own legacy response shape.
+- A model name learned from ollama.com names nothing this server serves and answers `404`; send a name [`GET /api/tags`](api_ollama_models.md#get-apitags) publishes.
+
+## Request headers
+
+| Header          | Purpose         | Notes                                           |
+|-----------------|-----------------|-------------------------------------------------|
+| `Authorization` | Gateway API key | `Bearer <key>`, required like every other route |
+
+A local Ollama server needs no key; this one does, on every route.
+
+## Try it
+
+```bash
+curl -X POST "$BASE/api/embed" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.titan-embed-text-v2:0",
+    "input": ["first", "second"]
+  }'
+```
+
+**Example response:**
+
+```json
+{
+  "model": "amazon.titan-embed-text-v2:0",
+  "embeddings": [[0.012, -0.034, ...], [0.041, 0.007, ...]],
+  "total_duration": 214567890,
+  "prompt_eval_count": 4
+}
+```
+
+## Next steps
+
+Next: [Chat API](api_ollama_chat.md) · [Models API](api_ollama_models.md) · [OpenAI Embeddings API](api_openai_embeddings.md) · [Search Models API](api_search_models.md)

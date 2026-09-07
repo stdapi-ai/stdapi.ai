@@ -19,6 +19,11 @@ No third party between your users and your models. No per-seat fees. Two Terrafo
 
 Here's how.
 
+!!! info "Published February 2026 — capability claims reviewed for v1.17.0 (September 2026)"
+
+    The gateway has gained API surfaces and dialects since this post was written.
+    See the [release notes](../../roadmap.md) for everything that shipped after it.
+
 ## The Stack
 
 | Component | Role |
@@ -50,6 +55,7 @@ This is where it gets interesting for regulated industries:
 - **Region allow-lists** — Pin inference to the AWS regions you approve. Whether that satisfies a given obligation is a judgement for you and your advisers; the gateway supplies the control, not the conclusion
 - **No data shared with model providers** — AWS Bedrock does not share your inference data with model providers
 - **No training on your data** — Your prompts and responses are never used for model training
+- **Two models are an exception worth knowing** — Claude Fable 5 and Claude Fable 5.1 require your account to allow AWS's own human review of retained traffic, within the AWS boundary and for up to 30 days; the [compliance guide](../../operations_compliance.md#data-retention-modes) covers every retention mode in full
 - **No third party in the request path** — traffic goes from your application to your own deployment to AWS
 - **Dedicated VPC** — Isolated network for your AI workloads
 
@@ -82,7 +88,8 @@ That's it.
 
 stdapi.ai is more than a simple proxy. It's an AI gateway purpose-built for AWS that:
 
-- **Translates the OpenAI API** — Chat completions, embeddings, images (generation/editing/variations), audio (speech/transcription/translation), and model listing
+- **Translates the OpenAI API** — Chat completions, responses, conversations, embeddings, images (generation/editing/variations), audio (speech/transcription/translation), batches, vector stores, realtime speech, and model listing (as of v1.17.0, September 2026)
+- **Speaks other dialects on the same deployment** — Anthropic, Cohere and Ollama clients each connect on their own route prefix
 - **Handles multi-region routing** — Automatically selects the best region and inference profile for each model
 - **Exposes advanced Bedrock features** — Prompt caching, reasoning modes (extended thinking), guardrails, service tiers, and model-specific parameters
 - **Integrates native AWS AI services** — Amazon Polly for TTS, Amazon Transcribe for STT with speaker diarization, Amazon Translate

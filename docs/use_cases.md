@@ -1,28 +1,18 @@
 ---
 title: Use Cases - Amazon Bedrock Integration Examples
-description: Integrate Amazon Bedrock with Claude Code, Open WebUI, n8n, voice agents, RAG pipelines, and other OpenAI, Anthropic, and Cohere-compatible tools. Step-by-step guides for coding assistants, chat interfaces, workflow automation, and more.
-keywords: AWS Bedrock integration, Open WebUI AWS, ChatGPT alternative, Claude alternative, AI coding assistant AWS, n8n AI workflow, private ChatGPT, private Claude, AI automation tools, voice agent AWS, RAG AWS Bedrock, OpenAI integration examples, Anthropic integration examples
+description: Integrate Amazon Bedrock with Claude Code, Open WebUI, n8n, voice agents, RAG pipelines, and other OpenAI, Anthropic, Cohere and Ollama-compatible tools. Step-by-step guides for coding assistants, chat interfaces, workflow automation, and more.
+keywords: AWS Bedrock integration, Open WebUI AWS, ChatGPT alternative, Claude alternative, AI coding assistant AWS, n8n AI workflow, private ChatGPT, private Claude, AI automation tools, voice agent AWS, RAG AWS Bedrock, OpenAI integration examples, Anthropic integration examples, Ollama integration examples
 ---
 
 # :material-puzzle: Use Cases
 
-Discover how to integrate stdapi.ai with popular AI applications and tools. stdapi.ai's OpenAI, Anthropic, and Cohere-compatible APIs are already spoken by hundreds of applications and tools, and adopting it takes **three client-side changes**: the base URL, the API key, and — where the name differs from what the client already sends — the model name, now picked from every provider in the catalogue rather than one vendor's list.
+Hundreds of AI applications and tools already speak stdapi.ai's OpenAI-, Anthropic-, Cohere- and Ollama-compatible APIs. Adopting it takes **three client-side changes**: the base URL, the API key, and — where the name differs from what the client already sends — the model name, now picked from every provider in the catalogue rather than one vendor's list.
 
-**Why use stdapi.ai for integrations?**
-
-- **Three client-side changes** - Point your application at the new base URL and API key, and update the model name if the one it already sends isn't in this deployment's catalogue
-- **Access [100+ models](models.md)** - Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen, GLM, Nova, Llama, Stability AI, and more
-- **Enterprise data control** - The gateway runs in your own AWS account — no third party sits between your users and your models
-- **Pay-per-use pricing** - Pay Amazon Bedrock rates for actual usage, with no markup and no per-seat fees
-- **AWS-native features** - Leverage prompt caching, reasoning modes, and guardrails through standard OpenAI, Anthropic, and Cohere APIs
-- **Three-dialect API compatibility** - Use the OpenAI, Anthropic, or Cohere SDK with the same deployment
-
-!!! tip "Try it before committing to anything"
-    Run stdapi.ai on your laptop with the [free community Docker image](operations_getting_started_local.md) — or deploy to AWS with a [14-day free trial](operations_getting_started.md). Both editions expose the same API surface, so the integrations below are configured the same way against either.
+Everything the gateway serves behind them — prompt caching, reasoning modes, guardrails — is on [Features](features.md).
 
 ## :material-lightning-bolt: How Integration Works
 
-Every integration on this page follows the same four steps, and that's the whole process:
+Every integration on this page is the same four steps:
 
 1. **Deploy** stdapi.ai — [on AWS](operations_getting_started.md) or [locally with Docker](operations_getting_started_local.md)
 2. **Copy** your endpoint URL and API key
@@ -35,6 +25,11 @@ from openai import OpenAI
 client = OpenAI(base_url="https://your-endpoint/v1", api_key="YOUR_KEY")
 # Then name a model from the catalogue — the rest of your application is unchanged
 ```
+
+An Anthropic, Cohere or Ollama client takes the same three changes, against its own [route prefix](api_overview.md).
+
+!!! tip "Try it before committing to anything"
+    Run stdapi.ai on your laptop with the [free community Docker image](operations_getting_started_local.md) — or deploy to AWS with a [14-day free trial](operations_getting_started.md). Both editions expose the same API surface, so the integrations below are configured the same way against either.
 
 ## :material-view-grid: Choose Your Integration
 
@@ -104,7 +99,7 @@ Build self-directed AI agents that can plan, execute, and refine complex tasks a
 
 All agent frameworks that support OpenAI or Anthropic SDKs work immediately — point the SDK's base URL to stdapi.ai. See the [API overview](api_overview.md) for connection details.
 
-**[Python Client Libraries Guide](use_cases_python_libraries.md)** — Configuring LangChain, pydantic-ai and the OpenAI Agents SDK directly against stdapi.ai
+**[Python Client Libraries Guide](use_cases_python_libraries.md)** — Configuring LangChain, pydantic-ai, the OpenAI Agents SDK and the official Ollama Python client directly against stdapi.ai
 
 **[Autonomous Agent CLIs Guide](use_cases_autonomous_agents.md)** — Configuring Hermes and OpenClaw directly against stdapi.ai
 
@@ -126,6 +121,7 @@ Build ChatGPT-like experiences with Amazon Bedrock models and complete privacy c
 - **Internal knowledge base** - RAG-enabled chat with document search
 - **Multi-modal applications** - Process text, voice, images, and documents
 - **Voice chat & image generation** - Speech input/output and in-chat image creation through the same endpoint
+- **Either dialect** - Open WebUI reaches the same catalogue through its OpenAI connection or its [Ollama](api_ollama_chat.md) one, and both can be enabled at once
 
 **Popular tools:** **Open WebUI**, LobeHub, AnythingLLM, LibreChat
 
@@ -149,6 +145,7 @@ Integrate Amazon Bedrock AI into your business processes and automation workflow
 - **Document workflows** - Automated summarization, translation, and classification
 - **Bulk runs** - Push a backlog through the [Batch API](api_openai_batches.md) asynchronously, at the Amazon Bedrock batch price
 - **Content safety** - Screen user-generated content with the [Moderations API](api_openai_moderations.md)
+- **Ollama nodes too** - n8n's `Ollama Chat Model`, `Ollama Model` and `Embeddings Ollama` nodes take a stdapi.ai credential like its OpenAI and Anthropic ones
 
 **Popular tools:** **n8n**, **Haystack**, Langflow, Dify, Flowise
 
@@ -177,7 +174,7 @@ Build voice-first applications on the same OpenAI-compatible endpoint: text-to-s
 
 **Popular frameworks:** **Pipecat**, **LiveKit Agents**, TEN Framework — all accept a custom OpenAI-compatible base URL for LLM, speech-to-text, and text-to-speech services, and the first two are also what put [WebRTC or a phone line](api_openai_realtime.md#transports) in front of a realtime session
 
-**Popular tools:** Home Assistant Assist (via the **wyoming-openai** proxy)
+**Popular tools:** Home Assistant Assist (via the **wyoming-openai** proxy), whose conversation stage is Home Assistant's own **Ollama** integration pointed at the [Ollama-compatible API](api_ollama_chat.md)
 
 **[Home Assistant Voice Guide](use_cases_home_assistant.md)** — Complete setup for local voice assistants backed by Amazon Transcribe and Amazon Polly
 
@@ -275,7 +272,7 @@ Deploy intelligent AI assistants to your team's communication platforms powered 
 
 - **Where does my data go?** The gateway runs in your own AWS account, so no third party sits between your users and your models: inference runs on the AWS services and regions you enable, and Amazon Bedrock does not share prompts with model providers or use them for training. [Data sovereignty & compliance →](operations_compliance.md)
 - **What does it cost?** $0.10/container-hour for the gateway — the Terraform module runs one container per Availability Zone by default — plus Amazon Bedrock rates, with no markup and no per-seat fees. Each end user's share can be reported separately in Cost Explorer, from the invoice rather than an estimate. [Licensing & pricing →](operations_licensing.md) · [Cost management →](operations_cost_management.md)
-- **Am I locked in?** No — stdapi.ai speaks the standard OpenAI, Anthropic, and Cohere APIs. Leaving is the same client-side change that got you in.
+- **Am I locked in?** No — stdapi.ai speaks the standard OpenAI, Anthropic, Cohere and Ollama APIs. Leaving is the same client-side change that got you in.
 
 ## :material-arrow-right: Ready to Get Started?
 

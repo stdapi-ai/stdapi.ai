@@ -8,22 +8,7 @@ keywords: AI coding assistant AWS, Cline AWS Bedrock, OpenCode AWS Bedrock, Code
 
 Connect your favorite AI coding assistants to Amazon Bedrock models through stdapi.ai—three client-side changes: the base URL, the API key, and — where the name differs from what the assistant already sends — the model name, now picked from every provider in the catalogue rather than one vendor's list. Get intelligent code completions, chat assistance, and codebase understanding with AWS models like Claude, Kimi thinking, and Qwen3 Coder Next.
 
-## :material-information-outline: About AI Coding Assistants
-
-AI coding assistants are IDE extensions and terminal tools that leverage large language models to enhance developer productivity. These tools provide real-time code completions, intelligent suggestions, natural language code generation, and interactive chat capabilities directly within your coding environment—acting as AI pair programmers that understand your codebase context.
-
-**What AI coding assistants can do:**
-
-- **Real-time completions** - Autocomplete code as you type with context awareness
-- **Interactive chat** - Ask questions about your codebase, get explanations
-- **Code generation** - Natural language to code conversion
-- **Refactoring** - Intelligent code improvements and optimization suggestions
-- **Documentation** - Auto-generate comments, docstrings, and READMEs
-- **Testing** - Create unit tests, debug issues, suggest fixes
-- **Git integration** - Generate commit messages, review diffs
-- **Multi-language** - Support for Python, JavaScript, TypeScript, Go, Rust, Java, and more
-
-## :material-help-circle-outline: Why AI Coding Assistants + stdapi.ai?
+## :material-lightning-bolt: At a glance { #why-ai-coding-assistants-stdapiai }
 
 <div class="grid cards" markdown>
 
@@ -51,13 +36,28 @@ flowchart LR
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
+## :material-information-outline: About AI Coding Assistants
+
+AI coding assistants are IDE extensions and terminal tools that leverage large language models to enhance developer productivity. These tools provide real-time code completions, intelligent suggestions, natural language code generation, and interactive chat capabilities directly within your coding environment—acting as AI pair programmers that understand your codebase context.
+
+**What AI coding assistants can do:**
+
+- **Real-time completions** - Autocomplete code as you type with context awareness
+- **Interactive chat** - Ask questions about your codebase, get explanations
+- **Code generation** - Natural language to code conversion
+- **Refactoring** - Intelligent code improvements and optimization suggestions
+- **Documentation** - Auto-generate comments, docstrings, and READMEs
+- **Testing** - Create unit tests, debug issues, suggest fixes
+- **Git integration** - Generate commit messages, review diffs
+- **Multi-language** - Support for Python, JavaScript, TypeScript, Go, Rust, Java, and more
+
 ## :material-connection: Connect Your Own Instance
 
 Point any coding assistant—CLI, IDE plugin, or terminal tool—at your stdapi.ai gateway, wherever it runs. Nothing below requires the AWS sample in [Part 2](#deploy-the-gateway-on-aws).
 
 ### :material-check-circle: Prerequisites
 
-!!! info "What You'll Need"
+??? info "Before you start"
     - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md); see [Part 2](#deploy-the-gateway-on-aws) for a Terraform-deployed gateway
     - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com` or `http://localhost:8000` for local
     - ✓ **Your API key** - From Terraform output or configuration (optional for local development)
@@ -265,14 +265,14 @@ Create or edit `~/.claude/settings.json`:
 
 - Replace `YOUR_STDAPI_URL` with your stdapi.ai deployment URL (e.g., `https://api.example.com` or `http://localhost:8000` for local)
 - Replace `YOUR_API_KEY` with your stdapi.ai API key
-- The `/anthropic` path prefix is configured via the [`ANTHROPIC_ROUTES_PREFIX`](operations_configuration.md#anthropic-routes-prefix) setting (default: `/anthropic`)
+- The `/anthropic` path prefix is configured via the [`ANTHROPIC_ROUTES_PREFIX`](operations_configuration_server.md#anthropic-routes-prefix) setting (default: `/anthropic`)
 - The `ANTHROPIC_DEFAULT_*_MODEL` variables pin each model tier to a specific Bedrock model ID, so Claude Code stops resolving the `fable`/`opus`/`sonnet`/`haiku` aliases itself — an alias moves to a new model whenever Anthropic ships one, while a pinned model ID only changes when you edit it. Haiku's current Bedrock ID carries a dated snapshot (`claude-haiku-4-5-20251001-v1:0`) for the most granular pin; Sonnet, Opus, and Fable 5 don't yet have a separate dated ID in the Bedrock catalog, so pinning to their generation ID (e.g. `anthropic.claude-sonnet-5`) is the most specific option available today. stdapi.ai also accepts the short alias names (e.g. `claude-sonnet-5`) as a convenience.
 
 !!! note "No API key authentication? `ANTHROPIC_AUTH_TOKEN` is still required"
     Claude Code refuses to start without a non-empty `ANTHROPIC_AUTH_TOKEN`, even if your stdapi.ai deployment has no API-key authentication configured. In that case, set it to any non-empty placeholder, e.g. `"ANTHROPIC_AUTH_TOKEN": "1"`.
 
 !!! tip "Beta Flag Compatibility"
-    stdapi.ai automatically filters unsupported `anthropic_beta` flags, so Claude Code works without needing `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`. Bedrock-supported flags (like `Interleaved-thinking-2025-05-14` and `token-efficient-tools-2025-02-19`) are preserved while unsupported ones are silently removed. See [`ANTHROPIC_BETA_FILTER`](operations_configuration.md#anthropic-beta-filter) and [`ANTHROPIC_BETA_ALLOWLIST`](operations_configuration.md#anthropic-beta-allowlist) for details.
+    stdapi.ai automatically filters unsupported `anthropic_beta` flags, so Claude Code works without needing `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`. Bedrock-supported flags (like `Interleaved-thinking-2025-05-14` and `token-efficient-tools-2025-02-19`) are preserved while unsupported ones are silently removed. See [`ANTHROPIC_BETA_FILTER`](operations_configuration_models.md#anthropic-beta-filter) and [`ANTHROPIC_BETA_ALLOWLIST`](operations_configuration_models.md#anthropic-beta-allowlist) for details.
 
 ##### :material-brain: Effort-Based Reasoning
 
@@ -364,7 +364,7 @@ Common configuration issues with non-Claude models:
 
 - **Prompt caching** — Claude Code sends `cache_control` headers that can cause errors on models that handle caching differently. Set `DISABLE_PROMPT_CACHING=1` to suppress them.
 - **Output token limit** — Claude Code defaults to requesting up to 32,000 output tokens, which exceeds the maximum for many non-Claude models. Set `CLAUDE_CODE_MAX_OUTPUT_TOKENS` to a value within the model's limit to avoid `max_tokens` validation errors.
-- **One-token model probes** — Claude Code probes a model with a `max_tokens: 1` request. The Responses API refuses any budget below 16, and it is the transport [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) reaches most of its models over, so stdapi.ai raises the budget to 16 instead of letting the probe fail with a `400`. Nothing to configure — the probe costs up to 16 output tokens rather than one. Where the classic endpoint also serves the model (the GPT-5.6 family, by default), clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models) moves it there, where the budget is honored as sent.
+- **One-token model probes** — Claude Code probes a model with a `max_tokens: 1` request. The Responses API refuses any budget below 16, and it is the transport [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) reaches most of its models over, so stdapi.ai raises the budget to 16 instead of letting the probe fail with a `400`. Nothing to configure — the probe costs up to 16 output tokens rather than one. Where the classic endpoint also serves the model (the GPT-5.6 family, by default), clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) moves it there, where the budget is honored as sent.
 
 ```json
 {
@@ -487,11 +487,11 @@ In all cases, file deletion tools (`openai_files_delete`, `anthropic_files_delet
 !!! warning "Token usage — complex API tools"
     `openai_chat_completion`, `openai_response`, and `anthropic_message` expose large schemas (messages, tool definitions, multimodal content parts). Each tool invocation can cost hundreds of extra tokens just to describe the schema. Select them only when your workflow actually needs multi-turn chat, function calling, or structured output — for text-first code Q&A, `openai_completion` is significantly cheaper per call.
 
-See [Configuration Reference → MCP](operations_configuration.md#mcp-model-context-protocol) for the full tool list and selection guidance.
+See [Configuration Reference → MCP](operations_configuration_server.md#mcp-model-context-protocol) for the full tool list and selection guidance.
 
 ### :material-account-key: One Key for the Team, or One Identity per Developer
 
-An assistant configured with the deployment's API key makes every developer's calls indistinguishable on the AWS bill. A deployment can [authenticate callers with Amazon Cognito user pool tokens](operations_configuration.md#cognito-authentication) instead — alongside the API key or in place of it — so each developer reaches the gateway with a credential of their own. With [per-user cost attribution](operations_cost_management.md#per-user-attribution) enabled, their model calls then run under a short-lived role session of their own, and Cost Explorer and the Cost and Usage Report show what each of them spent, from the invoice rather than an estimate.
+An assistant configured with the deployment's API key makes every developer's calls indistinguishable on the AWS bill. A deployment can [authenticate callers with Amazon Cognito user pool tokens](operations_configuration_authentication.md#cognito-authentication) instead — alongside the API key or in place of it — so each developer reaches the gateway with a credential of their own. With [per-user cost attribution](operations_cost_management.md#per-user-attribution) enabled, their model calls then run under a short-lived role session of their own, and Cost Explorer and the Cost and Usage Report show what each of them spent, from the invoice rather than an estimate.
 
 The assistant needs no feature for this beyond sending the token it was given: whichever field holds the API key today (`ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, a provider entry) carries the access token instead. Renewal is the thing to plan for — an access token expires where an API key does not — so favour a tool that reads its credential from the environment, or from a helper command, on each run over one that stores a key once in a settings file.
 
@@ -564,7 +564,7 @@ The Application Load Balancer, optionally fronted by AWS WAF, is the only addres
 | **AWS WAF** | Optional edge protection in front of the ALB — rate limiting and anonymous-IP blocking | `alb_waf_enabled`, `alb_waf_rate_limit`, `alb_waf_block_anonymous_ips` |
 | **AWS Certificate Manager / Route 53** | Issues and DNS-validates the TLS certificate for your own domain, and publishes the record that resolves to it | `alb_domain_name` |
 | **Amazon ECS on AWS Fargate** | Runs the stdapi.ai gateway container in private app subnets, with at least one task per Availability Zone | `autoscaling_min_capacity` |
-| **Amazon Bedrock** | Serves chat completions, tool calling and reasoning for every model the team's assistants call | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon Bedrock** | Serves chat completions, tool calling and reasoning for every model the team's assistants call | [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions) |
 | **Amazon S3** | Holds the gateway's temporary multimodal objects, KMS-encrypted, reached through the always-provisioned S3 gateway endpoint | `aws_s3_bucket_create` |
 | **AWS KMS** | Customer-managed keys encrypting the S3 bucket(s) | Terraform module |
 | **Amazon CloudWatch** | Container logs, gateway request logs, and optional EMF usage metrics | [Logging & monitoring](operations_logging_monitoring.md) |
@@ -576,7 +576,7 @@ The Application Load Balancer, optionally fronted by AWS WAF, is the only addres
 - **Encryption in transit** — HTTPS from every workstation to the ALB, whose listener supports TLS 1.2 and 1.3; a private-subnet hop from the ALB to the gateway task; SigV4-signed HTTPS from the gateway to Amazon Bedrock.
 - **Encryption at rest** — SSE-KMS on the S3 bucket(s), with automatic key rotation.
 - **Least privilege** — the gateway's task role carries only the model and AI-service actions it calls, and its security group accepts inbound traffic only from the ALB's security group, on the container port.
-- **Content policy** — an optional [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) applies to every route a coding assistant reaches, chat included, and stays in force unless the deployment explicitly allows a per-request override.
+- **Content policy** — an optional [Bedrock guardrail](operations_configuration_bedrock.md#bedrock-guardrails) applies to every route a coding assistant reaches, chat included, and stays in force unless the deployment explicitly allows a per-request override.
 - **Data handling** — the gateway is stateless and holds request bodies in memory only; CloudWatch receives request metadata, not the source code or the model's replies, unless payload logging is explicitly turned on for debugging.
 
 ### :material-gauge: What It Costs to Run

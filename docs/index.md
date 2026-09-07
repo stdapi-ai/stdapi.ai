@@ -165,7 +165,7 @@ A knowledge base is addressed under an allowlist and is never created or deleted
 
 ## Every endpoint is an agent tool.
 
-Agents need no HTTP glue code. stdapi.ai publishes its whole API surface over the Model Context Protocol — chat, images, audio, files, model search — so Claude Code, OpenCode, OpenClaw, LangGraph or any MCP client calls it directly. Underneath, tool calling supports the full OpenAI and Anthropic schemas and tool-choice modes.
+Agents need no HTTP glue code. stdapi.ai publishes its API surface over the Model Context Protocol — chat, images, audio, files, model search — so Claude Code, OpenCode, OpenClaw, LangGraph or any MCP client calls it directly. Underneath, tool calling supports the full OpenAI and Anthropic schemas and tool-choice modes.
 
 <div class="panel-split" markdown>
 <div class="panel-visual panel-visual--mono">
@@ -186,7 +186,7 @@ Agents need no HTTP glue code. stdapi.ai publishes its whole API surface over th
 </div>
 <div class="panel-stats" markdown>
 
-- <code>80+</code> endpoints exposed as named MCP tools, each with generated documentation
+- <code>90+</code> endpoints exposed as named MCP tools, each with generated documentation
 - <code>2</code> transports — Streamable HTTP at /mcp, SSE for older clients
 - <code>0</code> HTTP client code — agents call every endpoint directly
 - <code>auto</code> discovery — agents find every tool through the server card and API catalog
@@ -495,7 +495,7 @@ Unlike SaaS gateways, stdapi.ai is infrastructure you run. There is no vendor en
   <br>Bring your own KMS key for data at rest, with prompt and response bodies unlogged unless you enable it.
 
 - :material-shield-star: __Security Hub aligned__
-  <br>Terraform module built against AWS FSBP controls; GuardDuty and DNS Firewall opt-ins close the gaps.
+  <br>Terraform module built against AWS FSBP controls and passing most applicable ones out of the box; `compliance_vpc_endpoints_enabled` closes the remaining VPC-endpoint controls, and GuardDuty and DNS Firewall opt-ins add hardening beyond FSBP.
 
 </div>
 
@@ -536,7 +536,7 @@ MCP is not a like-for-like row: stdapi.ai exposes its own AI and media endpoints
 { .compare__legend }
 
 <div class="compare__legend" markdown>
-<span class="m-y" aria-hidden="true">✓</span> full &nbsp; <span class="m-p" aria-hidden="true">◐</span> partial / manual setup &nbsp; <span class="m-n" aria-hidden="true">—</span> not available &nbsp;·&nbsp; [Full comparison](features.md#how-stdapiai-compares)
+<span class="m-y" aria-hidden="true">✓</span> full &nbsp; <span class="m-p" aria-hidden="true">◐</span> partial / manual setup &nbsp; <span class="m-n" aria-hidden="true">—</span> not available &nbsp;·&nbsp; [Full comparison](compare.md#how-stdapiai-compares)
 </div>
 
 <div class="buttons" markdown>
@@ -586,7 +586,7 @@ Every integration is the same four steps: deploy, copy your endpoint URL, paste 
 <div class="usecase__tag">VOICE &amp; AUDIO</div>
 <div class="usecase__title">Speech in, speech out</div>
 <div class="usecase__body">Speech-to-speech agents over a single WebSocket, transcription streamed phrase by phrase, and subtitles — on Amazon Bedrock, Polly and Transcribe, without a second AI vendor.</div>
-<div class="usecase__tools"><strong>wyoming-openai</strong> · <strong>Pipecat</strong> · <strong>LiveKit Agents</strong> · Home Assistant</div>
+<div class="usecase__tools"><strong>wyoming-openai</strong> · <strong>Pipecat</strong> · <strong>LiveKit Agents</strong> · <strong>Home Assistant</strong></div>
 [Home Assistant voice guide](use_cases_home_assistant.md)
 </div>
 
@@ -613,16 +613,16 @@ Media generation, knowledge management and team chatbots are covered too. [:octi
 
 <div class="grid cards" markdown>
 
-- :material-test-tube: __6,000+ test cases__
+- :material-test-tube: __8,000+ test cases__
   <br>Run against real AWS services rather than mocks.
 
-- :material-account-check: __20 client &amp; framework suites__
+- :material-account-check: __22 client &amp; framework suites__
   <br>Real CLIs, apps, and libraries driven end to end against a live deployment.
 
 - :material-brain: __100+ model-probe records__
   <br>Committed observations of what each model actually accepts and rejects.
 
-- :material-robot: __80+ MCP API tools__
+- :material-robot: __90+ MCP API tools__
   <br>Every exposed tool called end to end through the official MCP client.
 
 - :material-shield-check: __95%+ branch coverage__
@@ -651,7 +651,7 @@ Start local, graduate to AWS — same API, same SDKs. And zero lock-in: leaving 
 <div class="pricing__flag">14-DAY FREE TRIAL</div>
 <div class="pricing__tier">Commercial · AWS Marketplace</div>
 <div class="pricing__price">$0.10 <small>/container-hour</small></div>
-<p>Per running container — the Terraform module defaults to one per Availability Zone. No markup on model usage: pay Bedrock rates directly. Hardened container, Terraform module, commercial support (1 business day), no AGPL obligations. Billed through AWS Marketplace onto your existing AWS invoice — no new vendor onboarding.</p>
+<p>Per running container — the Terraform module defaults to one per Availability Zone, and scales on CPU up to five times that under load. No markup on model usage: pay Bedrock rates directly. Hardened container, Terraform module, commercial support (1 business day), no AGPL obligations. Billed through AWS Marketplace onto your existing AWS invoice — no new vendor onboarding.</p>
 <p><a class="md-button md-button--primary" href="operations_getting_started/">Start 14-day free trial</a></p>
 </div>
 <div class="pricing__col pricing__col--offer">

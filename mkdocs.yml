@@ -45,7 +45,9 @@ theme:
     accent: custom
 nav:
   - Home: index.md
-  - Features: features.md
+  - Features:
+      - Features: features.md
+      - Compare: compare.md
   - Models: models.md
   - Get Started:
       - Overview: getting_started.md
@@ -53,7 +55,7 @@ nav:
       - Run Locally with Docker: operations_getting_started_local.md
       - Troubleshooting: operations_troubleshooting.md
   - Documentation:
-      - API:
+      - API Reference:
           - Overview: api_overview.md
           - API Reference: api_reference.md
           - OpenAI Compatible:
@@ -92,19 +94,24 @@ nav:
           - Native Extensions:
             - Search Models: api_search_models.md
             - Model Pricing: api_model_pricing.md
-      - Operations:
-          - Deploy on AWS: operations_getting_started.md
-          - Run Locally with Docker: operations_getting_started_local.md
+      - Guides:
           - Advanced Deployment: operations_deploy_advanced.md
-          - Configuration: operations_configuration.md
           - Authentication & Security: operations_authentication_security.md
-          - IAM Permissions: operations_iam_permissions.md
-          - Licensing: operations_licensing.md
-          - Logging & Monitoring: operations_logging_monitoring.md
           - Cost Management: operations_cost_management.md
           - Resilience & Failover: operations_resilience.md
           - Data Sovereignty & Compliance: operations_compliance.md
-          - Troubleshooting: operations_troubleshooting.md
+          - Logging & Monitoring: operations_logging_monitoring.md
+          - Pricing & Licensing: operations_licensing.md
+      - Configuration Reference:
+          - Overview & Essential Settings: operations_configuration.md
+          - Regions & AWS Clients: operations_configuration_aws.md
+          - Storage: operations_configuration_storage.md
+          - Models & Routing: operations_configuration_models.md
+          - Authentication & Tenants: operations_configuration_authentication.md
+          - HTTP Server & MCP: operations_configuration_server.md
+          - Bedrock Features: operations_configuration_bedrock.md
+          - Observability & Usage: operations_configuration_observability.md
+          - IAM Permissions: operations_iam_permissions.md
       - Use Cases:
           - Overview: use_cases.md
           - Open WebUI Integration: use_cases_openwebui.md
@@ -125,6 +132,13 @@ nav:
 repo_url: https://github.com/stdapi-ai/stdapi.ai
 repo_name: stdapi-ai/stdapi.ai
 edit_uri: ''
+
+# A dead in-page anchor (a link surviving a renamed heading) is otherwise a
+# WARNING even under --strict, which only promotes the mkdocs default: an
+# unresolvable fragment lands the reader at the top of the page, silently.
+validation:
+  links:
+    anchors: warn
 
 plugins:
   - blog:

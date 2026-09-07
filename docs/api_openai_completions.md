@@ -8,35 +8,33 @@ keywords: completions API, OpenAI completions API, text completion API, Amazon B
 
 Generate text completions with Amazon Bedrock foundation models—including Claude, Nova, Llama, and more—through an OpenAI-compatible interface using the simple completions format.
 
-!!! info "Legacy upstream, first-class here"
+## At a glance
 
-    OpenAI labels `/v1/completions` as **legacy** in their platform documentation and recommends new OpenAI projects migrate to `/v1/chat/completions` or `/v1/responses` for vendor compatibility. On stdapi.ai, this endpoint is a **first-class route** with the same quality guarantees as the others — its compact schema and small token footprint make it an excellent pick for MCP-based text agents and simple prompt-to-text workloads.
+- :material-feather: **The smallest schema of the text routes.** Prompt in, text out, over the Amazon Bedrock Converse API — the smallest token footprint for MCP-based text agents and high-volume prompt-to-text workloads.
+- :material-format-list-group: **Batch prompts.** An array of prompts returns one `choices[]` entry per prompt, streaming included, with `choices[].index` identifying the prompt.
+- :material-file-link: **File prompts.** `https://`, `s3://`, `data:` and `file-id:` references bring images, documents, audio and video into a completion request.
+- :material-aws: **Every Chat Completions model answers here too**, with the same service tiers and multi-region model access.
+- :material-swap-horizontal: **Differs from OpenAI:** OpenAI labels `/v1/completions` legacy and steers new projects to Chat Completions or Responses; here it is a first-class route with the same quality guarantees as the others.
+- :material-swap-horizontal: **Differs by backend:** models served by [Bedrock Mantle](features.md#bedrock-mantle-models) — the OpenAI GPT-5.6 family by default — take a single text prompt only; see [Limits and behaviour to know](#limits-and-behaviour-to-know).
 
-## Why Choose the Completions API?
+```bash
+curl -X POST "$BASE/v1/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-micro-v1:0",
+    "prompt": "Say hello world",
+    "max_tokens": 20
+  }'
+```
 
-<div class="grid cards" markdown>
-
-- :material-feather: __Smallest Token Footprint__
-  <br>The most compact request/response schema of the text APIs — ideal for MCP-based text agents and high-volume prompt-to-text workloads.
-
-- :material-format-list-group: __Batch Prompts__
-  <br>Send multiple independent prompts in one request and get one choice back per prompt, with streaming support.
-
-- :material-file-link: __Multimodal Prompt Inputs__
-  <br>Reference prompts and files via `https://`, `s3://`, `data:`, or `file-id:` URIs — including images, documents, audio, and video.
-
-- :material-aws: __AWS Scale & Reliability__
-  <br>Run on AWS infrastructure with service tiers and multi-region model access for availability and performance.
-
-</div>
-
-## Available Endpoints
+## Endpoints { #available-endpoints }
 
 | Endpoint          | Method | What It Does                     | Powered By                                | MCP Tool            |
 |-------------------|--------|----------------------------------|-------------------------------------------|---------------------|
 | `/v1/completions` | `POST`   | Simple prompt-to-text completion | Amazon Bedrock Converse API · Amazon Bedrock Mantle | `openai_completion` |
 
-## Feature Compatibility
+## Feature compatibility
 
 <div class="feature-table" markdown>
 
@@ -45,11 +43,11 @@ Generate text completions with Amazon Bedrock foundation models—including Clau
 | **Prompt Input**                   |                                          |                                                                  |
 | Single text prompt                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Full support for string prompts                                  |
 | Multiple prompts (batch)           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Returns one choice per prompt; rejected with `400` on Mantle-served models |
-| Text + files collapse (multimodal) | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | `[text, file, …]` sent as one multimodal request with one choice |
-| Prompt from URL (`https://`)       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | HTTP URL reference                                               |
-| Prompt from S3 (`s3://`)           | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | S3 URI reference                                                 |
-| Prompt from data URI (`data:`)     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Base64-encoded data URI                                          |
-| Prompt from Files API (`file-id:`) | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Reference uploaded files                                         |
+| Text + files collapse (multimodal) | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | `[text, file, …]` sent as one multimodal request with one choice; rejected with `400` on Mantle-served models |
+| Prompt from URL (`https://`)       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | HTTP URL reference; rejected with `400` on Mantle-served models   |
+| Prompt from S3 (`s3://`)           | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | S3 URI reference; rejected with `400` on Mantle-served models     |
+| Prompt from data URI (`data:`)     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Base64-encoded data URI; rejected with `400` on Mantle-served models |
+| Prompt from Files API (`file-id:`) | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Reference uploaded files; rejected with `400` on Mantle-served models |
 | Token array prompts                | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Not supported — use string prompts; rejected with `400` |
 | **Generation Control**             |                                          |                                                                  |
 | `max_tokens`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output length limits                                             |
@@ -89,7 +87,7 @@ Generate text completions with Amazon Bedrock foundation models—including Clau
 
 </div>
 
-## Model Support
+## Models { #model-support }
 
 Every model the [Chat Completions API](api_openai_chat_completions.md#model-support) serves also answers here — the same model classes back both routes, with the prompt adapted into a single Converse turn. That means all models supported by the Amazon Bedrock Converse and Converse Stream API, plus every model served by [Bedrock Mantle](features.md#bedrock-mantle-models) when enabled. The Mantle conversion behavior tabled above is the same three serving paths described on the Chat Completions page.
 
@@ -99,7 +97,7 @@ To list the models this deployment serves on this route, call [`search_models`](
 
 The dynamic aliases published by the official provider APIs resolve here too, exactly as they do for chat — `gpt-oss-20b` reaches `openai.gpt-oss-20b-1:0`.
 
-## Prompt Input Types
+## Working with prompt inputs { #prompt-input-types }
 
 _stdapi.ai extends the standard completions interface with multiple input modes:_
 
@@ -139,7 +137,7 @@ When the prompt list contains **exactly one text string and one or more file ref
 
 - **Trigger**: list with exactly one `str` element and ≥1 URL elements (`https://`, `s3://`, `data:`, `file-id:`).
 - **Effect**: elements are resolved concurrently, packed as Bedrock content blocks preserving input order, and sent as a single request. You get one `Completion` choice back.
-- **Requires**: a model that supports the target modalities (e.g. Claude, Nova for image / document input).
+- **Requires**: a model that supports the target modalities (e.g. Claude, Nova for image / document input), served by the classic Converse endpoint — a [Mantle](features.md#bedrock-mantle-models)-served model rejects any file prompt with `400`.
 - **Unchanged otherwise**: any other shape returns one `Completion` choice per list element. Each `str` becomes a `text` block; each `InputFileUrl` becomes the content block matching its detected MIME type (image, video, audio, document). See [Files-only prompts](#files-only-prompts) below.
 
 Image analysis with a base64 data URI (Claude handles image input):
@@ -253,7 +251,7 @@ curl -X POST "$BASE/v1/completions" \
 
 The gateway reads the file from S3 using your configured IAM role — no pre-signed URLs required.
 
-## Streaming
+### Streaming
 
 Set `"stream": true` to receive incremental text deltas as Server-Sent Events terminated by `data: [DONE]`:
 
@@ -269,7 +267,7 @@ curl -N -X POST "$BASE/v1/completions" \
   }'
 ```
 
-### Usage in Streaming Responses
+#### Usage in Streaming Responses
 
 Request usage statistics on the final chunk by setting `stream_options.include_usage`:
 
@@ -285,34 +283,9 @@ curl -N -X POST "$BASE/v1/completions" \
   }'
 ```
 
-## Available Request Headers
+### Model-Specific Features
 
-This endpoint supports standard Bedrock headers for enhanced control over your requests — they are applied by the shared request middleware, exactly as on the [Chat Completions API](api_openai_chat_completions.md#available-request-headers). All headers are optional and can be combined as needed.
-
-### Content Safety (Guardrails)
-
-| Header                               | Purpose                            | Valid Values                          |
-|--------------------------------------|------------------------------------|---------------------------------------|
-| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
-| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
-| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
-
-### Performance Optimization
-
-| Header                                     | Purpose                | Valid Values                              |
-|--------------------------------------------|------------------------|-------------------------------------------|
-| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `default`, `flex`, `priority`, `reserved` |
-| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`                   |
-
-!!! info "Detailed Documentation"
-    For complete information about these headers, configuration options, and use cases, see:
-
-    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
-    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
-
-## Model-Specific Features
-
-### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
+#### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
 
 `twelvelabs.pegasus-1-2-v1:0` is a video-understanding model. The Completions endpoint supports multimodal input: pass an array with exactly one text instruction and one video URL as `prompt` — the server combines them into a single Pegasus request.
 
@@ -331,9 +304,43 @@ curl -X POST "$BASE/v1/completions" \
   }'
 ```
 
-## Try It Now
+## Limits and behaviour to know
 
-Send your first completion in one line — then explore the richer input modes shown in [Prompt Input Types](#prompt-input-types) above:
+**A Mantle-served model takes one text prompt.** The request is converted to a chat payload before it leaves the gateway, and that conversion accepts a single string: a batch of prompts, a file prompt of any scheme (`https://`, `s3://`, `data:`, `file-id:`), `echo`, `logprobs` and `suffix` are each rejected with `400` naming what was refused. The OpenAI GPT-5.6 family is served from Mantle by default; clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) moves it to the classic endpoint, where the full prompt surface applies.
+
+**Eight parameters are accepted and ignored on every model.** `best_of`, `echo`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `logprobs`, `seed` and `suffix` are accepted, so a client that always sends them keeps working; the Amazon Bedrock Converse API has no equivalent for them and the completion is the same without them. `stop` and `n` are honored.
+
+**A token-array prompt is rejected with `400`.** Token IDs are specific to the tokenizer that produced them, so send the text and let the serving model tokenize it.
+
+## Request headers { #available-request-headers }
+
+This endpoint supports standard Bedrock headers for enhanced control over your requests — they are applied by the shared request middleware, exactly as on the [Chat Completions API](api_openai_chat_completions.md#available-request-headers). All headers are optional and can be combined as needed.
+
+### Content Safety (Guardrails)
+
+| Header                               | Purpose                            | Valid Values                          |
+|--------------------------------------|------------------------------------|---------------------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
+| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
+| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
+| `X-Amzn-Bedrock-GuardrailStreamProcessingMode` | Guardrail assessment timing on a streamed response | `sync`, `async` (streaming requests only) |
+
+### Performance Optimization
+
+| Header                                     | Purpose                | Valid Values                              |
+|--------------------------------------------|------------------------|-------------------------------------------|
+| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `default`, `flex`, `priority`, `reserved` |
+| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`                   |
+
+!!! info "Detailed Documentation"
+    For complete information about these headers, configuration options, and use cases, see:
+
+    - [Bedrock Guardrails Configuration](operations_configuration_bedrock.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration_bedrock.md#bedrock-service-tier-and-performance-configuration)
+
+## Try it { #try-it-now }
+
+Send a first completion in one line — then explore the richer input modes in [Working with prompt inputs](#prompt-input-types) above:
 
 ```bash
 curl -X POST "$BASE/v1/completions" \
@@ -341,11 +348,11 @@ curl -X POST "$BASE/v1/completions" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "amazon.nova-micro-v1:0",
-    "prompt": "Say hello world",
-    "max_tokens": 20
+    "prompt": "Write a limerick about the sea",
+    "max_tokens": 60
   }'
 ```
 
----
+## Next steps
 
-**Ready to build with AI?** Check out the [Models API](api_openai_models.md) to see all available foundation models!
+Next: [Chat Completions API](api_openai_chat_completions.md) · [Responses API](api_openai_responses.md) · [Files API](api_openai_files.md) · [Models API](api_openai_models.md)

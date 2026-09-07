@@ -10,7 +10,7 @@ The ``TRUSTED_HOSTS`` mapping asserts the exact host documented for each form of
 the setting, since operators size their allow-list against it.
 
 Ref: stdapi/healthcheck.py
-Ref: docs/operations_configuration.md#trusted-hosts
+Ref: docs/operations_configuration_server.md#trusted-hosts
 """
 
 from __future__ import annotations

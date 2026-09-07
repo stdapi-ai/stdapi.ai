@@ -20,7 +20,7 @@ from docs_gen.model_catalog.gateway import UNKNOWN_VERSION
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from docs_gen.model_catalog.schema import Catalog
+    from docs_gen.model_catalog.schema import Catalog, ModelRow
 
 #: Page whose generated blocks this module owns.
 PAGE_PATH: Path = REPO_ROOT / "docs" / "models.md"
@@ -186,13 +186,77 @@ def _providers_block(catalog: Catalog) -> str:
     )
 
 
+#: Tokens a humanised model name spells in capitals rather than in title case.
+_NAME_CAPITALS: frozenset[str] = frozenset(
+    {"glm", "gpt", "moe", "ocr", "oss", "trn2", "vl"}
+)
+
+#: A version, size or variant token, e.g. ``4.5``, ``120b``, ``a22b``, ``k2``.
+_CODE_TOKEN: re.Pattern[str] = re.compile(r"[a-z]?\d+(?:\.\d+)*[a-z]?")
+
+#: A dated release suffix, e.g. the ``-2026-03-05`` of ``gpt-5.4-2026-03-05``.
+_DATED_RELEASE: re.Pattern[str] = re.compile(r"-(\d{4}-\d{2}-\d{2})$")
+
+#: A version an ID hyphenates and a name writes with dots, e.g. ``4-5`` as ``4.5``.
+_VERSION_PART: re.Pattern[str] = re.compile(r"\d{1,2}(?:\.\d{1,2})*")
+
+
+def _display_name(model: ModelRow) -> str:
+    """Name a model the way a reader writes it, not the way an API keys it.
+
+    Bedrock Mantle names most of its models by their bare ID, which would put a
+    raw ID in a column whose other rows read as prose.
+
+    Args:
+        model: One catalogue row.
+
+    Returns:
+        The catalogue name, or the ID humanised when that is all the name is.
+    """
+    bare = model.id.split(".", 1)[-1]
+    if model.name not in {model.id, bare}:
+        return model.name
+    dated = _DATED_RELEASE.search(bare)
+    tokens: list[str] = []
+    for token in (bare[: dated.start()] if dated else bare).split("-"):
+        if tokens and _VERSION_PART.fullmatch(tokens[-1] + "." + token):
+            tokens[-1] = f"{tokens[-1]}.{token}"
+        else:
+            tokens.append(token)
+    name = " ".join(
+        token.upper()
+        if token in _NAME_CAPITALS or _CODE_TOKEN.fullmatch(token)
+        else token[:1].upper() + token[1:]
+        for token in tokens
+    )
+    return f"{name} ({dated.group(1)})" if dated else name
+
+
+def _services(model: ModelRow) -> str:
+    """Name every AWS service the row can be called through, its own first.
+
+    Args:
+        model: One catalogue row.
+
+    Returns:
+        The service names, comma-separated.
+    """
+    services = [model.service]
+    services.extend(
+        variant.service for variant in model.variants if variant.service not in services
+    )
+    return ", ".join(services)
+
+
 def _noscript_block(catalog: Catalog) -> str:
     """Render the catalogue as plain HTML for readers and crawlers without JS.
 
     The interactive table is built from JSON, so without this the page has no
     content at all: nothing for MkDocs' own search to index, nothing for a
     crawler, and a blank gap for anyone whose script failed to load. It sits
-    inside ``<noscript>``, so it costs a reader with JavaScript nothing.
+    inside ``<noscript>``, so it costs a reader with JavaScript nothing. It
+    carries the same service column as the interactive table, without which two
+    rows for one model on two services read as an unexplained duplicate.
 
     Args:
         catalog: The generated catalogue.
@@ -203,16 +267,17 @@ def _noscript_block(catalog: Catalog) -> str:
     rows = [
         (
             "<table><thead><tr>"
-            "<th>Model</th><th>ID</th><th>Provider</th>"
+            "<th>Model</th><th>ID</th><th>Provider</th><th>Service</th>"
             "<th>Input</th><th>Output</th><th>Regions</th>"
             "</tr></thead><tbody>"
         )
     ]
     rows.extend(
         "<tr>"
-        f"<td>{escape(model.name)}{' (legacy)' if model.legacy else ''}</td>"
+        f"<td>{escape(_display_name(model))}{' (legacy)' if model.legacy else ''}</td>"
         f"<td><code>{escape(model.id)}</code></td>"
         f"<td>{escape(model.provider)}</td>"
+        f"<td>{escape(_services(model))}</td>"
         f"<td>{escape(', '.join(model.input_modalities))}</td>"
         f"<td>{escape(', '.join(model.output_modalities))}</td>"
         f"<td>{len(model.regions)}</td>"

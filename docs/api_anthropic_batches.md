@@ -8,38 +8,42 @@ keywords: Anthropic message batches, batch processing Claude, bulk inference AWS
 
 Run a large set of Messages API requests asynchronously, at a lower price than the synchronous API, through the Anthropic Message Batches API shape.
 
-The requests are sent inline, the batch runs without a connection held open, and its results are streamed back as JSONL — exactly the Anthropic workflow, so the official Anthropic SDKs work by changing the base URL.
+The requests are sent inline, the batch runs without a connection held open, and its results are streamed back as JSONL — exactly the Anthropic workflow, so the official Anthropic SDKs work by changing the base URL. Served under `/anthropic` by default; the examples below use `$BASE`, which includes that prefix.
 
-## Why Choose the Message Batches API?
+## At a glance
 
-<div class="grid cards" markdown>
+- :material-tag-arrow-down: **Lower price per token** — Batched requests are billed at the published batch rate, well below the on-demand rate for the same model.
+- :material-swap-horizontal: **Drop-in Anthropic compatibility** — `client.messages.batches.create(...)` and `.results(...)` work unchanged.
+- :material-set-split: **Several models, one batch** — Each request names its own model, as upstream allows; the batch reports a single aggregate state.
+- :material-cloud-lock: **Private AWS backend** — Requests and results are stored in your own S3 buckets — no traffic to third-party endpoints.
+- :material-key-alert: **Off until a batch role is configured** — every endpoint answers `529` until [`AWS_BEDROCK_BATCH_ROLE_ARN`](operations_configuration_bedrock.md#aws-bedrock-batch-role-arn) is set; see [Prerequisites](#prerequisites).
+- :material-swap-horizontal: **Differs from the Anthropic API:** each model in a batch needs at least 100 requests, `tools` and structured output are refused at creation, and `archived_at` is never set — see [Limits and behaviour to know](#limits).
 
-- :material-tag-arrow-down: __Lower Price per Token__
-  <br>Batched requests are billed at the published batch rate, well below the on-demand rate for the same model.
+!!! info "Base URL and route prefix"
+    By default, all Anthropic-compatible routes are prefixed with `/anthropic`. This means the Message Batches API is available at `/anthropic/v1/messages/batches` instead of `/v1/messages/batches`. You can customize this prefix using the `ANTHROPIC_ROUTES_PREFIX` configuration variable documented in [HTTP Server and MCP](operations_configuration_server.md#anthropic-routes-prefix).
 
-- :material-swap-horizontal: __Drop-in Anthropic Compatibility__
-  <br>`client.messages.batches.create(...)` and `.results(...)` work unchanged.
+    The `curl` examples on this page use a `$BASE` variable that **must include this prefix** — set it to your scheme and host followed by `ANTHROPIC_ROUTES_PREFIX`:
 
-- :material-set-split: __Several Models, One Batch__
-  <br>Each request names its own model, as upstream allows; the batch reports a single aggregate state.
+    ```bash
+    export BASE="https://your-host/anthropic"  # <scheme>://<host> + ANTHROPIC_ROUTES_PREFIX
+    ```
 
-- :material-cloud-lock: __Private AWS Backend__
-  <br>Requests and results are stored in your own S3 buckets — no traffic to third-party endpoints.
+```bash
+curl "$BASE/v1/messages/batches" -H "x-api-key: $API_KEY"
+```
 
-</div>
+## Endpoints { #available-endpoints }
 
-## Available Endpoints
+| Endpoint                              | Method   | What It Does                        | MCP Tool                          |
+|---------------------------------------|----------|-------------------------------------|-----------------------------------|
+| `/v1/messages/batches`                | `POST`   | Create a batch from inline requests | `anthropic_message_batch`         |
+| `/v1/messages/batches`                | `GET`    | List batches, newest first          | `anthropic_message_batch_list`    |
+| `/v1/messages/batches/{id}`           | `GET`    | Retrieve a batch and its counters   | `anthropic_message_batch_get`     |
+| `/v1/messages/batches/{id}/results`   | `GET`    | Stream the results as JSONL         | `anthropic_message_batch_results` |
+| `/v1/messages/batches/{id}/cancel`    | `POST`   | Cancel a batch that is still processing | `anthropic_message_batch_cancel` |
+| `/v1/messages/batches/{id}`           | `DELETE` | Delete a batch that has ended       | `anthropic_message_batch_delete`  |
 
-| Endpoint                                        | Method   | What It Does                        | MCP Tool                          |
-|-------------------------------------------------|----------|-------------------------------------|-----------------------------------|
-| `/anthropic/v1/messages/batches`                | `POST`   | Create a batch from inline requests | `anthropic_message_batch`         |
-| `/anthropic/v1/messages/batches`                | `GET`    | List batches, newest first          | `anthropic_message_batch_list`    |
-| `/anthropic/v1/messages/batches/{id}`           | `GET`    | Retrieve a batch and its counters   | `anthropic_message_batch_get`     |
-| `/anthropic/v1/messages/batches/{id}/results`   | `GET`    | Stream the results as JSONL         | `anthropic_message_batch_results` |
-| `/anthropic/v1/messages/batches/{id}/cancel`    | `POST`   | Cancel a batch that is still processing | `anthropic_message_batch_cancel` |
-| `/anthropic/v1/messages/batches/{id}`           | `DELETE` | Delete a batch that has ended       | `anthropic_message_batch_delete`  |
-
-## Feature Compatibility
+## Feature compatibility { #feature-compatibility }
 
 <div class="feature-table" markdown>
 
@@ -73,16 +77,7 @@ The requests are sent inline, the batch runs without a connection held open, and
 
 </div>
 
-!!! note "`results_url` and Reverse Proxies"
-    `results_url` is an absolute URL on the address the request came in on, so `client.messages.batches.results(...)` works with no extra configuration and a client fetching it outside the SDK gets a URL it can dial as-is. Behind a reverse proxy it names the proxy's own origin, taken from the `Host` and `X-Forwarded-Proto` headers — enable [`ENABLE_PROXY_HEADERS`](operations_configuration.md#enable-proxy-headers) so the forwarded scheme is trusted, or a TLS-terminating proxy yields an `http://` URL.
-
-!!! note "Content Guardrails and Batches"
-    A request that a [guardrail](operations_configuration.md#aws-bedrock-guardrail-identifier) would apply to is refused rather than run unguarded. Send those requests without batching.
-
-!!! note "Prompt Caching and Batches"
-    Batched requests neither read nor write a prompt cache, on any model. A request carrying `cache_control` is still accepted and answered — the hint is dropped rather than the request — so a result reports no `cache_read_input_tokens` and no `cache_creation_input_tokens`. Nothing is lost by leaving it in: batched requests are already billed at the batch rate, and the cache discount was never available at that rate.
-
-## Model Support
+## Models { #model-support }
 
 Any chat model available for batch inference in your configured Amazon Bedrock regions can be used — the same identifiers as [Messages](api_anthropic_messages.md). To shortlist them, call [`search_models`](api_search_models.md) with `route=anthropic_message&batch=true`; each entry also carries a `batch` field.
 
@@ -91,14 +86,16 @@ Any chat model available for batch inference in your configured Amazon Bedrock r
 
 A model that cannot serve batched requests is refused when the batch is created, naming the model; no sibling job is left running. A model this deployment normally serves through another Amazon Bedrock endpoint is batched under the identifier the batch endpoint knows it by, so it needs nothing from you.
 
-## Workflow
+## Working with a batch { #workflow }
 
 ### 1. Create the batch
 
 ```python
 from anthropic import Anthropic
 
-client = Anthropic(base_url="https://your-host/anthropic", api_key="...")
+client = Anthropic(
+    base_url="https://your-host/anthropic", api_key="..."
+)  # <scheme>://<host> + ANTHROPIC_ROUTES_PREFIX
 
 batch = client.messages.batches.create(
     requests=[
@@ -115,28 +112,7 @@ batch = client.messages.batches.create(
 )
 ```
 
-**Example request (curl):**
-
-```bash
-curl -X POST "https://your-host/anthropic/v1/messages/batches" \
-  -H "x-api-key: $API_KEY" \
-  -H "anthropic-version: 2023-06-01" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "requests": [
-      {
-        "custom_id": "req-1",
-        "params": {
-          "model": "amazon.nova-micro-v1:0",
-          "max_tokens": 256,
-          "messages": [{"role": "user", "content": "Summarize: ..."}]
-        }
-      }
-    ]
-  }'
-```
-
-The samples above are abridged: a real batch needs at least 100 requests for each model it names.
+The sample above is abridged: a real batch needs at least 100 requests for each model it names. The equivalent `curl` calls are under [Try it](#try-it).
 
 **Example response:**
 
@@ -178,9 +154,24 @@ Each line pairs a `custom_id` with its outcome:
 !!! warning "Results Are Not in Request Order"
     Result lines may come back in any order, as upstream also warns. Match a result to its request with `custom_id`, never with the line number.
 
-Each result line's `message.model` names the model that actually served the request, so a request sent with an alias or a [wildcard pattern](operations_configuration.md#model-wildcard-patterns) comes back naming the resolved model rather than the string it was sent as — a parser matching on the string it wrote needs to match on the resolved ID instead.
+Each result line's `message.model` names the model that actually served the request, so a request sent with an alias or a [wildcard pattern](operations_configuration_models.md#model-wildcard-patterns) comes back naming the resolved model rather than the string it was sent as — a parser matching on the string it wrote needs to match on the resolved ID instead.
 
-## Limits
+## Prerequisites
+
+The Message Batches API is disabled until the deployment declares an AWS IAM service role that Amazon Bedrock assumes to read the requests and write the results:
+
+- [`AWS_BEDROCK_BATCH_ROLE_ARN`](operations_configuration_bedrock.md#aws-bedrock-batch-role-arn) — the service role.
+- [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket) — the bucket holding the batch data.
+- [`AWS_S3_BATCHES_PREFIX`](operations_configuration_storage.md#aws-s3-batches-prefix) — the prefix it is stored under.
+
+The permissions the role and the server need are listed in [IAM Permissions](operations_iam_permissions.md#batch-inference).
+While the role is unset, every batch endpoint answers `529`.
+
+## Billing
+
+Batched requests are billed at the published batch rate for the model, roughly half the on-demand rate. Usage is recorded once, when the batch ends. See [Cost Management](operations_cost_management.md#batch-inference).
+
+## Limits and behaviour to know { #limits }
 
 | Limit                        | Value                    |
 |------------------------------|--------------------------|
@@ -194,23 +185,59 @@ A batch below the minimum, or over the model cap, is refused when it is created 
 !!! note "The 100-request minimum is a quota default"
     100 is the default of the Amazon Bedrock quota *Minimum number of records per batch inference job*, which is set **per model** and adjustable for some of them — see [Amazon Bedrock quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html). The gateway checks against that default, not against your account's own value, so a raised quota is enforced by Amazon Bedrock rather than here — a model given 150 requests clears this check and is then refused by the backend — and a lowered one is not usable: fewer than 100 requests for a model is still refused here.
 
-## Prerequisites
+**Tool use and structured output are refused at creation.** A batch carrying `tools`, `tool_choice` or a structured-output schema is rejected before any job starts, so the failure arrives immediately rather than as 100 errored result lines.
 
-The Message Batches API is disabled until the deployment declares an AWS IAM service role that Amazon Bedrock assumes to read the requests and write the results:
+**Results are not in request order and `archived_at` is never set.** Match a result to its request by `custom_id`; results stay readable until the batch is deleted.
 
-- [`AWS_BEDROCK_BATCH_ROLE_ARN`](operations_configuration.md#aws-bedrock-batch-role-arn) — the service role.
-- [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) — the bucket holding the batch data.
-- [`AWS_S3_BATCHES_PREFIX`](operations_configuration.md#aws-s3-batches-prefix) — the prefix it is stored under.
+!!! note "Content Guardrails and Batches"
+    A request that a [guardrail](operations_configuration_bedrock.md#aws-bedrock-guardrail-identifier) would apply to is refused rather than run unguarded. Send those requests without batching.
 
-The permissions the role and the server need are listed in [IAM Permissions](operations_iam_permissions.md#batch-inference).
-While the role is unset, every batch endpoint answers `529`.
+!!! note "Prompt Caching and Batches"
+    Batched requests neither read nor write a prompt cache, on any model. A request carrying `cache_control` is still accepted and answered — the hint is dropped rather than the request — so a result reports no `cache_read_input_tokens` and no `cache_creation_input_tokens`. Nothing is lost by leaving it in: batched requests are already billed at the batch rate, and the cache discount was never available at that rate.
 
-## Billing
+!!! note "`results_url` and Reverse Proxies"
+    `results_url` is an absolute URL on the address the request came in on, so `client.messages.batches.results(...)` works with no extra configuration and a client fetching it outside the SDK gets a URL it can dial as-is. Behind a reverse proxy it names the proxy's own origin, taken from the `Host` and `X-Forwarded-Proto` headers — enable [`ENABLE_PROXY_HEADERS`](operations_configuration_server.md#enable-proxy-headers) so the forwarded scheme is trusted, or a TLS-terminating proxy yields an `http://` URL.
 
-Batched requests are billed at the published batch rate for the model, roughly half the on-demand rate. Usage is recorded once, when the batch ends. See [Cost Management](operations_cost_management.md#batch-inference).
+## Request headers
 
-## See Also
+| Header              | Purpose                   | Notes                                           |
+|---------------------|---------------------------|-------------------------------------------------|
+| `x-api-key`         | Gateway API key           | Required, like every other route                |
+| `anthropic-version` | Anthropic API version pin | Accepted and ignored; sent by the official SDKs |
 
-- [Messages API](api_anthropic_messages.md) — the per-request parameters
-- [Batch API](api_openai_batches.md) — the OpenAI-shaped equivalent
-- [Configuration](operations_configuration.md#aws-bedrock-batch-role-arn) — enabling batches
+## Try it
+
+**Create a batch:**
+
+```bash
+curl -X POST "$BASE/v1/messages/batches" \
+  -H "x-api-key: $API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "requests": [
+      {
+        "custom_id": "req-1",
+        "params": {
+          "model": "amazon.nova-micro-v1:0",
+          "max_tokens": 256,
+          "messages": [{"role": "user", "content": "Summarize: ..."}]
+        }
+      }
+    ]
+  }'
+```
+
+**Poll it, then read the results:**
+
+```bash
+curl "$BASE/v1/messages/batches/msgbatch_06fvfg3lbdqarbad8kbo55g0sg5h3s4a" \
+  -H "x-api-key: $API_KEY"
+
+curl "$BASE/v1/messages/batches/msgbatch_06fvfg3lbdqarbad8kbo55g0sg5h3s4a/results" \
+  -H "x-api-key: $API_KEY"
+```
+
+## Next steps { #see-also }
+
+Next: [Messages API](api_anthropic_messages.md) · [OpenAI Batch API](api_openai_batches.md) · [Enabling batches](operations_configuration_bedrock.md#aws-bedrock-batch-role-arn) · [Cost Management](operations_cost_management.md#batch-inference)

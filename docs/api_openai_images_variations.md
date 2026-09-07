@@ -8,31 +8,41 @@ keywords: image variations API, AI image variations, image style transfer, simil
 
 Create variations of existing images using Amazon Bedrock image models through an OpenAI-compatible interface.
 
-## Why Choose the Image Variations API?
+## At a glance
 
-<div class="grid cards" markdown>
+- :material-image-multiple: **`n` accepts 1 to 10 variations per request** — all from a single
+  source image, in one call, see [Feature compatibility](#feature-compatibility).
+- :material-palette-swatch: **Three variation modes on Amazon Nova Canvas and Titan v2** —
+  `IMAGE_VARIATION`, `TEXT_IMAGE` conditioning and `COLOR_GUIDED_GENERATION`, selected with a
+  `taskType` form field, see
+  [Working with the variations endpoint](#advanced-features).
+- :material-auto-fix: **Six Amazon Bedrock models** — Amazon Nova Canvas, two Amazon Titan Image
+  Generator versions and three Stability AI models, see [Models](#model-support).
+- :material-aws: **Served by Amazon Bedrock in your own AWS account** — `url` responses are
+  download links to your own `AWS_S3_BUCKET`, valid for 60 minutes, see
+  [Feature compatibility](#feature-compatibility).
+- :material-swap-horizontal: **A JSON body is accepted as well as multipart** — an `image` object
+  holding a Files API ID or a URL, where the OpenAI variations API is multipart-only, see
+  [Working with the variations endpoint](#advanced-features).
+- :material-swap-horizontal: **This endpoint carries no `output_format`, `quality`, `style`,
+  `stream` or `background` parameter** — see
+  [Limits and behaviour to know](#limits-and-behaviour-to-know).
 
-- :material-image-multiple: __Multiple Variations__
-  <br>Generate diverse versions of an existing image while maintaining composition.
+```bash
+curl -X POST "$BASE/v1/images/variations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -F image=@input.png \
+  -F model="stability.sd3-5-large-v1:0" \
+  -F n=2
+```
 
-- :material-palette-swatch: __Artistic Exploration__
-  <br>Explore different artistic interpretations and styles.
-
-- :material-auto-fix: __Quick Iterations__
-  <br>Rapidly create variations without manual editing.
-
-- :material-aws: __Flexible Models__
-  <br>Amazon Titan, Amazon Nova Canvas, and Stability AI SD3.5 — each with unique variation modes (standard variation, text-guided conditioning, color-guided generation).
-
-</div>
-
-## Available Endpoints
+## Endpoints { #quick-start-available-endpoint }
 
 | Endpoint                | Method | What It Does                           | Powered By                  | MCP Tool               |
 |-------------------------|--------|----------------------------------------|-----------------------------|------------------------|
 | `/v1/images/variations` | `POST` | Create variations of an existing image | Amazon Bedrock Image Models | `openai_image_variation` |
 
-## Feature Compatibility
+## Feature compatibility
 
 <div class="feature-table" markdown>
 
@@ -73,7 +83,7 @@ Create variations of existing images using Amazon Bedrock image models through a
 
 </div>
 
-## Model Support
+## Models { #model-support }
 
 ### ![Amazon](styles/logo_amazon.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
 
@@ -84,7 +94,7 @@ Create variations of existing images using Amazon Bedrock image models through a
 | amazon.titan-image-generator-v2:0 (legacy) | `IMAGE_VARIATION`, `TEXT_IMAGE`, `COLOR_GUIDED_GENERATION` | Enhanced with text-guided conditioning (CANNY_EDGE, SEGMENTATION) and color-guided generation               |
 
 !!! note "Legacy Amazon Image Models"
-    AWS has scheduled `amazon.nova-canvas-v1:0` and the Titan image models to reach end of life on September 30, 2026. Deployments with existing access can keep using them until then (legacy models are hidden unless [`AWS_BEDROCK_LEGACY=true`](operations_configuration.md#bedrock-legacy)); the Stability AI Stable Image family is the long-term successor.
+    AWS has scheduled `amazon.nova-canvas-v1:0` and the Titan image models to reach end of life on September 30, 2026. Deployments with existing access can keep using them until then (legacy models are hidden unless [`AWS_BEDROCK_LEGACY=true`](operations_configuration_models.md#bedrock-legacy)); the Stability AI Stable Image family is the long-term successor.
 
 ### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Models
 
@@ -95,12 +105,12 @@ Create variations of existing images using Amazon Bedrock image models through a
 | stability.stable-image-ultra-v1:1 | Image-to-image transformation, premium quality and detail |
 
 !!! info "No Built-In Aliases for OpenAI Image Model Names"
-    OpenAI's default image model names (`dall-e-2`, `dall-e-3`, `gpt-image-1`) have **no built-in alias**, so requests using them fail with a model-not-found error — the most common first-call issue. Pass one of the model IDs above, or map the OpenAI names to your preferred models with [`MODEL_ALIASES`](operations_configuration.md#model-aliases).
+    `gpt-image-1` and `gpt-image-1-mini` have **no built-in alias**, so requests naming them fail with a model-not-found error — the most common first-call issue. Pass one of the model IDs above, or map those names to your preferred models with [`MODEL_ALIASES`](operations_configuration_models.md#model-aliases). The retired `dall-e-2` and `dall-e-3` names are legacy strings older clients may still send; map them the same way.
 
 !!! warning "Configuration Required"
     You must configure the `AWS_S3_BUCKET` environment variable with a bucket to use the URL response format.
 
-## Advanced Features
+## Working with the variations endpoint { #advanced-features }
 
 ### Request Formats
 
@@ -114,7 +124,7 @@ The classic format — upload an image file directly via the `image` field.
 curl -X POST "$BASE/v1/images/variations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -F image=@input.png \
-  -F model="amazon.nova-canvas-v1:0"
+  -F model="stability.sd3-5-large-v1:0"
 ```
 
 #### JSON Body (Files API or URL References) :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" }
@@ -127,7 +137,7 @@ curl -X POST "$BASE/v1/images/variations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "amazon.nova-canvas-v1:0",
+    "model": "stability.sd3-5-large-v1:0",
     "image": {"file_id": "file-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},
     "n": 2,
     "size": "1024x1024"
@@ -138,7 +148,7 @@ curl -X POST "$BASE/v1/images/variations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "amazon.nova-canvas-v1:0",
+    "model": "stability.sd3-5-large-v1:0",
     "image": {"image_url": "https://example.com/photo.png"},
     "response_format": "b64_json"
   }'
@@ -156,11 +166,11 @@ precedence. `image` may also be a plain reference string (equivalent to
 `image_url`) — the shape MCP clients derive from the tool schema:
 
 ```json
-{"model": "amazon.nova-canvas-v1:0", "image": "data:image/png;base64,..."}
+{"model": "stability.sd3-5-large-v1:0", "image": "data:image/png;base64,..."}
 ```
 
 !!! tip "Workflow Integration"
-    The JSON body format works seamlessly with the [Files API](api_openai_files.md): upload images once, reuse them across multiple variation requests by file ID without re-uploading.
+    The JSON body format works with the [Files API](api_openai_files.md): upload images once, reuse them across multiple variation requests by file ID without re-uploading.
 
 ### Provider-Specific Parameters
 
@@ -320,7 +330,23 @@ curl -X POST "$BASE/v1/images/variations" \
 !!! info "Full Parameter Reference"
     For all Stability AI parameters, see [Stability AI documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-stability-diffusion.html)
 
-## Available Request Headers
+## Limits and behaviour to know
+
+- **The request body is `image`, `model`, `n`, `size`, `response_format` and `user`.** There is
+  no `output_format`, `quality`, `style`, `stream` or `background` parameter on this endpoint,
+  so the response is PNG unless a supporting model is given the provider-specific
+  `output_format` extra parameter.
+- **`n` is capped by the model, not by the endpoint.** The endpoint accepts 1-10; the effective
+  maximum is model-dependent, and Amazon Titan and Nova Canvas stop at 5. Stability AI models
+  produce each variation with a separate Bedrock call.
+- **Prompt text is not a standard parameter here.** The `TEXT_IMAGE` and
+  `COLOR_GUIDED_GENERATION` task types take their text through the provider-specific
+  `textToImageParams[text]` and `colorGuidedGenerationParams` fields — see
+  [Working with the variations endpoint](#advanced-features).
+- **OpenAI image model names resolve only once you map them**, as described in the
+  [Models](#model-support) section.
+
+## Request headers { #available-request-headers }
 
 This endpoint supports the same standard Bedrock headers as the other images endpoints: guardrail headers (`X-Amzn-Bedrock-GuardrailIdentifier`, `X-Amzn-Bedrock-GuardrailVersion`, `X-Amzn-Bedrock-Trace`) and performance headers (`X-Amzn-Bedrock-Service-Tier`, `X-Amzn-Bedrock-PerformanceConfig-Latency`). All headers are optional and can be combined as needed.
 
@@ -333,10 +359,10 @@ curl -X POST "$BASE/v1/images/variations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "X-Amzn-Bedrock-Service-Tier: priority" \
   -F image=@input.png \
-  -F model="amazon.nova-canvas-v1:0"
+  -F model="stability.sd3-5-large-v1:0"
 ```
 
-## Try It Now
+## Try it { #try-it-now }
 
 **Create a simple variation:**
 
@@ -345,7 +371,7 @@ curl -X POST "$BASE/v1/images/variations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: multipart/form-data" \
   -F image=@input.png \
-  -F model="amazon.nova-canvas-v1:0"
+  -F model="stability.sd3-5-large-v1:0"
 ```
 
 **Create multiple variations:**
@@ -355,7 +381,7 @@ curl -X POST "$BASE/v1/images/variations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: multipart/form-data" \
   -F image=@input.png \
-  -F model="amazon.nova-canvas-v1:0" \
+  -F model="stability.sd3-5-large-v1:0" \
   -F n=3
 ```
 
@@ -366,10 +392,10 @@ curl -X POST "$BASE/v1/images/variations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: multipart/form-data" \
   -F image=@input.png \
-  -F model="amazon.nova-canvas-v1:0" \
+  -F model="stability.sd3-5-large-v1:0" \
   -F response_format="b64_json"
 ```
 
----
+## Next steps
 
-**Ready to explore new versions of your images?** Discover available image models in the [Models API](api_openai_models.md).
+Next: [Models API](api_openai_models.md) · [Images Generation API](api_openai_images_generations.md) · [Images Edits API](api_openai_images_edits.md) · [Files API](api_openai_files.md)

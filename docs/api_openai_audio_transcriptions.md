@@ -8,31 +8,43 @@ keywords: speech to text API, audio transcription API, AWS Transcribe API, STT A
 
 Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable models through an OpenAI-compatible interface.
 
-## Why Choose the Speech to Text API?
+## At a glance
 
-<div class="grid cards" markdown>
+- :material-translate: **Amazon Transcribe across 100+ languages, or any Bedrock
+  model that accepts the `SPEECH` modality** — including Amazon Nova Sonic and
+  Mistral Voxtral, see [Models](#model-support).
+- :material-clock-fast: **Each phrase sent as it is recognized** — `stream=true`
+  streams phrase by phrase whenever the request names the language to expect,
+  and that path needs no S3 bucket, see [Streaming](#streaming).
+- :material-subtitles: **SRT and VTT cut by Amazon Transcribe itself** — with
+  the timings it produced, alongside `json`, `text`, `verbose_json` and
+  `diarized_json`, see [Feature compatibility](#feature-compatibility).
+- :material-account-multiple: **Speaker labels `A`, `B`, … for 10 speakers by
+  default and 30 at most** — `diarized_json`, in one response or streamed as
+  `transcript.text.segment` events, see
+  [Working with Amazon Transcribe](#advanced-features).
+- :material-plus-circle: **Audio as base64, data URI, HTTPS URL, S3 URI or a
+  `file-id:` reference** — a JSON body alternative to the multipart upload, for
+  MCP clients and AI agents, see [Try it](#try-it-now).
+- :material-close-circle: **`known_speaker_names` and `known_speaker_references`
+  are accepted and ignored, and `amazon.transcribe` refuses `prompt`,
+  `temperature`, `keywords` and `include`** — see
+  [Limits and behaviour to know](#limits-and-behaviour-to-know).
 
-- :material-translate: __Multiple Transcription Options__
-  <br>Choose Amazon Transcribe for 100+ languages with speaker diarization, or use Bedrock audio models for advanced capabilities.
+```bash
+curl -X POST "$BASE/v1/audio/transcriptions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -F file=@meeting-recording.mp3 \
+  -F model=amazon.transcribe
+```
 
-- :material-clock-fast: __Real-Time or Batch__
-  <br>Stream transcriptions in real-time via SSE or process files efficiently with either service.
-
-- :material-subtitles: __Subtitle Generation__
-  <br>Generate SRT and VTT subtitle files directly with precise timing for video content.
-
-- :material-account-multiple: __Advanced Features__
-  <br>Speaker diarization, word-level timestamps, and automatic language detection. Feature availability varies by model choice.
-
-</div>
-
-## Available Endpoints
+## Endpoints { #quick-start-available-endpoint }
 
 | Endpoint                    | Method | What It Does                             | Powered By                                       | MCP Tool                  |
 |-----------------------------|--------|------------------------------------------|--------------------------------------------------|---------------------------|
 | `/v1/audio/transcriptions`  | `POST` | Convert spoken audio to written text     | Amazon Transcribe or Amazon Bedrock Audio Models | `openai_audio_transcription` |
 
-## Feature Compatibility
+## Feature compatibility
 
 <div class="feature-table" markdown>
 
@@ -85,7 +97,7 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 
 </div>
 
-## Model Support
+## Models { #model-support }
 
 ### ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
 
@@ -128,7 +140,7 @@ Any Amazon Bedrock model that accepts the `SPEECH` input modality through the Co
 !!! tip "Audio Input Formats on Bedrock Models"
     Uploads in the formats the Bedrock Converse audio block accepts — `aac`, `flac`, `m4a`, `mka`, `mkv`, `mp3`, `mp4`, `mpeg`, `mpga`, `ogg`, `opus`, `pcm`, `wav`, `webm`, and `x-aac` — are sent through as-is. Any other audio or video upload is automatically converted to FLAC before transcription (requires FFmpeg on the server), including the audio track of a video container. An upload that is neither audio nor video is rejected with the list of accepted formats; an audio or video file whose track cannot be decoded is rejected as carrying no decodable audio.
 
-## Advanced Features
+## Working with Amazon Transcribe { #advanced-features }
 
 ### ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Transcribe Features
 
@@ -150,9 +162,7 @@ Any Amazon Bedrock model that accepts the `SPEECH` input modality through the Co
     - `gpt-4o-transcribe` → `amazon.transcribe`
     - `gpt-4o-mini-transcribe` → `amazon.transcribe`
 
-    These aliases enable seamless compatibility with OpenAI-based tools and applications without any configuration changes. You can also [customize or override these aliases](operations_configuration.md#model-aliases) to suit your needs.
-
-**Note:** With `amazon.transcribe`, the `prompt`, `temperature`, `keywords`, and `include` parameters are rejected with an error to ensure consistent transcription accuracy (for `keywords`, the error points at the pre-created custom vocabulary alternative via the `VocabularyName` extra parameter). The `known_speaker_names` and `known_speaker_references` parameters are accepted but ignored for every model: Amazon Transcribe's automatic speaker diarization runs without known speaker references, falling back to generic speaker labels.
+    These aliases let an OpenAI-based tool reach these models under the names it already sends, with no configuration change. You can also [customize or override these aliases](operations_configuration_models.md#model-aliases) to suit your needs.
 
 !!! tip "Performance Tips: Optimize Speed & Cost"
     - **Specify the language** if you know it—skips auto-detection for faster processing and lower AWS costs
@@ -300,13 +310,13 @@ The following parameters from Amazon Transcribe's [StartTranscriptionJob API](ht
 
 `VocabularyName`, `VocabularyFilterName`, and custom language models must already exist in your AWS account (created via the AWS Transcribe console, CLI, or SDK) before being referenced here.
 
-## :material-lightning-bolt: Streaming { #streaming }
+## Streaming { #streaming }
 
 `stream=true` returns the transcript as server-sent events — `transcript.text.delta` events followed by a final `transcript.text.done` — instead of one response body. A [ready-to-run example](#try-it-now) is below.
 
 Each phrase is sent as it is recognized, rather than after the whole recording, whenever the request names the language to expect: send `language`, or two or more expected `languages`. That path needs no S3 bucket, so a deployment with no storage configured serves streamed transcriptions.
 
-A request naming neither is still streamed, but its events arrive together once the recording has been read and its language detected. Operators can set [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](operations_configuration.md#aws-transcribe-stream-languages) to the languages their callers actually send, which gives those requests the faster path too. The same applies to a request using any provider-specific parameter above other than `VocabularyName`, `VocabularyFilterName` and `VocabularyFilterMethod`, which are the only ones a phrase-by-phrase transcript can carry.
+A request naming neither is still streamed, but its events arrive together once the recording has been read and its language detected. Operators can set [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](operations_configuration_storage.md#aws-transcribe-stream-languages) to the languages their callers actually send, which gives those requests the faster path too. The same applies to a request using any provider-specific parameter above other than `VocabularyName`, `VocabularyFilterName` and `VocabularyFilterMethod`, which are the only ones a phrase-by-phrase transcript can carry.
 
 ### Speaker segments
 
@@ -320,7 +330,25 @@ A model that reports no speakers rejects `diarized_json` with `stream=true` rath
 
 Streamed events carry no subtitle cues, which is why `srt` and `vtt` are rejected with `stream=true`.
 
-## Available Request Headers
+## Limits and behaviour to know
+
+- With `amazon.transcribe`, the `prompt`, `temperature`, `keywords` and
+  `include` parameters are rejected with an error to ensure consistent
+  transcription accuracy. For `keywords`, the error points at the pre-created
+  custom vocabulary alternative via the `VocabularyName` extra parameter.
+- `known_speaker_names` and `known_speaker_references` are accepted but ignored
+  for every model: Amazon Transcribe's automatic speaker diarization runs
+  without known speaker references, so it falls back to generic speaker labels.
+- `include: ["logprobs"]` is accepted on Bedrock models but never populated —
+  `logprobs` comes back `null` — because the Converse API returns no token log
+  probabilities.
+- `chunking_strategy` accepts `auto` only; any other value is rejected rather
+  than silently applied.
+- The extra Amazon Transcribe parameters are reachable through the
+  `application/json` body only, not through the multipart upload — see
+  [Provider-Specific Parameters](#provider-specific-parameters).
+
+## Request headers
 
 This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
 
@@ -357,10 +385,10 @@ curl -X POST "$BASE/v1/audio/transcriptions" \
 !!! info "Detailed Documentation"
     For complete information about these headers, configuration options, and use cases, see:
 
-    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
-    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
+    - [Bedrock Guardrails Configuration](operations_configuration_bedrock.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration_bedrock.md#bedrock-service-tier-and-performance-configuration)
 
-## Try It Now
+## Try it { #try-it-now }
 
 **Transcribe audio to JSON:**
 
@@ -472,6 +500,6 @@ data: {"id":"seg_0","start":0.01,"end":4.27,"speaker":"A","text":"Good morning, 
 !!! info "`verbose_json` streams as plain text"
     `stream=true` combined with `response_format=verbose_json` is accepted rather than rejected, but the streamed events carry `transcript.text.delta` / `.done` only — segment timings, word timings and language details are not included. Request `verbose_json` without `stream` to get them.
 
----
+## Next steps
 
-**Ready to transcribe audio?** Explore available transcription models in the [Models API](api_openai_models.md).
+Next: [Models API](api_openai_models.md) · [Speech to English API](api_openai_audio_translations.md) · [`AWS_TRANSCRIBE_S3_BUCKET`, where non-streamed jobs are staged](operations_configuration_storage.md#aws-transcribe-s3-bucket) · [Speech-to-text IAM permissions](operations_iam_permissions.md#speech-to-text-optional)

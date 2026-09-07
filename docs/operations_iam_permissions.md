@@ -6,21 +6,55 @@ keywords: IAM permissions Bedrock, AWS IAM policy, Bedrock IAM actions, least pr
 
 # :material-shield-key: IAM Permissions
 
-stdapi.ai requires specific AWS IAM permissions to access Amazon Bedrock models and other AWS services. The exact permissions needed depend on which features you enable.
+Every AWS call stdapi.ai makes is signed with the credentials of the role it runs under. This page lists, feature by feature, the exact IAM statements that role needs, and ends with complete policy examples.
 
-!!! tip "Building Your Policy"
-    Combine the permission statements below based on the features you need. At minimum, you need the **Bedrock** permissions. Add statements for S3, TTS, STT, and other features as required by your deployment. Only include the statements you need — start with the Bedrock permissions and add others as required (least privilege).
+**Who this page is for.** If you deploy with the official [Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai), it already provisions the ECS task role with every statement below — you need this page only to audit what that role can do, or to restrict it further. Read it in full when you build the role yourself: a manual ECS or EC2 deployment, a container running outside AWS, or an IAM user for local development.
 
-!!! warning "One policy may not hold all of these"
-    A customer managed policy is capped at **6,144 characters**, a limit AWS does not raise through Service Quotas, and whitespace does not count toward it. Enabling most of the features on this page exceeds that in a single document — `CreatePolicy` then fails with `LimitExceeded: Cannot exceed quota for PolicySize: 6144`, naming no statement.
+!!! info "Building your policy"
+    Combine the statements below based on the features you enable. At minimum, you need the **Bedrock** permissions; add S3, TTS, STT and the others only as your deployment requires them (least privilege).
 
-    Attach several policies to the role instead of widening actions to save characters. Splitting by service keeps each one readable and reviewable; the Terraform module ships two for exactly this reason, one for Amazon Bedrock and one for the supporting services. A role takes up to 10 managed policies by default.
+    A customer managed policy is capped at **6,144 characters**, a limit AWS does not raise through Service Quotas, and whitespace does not count toward it. Enabling most of the features on this page exceeds that in a single document — `CreatePolicy` then fails with `LimitExceeded: Cannot exceed quota for PolicySize: 6144`, naming no statement. Attach several policies to the role instead of widening actions to save characters: splitting by service keeps each one readable and reviewable, the Terraform module ships two for exactly this reason (one for Amazon Bedrock, one for the supporting services), and a role takes up to 10 managed policies by default.
 
-!!! info "Terraform Module"
-    The official [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) provisions the ECS task role with the required permissions automatically. This reference is for custom deployments and policy auditing.
+---
+
+## :material-table: Which Sections Do You Need? { #feature-specific-permission-requirements }
+
+Each row below is one section of this page. Find the features your deployment enables, then read the sections they point to.
+
+| Feature | Required Permissions | Configuration |
+|---------|----------------------|---------------|
+| **[Bedrock](#bedrock-iam)** | `bedrock:CountTokens`<br>`bedrock:InvokeGuardrailChecks`<br>`bedrock:InvokeModel`<br>`bedrock:InvokeModelWithBidirectionalStream`<br>`bedrock:InvokeModelWithResponseStream`<br>`bedrock:InvokeTool` (the Amazon Nova grounding server tool)<br>`bedrock:Rerank`<br>`bedrock:GetAsyncInvoke` and `bedrock:TagResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for async-invoke models (video, TwelveLabs Marengo embeddings)<br>For model discovery: `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles`<br>The Realtime API (`POST /v1/realtime/client_secrets`, `WS /v1/realtime`) needs no additional action: `bedrock:InvokeModelWithBidirectionalStream` covers it | Always required |
+| **[Bedrock Marketplace Auto-Subscribe](#bedrock-marketplace-auto-subscribe-iam)** | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions` | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default) |
+| **[Bedrock Marketplace Model Endpoints](#bedrock-marketplace-endpoints-iam)** | `bedrock:ListMarketplaceModelEndpoints`<br>`bedrock:GetMarketplaceModelEndpoint`<br>`sagemaker:InvokeEndpoint`<br>`sagemaker:InvokeEndpointWithResponseStream` (on `arn:aws:sagemaker:*:*:endpoint/*`, conditioned on `aws:CalledViaLast: bedrock.amazonaws.com`) | `AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED=true` |
+| **[SageMaker AI Endpoints](#sagemaker-endpoints-iam)** | `sagemaker:CallWithBearerToken` (on `*`, no resource-level support)<br>`sagemaker:InvokeEndpoint` (on the endpoint ARNs you serve) | `AWS_SAGEMAKER_ENDPOINTS` configured |
+| **[AWS Marketplace Metering](#aws-marketplace-metering)** | `aws-marketplace:RegisterUsage` | AWS Marketplace image only (always active); not required for the community image |
+| **[Bedrock Inference Profiles, Prompt Routers and Prompt Management](#bedrock-inference-profiles-and-prompt-routers-optional)** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`<br>`bedrock:GetPrompt` and `bedrock:RenderPrompt` (on `arn:aws:bedrock:*:*:prompt/*`) for Prompt Management prompts | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
+| **[Bedrock Guardrails](#bedrock-guardrails-optional)** | `bedrock:ApplyGuardrail` | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER` |
+| **[Bedrock Session Storage](#bedrock-session-storage-optional)** | Bedrock session permissions (`bedrock:CreateSession`, `bedrock:GetSession`, `bedrock:*Invocation*`, `bedrock:ListSessions`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`, `bedrock:ListTagsForResource` on sessions) | `store=true` requests and stored-completion listings |
+| **[Bedrock Mantle](#bedrock-mantle-iam)** | `bedrock-mantle:CreateInference`<br>`bedrock-mantle:GetInference`<br>`bedrock-mantle:DeleteInference`<br>`bedrock-mantle:ListModels`<br>`bedrock-mantle:GetModel`<br>`bedrock-mantle:CancelInference`<br>`bedrock-mantle:CountTokens` (on `arn:aws:bedrock-mantle:*:*:project/*`)<br>`bedrock-mantle:CallWithBearerToken` | `AWS_BEDROCK_MANTLE_ENABLED=true` |
+| **[Web Search](#web-search-iam)** | `bedrock-websearch:InvokeSearch`<br>`bedrock-websearch:InvokeFetch`<br>`bedrock-websearch:ExternalWebAccess` only when external web access is enabled | `web_search` requests on the OpenAI GPT-5.x family |
+| **[S3 File Storage](#s3-file-storage-optional)** | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads`<br>on every bucket, including each `AWS_S3_REGIONAL_BUCKETS` entry<br>`kms:Decrypt` and `kms:GenerateDataKey`, with a `kms:ViaService` condition, when the buckets use KMS encryption | `AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`<br>If S3 buckets use KMS encryption |
+| **[S3 Accepted Input Buckets](#s3-accepted-input-buckets)** | `s3:GetObject` on the objects of each declared bucket (no `s3:ListBucket`)<br>`kms:Decrypt`, with a `kms:ViaService` condition, when those buckets use KMS encryption | `AWS_S3_ACCEPTED_BUCKETS`<br>If those buckets use KMS encryption |
+| **[Vector Stores](#vector-stores-optional)** | `s3vectors:CreateIndex`<br>`s3vectors:DeleteIndex`<br>`s3vectors:PutVectors`<br>`s3vectors:GetVectors`<br>`s3vectors:QueryVectors`<br>`s3vectors:DeleteVectors` (on the vector bucket and its indexes)<br>File Storage S3 permissions on `AWS_S3_BUCKET` for the stores' records<br>`kms:Decrypt` and `kms:GenerateDataKey`, with a `kms:ViaService` condition, when the vector bucket uses KMS encryption | `AWS_S3_VECTORS_BUCKET`<br>`AWS_S3_VECTORS_REGION` |
+| **[Durable Vector Store Indexing](#durable-vector-store-indexing)** | `sqs:SendMessage`<br>`sqs:ReceiveMessage`<br>`sqs:DeleteMessage`<br>`sqs:ChangeMessageVisibility`<br>`sqs:GetQueueAttributes` (on the queue ARN only)<br>`kms:Decrypt` and `kms:GenerateDataKey`, with a `kms:ViaService` condition, when the queue uses SSE-KMS with your own key | `AWS_SQS_VECTOR_STORE_QUEUE_URL` |
+| **[Shared Table](#shared-table)** | `dynamodb:GetItem`<br>`dynamodb:PutItem`<br>`dynamodb:DeleteItem`<br>`dynamodb:Query`<br>`dynamodb:DescribeTable`<br>`dynamodb:DescribeTimeToLive` (on the table ARN; no `dynamodb:Scan`, no index ARN) | `AWS_DYNAMODB_TABLE`<br>`AWS_DYNAMODB_REGION`<br>`MODEL_CACHE_SHARED` |
+| **[Tenant API Key Delivery](#tenant-key-delivery)** | `ssm:PutParameter`<br>`ssm:GetParameter` (on the delivery prefix)<br>`kms:Encrypt`, `kms:Decrypt`, `kms:GenerateDataKey` on the key, with a `kms:ViaService` condition, when `TENANT_KEY_SSM_KMS_KEY_ID` names a key of your own<br>plus the Shared Table permissions above | `TENANT_API_KEYS`<br>`TENANT_KEY_SSM_PARAMETER_PREFIX`<br>`TENANT_KEY_SSM_KMS_KEY_ID` |
+| **[Tenant AWS Credentials](#tenant-aws-credentials)** | `sts:AssumeRole` on the tenant role ARNs, conditioned on `sts:ExternalId` | `TENANT_AWS_CREDENTIALS` |
+| **[Knowledge Base Vector Stores](#knowledge-base-vector-stores)** | `bedrock:GetKnowledgeBase`<br>`bedrock:Retrieve`<br>`bedrock:ListDataSources`<br>`bedrock:IngestKnowledgeBaseDocuments`<br>`bedrock:ListKnowledgeBaseDocuments`<br>`bedrock:GetKnowledgeBaseDocuments`<br>`bedrock:DeleteKnowledgeBaseDocuments` (on each allowlisted knowledge base ARN; no `bedrock:ListKnowledgeBases`) | `AWS_BEDROCK_KNOWLEDGE_BASE_IDS` |
+| **[Video Generation](#video-generation-optional)** | Core Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:TagResource`)<br>`bedrock:ListAsyncInvokes` and `bedrock:ListTagsForResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for job listing<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS` |
+| **[Batch Inference](#batch-inference)** | `bedrock:CreateModelInvocationJob`<br>`bedrock:GetModelInvocationJob`<br>`bedrock:StopModelInvocationJob` (on `arn:aws:bedrock:*:*:model-invocation-job/*`)<br>`iam:PassRole` on the batch service role, scoped with `iam:PassedToService: bedrock.amazonaws.com`<br>File Storage S3 permissions on each bucket a batch uses, plus the service role's own policy | `AWS_BEDROCK_BATCH_ROLE_ARN` |
+| **[Text-to-Speech](#text-to-speech-optional)** | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`<br>`polly:StartSpeechSynthesisStream` for generative voices above 3,000 characters<br>`polly:StartSpeechSynthesisTask`, `polly:GetSpeechSynthesisTask` and S3 `PutObject`/`GetObject`/`DeleteObject` on each bucket serving a Polly region, for the other voices above 3,000 characters | `AWS_POLLY_REGION`<br>`AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS` |
+| **[Speech-to-Text](#speech-to-text-optional)** | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:StartStreamTranscription`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>File Storage S3 permissions on every bucket serving a candidate region<br>`kms:GenerateDataKey`, `kms:Decrypt` on the output encryption key, when one is configured | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`<br>`AWS_TRANSCRIBE_STREAM_LANGUAGES`<br>`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN` |
+| **[Language Detection](#language-detection-optional)** | `comprehend:DetectDominantLanguage` | `AWS_COMPREHEND_REGION` |
+| **[Comprehend Moderation](#comprehend-moderation)** | `comprehend:DetectToxicContent` | Moderations API without a configured guardrail |
+| **[Text Translation](#text-translation-optional)** | `translate:TranslateText`<br>`translate:ListLanguages` (optional; validates the language pair before transcribing) | `AWS_TRANSLATE_REGION` |
+| **[Cost Tracking](#cost-tracking-iam)** | `pricing:GetProducts` | `COST_TRACKING=true` (opt-in; `false` by default) |
+| **[Usage API](#usage-api-iam)** | `cloudwatch:GetMetricData`<br>`cloudwatch:ListMetrics` (on `*` — [CloudWatch metric actions take no resource ARN](#usage-api-iam)); `GetMetricData` is billed per metric read and is outside the free tier | `USAGE_API=true` (opt-in; `false` by default), with `CLOUDWATCH_METRICS=true` |
+| **[Per-User Cost Attribution](#per-user-cost-attribution)** | `sts:AssumeRole` and `sts:TagSession` on the end user role, matched by that role's trust policy; on the end user role itself, `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` on every model ARN form the deployment allows, plus `bedrock:ApplyGuardrail` when a guardrail is configured and `s3:GetObject` (with `kms:Decrypt` via S3) on every bucket an invocation can reference by URI | `AWS_BEDROCK_USER_ROLE_ARN` |
+| **[API Key Authentication](#api-key-authentication-optional)** | Parameter Store: `ssm:GetParameter`<br>`kms:Decrypt` (if encrypted)<br>Secrets Manager: `secretsmanager:GetSecretValue` | `API_KEY_SSM_PARAMETER`<br>`API_KEY_SECRETSMANAGER_SECRET` |
 
 !!! warning "Multi-Region Failover and Region-Scoped Policies"
-    By default, Amazon Bedrock **and** the other AWS AI services (Polly, Transcribe, Comprehend, Translate) are called in every region listed in [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions), failing over from one to the next on throttling, quota, or availability errors. See [Other AWS Services Failover](operations_resilience.md#other-aws-services-failover).
+    By default, Amazon Bedrock **and** the other AWS AI services (Polly, Transcribe, Comprehend, Translate) are called in every region listed in [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions), failing over from one to the next on throttling, quota, or availability errors. See [Other AWS Services Failover](operations_resilience.md#other-aws-services-failover).
 
     The statements on this page use region-agnostic resources, so they work as-is. However, any `aws:RequestedRegion` condition — in the policy itself, a permissions boundary, or a service control policy — must allow **all** configured regions, otherwise failover silently fails and requests error out once the first region is unavailable.
 
@@ -80,7 +114,7 @@ These permissions are mandatory for stdapi.ai to discover and invoke Amazon Bedr
 
 ## :material-storefront: Bedrock Marketplace Auto-Subscribe (Optional) { #bedrock-marketplace-auto-subscribe-iam }
 
-**Environment Variables**: [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](operations_configuration.md#bedrock-marketplace-auto-subscribe)
+**Environment Variables**: [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](operations_configuration_models.md#bedrock-marketplace-auto-subscribe)
 
 Required only if you want models sold as third-party AWS Marketplace listings to be usable without subscribing to each one by hand (`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true`, which is the default). The server never calls `Subscribe` itself: it keeps a listing with no agreement in the catalogue, and AWS creates the subscription under this role on the first invocation. It applies to whichever models AWS sells that way — see [Which Models Are Which](operations_cost_management.md#which-models-are-which); models billed as ordinary Amazon Bedrock usage need none of these permissions.
 
@@ -104,7 +138,7 @@ Required only if you want models sold as third-party AWS Marketplace listings to
 
 ## :material-server-network: Bedrock Marketplace Model Endpoints (Optional) { #bedrock-marketplace-endpoints-iam }
 
-**Environment Variables**: [`AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED`](operations_configuration.md#bedrock-marketplace-endpoints-enabled)
+**Environment Variables**: [`AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED`](operations_configuration_models.md#bedrock-marketplace-endpoints-enabled)
 
 Required only if you want stdapi.ai to publish and serve the Amazon Bedrock Marketplace model endpoints already deployed in this account. The server only discovers and invokes them — it never creates, updates or deletes an endpoint, so it is granted no action that does.
 
@@ -143,7 +177,7 @@ Required only if you want stdapi.ai to publish and serve the Amazon Bedrock Mark
 
 ## :material-server: SageMaker AI Endpoints (Optional) { #sagemaker-endpoints-iam }
 
-**Environment Variables**: [`AWS_SAGEMAKER_ENDPOINTS`](operations_configuration.md#aws-sagemaker-endpoints)
+**Environment Variables**: [`AWS_SAGEMAKER_ENDPOINTS`](operations_configuration_models.md#aws-sagemaker-endpoints)
 
 Required only if you name Amazon SageMaker AI endpoints for stdapi.ai to serve. The server only invokes the endpoints you named — it never creates, updates, scales or deletes one, so it is granted no action that does.
 
@@ -193,7 +227,7 @@ Required only for the **AWS Marketplace image** — not the community image. At 
 
 ## :material-directions-fork: Bedrock Inference Profiles, Prompt Routers and Prompt Management (Optional) { #bedrock-inference-profiles-and-prompt-routers-optional }
 
-**Environment Variables**: [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](operations_configuration.md#bedrock-allow-cross-region-profile-arn), [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](operations_configuration.md#bedrock-allow-application-profile-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](operations_configuration.md#bedrock-allow-prompt-router-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](operations_configuration.md#bedrock-allow-prompt-arn), [`AWS_BEDROCK_MODEL_ARN_MAPPING`](operations_configuration.md#bedrock-model-arn-mapping)
+**Environment Variables**: [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](operations_configuration_bedrock.md#bedrock-allow-cross-region-profile-arn), [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](operations_configuration_bedrock.md#bedrock-allow-application-profile-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](operations_configuration_bedrock.md#bedrock-allow-prompt-router-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](operations_configuration_bedrock.md#bedrock-allow-prompt-arn), [`AWS_BEDROCK_MODEL_ARN_MAPPING`](operations_configuration_bedrock.md#bedrock-model-arn-mapping)
 
 Required only if you enable ARN-based routing features that allow users to pass inference profile, prompt router or Prompt Management prompt ARNs directly, or if you configure server-side ARN mappings.
 
@@ -234,9 +268,9 @@ Required only if you enable ARN-based routing features that allow users to pass 
 
 ## :material-shield-check: Bedrock Guardrails (Optional)
 
-**Environment Variables**: [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](operations_configuration.md#aws-bedrock-guardrail-identifier), [`AWS_BEDROCK_GUARDRAIL_VERSION`](operations_configuration.md#aws-bedrock-guardrail-version)
+**Environment Variables**: [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](operations_configuration_bedrock.md#aws-bedrock-guardrail-identifier), [`AWS_BEDROCK_GUARDRAIL_VERSION`](operations_configuration_bedrock.md#aws-bedrock-guardrail-version)
 
-Required if you configure Bedrock Guardrails for content filtering, use the `moderation` request parameter, or select a guardrail on the [Moderations API](api_openai_moderations.md) (without a guardrail, that API falls back to [Comprehend toxicity moderation](#comprehend-moderation)). See the [Bedrock Guardrails](operations_configuration.md#bedrock-guardrails) configuration section.
+Required if you configure Bedrock Guardrails for content filtering, use the `moderation` request parameter, or select a guardrail on the [Moderations API](api_openai_moderations.md) (without a guardrail, that API falls back to [Comprehend toxicity moderation](#comprehend-moderation)). See the [Bedrock Guardrails](operations_configuration_bedrock.md#bedrock-guardrails) configuration section.
 
 ??? example "Bedrock Guardrails IAM Policy Statement"
     ```json
@@ -254,7 +288,7 @@ Required if you configure Bedrock Guardrails for content filtering, use the `mod
 
 ## :material-database-lock: Bedrock Session Storage (Optional)
 
-**Environment Variables**: none (enabled by the `store=true` request parameter; see [Bedrock Session Storage](operations_configuration.md#bedrock-session-storage-optional) configuration)
+**Environment Variables**: none (enabled by the `store=true` request parameter; see [Bedrock Session Storage](operations_configuration_bedrock.md#bedrock-session-storage-optional) configuration)
 
 Required if clients use `store=true` on the [Responses](api_openai_responses.md#stored-responses) or [Chat Completions](api_openai_chat_completions.md#stored-chat-completions) APIs, or the [Conversations](api_openai_conversations.md) API, all of which persist state in Amazon Bedrock sessions.
 
@@ -289,15 +323,15 @@ Required if clients use `store=true` on the [Responses](api_openai_responses.md#
 
     `bedrock:ListSessions` serves the stored chat completions listing endpoint (`GET /v1/chat/completions`); the account-level `ListSessions` action does not support resource scoping. `bedrock:GetSession` is used on deletion and `bedrock:ListTagsForResource` on both deletion and listing, to check that a stored object belongs to the API it is requested from. `bedrock:UpdateSession` serves the conversation metadata update (`POST /v1/conversations/{conversation_id}`) only.
 
-    Add `kms:Decrypt` and `kms:GenerateDataKey` on the key when [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](operations_configuration.md#aws-bedrock-session-encryption-key-arn) is configured.
+    Add `kms:Encrypt`, `kms:Decrypt`, `kms:GenerateDataKey` and `kms:DescribeKey` on the key when [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](operations_configuration_bedrock.md#aws-bedrock-session-encryption-key-arn) is configured — the set AWS documents for [session encryption](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions-encryption.html). The [Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) grants a slightly different set, adding `kms:CreateGrant` and leaving out `kms:Encrypt`.
 
 ---
 
 ## :material-layers-triple: Bedrock Mantle (Optional) { #bedrock-mantle-iam }
 
-**Environment Variables**: [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration.md#bedrock-mantle-enabled)
+**Environment Variables**: [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration_aws.md#bedrock-mantle-enabled)
 
-Required for [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration.md#bedrock-mantle-enabled) (enabled by default), which exposes models served by the Amazon Bedrock Mantle endpoint (OpenAI GPT, xAI Grok, Google Gemma, and more). Without these permissions the server still starts normally: Mantle models are not listed and a warning is logged.
+Required for [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration_aws.md#bedrock-mantle-enabled) (enabled by default), which exposes models served by the Amazon Bedrock Mantle endpoint (OpenAI GPT, xAI Grok, Google Gemma, and more). Without these permissions the server still starts normally: Mantle models are not listed and a warning is logged.
 
 ??? example "Bedrock Mantle IAM Policy Statements"
     ```json
@@ -338,7 +372,7 @@ Required for the built-in [web search tool](api_openai_responses.md#openai-gpt-w
 !!! warning "A missing web search permission produces no error and no server log entry"
     The denial is handled inside the model call, so the request succeeds with a normal answer: the server sees nothing to report, and the response is indistinguishable from the model deciding it did not need to search. When answers never cite a source, check these permissions (and the Region the call was served in) before suspecting the model. AWS CloudTrail records the denied `bedrock-websearch` calls.
 
-Add `bedrock-websearch:ExternalWebAccess` on top when a request can reach external web access — that is, when [`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](operations_configuration.md#bedrock-external-web-access) is enabled, or when [`AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE`](operations_configuration.md#bedrock-allow-external-web-access-override) lets a client ask for it per request. Leaving it out is what keeps every search inside the AWS boundary.
+Add `bedrock-websearch:ExternalWebAccess` on top when a request can reach external web access — that is, when [`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](operations_configuration_models.md#bedrock-external-web-access) is enabled, or when [`AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE`](operations_configuration_models.md#bedrock-allow-external-web-access-override) lets a client ask for it per request. Leaving it out is what keeps every search inside the AWS boundary.
 
 ??? example "Web Search IAM Policy Statement"
     ```json
@@ -359,9 +393,9 @@ Add `bedrock-websearch:ExternalWebAccess` on top when a request can reach extern
 
 ## :material-database: S3 File Storage (Optional)
 
-**Environment Variables**: [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)
+**Environment Variables**: [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration_storage.md#aws-s3-regional-buckets)
 
-Required for storing generated images, audio files, documents, and videos. See [Storage Configuration](operations_configuration.md#storage-configuration) for bucket setup details.
+Required for storing generated images, audio files, documents, and videos. See [Storage Configuration](operations_configuration_storage.md#storage-configuration) for bucket setup details.
 
 ??? example "S3 File Storage IAM Policy Statements"
     ```json
@@ -390,7 +424,7 @@ Required for storing generated images, audio files, documents, and videos. See [
     ```
 
     !!! info "Replace Bucket Name"
-        Replace `AWS_S3_BUCKET_VALUE` with the value of your [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) environment variable. Repeat both statements for each [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) bucket — they serve video generation, asynchronous embeddings (TwelveLabs Marengo, Amazon Nova), [large attachments](features.md#attachment-size) on any multimodal route, and [Speech-to-Text](#speech-to-text-optional) failover, and the Files API looks up objects across every configured bucket.
+        Replace `AWS_S3_BUCKET_VALUE` with the value of your [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket) environment variable. Repeat both statements for each [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration_storage.md#aws-s3-regional-buckets) bucket — they serve video generation, asynchronous embeddings (TwelveLabs Marengo, Amazon Nova), [large attachments](features.md#attachment-size) on any multimodal route, and [Speech-to-Text](#speech-to-text-optional) failover, and the Files API looks up objects across every configured bucket.
 
     !!! note "Multipart Uploads"
         Large files are uploaded and copied with the multipart API. Its `CreateMultipartUpload`, `UploadPart`, `UploadPartCopy`, and `CompleteMultipartUpload` operations have no dedicated IAM actions — they are authorized by `s3:PutObject` — which is why only the abort and listing actions appear above.
@@ -422,11 +456,61 @@ Required for storing generated images, audio files, documents, and videos. See [
 
 ---
 
+## :material-bucket-outline: S3 Accepted Input Buckets (Optional) { #s3-accepted-input-buckets }
+
+**Environment Variables**: [`AWS_S3_ACCEPTED_BUCKETS`](operations_configuration_storage.md#aws-s3-accepted-buckets)
+
+Required when clients send S3 URIs — or S3 HTTP URLs, including presigned ones — that point at buckets this deployment does not own. The server reads those objects with its own role: a bucket that is not declared is refused before any AWS call, and a declared bucket the role cannot read answers `400` naming that input.
+
+??? example "S3 Accepted Input Buckets IAM Policy Statements"
+    ```json
+    {
+      "Sid": "S3AcceptedBuckets",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::ACCEPTED_BUCKET_NAME/*"
+      ]
+    }
+    ```
+
+    !!! info "Replace the Bucket Names"
+        Replace `ACCEPTED_BUCKET_NAME` with a bucket name declared in [`AWS_S3_ACCEPTED_BUCKETS`](operations_configuration_storage.md#aws-s3-accepted-buckets), and list one `arn:aws:s3:::BUCKET/*` resource per entry of that map. Grant it on the objects only — the server reads the object a request names and never lists these buckets, so no `s3:ListBucket` is needed.
+
+    !!! note "Reads, Heads, and Copies"
+        `s3:GetObject` covers all three ways the server touches these objects: reading the bytes, a `HeadObject` for the size and content type, and the server-side copy that moves an input into the region a model runs in. The destination of that copy is one of the deployment's own buckets, already covered by [S3 File Storage](#s3-file-storage-optional).
+
+    !!! note "The bucket owner grants the other half"
+        These buckets are not the deployment's, so their own bucket policy must also allow this role to `s3:GetObject` — cross-account access needs both sides. A denial that survives this statement is the caller's object to fix.
+
+    **If an accepted bucket uses KMS encryption**, also add:
+
+    ```json
+    {
+      "Sid": "KMSAcceptedBuckets",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt",
+      "Resource": [
+        "arn:aws:kms:REGION:ACCOUNT_ID:key/YOUR_KMS_KEY_ID"
+      ],
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": "s3.*.amazonaws.com"
+        }
+      }
+    }
+    ```
+
+    !!! tip "KMS Security"
+        Only `kms:Decrypt` is granted — the server never writes to these buckets, so it never needs `kms:GenerateDataKey` on their keys. The `kms:ViaService` condition restricts the key to S3 service calls; it is a `StringLike` because accepted buckets may span regions. When every key lives in one region, tighten it to `StringEquals` on `s3.REGION.amazonaws.com`. List one key ARN per encrypted bucket, and, for a key in another account, its key policy must grant this role as well.
+
+---
+
 ## :material-magnify: Vector Stores (Optional) { #vector-stores-optional }
 
-**Environment Variables**: [`AWS_S3_VECTORS_BUCKET`](operations_configuration.md#aws-s3-vectors-bucket), [`AWS_S3_VECTORS_REGION`](operations_configuration.md#aws-s3-vectors-region), [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket)
+**Environment Variables**: [`AWS_S3_VECTORS_BUCKET`](operations_configuration_storage.md#aws-s3-vectors-bucket), [`AWS_S3_VECTORS_REGION`](operations_configuration_storage.md#aws-s3-vectors-region), [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket)
 
-Required by the [Vector Stores API](api_openai_vector_stores.md). The indexed content lives in an [Amazon S3 vector bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors.html) you create; the stores' own records live in the general purpose bucket under [`AWS_S3_VECTOR_STORES_PREFIX`](operations_configuration.md#aws-s3-vector-stores-prefix) and are covered by the [S3 File Storage](#s3-file-storage-optional) statements above.
+Required by the [Vector Stores API](api_openai_vector_stores.md). The indexed content lives in an [Amazon S3 vector bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors.html) you create; the stores' own records live in the general purpose bucket under [`AWS_S3_VECTOR_STORES_PREFIX`](operations_configuration_storage.md#aws-s3-vector-stores-prefix) and are covered by the [S3 File Storage](#s3-file-storage-optional) statements above.
 
 ??? example "Vector Stores IAM Policy Statements"
     ```json
@@ -449,19 +533,41 @@ Required by the [Vector Stores API](api_openai_vector_stores.md). The indexed co
     ```
 
     !!! info "Replace the Placeholders"
-        Replace `AWS_S3_VECTORS_BUCKET_VALUE` with your [`AWS_S3_VECTORS_BUCKET`](operations_configuration.md#aws-s3-vectors-bucket) value, `REGION` with [`AWS_S3_VECTORS_REGION`](operations_configuration.md#aws-s3-vectors-region), and `ACCOUNT_ID` with your account. The bucket ARN itself is needed for the index actions; the index ARN pattern covers the per-store indexes the gateway creates and deletes.
+        Replace `AWS_S3_VECTORS_BUCKET_VALUE` with your [`AWS_S3_VECTORS_BUCKET`](operations_configuration_storage.md#aws-s3-vectors-bucket) value, `REGION` with [`AWS_S3_VECTORS_REGION`](operations_configuration_storage.md#aws-s3-vectors-region), and `ACCOUNT_ID` with your account. The bucket ARN itself is needed for the index actions; the index ARN pattern covers the per-store indexes the gateway creates and deletes.
 
     !!! note "The bucket is yours to create"
         The gateway never creates or deletes the vector bucket, only the indexes inside it, so no bucket-level create or delete action is granted.
 
     !!! note "Records live in the general purpose bucket"
-        Grant the [S3 File Storage](#s3-file-storage-optional) statements on [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) as well: the stores, their attached files and their batches are JSON objects there.
+        Grant the [S3 File Storage](#s3-file-storage-optional) statements on [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket) as well: the stores, their attached files and their batches are JSON objects there.
+
+    **If your vector bucket uses KMS encryption**, also add:
+
+    ```json
+    {
+      "Sid": "KMSVectorBucket",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "arn:aws:kms:REGION:ACCOUNT_ID:key/YOUR_KMS_KEY_ID",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3vectors.REGION.amazonaws.com"
+        }
+      }
+    }
+    ```
+
+    !!! tip "KMS Security"
+        `REGION` is [`AWS_S3_VECTORS_REGION`](operations_configuration_storage.md#aws-s3-vectors-region) — the region the vector bucket lives in — in the key ARN and in the `kms:ViaService` value alike. That condition restricts the key to Amazon S3 Vectors calls, so the role cannot use it anywhere else. Add this statement for a bucket you encrypted with a customer managed key of your own.
 
 ---
 
 ## :material-tray-arrow-down: Durable Vector Store Indexing (Optional) { #durable-vector-store-indexing }
 
-**Environment Variables**: [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url)
+**Environment Variables**: [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration_storage.md#aws-sqs-vector-store-queue-url)
 
 Required to keep indexing a vector store file when the server that accepted it stops. The gateway both writes the work to the [Amazon SQS](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/welcome.html) queue you create and reads it back, so it needs the producer and the consumer actions on that one queue.
 
@@ -482,7 +588,7 @@ Required to keep indexing a vector store file when the server that accepted it s
     ```
 
     !!! info "Replace the Placeholders"
-        `REGION`, `ACCOUNT_ID` and `QUEUE_NAME` are the three parts of your [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url). Grant this on the queue ARN itself — never on `*`.
+        `REGION`, `ACCOUNT_ID` and `QUEUE_NAME` are the three parts of your [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration_storage.md#aws-sqs-vector-store-queue-url). Grant this on the queue ARN itself — never on `*`.
 
     !!! note "The queues are yours to create"
         The gateway never creates, deletes or reconfigures a queue, so no `sqs:CreateQueue`, `sqs:DeleteQueue` or `sqs:SetQueueAttributes` is granted. `sqs:GetQueueAttributes` is read-only and is what lets the gateway honour your dead-letter queue's redrive policy.
@@ -490,11 +596,33 @@ Required to keep indexing a vector store file when the server that accepted it s
     !!! note "The dead-letter queue needs nothing"
         Amazon SQS moves an exhausted message itself; the gateway never reads the dead-letter queue, so grant it nothing.
 
+    **If your queue uses SSE-KMS with a key of your own**, also add:
+
+    ```json
+    {
+      "Sid": "KMSVectorStoreIndexingQueue",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "arn:aws:kms:REGION:ACCOUNT_ID:key/YOUR_KMS_KEY_ID",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "sqs.REGION.amazonaws.com"
+        }
+      }
+    }
+    ```
+
+    !!! tip "KMS Security"
+        Amazon SQS calls AWS KMS under the gateway's own identity, so the grant is conditioned on the call arriving through Amazon SQS in the region the queue lives in — the `REGION` of your [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration_storage.md#aws-sqs-vector-store-queue-url), in the key ARN and in the `kms:ViaService` value alike. Both actions are needed: `kms:GenerateDataKey` to send a message, `kms:Decrypt` to receive one. A queue encrypted with the Amazon SQS managed key needs no statement.
+
 ---
 
 ## :material-table: Shared Table (Optional) { #shared-table }
 
-**Environment Variables**: [`AWS_DYNAMODB_TABLE`](operations_configuration.md#aws-dynamodb-table), [`AWS_DYNAMODB_REGION`](operations_configuration.md#aws-dynamodb-region), [`MODEL_CACHE_SHARED`](operations_configuration.md#model-cache-shared)
+**Environment Variables**: [`AWS_DYNAMODB_TABLE`](operations_configuration_storage.md#aws-dynamodb-table), [`AWS_DYNAMODB_REGION`](operations_configuration_storage.md#aws-dynamodb-region), [`MODEL_CACHE_SHARED`](operations_configuration_models.md#model-cache-shared)
 
 Required by the features whose records every instance of a deployment reads and writes, on the one [Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html) table you create. Grant it on that table's ARN. [Model list sharing](operations_resilience.md#model-list-refresh) is the feature that uses it today; a server missing these permissions reports it at `WARNING` and keeps discovering the model list itself.
 
@@ -516,7 +644,7 @@ Required by the features whose records every instance of a deployment reads and 
     ```
 
     !!! info "Replace the Placeholders"
-        `REGION` is [`AWS_DYNAMODB_REGION`](operations_configuration.md#aws-dynamodb-region), `ACCOUNT_ID` your AWS account ID, and `TABLE_NAME` your [`AWS_DYNAMODB_TABLE`](operations_configuration.md#aws-dynamodb-table). Grant this on the table ARN itself — never on `*`.
+        `REGION` is [`AWS_DYNAMODB_REGION`](operations_configuration_storage.md#aws-dynamodb-region), `ACCOUNT_ID` your AWS account ID, and `TABLE_NAME` your [`AWS_DYNAMODB_TABLE`](operations_configuration_storage.md#aws-dynamodb-table). Grant this on the table ARN itself — never on `*`.
 
     !!! note "The table is yours to create"
         The gateway never creates, deletes or reconfigures a table, so no `dynamodb:CreateTable`, `dynamodb:DeleteTable` or `dynamodb:UpdateTable` is granted. `dynamodb:DescribeTable` and `dynamodb:DescribeTimeToLive` are read-only and are what let the gateway report a table whose key schema or expiration is not what the features need.
@@ -534,7 +662,7 @@ Required by the features whose records every instance of a deployment reads and 
 
 ## :material-key-multiple: Tenant API Key Delivery (Optional) { #tenant-key-delivery }
 
-**Environment Variables**: [`TENANT_API_KEYS`](operations_configuration.md#tenant-api-keys), [`TENANT_KEY_SSM_PARAMETER_PREFIX`](operations_configuration.md#tenant-key-ssm-parameter-prefix), [`TENANT_KEY_SSM_KMS_KEY_ID`](operations_configuration.md#tenant-key-ssm-kms-key-id)
+**Environment Variables**: [`TENANT_API_KEYS`](operations_configuration_authentication.md#tenant-api-keys), [`TENANT_KEY_SSM_PARAMETER_PREFIX`](operations_configuration_authentication.md#tenant-key-ssm-parameter-prefix), [`TENANT_KEY_SSM_KMS_KEY_ID`](operations_configuration_authentication.md#tenant-key-ssm-kms-key-id)
 
 Required, together with the [shared table permissions](#shared-table), when [tenant API keys](operations_authentication_security.md#tenant-api-keys) are enabled. The gateway writes each minted key exactly once (`PutParameter` refuses to overwrite), and reads a parameter back only to recover a mint that crashed between delivery and recording. Grant it on the delivery prefix and nothing wider.
 
@@ -552,10 +680,10 @@ Required, together with the [shared table permissions](#shared-table), when [ten
     ```
 
     !!! info "Replace the Placeholders"
-        `REGION` is the deployment's own Region, `ACCOUNT_ID` your AWS account ID, and `/PREFIX` your [`TENANT_KEY_SSM_PARAMETER_PREFIX`](operations_configuration.md#tenant-key-ssm-parameter-prefix) — the parameter ARN concatenates `parameter` and the prefix's leading slash.
+        `REGION` is the deployment's own Region, `ACCOUNT_ID` your AWS account ID, and `/PREFIX` your [`TENANT_KEY_SSM_PARAMETER_PREFIX`](operations_configuration_authentication.md#tenant-key-ssm-parameter-prefix) — the parameter ARN concatenates `parameter` and the prefix's leading slash.
 
     !!! note "One prefix per deployment"
-        Any principal allowed to read under the prefix can read every tenant's key, and the gateway role itself can read them back — unless [`TENANT_KEY_SSM_KMS_KEY_ID`](operations_configuration.md#tenant-key-ssm-kms-key-id) names a key of your own, which also takes `kms:Decrypt` on it. Keep the prefix private to one deployment, and delete each parameter once its key is delivered — the gateway never needs it again.
+        Any principal allowed to read under the prefix can read every tenant's key, and the gateway role itself can read them back — unless [`TENANT_KEY_SSM_KMS_KEY_ID`](operations_configuration_authentication.md#tenant-key-ssm-kms-key-id) names a key of your own, which also takes `kms:Decrypt` on it. Keep the prefix private to one deployment, and delete each parameter once its key is delivered — the gateway never needs it again.
 
 ??? example "Customer Managed Key Statement (with `TENANT_KEY_SSM_KMS_KEY_ID`)"
     Add this statement when the delivery parameters are encrypted with a key of your own instead of the AWS-managed `alias/aws/ssm` key. `kms:Encrypt` covers writing a standard `SecureString`, `kms:Decrypt` covers reading one back, and `kms:GenerateDataKey` is only needed if the account's default parameter tier creates advanced parameters. The `kms:ViaService` condition keeps the grant usable through Parameter Store alone.
@@ -585,7 +713,7 @@ Required, together with the [shared table permissions](#shared-table), when [ten
 
 ## :material-account-key: Tenant AWS Credentials (Optional) { #tenant-aws-credentials }
 
-**Environment Variables**: [`TENANT_AWS_CREDENTIALS`](operations_configuration.md#tenant-aws-credentials)
+**Environment Variables**: [`TENANT_AWS_CREDENTIALS`](operations_configuration_authentication.md#tenant-aws-credentials)
 
 Required when [tenant AWS credentials](operations_authentication_security.md#tenant-aws-credentials) are enabled: the gateway assumes each tenant's registered cross-account role to run that tenant's model invocations under the tenant's own account. Grant `sts:AssumeRole` on the tenant roles alone — list them, or constrain a pattern — never on `*`, and require an `ExternalId` to be presented so no code path can ever assume a role without the confused-deputy check.
 
@@ -611,7 +739,7 @@ Required when [tenant AWS credentials](operations_authentication_security.md#ten
 
 ## :material-book-search: Knowledge Base Vector Stores (Optional) { #knowledge-base-vector-stores }
 
-**Environment Variables**: [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids)
+**Environment Variables**: [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration_storage.md#aws-bedrock-knowledge-base-ids)
 
 Required to serve an [Amazon Bedrock knowledge base](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base.html) you created as a [vector store](api_openai_vector_stores.md#knowledge-base-stores). Grant one statement per allowlisted knowledge base, on its own ARN.
 
@@ -634,7 +762,7 @@ Required to serve an [Amazon Bedrock knowledge base](https://docs.aws.amazon.com
     ```
 
     !!! info "Replace the Placeholders"
-        Replace `REGION` with the first [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) entry, `ACCOUNT_ID` with your account, and `KNOWLEDGE_BASE_ID` with the knowledge base identifier — one ARN per entry of [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids).
+        Replace `REGION` with the first [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions) entry, `ACCOUNT_ID` with your account, and `KNOWLEDGE_BASE_ID` with the knowledge base identifier — one ARN per entry of [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration_storage.md#aws-bedrock-knowledge-base-ids).
 
     !!! note "No discovery action, deliberately"
         `bedrock:ListKnowledgeBases` is **not** granted, and is not needed: the server never discovers knowledge bases it was not given. Only the identifiers in the allowlist are ever addressed, and any other one is answered as an unknown vector store.
@@ -649,7 +777,7 @@ Required to serve an [Amazon Bedrock knowledge base](https://docs.aws.amazon.com
 
 ## :material-video: Video Generation (Optional) { #video-generation-optional }
 
-**Environment Variables**: [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)
+**Environment Variables**: [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration_storage.md#aws-s3-regional-buckets)
 
 Video generation itself runs on the core Bedrock asynchronous invocation permissions (`bedrock:InvokeModel`, `bedrock:GetAsyncInvoke`, `bedrock:TagResource`) plus [S3 File Storage](#s3-file-storage-optional) permissions on each regional bucket. The video job listing endpoint (`GET /v1/videos`) additionally requires:
 
@@ -679,7 +807,7 @@ Video generation itself runs on the core Bedrock asynchronous invocation permiss
 
 ## :material-package-variant-closed: Batch Inference (Optional) { #batch-inference }
 
-**Environment Variables**: [`AWS_BEDROCK_BATCH_ROLE_ARN`](operations_configuration.md#aws-bedrock-batch-role-arn), [`AWS_S3_BATCHES_PREFIX`](operations_configuration.md#aws-s3-batches-prefix), [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)
+**Environment Variables**: [`AWS_BEDROCK_BATCH_ROLE_ARN`](operations_configuration_bedrock.md#aws-bedrock-batch-role-arn), [`AWS_S3_BATCHES_PREFIX`](operations_configuration_storage.md#aws-s3-batches-prefix), [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration_storage.md#aws-s3-regional-buckets)
 
 The [Batch API](api_openai_batches.md) and the [Message Batches API](api_anthropic_batches.md) run on [Amazon Bedrock batch inference](https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference.html), which needs **two** policies: the server's own, and a service role Amazon Bedrock assumes to read the requests and write the results.
 
@@ -771,12 +899,12 @@ Create a role named by `AWS_BEDROCK_BATCH_ROLE_ARN` whose trust policy lets Amaz
 
 ## :material-account-voice: Text-to-Speech (Optional) { #text-to-speech-optional }
 
-**Environment Variables**: [`AWS_POLLY_REGION`](operations_configuration.md#aws-polly-region), [`DEFAULT_TTS_MODEL`](operations_configuration.md#default-tts-model), [`DEFAULT_TTS_LANGUAGE`](operations_configuration.md#default-tts-language), [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)
+**Environment Variables**: [`AWS_POLLY_REGION`](operations_configuration_aws.md#aws-polly-region), [`DEFAULT_TTS_MODEL`](operations_configuration_bedrock.md#default-tts-model), [`DEFAULT_TTS_LANGUAGE`](operations_configuration_bedrock.md#default-tts-language), [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration_storage.md#aws-s3-regional-buckets)
 
-Required for generating speech from text using Amazon Polly. See the [Audio and Text-to-Speech](operations_configuration.md#audio-and-text-to-speech) configuration section.
+Required for generating speech from text using Amazon Polly. See the [Audio and Text-to-Speech](operations_configuration_bedrock.md#audio-and-text-to-speech) configuration section.
 
 !!! tip "Optimize Performance"
-    Set [`DEFAULT_TTS_LANGUAGE`](operations_configuration.md#default-tts-language) to skip language detection and avoid Amazon Comprehend API calls, improving response times and reducing costs.
+    Set [`DEFAULT_TTS_LANGUAGE`](operations_configuration_bedrock.md#default-tts-language) to skip language detection and avoid Amazon Comprehend API calls, improving response times and reducing costs.
 
 ??? example "Polly Text-to-Speech IAM Policy Statements"
     ```json
@@ -807,10 +935,10 @@ Required for generating speech from text using Amazon Polly. See the [Audio and 
     !!! info "Only for Long Input"
         The two task actions and the S3 statement serve [input above 3,000 characters](api_openai_audio_speech.md#long-input), which Amazon Polly synthesizes into a bucket co-located with the serving region.
 
-        Replace `AWS_S3_BUCKET_VALUE` with the value of your [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) environment variable, and repeat the statement for each [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) bucket serving a Polly region. Amazon Polly writes the audio object with the identity that started the synthesis, which is why `s3:PutObject` belongs to this policy; the audio is then read back and deleted once the response has been sent.
+        Replace `AWS_S3_BUCKET_VALUE` with the value of your [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket) environment variable, and repeat the statement for each [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration_storage.md#aws-s3-regional-buckets) bucket serving a Polly region. Amazon Polly writes the audio object with the identity that started the synthesis, which is why `s3:PutObject` belongs to this policy; the audio is then read back and deleted once the response has been sent.
 
     !!! warning "Granting the permissions is not what enables long input"
-        The 3,000-character limit is decided by the configuration, not by this policy: text-to-speech stays capped at 3,000 characters per request — and requests above it are rejected with that limit — as long as no bucket is configured for the Polly regions ([`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)).
+        The 3,000-character limit is decided by the configuration, not by this policy: text-to-speech stays capped at 3,000 characters per request — and requests above it are rejected with that limit — as long as no bucket is configured for the Polly regions ([`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration_storage.md#aws-s3-regional-buckets)).
 
         With a bucket configured but these actions missing, long requests are accepted and then fail on a permission error instead. Grant the whole set, or leave the bucket unconfigured.
 
@@ -820,7 +948,7 @@ Required for generating speech from text using Amazon Polly. See the [Audio and 
 
 ## :material-microphone: Speech-to-Text (Optional) { #speech-to-text-optional }
 
-**Environment Variables**: [`AWS_TRANSCRIBE_REGION`](operations_configuration.md#aws-transcribe-region), [`AWS_TRANSCRIBE_S3_BUCKET`](operations_configuration.md#aws-transcribe-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets), [`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](operations_configuration.md#aws-transcribe-output-encryption-key-arn)
+**Environment Variables**: [`AWS_TRANSCRIBE_REGION`](operations_configuration_aws.md#aws-transcribe-region), [`AWS_TRANSCRIBE_S3_BUCKET`](operations_configuration_storage.md#aws-transcribe-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration_storage.md#aws-s3-regional-buckets), [`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](operations_configuration_storage.md#aws-transcribe-output-encryption-key-arn)
 
 Required for transcribing audio files using Amazon Transcribe. Each transcription job stages its audio in a bucket co-located with the Transcribe endpoint, so the S3 statement must cover every bucket that serves a candidate region.
 
@@ -861,10 +989,10 @@ Required for transcribing audio files using Amazon Transcribe. Each transcriptio
     ```
 
     !!! info "Replace Bucket Name"
-        Replace `AWS_TRANSCRIBE_S3_BUCKET_VALUE` with the value of your [`AWS_TRANSCRIBE_S3_BUCKET`](operations_configuration.md#aws-transcribe-s3-bucket) environment variable (or [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) if using the same bucket).
+        Replace `AWS_TRANSCRIBE_S3_BUCKET_VALUE` with the value of your [`AWS_TRANSCRIBE_S3_BUCKET`](operations_configuration_storage.md#aws-transcribe-s3-bucket) environment variable (or [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket) if using the same bucket).
 
     !!! note "One Bucket per Candidate Region"
-        With the default multi-region behavior ([`AWS_TRANSCRIBE_REGION`](operations_configuration.md#aws-transcribe-region) unset), Transcribe fails over across the [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) that have a co-located bucket: the primary region uses the bucket above, the others their [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) entry. Repeat the `TranscribeS3Storage` statement for each of those buckets.
+        With the default multi-region behavior ([`AWS_TRANSCRIBE_REGION`](operations_configuration_aws.md#aws-transcribe-region) unset), Transcribe fails over across the [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions) that have a co-located bucket: the primary region uses the bucket above, the others their [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration_storage.md#aws-s3-regional-buckets) entry. Repeat the `TranscribeS3Storage` statement for each of those buckets.
 
         On failover the audio is server-side copied from the previous candidate's bucket to the next one, which is why the copy and multipart actions are required. Set `AWS_TRANSCRIBE_REGION` to pin a single region and keep a single bucket.
 
@@ -873,7 +1001,7 @@ Required for transcribing audio files using Amazon Transcribe. Each transcriptio
 
     **If your transcribe S3 buckets use KMS encryption**, also add the KMS permissions for each bucket's key, with that region's `kms:ViaService` value.
 
-**Encrypting the transcription output with your own key** ([`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](operations_configuration.md#aws-transcribe-output-encryption-key-arn)) additionally requires:
+**Encrypting the transcription output with your own key** ([`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](operations_configuration_storage.md#aws-transcribe-output-encryption-key-arn)) additionally requires:
 
 ??? example "Transcribe Output Encryption IAM Policy Statement"
     ```json
@@ -889,13 +1017,13 @@ Required for transcribing audio files using Amazon Transcribe. Each transcriptio
     ```
 
     !!! info "Replace Key ARN"
-        Replace `AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN_VALUE` with the value of your [`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](operations_configuration.md#aws-transcribe-output-encryption-key-arn) environment variable. The key policy must allow the same actions for this role; `kms:Decrypt` is what lets the finished transcript be read back.
+        Replace `AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN_VALUE` with the value of your [`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](operations_configuration_storage.md#aws-transcribe-output-encryption-key-arn) environment variable. The key policy must allow the same actions for this role; `kms:Decrypt` is what lets the finished transcript be read back.
 
 ---
 
 ## :material-earth: Language Detection (Optional)
 
-**Environment Variables**: [`AWS_COMPREHEND_REGION`](operations_configuration.md#aws-comprehend-region)
+**Environment Variables**: [`AWS_COMPREHEND_REGION`](operations_configuration_aws.md#aws-comprehend-region)
 
 Required for automatic language detection (used by TTS for voice selection).
 
@@ -915,7 +1043,7 @@ Required for automatic language detection (used by TTS for voice selection).
 
 ## :material-shield-alert: Comprehend Moderation (Optional) { #comprehend-moderation }
 
-**Environment Variables**: [`AWS_COMPREHEND_REGION`](operations_configuration.md#aws-comprehend-region)
+**Environment Variables**: [`AWS_COMPREHEND_REGION`](operations_configuration_aws.md#aws-comprehend-region)
 
 Required for the [Moderations API](api_openai_moderations.md) toxicity backend — the default backend when no Bedrock guardrail is configured, and always available as the `amazon.comprehend-toxicity` model.
 
@@ -935,7 +1063,7 @@ Required for the [Moderations API](api_openai_moderations.md) toxicity backend �
 
 ## :material-translate: Text Translation (Optional)
 
-**Environment Variables**: [`AWS_TRANSLATE_REGION`](operations_configuration.md#aws-translate-region)
+**Environment Variables**: [`AWS_TRANSLATE_REGION`](operations_configuration_aws.md#aws-translate-region)
 
 Required for text translation features.
 
@@ -959,9 +1087,9 @@ Required for text translation features.
 
 ## :material-cash-multiple: Cost Tracking (Optional) { #cost-tracking-iam }
 
-**Environment Variables**: [`COST_TRACKING`](operations_configuration.md#cost-tracking)
+**Environment Variables**: [`COST_TRACKING`](operations_configuration_observability.md#cost-tracking)
 
-Required for [`COST_TRACKING`](operations_configuration.md#cost-tracking) (disabled by default), which prices requests from the AWS Price List API. Without this permission the catalog stays empty and request logs carry no cost data.
+Required for [`COST_TRACKING`](operations_configuration_observability.md#cost-tracking) (disabled by default), which prices requests from the AWS Price List API. Without this permission the catalog stays empty and request logs carry no cost data.
 
 ??? example "Cost Tracking IAM Policy Statement"
     ```json
@@ -979,9 +1107,9 @@ Required for [`COST_TRACKING`](operations_configuration.md#cost-tracking) (disab
 
 ## :material-chart-timeline-variant: Usage API (Optional) { #usage-api-iam }
 
-**Environment Variables**: [`USAGE_API`](operations_configuration.md#usage-api)
+**Environment Variables**: [`USAGE_API`](operations_configuration_observability.md#usage-api)
 
-Required only when [`USAGE_API`](operations_configuration.md#usage-api) is enabled (disabled by default), which serves the [organization usage and costs endpoints](api_openai_organization_usage.md) by reading the Amazon CloudWatch metrics the deployment publishes. Without these permissions those endpoints cannot answer; nothing else in the deployment is affected.
+Required only when [`USAGE_API`](operations_configuration_observability.md#usage-api) is enabled (disabled by default), which serves the [organization usage and costs endpoints](api_openai_organization_usage.md) by reading the Amazon CloudWatch metrics the deployment publishes. Without these permissions those endpoints cannot answer; nothing else in the deployment is affected.
 
 ??? example "Usage API IAM Policy Statement"
     ```json
@@ -1006,7 +1134,7 @@ Required only when [`USAGE_API`](operations_configuration.md#usage-api) is enabl
 
 ## :material-account-cash: Per-User Cost Attribution (Optional) { #per-user-cost-attribution }
 
-**Environment Variables**: [`AWS_BEDROCK_USER_ROLE_ARN`](operations_configuration.md#aws-bedrock-user-role-arn)
+**Environment Variables**: [`AWS_BEDROCK_USER_ROLE_ARN`](operations_configuration_bedrock.md#aws-bedrock-user-role-arn)
 
 Required to run each end user's model calls under a role session of their own, so AWS reports [their spend separately](operations_cost_management.md#per-user-attribution). Three policies are involved: the server's own role must be allowed to open the sessions, the end user role must trust it to do so, and the end user role must be allowed to invoke models.
 
@@ -1107,26 +1235,26 @@ Replace `ACCOUNT_ID` with your AWS account ID, `stdapi-ai-task-role` with the ro
     A cross-region inference profile routes to a foundation model in each of its Regions, and AWS authorizes **both** the profile ARN and every foundation model ARN it reaches. A policy naming only `inference-profile/...` fails with an access-denied error naming `foundation-model/...` in a Region you never configured. Keep `arn:aws:bedrock:*::foundation-model/...` alongside the profile, or the call is denied.
 
 !!! warning "A Marketplace model endpoint is authorized against a different resource shape"
-    `bedrock:InvokeModel` on a Marketplace model endpoint is authorized against `arn:aws:bedrock:*:ACCOUNT_ID:marketplace/model-endpoint/*` — **not** against the SageMaker endpoint ARN the request names. A policy that only lists `foundation-model/*` and the inference-profile forms above denies every Marketplace endpoint invocation with an access-denied error, even though the same statement already covers ordinary models. Keep this resource whenever [`AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED`](operations_configuration.md#bedrock-marketplace-endpoints-enabled) or [`AWS_BEDROCK_ALLOW_MARKETPLACE_ENDPOINT_ARN`](operations_configuration.md#bedrock-allow-marketplace-endpoint-arn) can put an endpoint in front of a request under this role.
+    `bedrock:InvokeModel` on a Marketplace model endpoint is authorized against `arn:aws:bedrock:*:ACCOUNT_ID:marketplace/model-endpoint/*` — **not** against the SageMaker endpoint ARN the request names. A policy that only lists `foundation-model/*` and the inference-profile forms above denies every Marketplace endpoint invocation with an access-denied error, even though the same statement already covers ordinary models. Keep this resource whenever [`AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED`](operations_configuration_models.md#bedrock-marketplace-endpoints-enabled) or [`AWS_BEDROCK_ALLOW_MARKETPLACE_ENDPOINT_ARN`](operations_configuration_models.md#bedrock-allow-marketplace-endpoint-arn) can put an endpoint in front of a request under this role.
 
 !!! warning "Media referenced by S3 URI is read as the end user"
-    An invocation may carry its media as an `s3Location` rather than inline — [large attachments](features.md#attachment-size) the server uploads to a regional bucket, a Files API `file_id`, or an S3 URI the client sent from an [accepted bucket](operations_configuration.md#aws-s3-accepted-buckets) — and Amazon Bedrock then reads that object **with the session that signed the invocation**, not with the server's role: [the assumed role must have the `s3:GetObject` permission to the Amazon S3 URI](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html). Without the `EndUserS3ReferencedMedia` statement, those requests fail with an access-denied error the caller sees as a `403`, while the same request without per-user attribution succeeds. List every bucket a URI can name: [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket), each [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) bucket, and each [`AWS_S3_ACCEPTED_BUCKETS`](operations_configuration.md#aws-s3-accepted-buckets) bucket — with the KMS statement for every encrypted one. The role needs no write action: the upload the server performs before the invocation keeps the server's own identity.
+    An invocation may carry its media as an `s3Location` rather than inline — [large attachments](features.md#attachment-size) the server uploads to a regional bucket, a Files API `file_id`, or an S3 URI the client sent from an [accepted bucket](operations_configuration_storage.md#aws-s3-accepted-buckets) — and Amazon Bedrock then reads that object **with the session that signed the invocation**, not with the server's role: [the assumed role must have the `s3:GetObject` permission to the Amazon S3 URI](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html). Without the `EndUserS3ReferencedMedia` statement, those requests fail with an access-denied error the caller sees as a `403`, while the same request without per-user attribution succeeds. List every bucket a URI can name: [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket), each [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration_storage.md#aws-s3-regional-buckets) bucket, and each [`AWS_S3_ACCEPTED_BUCKETS`](operations_configuration_storage.md#aws-s3-accepted-buckets) bucket — with the KMS statement for every encrypted one. The role needs no write action: the upload the server performs before the invocation keeps the server's own identity.
 
 !!! warning "A configured guardrail is authorized against the end user"
-    A guardrail applied **during** an invocation — [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](operations_configuration.md#aws-bedrock-guardrail-identifier), a model alias carrying one, or a request-level `moderation` parameter — is evaluated as part of that invocation, so AWS requires `bedrock:ApplyGuardrail` from the identity making the call. Without the `EndUserApplyGuardrail` statement, every model request fails with an access-denied error as soon as per-user attribution is enabled. See [Set up permissions to use Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-permissions.html). Narrow the resource to your guardrail ARN if you prefer.
+    A guardrail applied **during** an invocation — [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](operations_configuration_bedrock.md#aws-bedrock-guardrail-identifier), a model alias carrying one, or a request-level `moderation` parameter — is evaluated as part of that invocation, so AWS requires `bedrock:ApplyGuardrail` from the identity making the call. Without the `EndUserApplyGuardrail` statement, every model request fails with an access-denied error as soon as per-user attribution is enabled. See [Set up permissions to use Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-permissions.html). Narrow the resource to your guardrail ARN if you prefer.
 
 !!! note "Name every model ARN form the deployment allows"
-    The `Resource` list must cover every ARN a request can resolve to. Add `arn:aws:bedrock:*:ACCOUNT_ID:prompt/*` when [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](operations_configuration.md#bedrock-allow-prompt-arn) is enabled, and keep the application inference profile, prompt router and marketplace model endpoint entries above whenever [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](operations_configuration.md#bedrock-allow-application-profile-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](operations_configuration.md#bedrock-allow-prompt-router-arn), [`AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED`](operations_configuration.md#bedrock-marketplace-endpoints-enabled), [`AWS_BEDROCK_ALLOW_MARKETPLACE_ENDPOINT_ARN`](operations_configuration.md#bedrock-allow-marketplace-endpoint-arn) or [`AWS_BEDROCK_MODEL_ARN_MAPPING`](operations_configuration.md#bedrock-model-arn-mapping) can put one in front of a model. An ARN form the end user role does not name is denied under it while it still works on the server's role.
+    The `Resource` list must cover every ARN a request can resolve to. Add `arn:aws:bedrock:*:ACCOUNT_ID:prompt/*` when [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](operations_configuration_bedrock.md#bedrock-allow-prompt-arn) is enabled, and keep the application inference profile, prompt router and marketplace model endpoint entries above whenever [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](operations_configuration_bedrock.md#bedrock-allow-application-profile-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](operations_configuration_bedrock.md#bedrock-allow-prompt-router-arn), [`AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED`](operations_configuration_models.md#bedrock-marketplace-endpoints-enabled), [`AWS_BEDROCK_ALLOW_MARKETPLACE_ENDPOINT_ARN`](operations_configuration_models.md#bedrock-allow-marketplace-endpoint-arn) or [`AWS_BEDROCK_MODEL_ARN_MAPPING`](operations_configuration_bedrock.md#bedrock-model-arn-mapping) can put one in front of a model. An ARN form the end user role does not name is denied under it while it still works on the server's role.
 
     Add the [Web Search](#web-search-iam) actions to this role as well if you serve `web_search` requests: AWS evaluates them when the model actually runs a search, which happens inside the invocation the end user signed. A denied search does not fail the request, it degrades the answer.
 
 !!! danger "A session tag is an access boundary only when the identity is verified"
     The end user identity is taken from the authenticated caller only under [Amazon Cognito authentication](operations_authentication_security.md). With an API key, or with no authentication, it is whatever the client declared in the request body (`safety_identifier`, `user`, `metadata.user_id`) — so any caller holding the key can send another user's identifier and obtain that user's session tag.
 
-    Write policies conditioned on `aws:PrincipalTag/<key>` only when [`AUTHENTICATION_MODE`](operations_configuration.md#authentication-mode) is `cognito`, which is the configuration where every request carries an identity the gateway verified. Anywhere else, treat the tag as cost metadata, never as an authorization input.
+    Write policies conditioned on `aws:PrincipalTag/<key>` only when [`AUTHENTICATION_MODE`](operations_configuration_authentication.md#authentication-mode) is `cognito`, which is the configuration where every request carries an identity the gateway verified. Anywhere else, treat the tag as cost metadata, never as an authorization input.
 
 !!! tip "Restricting a role per end user"
-    Where the identity is verified, the session tag makes it testable in a policy: compare it to something on the resource side, so each session reaches only its own data — `"StringEquals": {"aws:ResourceTag/user": "${aws:PrincipalTag/user}"}`, an `s3:prefix` condition, or a `Resource` ARN embedding `${aws:PrincipalTag/user}`. A condition comparing the tag to itself always matches and restricts nothing. A `Deny` on any tag value the deployment does not expect is the other half of the same pattern. Set [`AWS_BEDROCK_USER_ROLE_TAG_KEY`](operations_configuration.md#aws-bedrock-user-role-tag-key) to the key the policy tests.
+    Where the identity is verified, the session tag makes it testable in a policy: compare it to something on the resource side, so each session reaches only its own data — `"StringEquals": {"aws:ResourceTag/user": "${aws:PrincipalTag/user}"}`, an `s3:prefix` condition, or a `Resource` ARN embedding `${aws:PrincipalTag/user}`. A condition comparing the tag to itself always matches and restricts nothing. A `Deny` on any tag value the deployment does not expect is the other half of the same pattern. Set [`AWS_BEDROCK_USER_ROLE_TAG_KEY`](operations_configuration_bedrock.md#aws-bedrock-user-role-tag-key) to the key the policy tests.
 
 !!! note "Scope"
     Only Bedrock model invocations run under the end user role, together with the guardrail applied during them and the S3 read Amazon Bedrock performs for an `s3Location` they carry. Standalone guardrail evaluations (the [Moderations API](api_openai_moderations.md)), reranking, video generation and its output files, speech, transcription and translation keep the server's own role, so the end user role needs none of their permissions — and the server's role still needs all of them.
@@ -1135,11 +1263,11 @@ Replace `ACCOUNT_ID` with your AWS account ID, `stdapi-ai-task-role` with the ro
 
 ## :material-key: API Key Authentication (Optional)
 
-Required if you configure API authentication. See the [Authentication](operations_configuration.md#authentication) configuration section.
+Required if you configure API authentication. See the [Authentication](operations_configuration_authentication.md#authentication) configuration section.
 
 ### SSM Parameter Store
 
-**Environment Variables**: [`API_KEY_SSM_PARAMETER`](operations_configuration.md#api-key-ssm)
+**Environment Variables**: [`API_KEY_SSM_PARAMETER`](operations_configuration_authentication.md#api-key-ssm)
 
 ??? example "SSM Parameter Store IAM Policy Statements"
     ```json
@@ -1154,7 +1282,7 @@ Required if you configure API authentication. See the [Authentication](operation
     ```
 
     !!! info "Replace Parameter Path"
-        Replace `API_KEY_SSM_PARAMETER_VALUE` with the value of your [`API_KEY_SSM_PARAMETER`](operations_configuration.md#api-key-ssm) environment variable (e.g., `/stdapi/prod/api-key`), and `REGION` with the server's own region (`AWS_REGION`) — parameters are read there, not in the Bedrock regions.
+        Replace `API_KEY_SSM_PARAMETER_VALUE` with the value of your [`API_KEY_SSM_PARAMETER`](operations_configuration_authentication.md#api-key-ssm) environment variable (e.g., `/stdapi/prod/api-key`), and `REGION` with the server's own region (`AWS_REGION`) — parameters are read there, not in the Bedrock regions.
 
     **If using encrypted SSM parameters**, also add:
 
@@ -1179,7 +1307,7 @@ Required if you configure API authentication. See the [Authentication](operation
 
 ### Secrets Manager
 
-**Environment Variables**: [`API_KEY_SECRETSMANAGER_SECRET`](operations_configuration.md#api-key-secretsmanager-secret)
+**Environment Variables**: [`API_KEY_SECRETSMANAGER_SECRET`](operations_configuration_authentication.md#api-key-secretsmanager-secret)
 
 ??? example "Secrets Manager IAM Policy Statement"
     ```json
@@ -1194,7 +1322,7 @@ Required if you configure API authentication. See the [Authentication](operation
     ```
 
     !!! info "Replace Secret Name"
-        Replace `API_KEY_SECRETSMANAGER_SECRET_VALUE` with the value of your [`API_KEY_SECRETSMANAGER_SECRET`](operations_configuration.md#api-key-secretsmanager-secret) environment variable (e.g., `stdapi-api-key`), and `REGION` with the server's own region (`AWS_REGION`) — secrets are read there, not in the Bedrock regions.
+        Replace `API_KEY_SECRETSMANAGER_SECRET_VALUE` with the value of your [`API_KEY_SECRETSMANAGER_SECRET`](operations_configuration_authentication.md#api-key-secretsmanager-secret) environment variable (e.g., `stdapi-api-key`), and `REGION` with the server's own region (`AWS_REGION`) — secrets are read there, not in the Bedrock regions.
 
 ---
 
@@ -1380,46 +1508,10 @@ Required if you configure API authentication. See the [Authentication](operation
         `MarketplaceRegisterUsage` is only needed on the **AWS Marketplace image**; remove it when deploying the community image.
 
     !!! note "Cost Tracking (Opt-In)"
-        `PricingCatalog` is only needed when [`COST_TRACKING`](operations_configuration.md#cost-tracking) is set to `true`; remove it otherwise.
+        `PricingCatalog` is only needed when [`COST_TRACKING`](operations_configuration_observability.md#cost-tracking) is set to `true`; remove it otherwise.
 
     !!! note "Usage API (Opt-In)"
-        `UsageApiMetricRead` is only needed when [`USAGE_API`](operations_configuration.md#usage-api) is set to `true`; remove it otherwise. See [Usage API](#usage-api-iam) for why the resource cannot be narrowed, and [Usage API Query Cost](operations_cost_management.md#usage-api-cost) for what the reads are billed at.
-
----
-
-## :material-table: Feature-Specific Permission Requirements
-
-| Feature                                         | Required Permissions                                                                                                                                       | Configuration                                                                |
-|-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
-| **Bedrock Models (Invoke)**                     | `bedrock:CountTokens`<br>`bedrock:InvokeGuardrailChecks`<br>`bedrock:InvokeModel`<br>`bedrock:InvokeModelWithBidirectionalStream`<br>`bedrock:InvokeModelWithResponseStream`<br>`bedrock:InvokeTool` (the Amazon Nova grounding server tool)<br>`bedrock:Rerank`<br>`bedrock:GetAsyncInvoke` and `bedrock:TagResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for async-invoke models (video, TwelveLabs Marengo embeddings) | Always required                                                              |
-| **Realtime API**                                | `bedrock:InvokeModelWithBidirectionalStream` (already part of the core Bedrock policy above); no additional action | `POST /v1/realtime/client_secrets`, `WS /v1/realtime`                        |
-| **Bedrock Models (Discovery)**                  | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required                                                              |
-| **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
-| **Bedrock Marketplace Model Endpoints**         | `bedrock:ListMarketplaceModelEndpoints`<br>`bedrock:GetMarketplaceModelEndpoint`<br>`sagemaker:InvokeEndpoint`<br>`sagemaker:InvokeEndpointWithResponseStream` (on `arn:aws:sagemaker:*:*:endpoint/*`, conditioned on `aws:CalledViaLast: bedrock.amazonaws.com`) | `AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED=true` |
-| **SageMaker AI Endpoints**                      | `sagemaker:CallWithBearerToken` (on `*`, no resource-level support)<br>`sagemaker:InvokeEndpoint` (on the endpoint ARNs you serve)                          | `AWS_SAGEMAKER_ENDPOINTS` configured                                         |
-| **AWS Marketplace Metering**                    | `aws-marketplace:RegisterUsage`                                                                                                                             | AWS Marketplace image only (always active); not required for the community image |
-| **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`<br>`bedrock:GetPrompt` and `bedrock:RenderPrompt` (on `arn:aws:bedrock:*:*:prompt/*`) for Prompt Management prompts | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
-| **Bedrock Guardrails & Moderations**            | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
-| **Stored Responses & Chat Completions**         | Bedrock session permissions (`bedrock:CreateSession`, `bedrock:GetSession`, `bedrock:*Invocation*`, `bedrock:ListSessions`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`, `bedrock:ListTagsForResource` on sessions) | `store=true` requests and stored-completion listings                         |
-| **Bedrock Mantle**                              | `bedrock-mantle:CreateInference`<br>`bedrock-mantle:GetInference`<br>`bedrock-mantle:DeleteInference`<br>`bedrock-mantle:ListModels`<br>`bedrock-mantle:GetModel`<br>`bedrock-mantle:CancelInference` (on `arn:aws:bedrock-mantle:*:*:project/*`)<br>`bedrock-mantle:CallWithBearerToken` | `AWS_BEDROCK_MANTLE_ENABLED=true`                                            |
-| **Web Search**                                  | `bedrock-websearch:InvokeSearch`<br>`bedrock-websearch:InvokeFetch`<br>`bedrock-websearch:ExternalWebAccess` only when external web access is enabled | `web_search` requests on the OpenAI GPT-5.x family                           |
-| **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads`<br>on every bucket, including each `AWS_S3_REGIONAL_BUCKETS` entry | `AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`                                 |
-| **Video Generation**                            | Core Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:TagResource`)<br>`bedrock:ListAsyncInvokes` and `bedrock:ListTagsForResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for job listing<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |
-| **Batch Inference**                             | `bedrock:CreateModelInvocationJob`<br>`bedrock:GetModelInvocationJob`<br>`bedrock:StopModelInvocationJob` (on `arn:aws:bedrock:*:*:model-invocation-job/*`)<br>`iam:PassRole` on the batch service role, scoped with `iam:PassedToService: bedrock.amazonaws.com`<br>File Storage S3 permissions on each bucket a batch uses, plus the service role's own policy (see [Batch Inference](#batch-inference)) | `AWS_BEDROCK_BATCH_ROLE_ARN`                                                 |
-| **Vector Stores**                               | `s3vectors:CreateIndex`<br>`s3vectors:DeleteIndex`<br>`s3vectors:PutVectors`<br>`s3vectors:GetVectors`<br>`s3vectors:QueryVectors`<br>`s3vectors:DeleteVectors` (on the vector bucket and its indexes)<br>File Storage S3 permissions on `AWS_S3_BUCKET` for the stores' records | `AWS_S3_VECTORS_BUCKET`<br>`AWS_S3_VECTORS_REGION`                           |
-| **Durable Vector Store Indexing**               | `sqs:SendMessage`<br>`sqs:ReceiveMessage`<br>`sqs:DeleteMessage`<br>`sqs:ChangeMessageVisibility`<br>`sqs:GetQueueAttributes` (on the queue ARN only)                                                       | `AWS_SQS_VECTOR_STORE_QUEUE_URL`                                             |
-| **Knowledge Base Vector Stores**                | `bedrock:GetKnowledgeBase`<br>`bedrock:Retrieve`<br>`bedrock:ListDataSources`<br>`bedrock:IngestKnowledgeBaseDocuments`<br>`bedrock:ListKnowledgeBaseDocuments`<br>`bedrock:GetKnowledgeBaseDocuments`<br>`bedrock:DeleteKnowledgeBaseDocuments` (on each allowlisted knowledge base ARN; no `bedrock:ListKnowledgeBases`) | `AWS_BEDROCK_KNOWLEDGE_BASE_IDS`                                             |
-| **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
-| **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`<br>`polly:StartSpeechSynthesisStream` for generative voices above 3,000 characters<br>`polly:StartSpeechSynthesisTask`, `polly:GetSpeechSynthesisTask` and S3 `PutObject`/`GetObject`/`DeleteObject` on each bucket serving a Polly region, for the other voices above 3,000 characters | `AWS_POLLY_REGION`<br>`AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`           |
-| **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:StartStreamTranscription`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>File Storage S3 permissions on every bucket serving a candidate region<br>`kms:GenerateDataKey`, `kms:Decrypt` on the output encryption key, when one is configured | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`<br>`AWS_TRANSCRIBE_STREAM_LANGUAGES`<br>`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN` |
-| **Language Detection**                          | `comprehend:DetectDominantLanguage`                                                                                                                        | `AWS_COMPREHEND_REGION`                                                      |
-| **Comprehend Moderations**                      | `comprehend:DetectToxicContent`                                                                                                                            | Moderations API without a configured guardrail                              |
-| **Translation**                                 | `translate:TranslateText`<br>`translate:ListLanguages` (optional; validates the language pair before transcribing)                                          | `AWS_TRANSLATE_REGION`                                                       |
-| **Cost Tracking**                               | `pricing:GetProducts`                                                                                                                                      | `COST_TRACKING=true` (opt-in; `false` by default)                            |
-| **Usage API**                                   | `cloudwatch:GetMetricData`<br>`cloudwatch:ListMetrics` (on `*` — [CloudWatch metric actions take no resource ARN](#usage-api-iam)); `GetMetricData` is billed per metric read and is outside the free tier | `USAGE_API=true` (opt-in; `false` by default), with `CLOUDWATCH_METRICS=true` |
-| **Per-User Cost Attribution**                   | `sts:AssumeRole` and `sts:TagSession` on the end user role, matched by that role's trust policy; on the end user role itself, `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` on every model ARN form the deployment allows, plus `bedrock:ApplyGuardrail` when a guardrail is configured and `s3:GetObject` (with `kms:Decrypt` via S3) on every bucket an invocation can reference by URI (see [Per-User Cost Attribution](#per-user-cost-attribution)) | `AWS_BEDROCK_USER_ROLE_ARN`                                                  |
-| **SSM Parameter Store**                         | `ssm:GetParameter`<br>`kms:Decrypt` (if encrypted)                                                                                                         | `API_KEY_SSM_PARAMETER`                                                      |
-| **Secrets Manager**                             | `secretsmanager:GetSecretValue`                                                                                                                            | `API_KEY_SECRETSMANAGER_SECRET`                                              |
+        `UsageApiMetricRead` is only needed when [`USAGE_API`](operations_configuration_observability.md#usage-api) is set to `true`; remove it otherwise. See [Usage API](#usage-api-iam) for why the resource cannot be narrowed, and [Usage API Query Cost](operations_cost_management.md#usage-api-cost) for what the reads are billed at.
 
 ---
 
