@@ -10,7 +10,7 @@ stdapi.ai is deployed entirely within your AWS account. Model inference, data st
 
 !!! success "What this means for your organization"
     - **No vendor endpoint in the request path** — no third party sits between your users and your models; inference runs on the AWS services and regions you enable
-    - **Amazon Bedrock does not train on your data** — prompts and completions are not used for model training, and model providers have no access unless you explicitly enable `provider_data_share`
+    - **Amazon Bedrock does not train on your data** — prompts and completions are not used for model training, and are never shared with model providers under any data retention mode; models whose provider requires human review (currently **Claude Fable 5** and **Claude Fable 5.1**) have that review performed by AWS itself, within the AWS boundary
     - **AWS services carry enterprise compliance certifications** — GDPR, ISO 27001/27017/27018, SOC 1/2/3, HIPAA, FedRAMP (Moderate and High), PCI-DSS, and more via Amazon Bedrock
     - **Those certifications are not inherited** — AWS compliance certifications apply to the AWS services and regions you choose; they are not inherited by stdapi.ai or by your application
     - **All data encrypted in transit and at rest** — TLS 1.2+ on all AWS service calls; the Terraform module additionally configures the ALB with TLS 1.2+ with TLS 1.3 and post-quantum key exchange enabled, and Customer Managed KMS keys for all stored data
@@ -97,11 +97,12 @@ AWS gives you explicit control over whether your prompts and outputs are retaine
 
 #### Data Retention Modes
 
-| Mode                  | Behavior                                                                                                                                                                                   |
-|-----------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `default`             | AWS may retain data for safety and abuse-prevention purposes. The model provider does **not** receive it. Actual retention depends on the model — consult the model's terms for specifics. |
-| `provider_data_share` | AWS retains and shares your inference data with the model provider per their requirements. Required for access to certain models (see below).                                              |
-| `none`                | **Zero data retention (ZDR).** No request or response data is written to durable storage by AWS or shared with the model provider.                                                         |
+| Mode                   | Behavior                                                                                                                                                                                   |
+|------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `default`              | AWS may retain data for safety and abuse-prevention purposes. The model provider does **not** receive it. Actual retention depends on the model — consult the model's terms for specifics. |
+| `aws_review`           | AWS retains your inputs and outputs within the AWS boundary for up to 30 days and may review them itself to satisfy a human-review requirement the model provider imposes as a condition of access. Required for **Claude Fable 5** and **Claude Fable 5.1**. Your content is **not** shared with the model provider. |
+| `provider_data_share`  | **Legacy.** Amazon Bedrock does not share content with model providers today, so this mode now results in the same handling as `aws_review`.                                               |
+| `none`                 | **Zero data retention (ZDR).** No request or response data is written to durable storage by AWS or shared with the model provider.                                                         |
 
 !!! info "Your retention policy takes precedence over model access"
     If your account or project is configured for zero data retention (`data_retention_mode: none`) and you invoke a model that requires retention, Amazon Bedrock **blocks the request and returns an error** rather than retaining the data anyway.
@@ -112,12 +113,14 @@ Some models require data retention for safety and abuse-prevention purposes. If 
 
 You can also enforce a zero-retention policy organization-wide via an AWS Service Control Policy (SCP) — contact your AWS account manager or cloud team to set this up.
 
-#### `provider_data_share` Mode and Model Availability
+Anthropic designates **Claude Mythos 5.1**, **Claude Fable 5.1**, **Claude Mythos 5**, and **Claude Fable 5** as Covered Models: these carry a 30-day minimum retention by default, and zero data retention is not available for them in workspaces where they can be accessed. Anthropic's **Enterprise Frontier Safeguards** — automated misuse monitoring with retained data held in cloud infrastructure the customer controls and no Anthropic human review — is rolling out in phases beginning fall 2026 and is **not yet generally available**; eligible customers can ask their AWS or Anthropic account team about ZDR eligibility for Claude Fable 5 and Claude Fable 5.1 in the meantime.
 
-Certain models — for example, models that require provider-side safety review — are only accessible if your account is configured to share inference data with the model provider. This is an explicit opt-in: most models do not require it, and AWS blocks the request if your retention policy does not permit it.
+#### `aws_review` Mode and Model Availability
 
-!!! warning "Understand the implications before enabling `provider_data_share`"
-    When this mode is active, AWS retains and shares your inference data with the relevant model provider per their requirements. Prefer enabling it at the project level rather than account-wide, and verify which models require it before doing so. See the [Amazon Bedrock data retention documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html) for configuration steps.
+Certain models — for example, models whose provider requires human review as a condition of access — are only accessible if your account or project is configured to permit that review. This is an explicit opt-in: most models do not require it, and AWS blocks the request if your retention policy does not permit it. Currently this applies to **Claude Fable 5** and **Claude Fable 5.1**.
+
+!!! warning "Understand the implications before enabling `aws_review`"
+    When this mode is active, AWS retains your inputs and outputs within the AWS boundary for up to 30 days and may review them to satisfy the human-review requirement the model provider imposes. **Your content is not shared with the model provider.** Prefer enabling it at the project level rather than account-wide, and verify which models require it before doing so. See the [Amazon Bedrock data retention documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html) for configuration steps.
 
 #### Model Deployment Account Architecture
 
@@ -125,7 +128,7 @@ The default isolation guarantee is enforced by the **Model Deployment Account** 
 
 > *"Model providers don't have any access to those accounts. [...] Because the model providers don't have access to those accounts, they don't have access to Amazon Bedrock logs or to customer prompts and completions."*
 
-This means that regardless of the geographic origin of a model, inference runs on AWS-owned infrastructure and — unless `provider_data_share` mode is explicitly configured — your prompts never reach the model provider. See [which models run in which geography](models.md).
+This means that regardless of the geographic origin of a model, inference runs on AWS-owned infrastructure, and your prompts never reach the model provider under any data retention mode — including `aws_review`, where AWS itself performs the review the provider requires rather than sharing your content with it. See [which models run in which geography](models.md).
 
 ### Abuse Detection
 
@@ -135,7 +138,7 @@ Key points:
 
 - **Zero operator access (ZOA):** No AWS operator can access model inputs or outputs.
 - **No storage of inputs or outputs by default:** AWS does not store model inputs or outputs unless a specific model requires it for safety and abuse-prevention purposes (see [Data Privacy](#data-privacy)); full zero data retention is the `none` retention mode.
-- **Model-specific retention for abuse detection:** A small number of models require short-term retention of flagged or all traffic for automated offline abuse detection. For example, classifier-flagged traffic for certain OpenAI models may be retained for up to 30 days, and some Anthropic models require opting in to share retained traffic with the provider for abuse review. Eligible customers can request full ZDR for these models through their AWS account team.
+- **Model-specific retention for abuse detection:** A small number of models require short-term retention of flagged or all traffic for automated offline abuse detection. For example, classifier-flagged traffic for certain OpenAI models may be retained for up to 30 days, and **Claude Fable 5** and **Claude Fable 5.1** require your account to allow AWS's own human review of retained traffic (`aws_review` mode) — that review is performed by AWS, not shared with the provider. Eligible customers can request full ZDR for these models through their AWS account team.
 - **CSAM detection:** AWS uses automated mechanisms (hash matching, classifiers) to detect child sexual abuse material in image inputs. Detected content is blocked (`400 ValidationException`), may be stored for review, and may be reported to NCMEC or relevant authorities.
 - **Policy violations:** If abuse is detected, AWS may contact the email address on your AWS account and may suspend access to affected models. Keep your AWS account contact information current and monitored.
 
@@ -197,7 +200,7 @@ Amazon Polly, Transcribe, Comprehend, and Translate each run in an independently
 
     > *"When you opt out of content use by an AWS AI service, that service deletes all of the associated historical content that was shared with AWS before you set the option."*
 
-    You do not need to opt out for Amazon Bedrock — Bedrock does not use prompts or completions to improve models, and does not share them with model providers unless you enable `provider_data_share`. Retention itself is governed separately by your [data retention mode](#data-retention-modes), and by the model-specific [abuse-detection](#abuse-detection) rules that apply to a small number of models.
+    You do not need to opt out for Amazon Bedrock — Bedrock does not use prompts or completions to improve models, and does not share them with model providers under any data retention mode. Retention itself is governed separately by your [data retention mode](#data-retention-modes), and by the model-specific [abuse-detection](#abuse-detection) rules that apply to a small number of models.
 
 ---
 
