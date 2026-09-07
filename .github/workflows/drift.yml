@@ -139,14 +139,71 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           LABEL: ${{ matrix.label }}
           TITLE: ${{ matrix.title }}
+          ARTIFACT: drift-report-${{ matrix.key }}
         run: |
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
             --label "$LABEL" --state open --json number \
             --jq '.[0].number')
+          # An issue body over 65,536 characters is refused outright, and a
+          # captured failure can be orders of magnitude larger than the finding
+          # it reports. The whole report is already this run's artifact, so the
+          # body keeps its head and its tail, the two places the finding and the
+          # summary line are, and says where the rest is. The budgets are counted
+          # in bytes, which is never fewer than characters, and spent whole lines
+          # at a time wherever the lines fit inside them.
+          max_bytes=60000
+          head_bytes=40000
+          tail_bytes=20000
+          # The capture carries the colouring the workflow log asks for, which
+          # an issue body renders as noise. Captured pytest output also quotes a
+          # failure or a skip reason verbatim, so an account ID or a role ARN can
+          # reach what is a public issue: both are redacted here rather than
+          # trusted not to appear.
+          sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' \
+              -e 's#arn:aws[a-z-]*:[^[:space:]"'"'"']*#<arn redacted>#g' \
+              -e 's/\([^[:alnum:].]\|^\)[0-9]\{12\}\([^[:alnum:].]\|$\)/\1<account redacted>\2/g' \
+              drift-report.txt > report.txt
+          # A detector that died before writing anything still has to arrive as
+          # a readable issue rather than as a body holding only the header.
+          if [ ! -s report.txt ]; then
+            printf 'The detector produced no output at all.\n' > report.txt
+          fi
+          size=$(wc -c < report.txt)
+          body=report.txt
+          if [ "$size" -gt "$max_bytes" ]; then
+            LC_ALL=C awk -v budget="$head_bytes" \
+              '{ total += length + 1 } total <= budget' report.txt > head.txt
+            tac report.txt \
+              | LC_ALL=C awk -v budget="$tail_bytes" \
+                '{ total += length + 1 } total <= budget' \
+              | tac > tail.txt
+            # A single line longer than its budget leaves that end empty; fall
+            # back to a raw byte cut and drop the partial UTF-8 character it can
+            # leave at the seam.
+            [ -s head.txt ] || head -c "$head_bytes" report.txt \
+              | LC_ALL=C sed '$ s/[\xc0-\xff][\x80-\xbf]*$//' > head.txt
+            [ -s tail.txt ] || tail -c "$tail_bytes" report.txt \
+              | LC_ALL=C sed '1 s/^[\x80-\xbf]*//' > tail.txt
+            {
+              cat head.txt
+              printf '\n[... %s of %s bytes omitted here; the whole report is the "%s" artifact of %s, kept for 14 days ...]\n\n' \
+                "$(( size - $(wc -c < head.txt) - $(wc -c < tail.txt) ))" \
+                "$size" "$ARTIFACT" "$RUN_URL"
+              cat tail.txt
+            } > truncated.txt
+            body=truncated.txt
+          fi
+          # Fenced so pytest output and third-party-derived text (vendor page
+          # fragments in a Finding's detail) render as literal text rather than
+          # being interpreted as Markdown -- an angle-bracketed token, an
+          # @mention or a spoofed header would otherwise reach a public issue live.
           {
             echo "Detected by the scheduled drift workflow: $RUN_URL"
             echo
-            cat drift-report.txt
+            echo '~~~~~~~~~~'
+            cat "$body"
+            echo
+            echo '~~~~~~~~~~'
           } > issue-body.txt
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
