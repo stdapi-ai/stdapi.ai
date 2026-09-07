@@ -850,8 +850,9 @@ class TestEmbeddingRouteAdvertised:
     def test_embedding_model_advertises_every_embedding_route(self) -> None:
         """The OpenAI, Cohere and Ollama embedding routes are advertised, and nothing else.
 
-        The Ollama pair contributes its paths but no MCP tool: those routes are
-        mounted and deliberately not published as tools.
+        The Ollama pair contributes both its paths and its tools: each has an
+        OpenAPI operation and each is published, so withholding them here would
+        advertise no model for a tool an MCP client can call.
 
         Ref: stdapi/routes/openai_embeddings.py:register_route_capability
              stdapi/routes/cohere_embed.py:register_route_capability
@@ -880,7 +881,13 @@ class TestEmbeddingRouteAdvertised:
                 f"{openai}/v1/embeddings",
             ]
         )
-        assert tools == ["cohere_embed", "cohere_embed_v1", "openai_embedding"]
+        assert tools == [
+            "cohere_embed",
+            "cohere_embed_v1",
+            "ollama_embed",
+            "ollama_embeddings",
+            "openai_embedding",
+        ]
 
     def test_text_models_do_not_advertise_the_embedding_routes(self) -> None:
         """A TEXT/TEXT model advertises no embedding route or tool.

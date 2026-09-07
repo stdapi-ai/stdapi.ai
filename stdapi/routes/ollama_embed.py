@@ -25,18 +25,13 @@ from stdapi.types.ollama import (
 )
 
 register_route_capability(
-    "ollama_embed",
-    f"{SETTINGS.ollama_routes_prefix}/api/embed",
-    "TEXT",
-    "EMBEDDING",
-    mcp_tool=False,
+    "ollama_embed", f"{SETTINGS.ollama_routes_prefix}/api/embed", "TEXT", "EMBEDDING"
 )
 register_route_capability(
     "ollama_embeddings",
     f"{SETTINGS.ollama_routes_prefix}/api/embeddings",
     "TEXT",
     "EMBEDDING",
-    mcp_tool=False,
 )
 
 router = APIRouter(

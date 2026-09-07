@@ -26,11 +26,7 @@ if TYPE_CHECKING:
     from stdapi.types.openai_chat_completions import ChatCompletion
 
 register_route_capability(
-    "ollama_generate",
-    f"{SETTINGS.ollama_routes_prefix}/api/generate",
-    "TEXT",
-    "TEXT",
-    mcp_tool=False,
+    "ollama_generate", f"{SETTINGS.ollama_routes_prefix}/api/generate", "TEXT", "TEXT"
 )
 
 router = APIRouter(

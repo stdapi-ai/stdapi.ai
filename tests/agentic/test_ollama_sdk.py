@@ -567,12 +567,14 @@ class TestModelManagement:
 
         A bare ``ResponseError`` would also be raised by a 404 or a 500, so the
         status and the message both have to be checked: what the gateway owes the
-        caller is a refusal they can act on, not merely a failure.
+        caller is a refusal they can act on, not merely a failure. The status is
+        403 rather than 400 because nothing about the request is malformed --
+        this server has no model store to write to, whatever is asked of it.
 
         Args:
             call: Zero-argument callable performing the refused operation.
         """
         with pytest.raises(ollama.ResponseError) as refusal:
             call()
-        assert refusal.value.status_code == 400, refusal.value
+        assert refusal.value.status_code == 403, refusal.value
         assert "does not store models" in refusal.value.error, refusal.value

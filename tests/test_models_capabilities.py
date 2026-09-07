@@ -316,6 +316,26 @@ class TestRealtimeRouteAdvertised:
         assert tools == ["openai_audio_transcription", "openai_audio_translation"]
         assert ROUTE_CAPABILITIES[_REALTIME_OPERATION].path in routes
 
+    def test_only_operations_without_a_tool_are_marked_as_having_none(
+        self, mcp_tool_names: frozenset[str]
+    ) -> None:
+        """``mcp_tool=False`` is reserved for operations no MCP tool is built from.
+
+        The flag trims ``supported_mcp_tools`` alone; it does not stop the server
+        publishing the tool. Setting it on an operation that is published leaves
+        every model advertising no support for a tool an agent can call, and no
+        assertion on one model's tool list catches it.
+
+        Ref: stdapi/models/capabilities.py:register_route_capability
+        """
+        import stdapi.main  # noqa: F401, PLC0415
+
+        untooled = {
+            op_id for op_id, cap in ROUTE_CAPABILITIES.items() if not cap.mcp_tool
+        }
+
+        assert not untooled & mcp_tool_names
+
     def test_advertised_tools_are_tools_the_server_exposes(
         self, mcp_tool_names: frozenset[str]
     ) -> None:
