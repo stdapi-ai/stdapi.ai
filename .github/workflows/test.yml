@@ -135,6 +135,11 @@ jobs:
       - name: Build the documentation
         run: mkdocs build --strict
 
+      # Claims that quietly stopped being true, and the wordings the copy rules
+      # ban, are caught here rather than by a reader of the published page.
+      - name: Check the documentation claims
+        run: python -m docs_hooks.check_claims
+
   official-api:
     name: Cross-validation against the vendor APIs
     # Manual only: this lane spends real money on the OpenAI/Anthropic/Cohere

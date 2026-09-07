@@ -169,6 +169,9 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Backgroun
 "docs_gen/**/__main__.py" = [
     "T201", # a command line generator reports on stdout
 ]
+"docs_hooks/check_claims.py" = [
+    "T201", # a command line check reports on stdout
+]
 "tests/*.py" = [
     "S101", # assert
     "ARG002", # parametrize comments
