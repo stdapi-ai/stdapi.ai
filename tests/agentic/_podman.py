@@ -642,6 +642,7 @@ def start_service_container(
     env: Mapping[str, str],
     forward_port: int | None,
     argv: Sequence[str] = (),
+    entrypoint: str | None = None,
     data_dirs: Sequence[str] = (),
     health_path: str | None = None,
     startup_timeout: int,
@@ -671,6 +672,10 @@ def start_service_container(
         forward_port: Host loopback port to expose on the container's loopback,
             typically the gateway under test; None when it needs none.
         argv: Command overriding the image's own, if any.
+        entrypoint: Executable replacing the image's own entry point, for an image
+            whose entry point is a supervisor the sandbox cannot host -- an s6
+            overlay wants a writable root and root privileges, which are exactly
+            what the flags above deny. *argv* then carries its arguments.
         data_dirs: Directory names created under *workdir* before the start, for
             state the service writes (``DATA_DIR``, ``HOME``, caches). Created
             here so they belong to the test runner rather than to the container.
@@ -736,6 +741,8 @@ def start_service_container(
         cmd.append("--read-only")
     if user is not None:
         cmd += ["--user", user]
+    if entrypoint is not None:
+        cmd += ["--entrypoint", entrypoint]
 
     with _env_flags(env) as env_flags:
         cmd += env_flags

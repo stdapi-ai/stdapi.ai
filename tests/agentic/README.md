@@ -1,7 +1,8 @@
 # Agentic test lane
 
 Real third-party clients — Claude Code, Codex, pi, OpenClaw, Hermes, Qwen Code,
-n8n, Haystack, Open WebUI, wyoming-openai, Docling Serve, LangChain, pydantic-ai,
+n8n, Haystack, Open WebUI, wyoming-openai, Home Assistant, Docling Serve,
+LangChain, pydantic-ai,
 litellm, the OpenAI Agents SDK, LiveKit Agents, Pipecat, inspect-ai, Agno,
 LlamaIndex and the official `ollama` client — driven
 end to end against a live stdapi.ai server. They are the only tests that
@@ -21,6 +22,7 @@ by the gateway for a model that is usually not the vendor's own.
 | Haystack | `/cohere/v2/rerank` | The only client that reranks, chained onto embeddings and chat |
 | Open WebUI | chat ×2 dialects, audio ×2, images, embeddings, rerank, Ollama model management | The documented integration's own environment block, as a service — and the only client that **gates** on `/api/version` |
 | wyoming-openai | audio ×2 | The only client streaming `/v1/audio/speech` and the only one calling it concurrently — and the only one reading a streamed transcription |
+| Home Assistant | `/ollama/api/tags`, `/ollama/api/chat` | The only client that **validates the gateway before using it** — its config flow refuses the integration unless `/api/tags` answers — and the only one whose missing-API-key case is a documented `401` |
 | langchain-openai / langchain-anthropic | `/v1` chat + embeddings, `/anthropic` | Streaming, `bind_tools`, `with_structured_output`, and the embeddings token-array trap, in plain Python |
 | pydantic-ai | `/v1/chat/completions` | Proves a real multi-turn tool loop survives Claude's silent `reasoning_content` replay drop |
 | litellm | `/v1` chat + embeddings | The only client that puts *its own* control parameters in the request body — the client half of `EXTRA_MODEL_PARAMS_DENYLIST` |
@@ -105,6 +107,18 @@ streaming is an allowlist — a model named in `STT_STREAMING_MODELS` is asked f
 with `stream=True` and every `transcript.text.delta` becomes one Wyoming
 `transcript-chunk` — which makes the non-streaming transcription test the control
 for it, since that path emits no chunk at all.
+
+Home Assistant is the other half of that same integration document, and the only
+half that reaches a model. It reaches no new route either — `test_ollama_sdk.py`
+covers the whole `/api/*` dialect — but it is the lane's only client that
+**validates the gateway before it will use it at all**: its Ollama config flow
+calls `GET /api/tags` through the real `ollama` client and refuses to create the
+integration when the answer does not deserialise, so an acceptance is proof the
+routes prefix survived, the key was taken as `Authorization: Bearer` and the
+listing had the shape the client's types demand. It is also the only place where
+*omitting* the key is a documented failure worth asserting, and the only client
+that puts Home Assistant's own tool schema — Assist's intent handlers, converted
+from voluptuous to JSON Schema — on the Ollama chat route.
 
 langchain-openai and pydantic-ai reach no new route either, but they are the
 lane's only pure Python HTTP client libraries: no npm package, no container, no
@@ -198,6 +212,7 @@ uv run pytest tests/agentic/test_rag_haystack.py --agentic   # the rerank route
 uv run pytest tests/agentic/test_open_webui.py --agentic   # the documented env block
 uv run pytest tests/agentic/test_docling.py --agentic         # the VLM vision call
 uv run pytest tests/agentic/test_wyoming_audio.py --agentic   # streamed TTS
+uv run pytest tests/agentic/test_home_assistant.py --agentic   # the conversation agent
 uv run pytest tests/agentic/test_inspect_ai.py --agentic --slow   # both batch surfaces
 uv run pytest tests/agentic/test_langchain.py --agentic      # both langchain routes
 uv run pytest tests/agentic/test_pydantic_ai.py --agentic    # the reasoning-replay proof
@@ -427,13 +442,14 @@ service = start_service_container(
     health_path="/health",  # None probes the TCP port, for a non-HTTP service
     startup_timeout=120,
     user=f"{workdir.stat().st_uid}:{workdir.stat().st_gid}",  # image runs as root
+    entrypoint=None,  # replace the image's own entry point, when it needs replacing
 )
 # ... the tests talk to service.base_url ...
 stop_service_container(service)
 ```
 
 The sandbox is the one-shot runner's: no capabilities, no new privileges, a
-read-only root, `/work` the only writable mount. Five things bite:
+read-only root, `/work` the only writable mount. Six things bite:
 
 - the service must listen on **all interfaces** inside the container — pasta
   forwards an inbound connection to the container's own address, so a server bound
@@ -452,6 +468,12 @@ read-only root, `/work` the only writable mount. Five things bite:
   container is created and resets it until something inside is listening. A
   caller polling the TCP port has to follow up with a handshake of its own
   protocol — `test_wyoming_audio.py:_await_ready` is what that looks like.
+- an image whose entry point is a **process supervisor** needs `entrypoint=`.
+  `argv` only replaces the image's `CMD`, which an s6 overlay still runs *behind*
+  its own stage-2 setup — and that setup wants a writable root and root
+  privileges, the two things the flags above deny. Home Assistant is started as
+  `entrypoint="python3"` with `-m homeassistant` instead, which is what its own
+  service script ends up executing.
 
 Containers still running when the interpreter exits are force-removed, so a
 crashed test leaks nothing.
@@ -622,6 +644,64 @@ program and makes both synthesis paths reachable from one boot. Six things bite:
   the recording is four separately synthesised sentences joined across a second
   of silence; the same text spoken in one go comes back as a single chunk. More
   than one chunk before the final `transcript` is the assertion.
+
+## The Home Assistant service
+
+`test_home_assistant.py` boots a real Home Assistant, onboards it over its own
+REST API and configures the gateway as an Assist conversation agent, exactly as
+`docs/use_cases_home_assistant.md` tells a household to. The image is **pinned**
+to `2026.7.4` rather than floating like the other service images: the config
+flow, the subentry schema and the flow step ids asserted here are read from that
+tag, and Home Assistant renames steps between monthly releases. Six things bite:
+
+- **the entry point is an s6 overlay.** See the service-container caveat above:
+  `entrypoint="python3"` with `-m homeassistant --config /work/config` is the
+  only way this image starts inside the sandbox. `--skip-pip` keeps the boot off
+  PyPI, which the image does not need — it already ships every integration
+  requirement.
+- **`default_config:` is not used.** Home Assistant writes that file into a
+  config directory it finds empty, and it sets up cloud, discovery, recorder and
+  hardware integrations that cost minutes and serve nothing here. A seeded
+  `configuration.yaml` naming only `http` (for the port) and `conversation` is
+  what keeps the boot to one job; `frontend` pulls `api`, `config`, `auth` and
+  `onboarding` in behind it, which is every route the tests use.
+- **the readiness probe has to outlast the health probe.** `/manifest.json`
+  answers below 500 long before the REST API is usable, and `_is_healthy` accepts
+  any such answer, so the container probe is followed by `_await_ready` polling
+  `GET /api/onboarding` until it returns a list.
+- **the bearer token comes from onboarding, not from a browser.**
+  `POST /api/onboarding/users` is unauthenticated and answers with an
+  authorization code; `POST /auth/token` — the one **form-encoded** request in
+  the sequence — trades it for a token, and the remaining `core_config`,
+  `analytics` and `integration` steps are then marked done with it. `client_id`
+  is Home Assistant's own base URL and `redirect_uri` a path on it, so indieauth's
+  same-origin rule passes without it fetching anything; a loopback address is the
+  one IP literal it accepts as a client identifier.
+- **the config flow gives the gateway five seconds.**
+  `ollama.const.DEFAULT_TIMEOUT` bounds both the flow's `list()` and the entry's
+  own setup, and the gateway builds its `/api/tags` response on the first call,
+  so the test warms that route from the host first. A cold catalogue surfaces as
+  `cannot_connect`, blaming the connection for a latency the client refused to
+  wait for.
+- **a repeat flow for the same URL aborts before it validates.**
+  `_async_abort_entries_match` runs ahead of the connection check, so the
+  no-API-key case is submitted as `.../ollama/` — `ollama._parse_host` strips the
+  trailing slash, leaving the request byte-identical and the stored URL
+  different. Its failure is *silent* at the HTTP layer: the flow route answers
+  200 and carries `errors: {"base": "invalid_auth"}` in the body.
+
+The conversation agent is a **subentry**, not the entry, which is what the
+documentation's own step 4 is: `POST /api/config/config_entries/subentries/flow`
+with a two-element `handler`, then a `set_options` step whose `model` field must
+name a model `/api/tags` already lists — anything else turns the reply into a
+`show_progress` "download" step. Two subentries are created from one entry, one
+with `llm_hass_api` and one without, so the tool assertions have a control that
+declares no tool at all. No device action is asserted: the sandbox exposes no
+controllable entity, and seeding one would mean carrying a template light
+platform whose schema moves between releases. What is asserted instead is
+everything up to the device — Assist's schema reaching the model in Ollama's
+`{"type": "function", ...}` shape, and a tool result replayed back on a second
+chat request.
 
 ## The Batch API client
 
@@ -800,9 +880,9 @@ Eight things bite:
   the parametrized Bedrock model. Without it, a CLI silently falling back to its own
   default model would still pass and the test would prove nothing. The n8n and
   Haystack tests add an explicit route assertion on the server log, because several
-  of their surfaces resolve a model the identity check cannot see; Open WebUI and
-  wyoming-openai drive no registered CLI, so that per-route assertion is the only
-  thing pinning their models;
+  of their surfaces resolve a model the identity check cannot see; Open WebUI,
+  wyoming-openai and Home Assistant drive no registered CLI, so that per-route
+  assertion is the only thing pinning their models;
 - **the traffic itself**, where the answer cannot show it: the routes a run had to
   reach, and the routes it had to leave untouched. inspect-ai's batches and
   Docling's default pipeline are asserted this way, because a fallback to the
