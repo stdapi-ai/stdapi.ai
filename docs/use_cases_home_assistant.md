@@ -127,12 +127,21 @@ Enables: the middle stage of the Assist pipeline — turning the recognized text
 
 The speech halves above use the Wyoming bridge; the conversation agent does not need one. Home Assistant's built-in **Ollama** integration talks to stdapi.ai directly through the [Ollama-compatible API](api_ollama_chat.md):
 
-1. **Settings → Devices & Services → Add Integration → Ollama**
-2. **URL**: your stdapi.ai deployment URL followed by [`OLLAMA_ROUTES_PREFIX`](operations_configuration.md#ollama-routes-prefix), e.g. `https://YOUR_STDAPI_URL/ollama` by default — Home Assistant appends `/api/chat` itself
-3. **API key**: your stdapi.ai key. A local Ollama needs no credentials, so this field is easy to skip; without it every request is refused with `401`
-4. **Model**: pick one from the list, which is what [`GET /api/tags`](api_ollama_models.md) publishes. The names a local Ollama would offer, such as `llama3.2:latest`, are not served here
+Home Assistant 2026.4 and later splits this across **two dialogs**: the first adds the server, the second adds a conversation agent on it.
 
-Then select the integration as the conversation agent of your Assist pipeline. Choose a model that supports tool calling if you want the agent to control devices rather than only answer questions.
+**Add the server** — **Settings → Devices & Services → Add Integration → Ollama**:
+
+1. **URL**: your stdapi.ai deployment URL followed by [`OLLAMA_ROUTES_PREFIX`](operations_configuration.md#ollama-routes-prefix), e.g. `https://YOUR_STDAPI_URL/ollama` by default — Home Assistant appends `/api/chat` itself
+2. **API key**: your stdapi.ai key. A local Ollama needs no credentials, so this field is easy to skip; without it every request is refused with `401` and the dialog fails with an invalid-authentication error
+
+Submitting the dialog validates the connection with [`GET /api/tags`](api_ollama_models.md), so a wrong URL or a missing key is reported here rather than at the first spoken command.
+
+**Add the conversation agent** — on the entry that dialog created, choose **Add conversation agent**:
+
+3. **Model**: pick one from the list, which is what [`GET /api/tags`](api_ollama_models.md) publishes. The names a local Ollama would offer, such as `llama3.2:latest`, are not served here — and a name that is not on the list makes Home Assistant try to *download* it
+4. **Control Home Assistant**: select Assist to let the agent operate devices instead of only answering questions. This is what attaches Home Assistant's tool definitions to every request, so pick a model that supports tool calling
+
+Each conversation agent registers its own `conversation.*` entity. Select that entity as the conversation agent of your Assist pipeline.
 
 ---
 
@@ -241,7 +250,7 @@ tofu init
 tofu apply
 ```
 
-Three steps stay manual after `tofu apply`, for reasons specific to Home Assistant: creating the owner account through the onboarding wizard, adding the Wyoming integration (**Settings → Devices & Services**), and pointing an Assist pipeline at it. See the sample's README for the exact steps.
+Nothing is left manual after `tofu apply`: a bootstrap container in the same ECS task drives Home Assistant's own APIs to create the owner account, finish onboarding, add the Wyoming integration, add the Ollama conversation agent, and make an Assist pipeline bound to all three the preferred one. Sign in with the credentials Terraform prints and the assistant answers. The conversation model is a Terraform variable, so the two dialogs above are what you follow only when you configure Home Assistant yourself. See the sample's README for the details.
 
 ---
 
