@@ -10,13 +10,13 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 ## :material-tag-multiple: Version Index { #recent-releases }
 
-**Latest: v1.17.0 — not yet released.**
+**Latest: v1.17.0 — released 2026-09-08.**
 
 Every release, newest first. Each entry in the [Release History](#release-history) below opens with a five-bullet summary.
 
 | Version | Date | Theme | Release notes |
 |---|---|---|---|
-| **v1.17.0** | not yet released | Your own model endpoints, the Ollama dialect, per-tenant keys, usage and cost from the API, WebRTC | [Read](#v1170-your-own-models-your-own-tenants-your-own-spend) |
+| **v1.17.0** | 2026-09-08 | Your own model endpoints, the Ollama dialect, per-tenant keys, usage and cost from the API, WebRTC | [Read](#v1170-your-own-models-your-own-tenants-your-own-spend) |
 | **v1.16.0** (and v1.16.1) | 2026-08-21 (2026-08-25) | Conversations, batches, vector stores, realtime speech and per-user identity | [Read](#v1160-conversations-batches-vector-stores-realtime-speech-per-user-identity-with-v1161-maintenance-update) |
 | **v1.15.0** | 2026-08-03 | Reliability, performance and feature completeness | [Read](#v1150-reliability-performance-feature-completeness) |
 | **v1.14.0** | 2026-07-12 | Bedrock Mantle, video generation, Cohere APIs, moderation and stored conversations | [Read](#v1140-bedrock-mantle-video-generation-cohere-apis-moderation-stored-conversations) |
@@ -45,7 +45,7 @@ Pending features and current deployment state are tracked on the [GitHub Project
 
 ## :material-history: Release History
 
-### v1.17.0 – Not yet released – Your Own Models, Your Own Tenants, Your Own Spend { #v1170-your-own-models-your-own-tenants-your-own-spend }
+### v1.17.0 – 2026-09-08 – Your Own Models, Your Own Tenants, Your Own Spend { #v1170-your-own-models-your-own-tenants-your-own-spend }
 
 !!! abstract "At a glance"
     - **Your own model endpoints** — [Amazon SageMaker AI](operations_configuration_models.md#aws-sagemaker-endpoints) and [Amazon Bedrock Marketplace](features.md#bedrock-marketplace-endpoints) endpoints join the model list and answer on the same routes, streaming included; one scaled to zero is woken rather than refused.
