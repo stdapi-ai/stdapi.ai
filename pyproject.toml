@@ -210,6 +210,12 @@ module = [
 ]
 ignore_missing_imports = true
 
+# mkdocs-material ships no py.typed marker; the icon check only reads its
+# package directory to find the icon sets it installs.
+[[tool.mypy.overrides]]
+module = ["material.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 addopts = [
