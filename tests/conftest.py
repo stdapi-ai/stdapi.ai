@@ -1356,8 +1356,11 @@ def ollama_client(
             pytest.skip("tests/.env.use-official-api sets no OLLAMA_API_KEY")
         host, headers = OLLAMA_CLOUD_HOST, {"Authorization": f"Bearer {key}"}
     elif server_url:
+        # The deployed gateway carries its own key, named as every other remote
+        # dialect client names it; ``api_key`` is the in-process app's, minted
+        # per run, and authenticates nothing here.
         host = f"{server_url.rstrip('/')}{SETTINGS.ollama_routes_prefix}"
-        headers = {"Authorization": f"Bearer {api_key}"}
+        headers = {"Authorization": f"Bearer {getenv('OPENAI_API_KEY', '')}"}
     else:
         pytest.skip("Requires a gateway serving the Ollama routes")
     with ollama.Client(host=host, headers=headers, timeout=_LIVE_TIMEOUT) as client:
