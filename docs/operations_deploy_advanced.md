@@ -527,7 +527,7 @@ For development, side projects, and non-critical workloads.
 
 **Trade-offs:** Spot interruptions possible, minimal observability, scheduled availability only
 
-**512 MiB covers text generation and embeddings only.** The paths that hold bytes in memory need more: audio and video go through the ffmpeg pipeline, inline input files are held up to [`MAX_INPUT_FILE_SIZE`](operations_configuration_server.md#max-input-file-size) each, and [`MAX_CONCURRENT_INPUT_DOWNLOADS`](operations_configuration_server.md#max-concurrent-input-downloads) of them are fetched at once. Raise the module's `memory` to `1024` or beyond before serving those, or the task is OOM-killed under load rather than answering slowly.
+**512 MiB covers text generation and embeddings only.** The paths that hold bytes in memory need more: audio and video go through the ffmpeg pipeline, inline input files are held up to [`MAX_INPUT_FILE_SIZE`](operations_configuration_server.md#max-input-file-size) each, and [`MAX_CONCURRENT_INPUT_DOWNLOADS`](operations_configuration_server.md#max-concurrent-input-downloads) of them are fetched at once. Raise the module's `memory` to `1024` or beyond before serving those, or the task is OOM-killed under load rather than answering slowly. A deployment already running this way that starts returning `502`/`504` or restarting tasks under load has hit exactly this — see [Troubleshooting → Nothing answers](operations_troubleshooting.md#reaching-the-gateway) to confirm it and fix the size.
 
 ---
 
@@ -707,7 +707,7 @@ The example below uses ARM64 architecture, which requires the `-arm64` image tag
 
     `"user": "65532:65532"` is the image's own non-root user, declared explicitly because Security Hub control ECS.20 reads the task definition rather than the image.
 
-`"memory": "512"` sizes the task for text generation and embeddings, where it holds little more than the request in flight. Raise it to `"1024"` or beyond — with a `"cpu"` value ECS accepts alongside it — before serving audio, video or inline file inputs: those hold bytes in memory through the ffmpeg pipeline and the [input download limits](operations_configuration_server.md#max-input-file-size), and the task is OOM-killed under load rather than answering slowly.
+`"memory": "512"` sizes the task for text generation and embeddings, where it holds little more than the request in flight. Raise it to `"1024"` or beyond — with a `"cpu"` value ECS accepts alongside it — before serving audio, video or inline file inputs: those hold bytes in memory through the ffmpeg pipeline and the [input download limits](operations_configuration_server.md#max-input-file-size), and the task is OOM-killed under load rather than answering slowly. See [Troubleshooting → Nothing answers](operations_troubleshooting.md#reaching-the-gateway) for how that failure surfaces (`502`/`504`, restarting tasks) and how to confirm it.
 
 **Note:** This is a minimal example. For production, configure:
 
