@@ -248,6 +248,10 @@ _loaded_env_file: str | None = None
 #: otherwise silently fall back to ``tests/.env``.
 _ENV_FILE_MARKER = "_STDAPI_TESTS_ENV_FILE"
 
+#: The whole ``sys.argv`` of a process running execnet's bootstrap code, which is
+#: every pytest-xdist worker and nothing that was given a command line.
+_BOOTSTRAP_ARGV = ["-c"]
+
 
 def _load_env_profile() -> None:
     """Load environment variables from a profile .env file.
@@ -270,7 +274,11 @@ def _load_env_profile() -> None:
     global _loaded_env_file  # noqa: PLW0603
     tests_dir = Path(__file__).parent
 
-    if marker := environ.get(_ENV_FILE_MARKER):
+    # Only a process that cannot read its own command line reuses the master's
+    # choice. A nested pytest run -- the container suite starts one, with a
+    # --server-url of its own -- has a real argv and selects from it, or it would
+    # load the profile of whichever gateway the outer run was pointed at.
+    if sys.argv == _BOOTSTRAP_ARGV and (marker := environ.get(_ENV_FILE_MARKER)):
         _loaded_env_file = marker
         load_dotenv(tests_dir.parent / marker, override=True)
         return
