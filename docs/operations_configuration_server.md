@@ -807,7 +807,7 @@ export SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS=false
     **SSRF protection has two layers:**
 
     1. **Baseline Protection (Always Enabled)** - Cannot be disabled:
-        - :material-loopback: **Loopback Addresses** - 127.0.0.0/8, ::1
+        - :material-restart: **Loopback Addresses** - 127.0.0.0/8, ::1
         - :material-network-off: **Unspecified Addresses** - 0.0.0.0, ::
         - :material-link: **Link-Local Addresses** - 169.254.0.0/16, fe80::/10
         - :material-network-off: **Reserved IP Ranges** - IETF reserved addresses
@@ -844,7 +844,7 @@ export SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS=false
     Even with SSRF protection enabled, implement additional security measures:
 
     - :material-network-strength-4: **Network Segmentation** - Isolate application servers from sensitive internal networks
-    - :material-firewall: **Firewall Rules** - Restrict outbound connections from application servers
+    - :material-wall-fire: **Firewall Rules** - Restrict outbound connections from application servers
     - :material-security: **Security Groups** - Use AWS security groups to limit network access
     - :material-monitor: **Monitoring** - Log and monitor outbound requests for suspicious patterns
 

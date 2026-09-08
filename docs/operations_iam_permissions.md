@@ -660,7 +660,7 @@ Required by the features whose records every instance of a deployment reads and 
 
 ---
 
-## :material-key-multiple: Tenant API Key Delivery (Optional) { #tenant-key-delivery }
+## :material-account-key: Tenant API Key Delivery (Optional) { #tenant-key-delivery }
 
 **Environment Variables**: [`TENANT_API_KEYS`](operations_configuration_authentication.md#tenant-api-keys), [`TENANT_KEY_SSM_PARAMETER_PREFIX`](operations_configuration_authentication.md#tenant-key-ssm-parameter-prefix), [`TENANT_KEY_SSM_KMS_KEY_ID`](operations_configuration_authentication.md#tenant-key-ssm-kms-key-id)
 

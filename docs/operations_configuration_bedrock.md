@@ -452,7 +452,7 @@ curl -X POST https://api.example.com/v1/images/generations \
 | `amazon.polly-standard` | Standard Polly voices | :material-star: Classic quality |
 | `amazon.polly-neural` | Neural Polly voices | :material-star-circle: Higher quality, more natural |
 | `amazon.polly-long-form` | Long-form content | :material-text-long: Optimized for long content |
-| `amazon.polly-generative` | Generative AI voices | :material-sparkles: Latest technology |
+| `amazon.polly-generative` | Generative AI voices | :material-creation: Latest technology |
 
 ```bash
 export DEFAULT_TTS_MODEL=amazon.polly-neural

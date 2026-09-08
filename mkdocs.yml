@@ -190,6 +190,7 @@ plugins:
         - styles/trademarks.css
 
 hooks:
+  - docs_hooks/check_icons.py
   - docs_hooks/fastapi_openapi.py
   - docs_hooks/markdown_for_agents.py
   - docs_hooks/blog_rss.py

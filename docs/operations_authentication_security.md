@@ -114,7 +114,7 @@ Every request is checked against all of the following, and any failure returns t
 !!! tip "Both methods, or one"
     With both a user pool and an API key configured, either credential is accepted: a bearer value shaped like a signed token is validated against the pool, anything else is compared to the API key. Set [`AUTHENTICATION_MODE`](operations_configuration_authentication.md#authentication-mode) to `cognito` or `api_key` to accept only one of them — the deployment then refuses to start if the other one is configured too, so a credential is never accepted by accident.
 
-### :material-key-multiple: Tenant API Keys { #tenant-api-keys }
+### :material-account-key: Tenant API Keys { #tenant-api-keys }
 
 One deployment can serve several customers or teams, each holding an API key of its own — shaped `sk-std-<key id>-<secret>` — that is validated on every request and scoped to the models and endpoints its tenant is entitled to. Enable the method with [`TENANT_API_KEYS`](operations_configuration_authentication.md#tenant-api-keys); it needs the [shared DynamoDB table](operations_configuration_storage.md#aws-dynamodb-table). Keys are delivered under a [delivery prefix](operations_configuration_authentication.md#tenant-key-ssm-parameter-prefix) that has a default and only needs overriding on a deployment that shares an AWS account with another. Clients send the key like any API key, in the `Authorization: Bearer <key>` or `X-API-Key` header. The deployment-wide API key and Cognito tokens keep working unchanged alongside it — enabling tenant keys changes nothing for existing credentials.
 

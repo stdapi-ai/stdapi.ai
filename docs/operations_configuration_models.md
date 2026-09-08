@@ -688,7 +688,7 @@ Configure default service tiers applied automatically to specific Bedrock models
 :octicons-gear-24: **Default**
 :   `true` (clients may select a tier)
 
-:octicons-cash-24: **Cost Consideration**
+:material-cash: **Cost Consideration**
 :   Service tiers are billed at different rates. Set to `false` on a shared deployment to pin every model to the tier you configured, so a client cannot move its traffic to a more expensive tier. A model with no configured tier still honors the request in either case.
 
 :octicons-alert-24: **Scope**
