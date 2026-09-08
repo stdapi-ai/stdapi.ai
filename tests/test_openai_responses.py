@@ -2396,21 +2396,23 @@ class TestOpenAIInputTokens:
         assert response_long.input_tokens > response_short.input_tokens
 
     def test_input_tokens_invalid_model(self, openai_client: OpenAI) -> None:
-        """An unknown model is a 400 on this route, not the 404 the create route uses.
+        """An unknown model is a 404 here, the same as on the create route.
 
-        ``count_input_tokens`` resolves the model with an explicit
-        ``error_status=400`` override, so the same ``UnsupportedModelError`` is
-        surfaced as a bad request here.
+        Verified against the official API on 2026-09-08: counting input tokens
+        for a model that does not exist answers 404 ``model_not_found``, not
+        the 400 the images routes answer. This route carried an
+        ``error_status=400`` override until v1.17.0, which the vendor lane is
+        what caught.
 
         Ref: https://developers.openai.com/api/docs/guides/error-codes
              stdapi/routes/openai_responses.py:count_input_tokens
         """
-        with pytest.raises(BadRequestError) as excinfo:
+        with pytest.raises(NotFoundError) as excinfo:
             openai_client.responses.input_tokens.count(
                 model="nonexistent-model-xyz", input="Hello"
             )
 
-        assert excinfo.value.status_code == 400
+        assert excinfo.value.status_code == 404
         envelope = _error_envelope(excinfo.value)
         assert envelope["type"] == "invalid_request_error"
         assert "does not exist" in envelope["message"]

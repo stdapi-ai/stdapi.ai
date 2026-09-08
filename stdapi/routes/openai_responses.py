@@ -966,9 +966,9 @@ async def count_input_tokens(
         ResponseInputTokensCount with the input token count.
 
     Raises:
-        ApiError: If the model is invalid, the request is unsupported, or the
-            model is served by Bedrock Mantle or a Marketplace model
-            endpoint (400).
+        ApiError: If the model is unknown (404, as upstream answers here), or
+            the request is unsupported, or the model is served by Bedrock
+            Mantle or a Marketplace model endpoint (400).
     """
     log_request_params(request)
     model = await validate_model(
@@ -976,7 +976,6 @@ async def count_input_tokens(
         input_modality="TEXT",
         output_modality="TEXT",
         route="openai_response_input_tokens",
-        error_status=400,
     )
     reject_unsupported_token_counting(model)
     model_id = model.get_id()

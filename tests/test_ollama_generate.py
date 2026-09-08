@@ -4,8 +4,10 @@ The served subset is ``prompt`` with ``system`` and ``images``. ``raw``,
 ``suffix``, ``template`` and ``context`` all need the model's own tokenizer and
 prompt template, which a hosted backend does not expose, so each is refused
 rather than quietly ignored: dropping any of them answers something other than
-what was asked for. Ollama Cloud serves them, so that refusal is asserted on
-both targets rather than only where it holds.
+what was asked for. Ollama Cloud serves ``suffix``, ``template`` and
+``context``, so that refusal is asserted on both targets rather than only
+where it holds; ``raw`` is a gateway-only assertion, since the cheapest cloud
+chat model refuses it too, for an unrelated, model-specific reason.
 
 Ref: https://docs.ollama.com/api/generate
      stdapi/routes/ollama_generate.py:generate
@@ -124,11 +126,18 @@ def test_generate_refuses_the_prompt_level_fields(
     """Each field needing the model's prompt template is refused with a reason.
 
     A deliberate divergence, asserted on both targets so it stays one: Ollama
-    Cloud runs the model's own template and serves all four, while this gateway
-    reaches the backend through a chat API that exposes neither the template nor
-    the tokenizer, and says so rather than silently answering something else.
+    Cloud runs the model's own template and serves ``suffix``, ``template`` and
+    ``context``, while this gateway reaches the backend through a chat API that
+    exposes neither the template nor the tokenizer, and says so rather than
+    silently answering something else. ``raw`` is skipped on the official
+    target: ``gpt-oss:20b``, the cheapest Ollama Cloud chat model, is rendered
+    through Ollama's Harmony pipeline, which raw mode bypasses entirely, so
+    Ollama Cloud refuses ``raw`` for this model specifically ("does not
+    currently support raw mode") -- a model-level restriction, not evidence
+    that upstream dropped the parameter.
 
     Ref: stdapi/types/ollama.py:GenerateRequest._reject_prompt_level_fields
+         https://docs.ollama.com/api/generate
     """
     request: dict[str, Any] = {
         "model": ollama_chat_model,
@@ -138,6 +147,12 @@ def test_generate_refuses_the_prompt_level_fields(
         field: value,
     }
     if use_official_api:
+        if field == "raw":
+            pytest.skip(
+                'ollama.com refuses raw mode for "gpt-oss:20b" itself (its '
+                "Harmony renderer requires templating), so this model cannot "
+                "prove the divergence for the raw field"
+            )
         assert ollama_client.generate(**request).done is True
         return
     with pytest.raises(ollama.ResponseError) as raised:
