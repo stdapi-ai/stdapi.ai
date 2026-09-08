@@ -33,6 +33,17 @@ jobs:
             tests: tests/test_docs_assets_drift.py
     env:
       FORCE_COLOR: "1"
+      # A detector reads npm and a CDN, never AWS -- but the shared fixtures
+      # import the server's configuration, which refuses to load without a
+      # region and takes the whole run down before anything is compared. A
+      # region is not a credential: none is configured, and blocking the IMDS
+      # endpoint turns a stray call into an immediate failure rather than a job
+      # that hangs until it times out.
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_CONFIG_FILE: /dev/null
+      AWS_SHARED_CREDENTIALS_FILE: /dev/null
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
     steps:
       - uses: actions/checkout@v6
         with:
