@@ -155,6 +155,7 @@ This release widens what a deployment can serve, who it can serve it to, and wha
 - **A deployment on your own subnets can be planned again**: the VPC module this one builds on fed a set to a function that takes only lists, so every plan that creates a VPC failed outright — including for a deployment that had changed nothing, since the constraint resolves to the newest release. Fixed in `JGoutin/terraform-aws-vpc` v1.6.1.
 - **A deployment on your own subnets can be planned again, twice over**: the module's IPv6 out-of-band egress rule read whether the subnets carry IPv6 before checking that the WebRTC media path was even on. On [`subnet_ids`](https://github.com/stdapi-ai/terraform-aws-stdapi-ai#input_subnet_ids) that answer comes from the subnets themselves and is unknown while planning, so the plan failed outright — with the rule set empty and WebRTC off, which is every such deployment.
 - **A module that names your own VPC no longer deadlocks the plan**: the length limit `name_prefix` carries when a load balancer is enabled was asserted on the variable, which tied it to `alb_enabled` and through that to `subnet_ids`. Passing the module's `name_prefix` output to a VPC and that VPC's subnets back — what the output exists for — closed a dependency cycle. The limit is now checked on the load balancer itself and still refuses too long a prefix while planning.
+- **The documentation pages load a current Swagger UI**: `swagger-ui-dist` 5.32.15, which scopes its HTML sanitiser to itself instead of mutating the page's global one.
 
 ---
 

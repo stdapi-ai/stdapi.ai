@@ -25,7 +25,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 #: Exact ``swagger-ui-dist`` release the Swagger UI page loads, under Apache-2.0.
-SWAGGER_UI_VERSION = "5.32.14"
+SWAGGER_UI_VERSION = "5.32.15"
 
 #: Exact ``redoc`` release the ReDoc page loads, under the MIT licence.
 REDOC_VERSION = "2.5.3"
@@ -108,7 +108,7 @@ BROWSER_ASSETS: dict[str, Asset] = {
             "swagger-ui-dist",
             SWAGGER_UI_VERSION,
             "swagger-ui-bundle.js",
-            "16d93d5cc19e54c98fb0b81157dbb3bd90780aa36b914e128a643b31e54a93f4",
+            "a7e344f2770b2f07527ce828e0951626983b8f2dcdb7a826689c0232023f995b",
             "text/javascript",
         ),
         Asset(
@@ -146,7 +146,7 @@ LICENSE_ASSETS: tuple[Asset, ...] = (
         "swagger-ui-dist",
         SWAGGER_UI_VERSION,
         "swagger-ui-bundle.js.LICENSE.txt",
-        "c07853f3704b510a864eb56561ca4f36e0347fdaefc5176611c57575e4b5593d",
+        "63818894e4b04cd0e3180d9cb20761e227a939121e7484f8e1d528227c756f89",
     ),
     Asset(
         "redoc",
