@@ -1263,6 +1263,11 @@ class TestResponses:
         )
 
     @pytest.mark.expensive
+    @pytest.mark.retry(
+        "a content filter can cut off the answer after the search lifecycle "
+        "already completed cleanly, ending the stream response.incomplete "
+        "instead of response.completed (issue #169)"
+    )
     def test_web_search_type_tool_streaming(
         self,
         openai_client: OpenAI,
@@ -1274,7 +1279,11 @@ class TestResponses:
         The event names are shared with ``web_search_preview`` because both tool
         spellings resolve to the same Bedrock server tool.
 
-        This one fails intermittently on the vendor lane; see issue #169.
+        This one fails intermittently on the vendor lane; see issue #169. The
+        capture shows the failure is a content-filtered answer, not a broken
+        search lifecycle, so it is retried rather than accepted: the terminal
+        assertion below stays exactly as strict, and a run that never reaches
+        ``response.completed`` still fails once the retries are spent.
 
         Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
              stdapi/models/chat/_adapters/_openai_responses.py:format_stream

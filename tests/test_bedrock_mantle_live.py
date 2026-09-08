@@ -996,6 +996,10 @@ class TestMantleWebSearch:
         usage event, so a stream is billed from there rather than from the
         completed response. Only the billing assertions need the in-process
         app; the lifecycle and citation ones run against a deployment too.
+        When Bedrock Mantle's own web-search backend fails the response
+        server-side before emitting any search event (``response.failed``),
+        the run is skipped rather than failed: that outcome is Bedrock's to
+        fix, not the gateway's.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
              stdapi/models/chat/_mantle/_default.py:_event_web_search_queries
@@ -1012,6 +1016,15 @@ class TestMantleWebSearch:
         )
         dumped = [event.model_dump() for event in events]
         types = [event["type"] for event in dumped]
+        if "response.failed" in types:
+            failed = next(
+                event for event in dumped if event["type"] == "response.failed"
+            )
+            error = (failed.get("response") or {}).get("error") or {}
+            pytest.skip(
+                "Bedrock Mantle's web search backend failed the response "
+                f"server-side: {error.get('code')}: {error.get('message')}"
+            )
         assert "response.web_search_call.in_progress" in types
         assert "response.web_search_call.searching" in types
         assert "response.web_search_call.completed" in types
