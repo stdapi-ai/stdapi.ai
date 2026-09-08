@@ -97,7 +97,7 @@ Competitor capabilities were verified against official sources on 5 August 2026;
   <br>Measured with every test tier enabled — the full suite, not the offline CI gate that runs on every push.
 
 - :material-account-check: __Validated against the vendors__
-  <br>The same tests run against the real OpenAI, Anthropic and Cohere APIs.
+  <br>The same tests run against the real OpenAI, Anthropic, Cohere and Ollama APIs.
 
 - :material-robot-happy: __Driven by real client software__
   <br>Twenty-two third-party clients — Claude Code, n8n, Open WebUI, Home Assistant and more — driven end to end against a live gateway.
@@ -106,7 +106,7 @@ Competitor capabilities were verified against official sources on 5 August 2026;
 
 ### Compatibility is proven against the real APIs, not against our own docs
 
-A gateway tested only against itself proves only that it is self-consistent. The suite runs **the same test bodies against the genuine OpenAI, Anthropic and Cohere endpoints**, changing nothing but the URL, and a test that passes here and fails there is a compatibility bug in this product rather than an acceptable difference. The expected behaviour is captured from the vendor's own API before the feature exists, so the implementation is written against a contract that was verified, not assumed.
+A gateway tested only against itself proves only that it is self-consistent. The suite runs **the same test bodies against the genuine OpenAI, Anthropic, Cohere and Ollama endpoints**, changing nothing but the URL, and a test that passes here and fails there is a compatibility bug in this product rather than an acceptable difference. The expected behaviour is captured from the vendor's own API before the feature exists, so the implementation is written against a contract that was verified, not assumed.
 
 ### Real applications, not just API calls
 

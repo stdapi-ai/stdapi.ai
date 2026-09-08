@@ -609,7 +609,7 @@ Media generation, knowledge management and team chatbots are covered too. [:octi
 
 ## Compatibility you can inspect
 
-&ldquo;Compatible&rdquo; should mean more than one successful chat request. The test suite is public, and the same test bodies also run against the real OpenAI, Anthropic, and Cohere endpoints — so compatibility is measured against the originals, not asserted.
+&ldquo;Compatible&rdquo; should mean more than one successful chat request. The test suite is public, and the same test bodies also run against the real OpenAI, Anthropic, Cohere and Ollama endpoints — so compatibility is measured against the originals, not asserted.
 
 <div class="grid cards" markdown>
 
