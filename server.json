@@ -1,0 +1,57 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "ai.stdapi/stdapi-ai",
+  "title": "stdapi.ai",
+  "description": "Self-hosted MCP tools for Amazon Bedrock and the AWS AI services, in your own AWS account.",
+  "version": "1.17.0",
+  "websiteUrl": "https://stdapi.ai/",
+  "repository": {
+    "url": "https://github.com/stdapi-ai/stdapi.ai",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/stdapi-ai/stdapi.ai-community:1.17.0",
+      "runtimeHint": "docker",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:8000/mcp"
+      },
+      "environmentVariables": [
+        {
+          "name": "ENABLE_MCP_STREAMABLE_HTTP",
+          "description": "Serve the MCP endpoint at /mcp. Off by default: without it the container starts and serves its REST APIs, but exposes no MCP server.",
+          "default": "true",
+          "isRequired": true
+        },
+        {
+          "name": "AWS_REGION",
+          "description": "AWS region the gateway calls Amazon Bedrock and the AWS AI services in.",
+          "example": "us-east-1",
+          "isRequired": true
+        },
+        {
+          "name": "AWS_ACCESS_KEY_ID",
+          "description": "Access key of an AWS principal allowed to call the services you enable. Omit when the container already receives credentials from its task or instance role.",
+          "isSecret": true
+        },
+        {
+          "name": "AWS_SECRET_ACCESS_KEY",
+          "description": "Secret half of AWS_ACCESS_KEY_ID.",
+          "isSecret": true
+        },
+        {
+          "name": "AWS_SESSION_TOKEN",
+          "description": "Session token, when the credentials above are temporary.",
+          "isSecret": true
+        },
+        {
+          "name": "API_KEY",
+          "description": "Require this bearer token on every request. Strongly recommended: without it the endpoint is unauthenticated to anything that can reach the port.",
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}
