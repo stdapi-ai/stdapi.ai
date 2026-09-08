@@ -242,6 +242,12 @@ def _keep_bidi_client_pool() -> Generator[None]:
 
 _loaded_env_file: str | None = None
 
+#: Carries the master process' env-file choice to xdist worker subprocesses:
+#: a worker's own ``sys.argv`` is execnet's bootstrap code (``['-c']``), not
+#: the real CLI arguments, so it cannot repeat the selection below and would
+#: otherwise silently fall back to ``tests/.env``.
+_ENV_FILE_MARKER = "_STDAPI_TESTS_ENV_FILE"
+
 
 def _load_env_profile() -> None:
     """Load environment variables from a profile .env file.
@@ -256,8 +262,18 @@ def _load_env_profile() -> None:
 
     This runs at module import time (before pytest parses arguments) so that
     ``PYTEST_ADDOPTS`` from the ``.env`` file is available during arg parsing.
+
+    An xdist worker reuses the file the master already picked (via
+    ``_ENV_FILE_MARKER``, inherited from the master's environment) instead of
+    repeating this selection from its own unusable ``sys.argv``.
     """
     global _loaded_env_file  # noqa: PLW0603
+    tests_dir = Path(__file__).parent
+
+    if marker := environ.get(_ENV_FILE_MARKER):
+        _loaded_env_file = marker
+        load_dotenv(tests_dir.parent / marker, override=True)
+        return
 
     def _argv_value(argv: list[str], option: str) -> str:
         """Return the value of a ``--option value`` or ``--option=value`` CLI arg."""
@@ -273,7 +289,6 @@ def _load_env_profile() -> None:
     profile = _argv_value(argv, "--env-profile") or environ.get(
         "PYTEST_ENV_PROFILE", ""
     )
-    tests_dir = Path(__file__).parent
     candidates = (
         f".env.{profile}" if profile else "",
         ".env.use-official-api" if "--use-official-api" in argv else "",
@@ -284,6 +299,7 @@ def _load_env_profile() -> None:
         if name and (env_file := tests_dir / name).is_file():
             _loaded_env_file = str(env_file.relative_to(tests_dir.parent))
             load_dotenv(env_file, override=True)
+            environ[_ENV_FILE_MARKER] = _loaded_env_file
             return
 
 
