@@ -1,6 +1,6 @@
 ---
 site_name: stdapi.ai
-site_description: "Self-hosted OpenAI, Anthropic and Cohere compatible API gateway for Amazon Bedrock. Point your applications at it and reach 100+ models across 20+ providers including Claude, OpenAI GPT, xAI Grok and Amazon Nova, for chat, images, video, speech, transcription, embeddings and moderation — in your own AWS account, at AWS rates with no markup."
+site_description: "Self-hosted OpenAI, Anthropic, Cohere and Ollama compatible API gateway for Amazon Bedrock. Point your applications at it and reach 100+ models across 20+ providers including Claude, OpenAI GPT, xAI Grok and Amazon Nova, for chat, images, video, speech, transcription, embeddings and moderation — in your own AWS account, at AWS rates with no markup."
 site_url: https://stdapi.ai
 site_author: JGoutin-dev
 exclude_docs: |
