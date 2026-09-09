@@ -16,14 +16,11 @@ from stdapi.batches import (
     MIN_REQUESTS_PER_MODEL,
     BatchState,
     cancel_batch,
-    create_batch,
+    create_openai_batch,
     finish_listed,
     get_batch,
     list_batches,
     materialize_openai_results,
-    prepare_openai_requests,
-    read_input_requests,
-    require_batches_enabled,
     settle,
 )
 from stdapi.config import SETTINGS
@@ -200,18 +197,11 @@ async def create(
             batched; 503 when the Batch API is not enabled.
     """
     log_request_params(request)
-    # Before the input file is read, so a 503 costs no 200 MB parse.
-    require_batches_enabled()
-    lines = await read_input_requests(request.input_file_id)
-    prepared = await prepare_openai_requests(lines, request.endpoint)
-    del lines
     return log_response_params(
         _to_batch(
-            await create_batch(
-                surface="openai",
+            await create_openai_batch(
                 endpoint=request.endpoint,
                 completion_window=request.completion_window,
-                prepared=prepared,
                 input_file_id=request.input_file_id,
                 metadata=request.metadata,
                 output_expires_after=(

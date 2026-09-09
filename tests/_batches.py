@@ -62,14 +62,24 @@ _PRECONDITION = "PreconditionFailed"
 _NO_SUCH_KEY = "NoSuchKey"
 _VALIDATION = "ValidationException"
 _NOT_FOUND = "ResourceNotFoundException"
+_INVALID_PART_ORDER = "InvalidPartOrder"
 
 
 class FakeS3:
-    """An object store holding every written object in memory."""
+    """An object store holding every written object in memory.
+
+    Multipart uploads are held as their parts until they are completed, so a
+    caller that streams an object is answered the way S3 answers it: the
+    object appears once the last part is in, and never at all if the upload
+    is aborted.
+    """
 
     def __init__(self) -> None:
         self.objects: dict[tuple[str, str], bytes] = {}
         self.options: dict[tuple[str, str], dict[str, Any]] = {}
+        self.uploads: dict[str, dict[int, bytes]] = {}
+        self.parts: dict[tuple[str, str], int] = {}
+        self.aborted: list[str] = []
 
     async def put_object(
         self,
@@ -85,6 +95,67 @@ class FakeS3:
             raise _client_error(_PRECONDITION, "PutObject")
         self.objects[Bucket, Key] = Body
         self.options[Bucket, Key] = _kwargs
+        return {}
+
+    async def create_multipart_upload(
+        self,
+        *,
+        Bucket: str,  # noqa: N803
+        Key: str,  # noqa: N803
+        **_kwargs: Any,  # noqa: ANN401
+    ) -> dict[str, Any]:
+        """Open a multipart upload and answer with its identifier."""
+        upload_id = f"upload-{len(self.uploads)}-{Bucket}/{Key}"
+        self.uploads[upload_id] = {}
+        return {"UploadId": upload_id}
+
+    async def upload_part(
+        self,
+        *,
+        Bucket: str,  # noqa: N803
+        Key: str,  # noqa: N803
+        UploadId: str,  # noqa: N803
+        PartNumber: int,  # noqa: N803
+        Body: bytes,  # noqa: N803
+    ) -> dict[str, Any]:
+        """Hold one part of an open multipart upload."""
+        del Bucket, Key
+        self.uploads[UploadId][PartNumber] = Body
+        return {"ETag": f'"part-{PartNumber}"'}
+
+    async def complete_multipart_upload(
+        self,
+        *,
+        Bucket: str,  # noqa: N803
+        Key: str,  # noqa: N803
+        UploadId: str,  # noqa: N803
+        MultipartUpload: dict[str, Any],  # noqa: N803
+    ) -> dict[str, Any]:
+        """Assemble the held parts into the object, refusing an unordered list.
+
+        S3 refuses a completion list that is not in ascending part-number
+        order, so an uploader collecting its parts out of order fails here
+        rather than silently storing a scrambled object.
+        """
+        held = self.uploads.pop(UploadId)
+        numbers = [entry["PartNumber"] for entry in MultipartUpload["Parts"]]
+        if numbers != sorted(numbers):
+            raise _client_error(_INVALID_PART_ORDER, "CompleteMultipartUpload")
+        self.objects[Bucket, Key] = b"".join(held[number] for number in numbers)
+        self.parts[Bucket, Key] = len(numbers)
+        return {}
+
+    async def abort_multipart_upload(
+        self,
+        *,
+        Bucket: str,  # noqa: N803
+        Key: str,  # noqa: N803
+        UploadId: str,  # noqa: N803
+    ) -> dict[str, Any]:
+        """Drop an upload nothing completed, parts and all."""
+        del Bucket, Key
+        self.uploads.pop(UploadId, None)
+        self.aborted.append(UploadId)
         return {}
 
     async def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803

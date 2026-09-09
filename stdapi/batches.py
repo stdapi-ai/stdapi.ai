@@ -10,7 +10,7 @@ the batch reports the aggregate. Results are written per job and translated to
 the calling API's dialect on read.
 """
 
-from asyncio import TaskGroup, gather
+from asyncio import Semaphore, TaskGroup, gather
 from base64 import b32hexencode
 from binascii import crc32 as _crc32
 from contextlib import contextmanager, suppress
@@ -61,7 +61,12 @@ from stdapi.routes.openai_embeddings import build_embedding_response
 from stdapi.types.openai_chat_completions import CompletionCreateParams
 from stdapi.types.openai_embeddings import EmbeddingCreateParams
 from stdapi.usage import record_bedrock_usage
-from stdapi.utils import now_utc_timestamp, to_json_bytes, validation_error_handler
+from stdapi.utils import (
+    async_iter,
+    now_utc_timestamp,
+    to_json_bytes,
+    validation_error_handler,
+)
 
 if TYPE_CHECKING:
     from asyncio import Task
@@ -71,6 +76,7 @@ if TYPE_CHECKING:
         Callable,
         Coroutine,
         Generator,
+        Mapping,
         Sequence,
     )
 
@@ -192,6 +198,12 @@ _LIST_SEEK_GROWTH: int = 16
 
 #: Requests translated concurrently while a batch is being prepared.
 _BUILD_CONCURRENCY: int = 32
+
+#: Batch creations reading an input file at once, however many ask to.
+_CREATE_SLOTS: int = 2
+
+#: Bounds concurrent creations to :data:`_CREATE_SLOTS` input files server-wide.
+_CREATE_SEMAPHORE: Semaphore = Semaphore(_CREATE_SLOTS)
 
 #: Models the batch being prepared resolved, keyed by the name its lines wrote.
 _PINNED_MODELS: ContextVar[dict[str, ModelBase[Any, Any]] | None] = ContextVar(
@@ -731,6 +743,27 @@ class PreparedRequest:
     model_input: JsonMapping
 
 
+@dataclass(slots=True)
+class StreamedRequests:
+    """One model's requests, translated while the job's input is written.
+
+    What a batch runs is known before its requests are: they are counted and
+    their model resolved on the way in, so the job can be started from a
+    stream that holds one wave of translated requests rather than all of them.
+
+    Attributes:
+        model: Model name as written by the client.
+        model_id: Resolved backend model identifier every request runs under.
+        requests: Number of requests the stream yields.
+        items: The translated requests, in input order.
+    """
+
+    model: str
+    model_id: str
+    requests: int
+    items: AsyncIterator[PreparedRequest]
+
+
 async def _prepare_openai_request(
     custom_id: str, body: CompletionCreateParams, index: int
 ) -> PreparedRequest:
@@ -919,22 +952,35 @@ def _group_by_model(
     groups: dict[str, list[PreparedRequest]] = {}
     for item in prepared:
         groups.setdefault(item.model_id, []).append(item)
-    if len(groups) > MAX_MODELS_PER_BATCH:
+    _check_group_sizes({model: len(items) for model, items in groups.items()})
+    return groups
+
+
+def _check_group_sizes(counts: Mapping[str, int]) -> None:
+    """Refuse a fan-out or a per-model count no job could be started for.
+
+    Args:
+        counts: Number of requests per resolved model ID.
+
+    Raises:
+        ApiError: When the batch fans out to more models than allowed, or a
+            model carries fewer requests than the backend accepts.
+    """
+    if len(counts) > MAX_MODELS_PER_BATCH:
         msg = (
             f"A batch may name at most {MAX_MODELS_PER_BATCH} different models; "
-            f"this one names {len(groups)}. Split it into several batches."
+            f"this one names {len(counts)}. Split it into several batches."
         )
         raise ApiError(msg)
     if short := sorted(
-        model for model, items in groups.items() if len(items) < MIN_REQUESTS_PER_MODEL
+        model for model, count in counts.items() if count < MIN_REQUESTS_PER_MODEL
     ):
-        counts = ", ".join(f"{model} ({len(groups[model])})" for model in short)
+        detail = ", ".join(f"{model} ({counts[model]})" for model in short)
         msg = (
             f"A batch must carry at least {MIN_REQUESTS_PER_MODEL} requests for "
-            f"each model it names. Below the minimum: {counts}."
+            f"each model it names. Below the minimum: {detail}."
         )
         raise ApiError(msg)
-    return groups
 
 
 async def _delete_object(bucket: str, key: str) -> None:
@@ -983,23 +1029,52 @@ def _invocation_type(endpoint: str) -> ModelInvocationTypeType:
     return "InvokeModel" if endpoint == _EMBEDDINGS_ENDPOINT else "Converse"
 
 
+async def _job_records(items: AsyncIterator[PreparedRequest]) -> AsyncIterator[bytes]:
+    """Yield the stored form of a job's requests, one record per line.
+
+    Each request is released as soon as it is encoded, so a job's input exists
+    in the upload's own buffer and nowhere else — never once per translated
+    request and once more joined.
+
+    Args:
+        items: The job's translated requests, in input order.
+
+    Yields:
+        One JSONL record at a time.
+    """
+    async for item in items:
+        yield (
+            to_json_bytes({"recordId": item.custom_id, "modelInput": item.model_input})
+            + b"\n"
+        )
+
+
 async def _submit_job(
     *,
     payload: str,
     index: int,
     endpoint: str,
+    model: str,
     model_id: str,
-    items: Sequence[PreparedRequest],
+    items: AsyncIterator[PreparedRequest],
+    requests: int,
     role_arn: str,
 ) -> BatchJobRef:
     """Write one model's requests to storage and start its inference job.
+
+    The requests are uploaded as they arrive rather than joined first, so the
+    memory one submission holds is that of the upload's buffer whatever the
+    batch carries.
 
     Args:
         payload: Bare 32-char batch payload.
         index: Zero-based position of the job within the batch.
         endpoint: API endpoint every request of the batch targets.
+        model: Model name as written by the client, to name in anything they
+            read back.
         model_id: Resolved identifier of the model running the job.
         items: The model's translated requests, in input order.
+        requests: Number of requests *items* yields.
         role_arn: Service role the backend assumes to read and write storage.
 
     Returns:
@@ -1008,8 +1083,6 @@ async def _submit_job(
     Raises:
         ApiError: When the model cannot run batched requests.
     """
-    # What the caller wrote, to name in anything they read back.
-    model = items[0].model
     job_model = await _resolve_job_model(endpoint, model_id)
     region = await job_model.select_region(s3_required=True)
     bucket = require_s3_bucket_for_region(region, feature=_FEATURE)
@@ -1022,13 +1095,9 @@ async def _submit_job(
         raise ApiError(msg) from exc
     prefix = f"{SETTINGS.aws_s3_batches_prefix}{payload}/{index}/"
     input_key = f"{prefix}{_INPUT_FILE_NAME}"
-    body = b"".join(
-        to_json_bytes({"recordId": item.custom_id, "modelInput": item.model_input})
-        + b"\n"
-        for item in items
+    await put_s3_object(
+        _job_records(items), "application/jsonl", bucket=bucket, key=input_key
     )
-    await put_s3_object(body, "application/jsonl", bucket=bucket, key=input_key)
-    del body
     client: BedrockClient = get_client("bedrock", region)
     with feature_unavailable_guard(_FEATURE, missing=_CREATE_JOB_PERMISSIONS):
         try:
@@ -1065,7 +1134,7 @@ async def _submit_job(
         job_arn=job_arn,
         job_id=job_arn.rsplit("/", 1)[-1],
         model_id=job_model.model.id,
-        requests=len(items),
+        requests=requests,
         prefix=prefix,
     )
 
@@ -1163,17 +1232,41 @@ async def _write_record(record: BatchRecord) -> None:
     )
 
 
+def _refuse_tenant_credential() -> None:
+    """Refuse a batch for an API key carrying an AWS credential of its own.
+
+    Refused rather than run on this deployment's account: a batch job outlives
+    the one-hour role session role chaining caps a tenant credential at, and
+    would land hours of spend on someone else's bill.
+
+    Raises:
+        ApiError: When the API key carries a tenant AWS credential.
+    """
+    if tenant_aws_credential() is None:
+        return
+    msg = (
+        "The Batch API is not available for API keys that carry an AWS "
+        "credential of their own: a batch job cannot run under it. "
+        "Use the non-batch endpoints instead."
+    )
+    raise ApiError(msg)
+
+
 async def create_batch(
     *,
     surface: BatchSurface,
     endpoint: str,
     completion_window: str,
-    prepared: Sequence[PreparedRequest],
+    prepared: Sequence[PreparedRequest] | StreamedRequests,
     input_file_id: str | None = None,
     metadata: dict[str, str] | None = None,
     output_expires_after: int | None = None,
 ) -> BatchState:
-    """Group translated requests by model, start a job per model, and store the batch.
+    """Start one inference job per model named, and store the batch.
+
+    Requests handed over as a sequence are grouped by the model they resolved
+    to, one job each; requests handed over as a stream already name one model
+    and are written to its job as they are translated.
 
     A job that starts while a sibling fails is stopped again, and so is every
     job of a batch whose record cannot be stored: nothing that could not be
@@ -1183,7 +1276,8 @@ async def create_batch(
         surface: API the batch is created through.
         endpoint: API endpoint every request targets.
         completion_window: Time frame within which the batch is processed.
-        prepared: The translated requests, in input order.
+        prepared: The translated requests, in input order, or the stream
+            translating them.
         input_file_id: Files API identifier of the submitted requests.
         metadata: Key-value pairs to attach to the batch.
         output_expires_after: Seconds the result files stay readable once
@@ -1197,18 +1291,16 @@ async def create_batch(
             when the API key carries a tenant AWS credential a batch job
             cannot run under.
     """
-    if tenant_aws_credential() is not None:
-        # Refused rather than run on this deployment's account: a batch job
-        # outlives the one-hour role session role chaining caps a tenant
-        # credential at, and would land hours of spend on someone else's bill.
-        msg = (
-            "The Batch API is not available for API keys that carry an AWS "
-            "credential of their own: a batch job cannot run under it. "
-            "Use the non-batch endpoints instead."
-        )
-        raise ApiError(msg)
+    _refuse_tenant_credential()
     role_arn, bucket = require_batches_enabled()
-    groups = _group_by_model(prepared)
+    jobs = (
+        [prepared]
+        if isinstance(prepared, StreamedRequests)
+        else [
+            StreamedRequests(items[0].model, model_id, len(items), async_iter(*items))
+            for model_id, items in _group_by_model(prepared).items()
+        ]
+    )
     payload = encode_id_payload(bucket)
     results = await gather(
         *(
@@ -1216,11 +1308,13 @@ async def create_batch(
                 payload=payload,
                 index=index,
                 endpoint=endpoint,
-                model_id=model_id,
-                items=items,
+                model=job.model,
+                model_id=job.model_id,
+                items=job.items,
+                requests=job.requests,
                 role_arn=role_arn,
             )
-            for index, (model_id, items) in enumerate(groups.items())
+            for index, job in enumerate(jobs)
         ),
         return_exceptions=True,
     )
@@ -2150,18 +2244,18 @@ async def materialize_openai_results(state: BatchState) -> BatchState:
     return state
 
 
-async def read_input_requests(file_id: str) -> list[JsonMapping]:
-    """Read and decode the requests of a batch input file.
+async def _open_input_file(file_id: str) -> AsyncIterator[bytes]:
+    """Return the content of a batch input file, refusing one that cannot hold requests.
 
     Args:
         file_id: Files API identifier of the input file.
 
     Returns:
-        The decoded request lines, in input order.
+        The file's content, in chunks.
 
     Raises:
-        ApiError: When the file was not uploaded for batching, holds no
-            request, or holds a line that is not a JSON object.
+        ApiError: When the file was not uploaded for batching, or is larger
+            than a batch input file may be.
     """
     payload = parse_file_id(file_id)
     record = await get_file(payload)
@@ -2178,11 +2272,77 @@ async def read_input_requests(file_id: str) -> list[JsonMapping]:
         )
         raise ApiError(msg)
     content, _ = await get_file_content(payload)
+    return content
+
+
+def _read_input_request(
+    line: JsonMapping,
+    index: int,
+    endpoint: str,
+    params: type[CompletionCreateParams | EmbeddingCreateParams],
+) -> CompletionCreateParams | EmbeddingCreateParams:
+    """Read one line of a batch input file as the request it carries.
+
+    Args:
+        line: The decoded line.
+        index: Zero-based position of the line in the file.
+        endpoint: API endpoint every request must target.
+        params: Parameters that endpoint's requests are validated against.
+
+    Returns:
+        The request the line carries.
+
+    Raises:
+        ApiError: When the line targets another endpoint or another method, or
+            carries no valid request.
+    """
+    if line.get("url") != endpoint:
+        msg = (
+            f"Line {index + 1}: 'url' must be '{endpoint}', the endpoint the "
+            f"batch targets."
+        )
+        raise ApiError(msg)
+    if (method := line.get("method", "POST")) != "POST":
+        msg = f"Line {index + 1}: 'method' must be 'POST', not {method!r}."
+        raise ApiError(msg)
+    body = line.get("body")
+    if not isinstance(body, dict):
+        msg = f"Line {index + 1}: 'body' must be a JSON object."
+        raise ApiError(msg)
+    with validation_error_handler():
+        return params.model_validate(body)
+
+
+async def _iter_input_requests(
+    file_id: str, endpoint: str
+) -> AsyncIterator[tuple[str, CompletionCreateParams | EmbeddingCreateParams]]:
+    """Yield every request a batch input file carries, in input order.
+
+    One line is decoded at a time and nothing but that line is kept, so a file
+    at the accepted size limit costs the memory of its longest request rather
+    than of the whole file.
+
+    Args:
+        file_id: Files API identifier of the input file.
+        endpoint: API endpoint every request must target.
+
+    Yields:
+        Tuple of (client-chosen identifier, the request the line carries).
+
+    Raises:
+        ApiError: When the file holds no request, carries more requests than a
+            batch may, or holds a line that cannot be read as a request.
+    """
+    params = (
+        EmbeddingCreateParams
+        if endpoint == _EMBEDDINGS_ENDPOINT
+        else CompletionCreateParams
+    )
     maximum = MAX_REQUESTS["openai"]
-    lines: list[JsonMapping] = []
-    async for index, line in _enumerate(_iter_jsonl(content)):
+    empty = True
+    async for index, line in _enumerate(_iter_jsonl(await _open_input_file(file_id))):
         if index >= maximum:
-            # Refused mid-decode, so an oversized file is never materialised in memory.
+            # Refused mid-read, so an oversized file is never read to its end.
             msg = (
                 f"A batch may carry at most {maximum} requests; '{file_id}' "
                 f"carries more."
@@ -2196,11 +2356,14 @@ async def read_input_requests(file_id: str) -> list[JsonMapping]:
         if not isinstance(decoded, dict):
             msg = f"Line {index + 1}: each line must be a JSON object."
             raise ApiError(msg)
-        lines.append(decoded)
-    if not lines:
+        empty = False
+        yield (
+            str(decoded.get("custom_id", "")),
+            _read_input_request(decoded, index, endpoint, params),
+        )
+    if empty:
         msg = f"File '{file_id}' holds no request."
         raise ApiError(msg)
-    return lines
 
 
 async def _enumerate[T](iterator: AsyncIterator[T]) -> AsyncIterator[tuple[int, T]]:
@@ -2211,70 +2374,166 @@ async def _enumerate[T](iterator: AsyncIterator[T]) -> AsyncIterator[tuple[int, 
         index += 1
 
 
-async def prepare_openai_requests(
-    lines: Sequence[JsonMapping], endpoint: str
-) -> list[PreparedRequest]:
-    """Validate and translate the request lines of a batch input file.
+async def _read_input_file(file_id: str, endpoint: str) -> StreamedRequests:
+    """Validate a batch input file and resolve the model its requests name.
+
+    The file is read once to be checked and once more to be translated, rather
+    than decoded into memory and kept: a file at the accepted size limit would
+    otherwise cost the server several times its own size — the decoded line,
+    the request read from it and its translated form — for as long as the
+    batch takes to submit.
+
+    Every check a request can be refused for happens here, so nothing is
+    translated for a file that will be refused: translating one request can
+    mean fetching the content it points at. Two of those checks are about the
+    file as a whole rather than about a line, so the identifiers and the model
+    names are the one thing kept — both bounded by the request cap and the
+    identifier length, never by the size of the file.
 
     Args:
-        lines: The decoded request lines, in input order.
+        file_id: Files API identifier of the input file.
         endpoint: API endpoint every request must target.
 
     Returns:
-        The translated requests, in input order.
+        What the batch will run, and the stream translating its requests.
 
     Raises:
-        ApiError: When a line is malformed, targets another endpoint, or names
-            a model another line does not.
+        ApiError: When the file cannot be batched as it stands.
     """
-    if len(lines) > MAX_REQUESTS["openai"]:
-        msg = (
-            f"A batch may carry at most {MAX_REQUESTS['openai']} requests; this "
-            f"one carries {len(lines)}."
-        )
-        raise ApiError(msg)
-    embeddings = endpoint == _EMBEDDINGS_ENDPOINT
-    params = EmbeddingCreateParams if embeddings else CompletionCreateParams
-    bodies: list[CompletionCreateParams | EmbeddingCreateParams] = []
     custom_ids: list[str] = []
-    for index, line in enumerate(lines):
-        url = line.get("url")
-        if url != endpoint:
-            msg = (
-                f"Line {index + 1}: 'url' must be '{endpoint}', the endpoint the "
-                f"batch targets."
-            )
-            raise ApiError(msg)
-        if (method := line.get("method", "POST")) != "POST":
-            msg = f"Line {index + 1}: 'method' must be 'POST', not {method!r}."
-            raise ApiError(msg)
-        body = line.get("body")
-        if not isinstance(body, dict):
-            msg = f"Line {index + 1}: 'body' must be a JSON object."
-            raise ApiError(msg)
-        with validation_error_handler():
-            bodies.append(params.model_validate(body))
-        custom_ids.append(str(line.get("custom_id", "")))
+    names: set[str] = set()
+    first = ""
+    async for custom_id, request in _iter_input_requests(file_id, endpoint):
+        if not custom_ids:
+            first = request.model
+        custom_ids.append(custom_id)
+        names.add(request.model)
     _validate_custom_ids(custom_ids, "Line")
-    # Resolved once per distinct name — never the full file — and compared
+    # Resolved once per distinct name — never once per request — and compared
     # before translating a single request: two names of one model are one
     # model, and a file naming more than one is refused before it pays for
     # translating any of its lines.
-    resolve = _resolve_embedding_model if embeddings else _resolve_model
-    with _pinned_models():
-        resolved = await _resolve_distinct({body.model for body in bodies}, resolve)
-        if len({model.model.id for model in resolved}) > 1:
-            msg = (
-                "Every request in a batch input file must name the same model. "
-                "Split the file into one file per model."
-            )
-            raise ApiError(msg)
-        return await _prepare_all(
-            list(zip(custom_ids, bodies, strict=True)),
-            (lambda item, index: _prepare_embedding_request(item[0], item[1], index))  # type: ignore[arg-type]
-            if embeddings
-            else (lambda item, index: _prepare_openai_request(item[0], item[1], index)),  # type: ignore[arg-type]
+    resolved = await _resolve_distinct(
+        names,
+        _resolve_embedding_model
+        if endpoint == _EMBEDDINGS_ENDPOINT
+        else _resolve_model,
+    )
+    if len(model_ids := {model.model.id for model in resolved}) > 1:
+        msg = (
+            "Every request in a batch input file must name the same model. "
+            "Split the file into one file per model."
         )
+        raise ApiError(msg)
+    model_id = model_ids.pop()
+    _check_group_sizes({model_id: len(custom_ids)})
+    return StreamedRequests(
+        first, model_id, len(custom_ids), _iter_prepared_requests(file_id, endpoint)
+    )
+
+
+async def _iter_prepared_requests(
+    file_id: str, endpoint: str
+) -> AsyncIterator[PreparedRequest]:
+    """Translate every request of a batch input file, a bounded number at a time.
+
+    Args:
+        file_id: Files API identifier of the input file.
+        endpoint: API endpoint every request must target.
+
+    Yields:
+        The translated requests, in input order.
+
+    Raises:
+        ApiError: When a request asks for something batches cannot serve.
+    """
+    wave: list[tuple[str, CompletionCreateParams | EmbeddingCreateParams]] = []
+    start = 0
+    async for entry in _iter_input_requests(file_id, endpoint):
+        wave.append(entry)
+        if len(wave) < _BUILD_CONCURRENCY:
+            continue
+        for item in await _translate_wave(wave, start):
+            yield item
+        start += len(wave)
+        wave.clear()
+    for item in await _translate_wave(wave, start):
+        yield item
+
+
+async def _translate_wave(
+    wave: Sequence[tuple[str, CompletionCreateParams | EmbeddingCreateParams]],
+    start: int,
+) -> list[PreparedRequest]:
+    """Translate one wave of requests concurrently, in input order.
+
+    Args:
+        wave: The requests to translate, as read from the input file.
+        start: Zero-based position of the wave's first request in the batch.
+
+    Returns:
+        The translated requests, in input order.
+    """
+    return list(
+        await gather(
+            *(
+                _prepare_embedding_request(custom_id, body, start + offset)
+                if isinstance(body, EmbeddingCreateParams)
+                else _prepare_openai_request(custom_id, body, start + offset)
+                for offset, (custom_id, body) in enumerate(wave)
+            )
+        )
+    )
+
+
+async def create_openai_batch(
+    *,
+    endpoint: str,
+    completion_window: str,
+    input_file_id: str,
+    metadata: dict[str, str] | None = None,
+    output_expires_after: int | None = None,
+) -> BatchState:
+    """Create a batch from an uploaded file of requests.
+
+    The file is checked first and translated second, a line at a time in both
+    passes, and each translated request is written to the job's input as it is
+    produced: what one creation holds follows the caps a batch is bounded by
+    rather than the size of the file. Creations are bounded too, so a
+    deployment answering several at once keeps that same ceiling.
+
+    Args:
+        endpoint: API endpoint every request of the file targets.
+        completion_window: Time frame within which the batch is processed.
+        input_file_id: Files API identifier of the submitted requests.
+        metadata: Key-value pairs to attach to the batch.
+        output_expires_after: Seconds the result files stay readable once
+            written, or ``None`` to keep them until they are deleted.
+
+    Returns:
+        The created batch and the state of its jobs.
+
+    Raises:
+        ApiError: When the file cannot be batched as it stands, or when the
+            API key carries a tenant AWS credential a batch job cannot run
+            under.
+    """
+    _refuse_tenant_credential()
+    # Before the input file is read, so a disabled deployment costs no read.
+    require_batches_enabled()
+    async with _CREATE_SEMAPHORE:
+        # Pinned here rather than around the read: the translation resolves the
+        # same names again, and it runs after the read has returned.
+        with _pinned_models():
+            return await create_batch(
+                surface="openai",
+                endpoint=endpoint,
+                completion_window=completion_window,
+                prepared=await _read_input_file(input_file_id, endpoint),
+                input_file_id=input_file_id,
+                metadata=metadata,
+                output_expires_after=output_expires_after,
+            )
 
 
 async def prepare_anthropic_requests(
@@ -2324,6 +2583,7 @@ __all__ = [
     "BatchSurface",
     "cancel_batch",
     "create_batch",
+    "create_openai_batch",
     "delete_batch",
     "finish_listed",
     "get_batch",
@@ -2332,8 +2592,6 @@ __all__ = [
     "list_batches",
     "materialize_openai_results",
     "prepare_anthropic_requests",
-    "prepare_openai_requests",
-    "read_input_requests",
     "require_batches_enabled",
     "rfc3339",
     "settle",

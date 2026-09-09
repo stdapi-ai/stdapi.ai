@@ -21,6 +21,7 @@ Ref: https://developers.openai.com/api/docs/guides/batch.md
 import contextlib
 from base64 import b32hexencode
 from binascii import crc32
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from itertools import count
 from json import dumps, loads
@@ -32,7 +33,7 @@ from uuid import UUID
 import pytest
 from botocore.exceptions import ClientError
 
-from stdapi import batches
+from stdapi import aws_s3, batches
 from stdapi.files import payload_created_at
 from tests import _batches
 from tests._batches import chat_lines, converse_output
@@ -108,6 +109,40 @@ def _create(client: TestClient, file_id: str) -> dict[str, Any]:
     return {"http_status": response.status_code, **response.json()}
 
 
+def _translation_backlog(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Record how many translated requests are waiting to be written.
+
+    A request is translated on its way into the batched form and released
+    again once it has been written to the job's input, so the difference
+    between the two counts is what the creation holds at that instant.
+
+    Args:
+        monkeypatch: The test's patcher.
+
+    Returns:
+        The backlog after each translation, filled in as the batch is built.
+    """
+    from stdapi.utils import to_json_bytes  # noqa: PLC0415
+
+    backlog: list[int] = []
+    counts = {"translated": 0, "written": 0}
+    to_batched_form = batches._to_model_input  # noqa: SLF001
+
+    def _translate(request: Any) -> Any:  # noqa: ANN401
+        counts["translated"] += 1
+        backlog.append(counts["translated"] - counts["written"])
+        return to_batched_form(request)
+
+    def _encode(value: Any) -> bytes:  # noqa: ANN401
+        if isinstance(value, dict) and "recordId" in value:
+            counts["written"] += 1
+        return to_json_bytes(value)
+
+    monkeypatch.setattr(batches, "_to_model_input", _translate)
+    monkeypatch.setattr(batches, "to_json_bytes", _encode)
+    return backlog
+
+
 @pytest.mark.local
 class TestOpenAIBatchValidation:
     """POST /v1/batches: what a batch refuses, and with which message.
@@ -116,7 +151,7 @@ class TestOpenAIBatchValidation:
     the problem in the create call instead of in a results file hours later.
 
     Ref: https://developers.openai.com/api/docs/guides/batch.md
-         stdapi/batches.py:prepare_openai_requests
+         stdapi/batches.py:_read_input_file
     """
 
     def test_below_minimum_names_the_floor(
@@ -125,7 +160,7 @@ class TestOpenAIBatchValidation:
         """A batch under the per-model floor is refused, naming the floor.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference.html
-             stdapi/batches.py:_group_by_model
+             stdapi/batches.py:_check_group_sizes
         """
         _batches.install(monkeypatch)
         file_id = _batches.install_input_file(monkeypatch, chat_lines(99))
@@ -142,7 +177,7 @@ class TestOpenAIBatchValidation:
         """A file naming two models is refused, as upstream forbids one.
 
         Ref: https://developers.openai.com/api/docs/guides/batch
-             stdapi/batches.py:prepare_openai_requests
+             stdapi/batches.py:_read_input_file
         """
         _batches.install(monkeypatch)
         lines = chat_lines(100) + chat_lines(
@@ -164,17 +199,10 @@ class TestOpenAIBatchValidation:
         so a file that will be refused anyway must not pay for translating any
         of its lines — the model names are compared first instead.
 
-        Ref: stdapi/batches.py:prepare_openai_requests
+        Ref: stdapi/batches.py:_read_input_file
         """
         _batches.install(monkeypatch)
-        translated: list[Any] = []
-        original = batches._prepare_all  # noqa: SLF001
-
-        async def _tracked(items: Any, prepare: Any) -> Any:  # noqa: ANN401
-            translated.extend(items)
-            return await original(items, prepare)
-
-        monkeypatch.setattr(batches, "_prepare_all", _tracked)
+        translated = _batches.capture_translations(monkeypatch)
         lines = chat_lines(100) + chat_lines(
             100, model="amazon.nova-lite-v1:0", prefix="other"
         )
@@ -193,8 +221,7 @@ class TestOpenAIBatchValidation:
         submitted as two jobs consuming two of the batch's model slots.
 
         Ref: https://developers.openai.com/api/docs/guides/batch
-             stdapi/batches.py:_group_by_model
-             stdapi/batches.py:prepare_openai_requests
+             stdapi/batches.py:_read_input_file
         """
         _, bedrock = _batches.install(monkeypatch)
         _resolve_alias(monkeypatch)
@@ -303,7 +330,7 @@ class TestOpenAIBatchValidation:
         """A file not uploaded for batching is refused, naming the purpose.
 
         Ref: https://developers.openai.com/api/docs/guides/batch
-             stdapi/batches.py:read_input_requests
+             stdapi/batches.py:_open_input_file
         """
         _batches.install(monkeypatch)
         file_id = _batches.install_input_file(
@@ -315,13 +342,34 @@ class TestOpenAIBatchValidation:
         assert isinstance(error, dict)
         assert "purpose 'assistants'" in error["message"]
 
+    def test_a_line_without_a_request_body_is_refused(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A line whose 'body' is not an object is refused, naming its position.
+
+        Ref: https://developers.openai.com/api/docs/guides/batch
+             stdapi/batches.py:_read_input_request
+        """
+        _batches.install(monkeypatch)
+        lines = chat_lines(100)
+        lines[8] = (
+            '{"custom_id": "req-8", "method": "POST", '
+            '"url": "/v1/chat/completions", "body": "hi"}'
+        )
+        file_id = _batches.install_input_file(monkeypatch, lines)
+        body = _create(app_client, file_id)
+        assert body["http_status"] == 400
+        error = body["error"]
+        assert isinstance(error, dict)
+        assert "Line 9: 'body' must be a JSON object" in error["message"]
+
     def test_wrong_url_is_refused(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A line targeting another endpoint is refused, naming its position.
 
         Ref: https://developers.openai.com/api/docs/guides/batch
-             stdapi/batches.py:prepare_openai_requests
+             stdapi/batches.py:_read_input_request
         """
         _batches.install(monkeypatch)
         lines = chat_lines(100)
@@ -339,7 +387,7 @@ class TestOpenAIBatchValidation:
         """A line that is not a JSON object is refused, naming its position.
 
         Ref: https://developers.openai.com/api/docs/guides/batch
-             stdapi/batches.py:read_input_requests
+             stdapi/batches.py:_iter_input_requests
         """
         _batches.install(monkeypatch)
         lines = chat_lines(100)
@@ -360,7 +408,7 @@ class TestOpenAIBatchValidation:
         own `ValueError` reaches no handler.
 
         Ref: https://developers.openai.com/api/docs/guides/batch
-             stdapi/batches.py:read_input_requests
+             stdapi/batches.py:_iter_input_requests
         """
         _batches.install(monkeypatch)
         lines = chat_lines(100)
@@ -382,7 +430,7 @@ class TestOpenAIBatchValidation:
         which is what keeps a legal 200 MB file from exhausting the server.
 
         Ref: https://developers.openai.com/api/docs/guides/batch
-             stdapi/batches.py:read_input_requests
+             stdapi/batches.py:_iter_input_requests
         """
         _batches.install(monkeypatch)
         monkeypatch.setitem(batches.MAX_REQUESTS, "openai", 5)
@@ -417,7 +465,7 @@ class TestOpenAIBatchValidation:
         """A line asking for another HTTP method is refused, naming its position.
 
         Ref: https://developers.openai.com/api/docs/guides/batch
-             stdapi/batches.py:prepare_openai_requests
+             stdapi/batches.py:_read_input_request
         """
         _batches.install(monkeypatch)
         lines = chat_lines(100)
@@ -435,7 +483,7 @@ class TestOpenAIBatchValidation:
         """A file holding no request is refused, naming the file.
 
         Ref: https://developers.openai.com/api/docs/guides/batch
-             stdapi/batches.py:read_input_requests
+             stdapi/batches.py:_iter_input_requests
         """
         _batches.install(monkeypatch)
         file_id = _batches.install_input_file(monkeypatch, [])
@@ -882,6 +930,212 @@ class TestOpenAIBatchValidation:
         batches._to_job_state(ref, response)  # type: ignore[arg-type] # noqa: SLF001
 
         assert "error_detail" not in request_log
+
+
+@pytest.mark.local
+class TestOpenAIBatchInputFile:
+    """POST /v1/batches: what reading an input file costs the server.
+
+    An input file is accepted at up to 200 MB and the server has to keep
+    answering every other request while one is submitted, so a creation holds
+    a bounded number of requests whatever the file carries: the lines are
+    read, translated and uploaded in waves instead of being expanded into
+    memory, and the creations doing so are themselves bounded.
+
+    Ref: https://developers.openai.com/api/docs/guides/batch.md
+         stdapi/batches.py:_read_input_file
+    """
+
+    def test_a_translated_request_is_written_as_soon_as_it_is_produced(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The translated requests never pile up beyond one wave of them.
+
+        Translating the whole file before writing any of it holds every
+        request of a 200 MB batch at once, several times over — the decoded
+        line, the parsed body and the translated request. What bounds it is
+        that a wave is written before the next one is translated.
+
+        Ref: stdapi/batches.py:_iter_prepared_requests
+             stdapi/batches.py:_job_records
+        """
+        _batches.install(monkeypatch)
+        backlog = _translation_backlog(monkeypatch)
+        requests = 8 * batches._BUILD_CONCURRENCY  # noqa: SLF001
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(requests))
+
+        assert _create(app_client, file_id)["http_status"] == 200
+
+        assert len(backlog) == requests
+        assert max(backlog) <= batches._BUILD_CONCURRENCY  # noqa: SLF001
+
+    def test_an_input_longer_than_one_chunk_is_uploaded_in_parts(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A job's input reaches storage in parts, never joined into one blob.
+
+        Joining every record to upload it in a single request is the one
+        expansion a 200 MB file cannot afford. The upload chunk size is
+        lowered rather than writing a file that large; what is asserted is
+        that more than one part reached storage and that the object they
+        assemble into is the whole input, in input order.
+
+        Ref: stdapi/aws_s3.py:put_s3_object
+             stdapi/batches.py:_job_records
+        """
+        from pydantic_core import from_json  # noqa: PLC0415
+
+        s3, bedrock = _batches.install(monkeypatch)
+        monkeypatch.setattr(aws_s3, "UPLOAD_CHUNK_SIZE", 1024)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+
+        assert _create(app_client, file_id)["http_status"] == 200
+
+        uri = bedrock.created[0]["inputDataConfig"]["s3InputDataConfig"]["s3Uri"]
+        key = uri.split("/", 3)[3]
+        assert s3.parts[_batches.BUCKET, key] > 1
+        records = [
+            from_json(line) for line in s3.objects[_batches.BUCKET, key].splitlines()
+        ]
+        assert [record["recordId"] for record in records] == [
+            f"req-{index}" for index in range(100)
+        ]
+
+    def test_a_file_past_the_size_limit_is_refused_before_it_is_read(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file larger than the limit is refused on its size alone.
+
+        The limit is what every other bound rests on, and it is checked
+        against the stored size rather than by reading the file: an oversized
+        file costs one metadata read, never a download. The limit is lowered
+        rather than uploading 200 MB.
+
+        Ref: https://developers.openai.com/api/docs/guides/batch
+             stdapi/batches.py:_open_input_file
+        """
+        _batches.install(monkeypatch)
+        monkeypatch.setattr(batches, "_MAX_INPUT_FILE_BYTES", 1024**2)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(11_000))
+        read: list[str] = []
+
+        async def _get_file_content(payload: str) -> Any:  # noqa: ANN401
+            read.append(payload)
+            raise AssertionError(payload)
+
+        monkeypatch.setattr(batches, "get_file_content", _get_file_content)
+
+        body = _create(app_client, file_id)
+
+        assert body["http_status"] == 400
+        assert "at most 1 MB" in body["error"]["message"]
+        assert not read
+
+    def test_a_line_refused_mid_upload_leaves_nothing_stored(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A request refused after the upload started stores no partial input.
+
+        Uploading the records as they are translated means a line refused
+        half-way through has already sent parts of the job's input. None of it
+        may survive: an object nothing points at is storage the deployment
+        pays for and nobody can find.
+
+        Ref: stdapi/aws_s3.py:_multipart_upload
+             stdapi/batches.py:_check_batchable
+        """
+        s3, bedrock = _batches.install(monkeypatch)
+        monkeypatch.setattr(aws_s3, "UPLOAD_CHUNK_SIZE", 1024)
+        lines = chat_lines(100)
+        lines[90] = lines[90].replace(
+            '"messages"',
+            '"tools": [{"type": "function", "function": {"name": "f"}}], "messages"',
+        )
+        file_id = _batches.install_input_file(monkeypatch, lines)
+
+        body = _create(app_client, file_id)
+
+        assert body["http_status"] == 400
+        assert "tool use is not available" in body["error"]["message"].lower()
+        assert not bedrock.created
+        # The upload had started, so the refusal is what aborted it.
+        assert len(s3.aborted) == 1
+        assert not s3.uploads
+        assert not [key for _bucket, key in s3.objects if key.endswith(".jsonl")]
+
+    async def test_reading_the_input_file_answers_what_the_batch_will_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reading the file answers a summary of it, not its requests.
+
+        The read is what a file's whole content would be held by, so it
+        answers what the batch runs — the model, and how many requests name it
+        — and leaves the requests themselves to the stream that writes them.
+
+        Ref: stdapi/batches.py:_read_input_file
+        """
+        _batches.install(monkeypatch)
+        _resolve_alias(monkeypatch)
+        file_id = _batches.install_input_file(
+            monkeypatch, chat_lines(100, model=_ALIAS)
+        )
+
+        prepared = await batches._read_input_file(  # noqa: SLF001
+            file_id, "/v1/chat/completions"
+        )
+
+        assert (prepared.model, prepared.model_id, prepared.requests) == (
+            _ALIAS,
+            _ALIAS_TARGET,
+            100,
+        )
+        assert isinstance(prepared.items, AsyncIterator)
+
+    async def test_the_creations_reading_a_file_are_bounded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """However many batches are created at once, only a few are read at once.
+
+        The ceiling one creation holds is only a ceiling for the server if the
+        creations sharing it are counted: a task answering an unbounded number
+        of them at once multiplies it by however many arrive together.
+
+        Ref: stdapi/batches.py:create_openai_batch
+        """
+        from asyncio import gather, sleep  # noqa: PLC0415
+
+        from stdapi.aws_s3 import put_s3_object  # noqa: PLC0415
+
+        _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        in_flight = 0
+        peak = 0
+
+        async def _put(data: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            try:
+                await sleep(0)
+                return await put_s3_object(data, *args, **kwargs)
+            finally:
+                in_flight -= 1
+
+        monkeypatch.setattr(batches, "put_s3_object", _put)
+        creations = 2 * batches._CREATE_SLOTS  # noqa: SLF001
+
+        await gather(
+            *(
+                batches.create_openai_batch(
+                    endpoint="/v1/chat/completions",
+                    completion_window="24h",
+                    input_file_id=file_id,
+                )
+                for _ in range(creations)
+            )
+        )
+
+        assert peak == batches._CREATE_SLOTS < creations  # noqa: SLF001
 
 
 @pytest.mark.local
