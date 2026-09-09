@@ -307,7 +307,7 @@ class ChatModel(_BaseChatModel):
         body, service_tier, guardrail_config = await self._build_pegasus_body(
             request, region
         )
-        raw_stream = self.invoke_stream(
+        raw_stream = await self.invoke_stream(
             body, region=region, service_tier=service_tier, guardrail=guardrail_config
         )
         return {"stream": self._format_converse_stream(raw_stream)}  # type: ignore[typeddict-item]

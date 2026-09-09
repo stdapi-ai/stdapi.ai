@@ -999,6 +999,10 @@ class ModelBase[RequestT, ResponseT]:
     ) -> AsyncGenerator[JsonValue]:
         """Invoke the model via ``InvokeModelWithResponseStream``.
 
+        The connection is opened here rather than on the first chunk, so a
+        failure to open is raised to the caller while it can still be answered
+        with an HTTP status and retried in another region.
+
         Args:
             body: JSON request payload.
             inference_profile: Use the cross-region inference profile ID when available.
@@ -1013,13 +1017,13 @@ class ModelBase[RequestT, ResponseT]:
                 over context variable. Defaults to None (uses the context var only
                 when the model class supports native InvokeModel guardrails).
 
-        Yields:
-            Parsed JSON chunks from the streaming response.
+        Returns:
+            Async generator of parsed JSON chunks from the open stream.
         """
         candidates = await compute_candidate_regions(
             self._model_id, region=region, s3_required=s3_required
         )
-        async for chunk in await route_and_execute(
+        return await route_and_execute(
             self._model_id,
             candidates,
             partial(
@@ -1037,8 +1041,7 @@ class ModelBase[RequestT, ResponseT]:
                 ),
                 record_usage_callback=self._record_invocation_metrics_usage,
             ),
-        ):
-            yield chunk
+        )
 
     async def invoke_async(
         self,

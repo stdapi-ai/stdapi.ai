@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from stdapi import models
+from stdapi.api_errors import ApiError
 from stdapi.aws import AWS_ENVIRONMENT
 from stdapi.input_file import (
     _CURRENT_INPUT_FILES,
@@ -470,3 +472,69 @@ class TestPegasusStreamTranslation:
             "totalTokens": 0,
         }
         assert events[-2]["messageStop"]["stopReason"] == "end_turn"
+
+
+class TestPegasusStreamOpensBeforeItReturns:
+    """The streamed invocation is opened before ``_converse_stream`` returns.
+
+    A streamed response commits its HTTP status the moment the route starts
+    sending events, so a failure to open the stream has to surface while the
+    status can still say what went wrong -- 429 for a throttle, 403 for a
+    refusal -- instead of a 200 carrying an error in the event sequence. It is
+    also the only window in which another region can still serve the request.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModelWithResponseStream.html
+         stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._converse_stream
+    """
+
+    async def test_a_failure_to_open_is_raised_instead_of_returned_as_a_stream(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The backend refusal reaches the caller, not the event sequence.
+
+        The stub stands in for the streaming invocation, so the assertion is
+        that ``_converse_stream`` had already made it -- and propagated its
+        error -- by the time it returned.
+        """
+        model = ChatModel("twelvelabs.pegasus-1-2-v1:0")
+        opened: list[RegionName] = []
+
+        async def _noop_prepare(
+            _request: ConverseRequestBaseTypeDef, _region: RegionName
+        ) -> None:
+            return None
+
+        async def _stub_build_body(
+            _request: ConverseRequestBaseTypeDef, _region: RegionName
+        ) -> tuple[dict[str, Any], None, None]:
+            return {}, None, None
+
+        async def _refusing_open(
+            _model_id: str,
+            _body: dict[str, Any],
+            region: RegionName,
+            **_kwargs: Any,  # noqa: ANN401
+        ) -> AsyncGenerator[Any]:
+            opened.append(region)
+            msg = "Too many requests."
+            raise ApiError(msg, status=429)
+
+        monkeypatch.setattr(
+            type(model),
+            "_prepare_converse_request_for_region",
+            staticmethod(_noop_prepare),
+        )
+        monkeypatch.setattr(
+            type(model), "_build_pegasus_body", staticmethod(_stub_build_body)
+        )
+        monkeypatch.setattr(models, "_open_invoke_stream", _refusing_open)
+
+        with pytest.raises(ApiError) as refusal:
+            await model._converse_stream(  # noqa: SLF001
+                {"modelId": "", "messages": []}, "us-east-1", single_region=True
+            )
+
+        assert refusal.value.status == 429
+        assert opened == ["us-east-1"], (
+            "the stream must be opened before the response is returned"
+        )
