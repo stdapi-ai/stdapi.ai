@@ -24,6 +24,7 @@ from uuid import uuid4
 from pybase64 import urlsafe_b64decode, urlsafe_b64encode
 from pydantic import ValidationError
 from pydantic_core import from_json
+from starlette.datastructures import Headers
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from stdapi.api_errors import ApiError
@@ -33,12 +34,13 @@ from stdapi.auth import (
     verify_websocket_credentials,
 )
 from stdapi.aws_bedrock import (
+    GUARDRAIL_CONFIG_VAR,
     GuardrailInterventionError,
     apply_guardrail_to_text,
     set_guardrail_configuration,
     set_performance_configuration,
 )
-from stdapi.aws_bedrock_mantle import set_mantle_project
+from stdapi.aws_bedrock_mantle import MANTLE_PROJECT_VAR, set_mantle_project
 from stdapi.cleanup import CLEANUPS, drain_tasks, run_cleanups_detached
 from stdapi.config import SETTINGS
 from stdapi.input_file import reset_current_input_files
@@ -131,6 +133,9 @@ _SHUTDOWN_CLOSE: Final = (1001, "server_shutdown")
 
 #: Message closing a session that failed in a way nothing else answered for.
 _UNEXPECTED_ERROR: Final = "The request could not be completed. Retry the request."
+
+#: Empty headers, under which the setters install the deployment's defaults.
+_NO_HEADERS: Final = Headers()
 
 #: Bytes of 16-bit audio the client may buffer before a commit is required.
 _MAX_BUFFERED_AUDIO_BYTES: Final = 24000 * 2 * 120
@@ -2032,6 +2037,23 @@ async def serve_realtime_session(
             run_cleanups_detached(log["id"])
 
 
+def apply_deployment_configuration() -> None:
+    """Configure a request held by an ephemeral client secret.
+
+    The secret holder is untrusted, so the headers selecting a guardrail, a
+    performance configuration or a Mantle project need the deployment's own
+    key: they are discarded, and the deployment's configured defaults apply
+    instead. The setters keep a value already in the context when no default
+    is configured, so the context is reset before they run.
+    """
+    # None reads as unset everywhere the guardrail var is consumed.
+    GUARDRAIL_CONFIG_VAR.set(None)  # type: ignore[arg-type]
+    MANTLE_PROJECT_VAR.set("")
+    set_guardrail_configuration(_NO_HEADERS)
+    set_performance_configuration(_NO_HEADERS)
+    set_mantle_project(_NO_HEADERS)
+
+
 async def _open_session(websocket: WebSocket, model: str | None) -> None:
     """Authenticate, configure and run one accepted connection.
 
@@ -2065,8 +2087,9 @@ async def _open_session(websocket: WebSocket, model: str | None) -> None:
     if _SHUTTING_DOWN:
         message = "The server is shutting down. Reconnect to start a new session."
         raise ApiError(message, status=503)
-    if not minted:
-        # Ephemeral secrets are client-held: these headers need the deployment's key.
+    if minted:
+        apply_deployment_configuration()
+    else:
         set_guardrail_configuration(websocket.headers)
         set_performance_configuration(websocket.headers)
         set_mantle_project(websocket.headers)

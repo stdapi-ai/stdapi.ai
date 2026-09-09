@@ -14,13 +14,15 @@ import asyncio
 import base64
 import threading
 from contextlib import asynccontextmanager, suppress
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import pytest
 from openai.types.realtime.realtime_server_event import RealtimeServerEvent
 from pydantic import TypeAdapter
 from starlette.websockets import WebSocketDisconnect
 
+from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, PERFORMANCE_CONFIG_VAR
+from stdapi.aws_bedrock_mantle import MANTLE_PROJECT_VAR
 from stdapi.config import SETTINGS
 from stdapi.models.realtime import (
     InputTranscript,
@@ -1824,6 +1826,7 @@ class TestSecretCarriedSessions:
 
     Ref: https://developers.openai.com/api/reference/resources/realtime/subresources/client_secrets/methods/create
          stdapi/realtime.py:_open_session
+         stdapi/realtime.py:apply_deployment_configuration
     """
 
     @staticmethod
@@ -1963,29 +1966,101 @@ class TestSecretCarriedSessions:
         assert updated["type"] == "session.updated", updated
         assert updated["session"]["instructions"] == "Only answer about the product."
 
-    @pytest.mark.usefixtures("fake_backend")
-    def test_the_configuration_headers_are_ignored_for_a_secret(
-        self, app_client: TestClient
-    ) -> None:
-        """A credential held by an untrusted client cannot redirect the guardrail."""
-        applied: list[Any] = []
+    #: Deployment-key-only headers an untrusted secret holder might send.
+    _SPOOFED_HEADERS: ClassVar[dict[str, str]] = {
+        "X-Amzn-Bedrock-GuardrailIdentifier": "attacker-guardrail",
+        "X-Amzn-Bedrock-GuardrailVersion": "1",
+        "OpenAI-Project": "proj_attacker",
+    }
+
+    def _configuration_seen_by_the_guardrail(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> dict[str, Any]:
+        """Open a secret-held session with spoofed headers and check one item.
+
+        Returns:
+            The request configuration in force when the guardrail ran.
+        """
         from stdapi import realtime  # noqa: PLC0415
 
+        seen: dict[str, Any] = {}
+
+        async def _apply(text: str, **_: object) -> str:
+            """Capture what the guardrail check would run under."""
+            seen.update(
+                guardrail=GUARDRAIL_CONFIG_VAR.get(None),
+                mantle_project=MANTLE_PROJECT_VAR.get(),
+                performance=PERFORMANCE_CONFIG_VAR.get(None),
+            )
+            return text
+
+        monkeypatch.setattr(realtime, "apply_guardrail_to_text", _apply)
         value, _ = mint_client_secret(RealtimeSessionConfig(model=_MODEL), 600)
+        with app_client.websocket_connect(
+            "/v1/realtime", headers={**self._bearer(value), **self._SPOOFED_HEADERS}
+        ) as websocket:
+            created = websocket.receive_json()
+            websocket.send_json(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Hello there."}],
+                    },
+                }
+            )
+            events = _drain(websocket, "conversation.item.done")
 
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(realtime, "set_guardrail_configuration", applied.append)
-            with app_client.websocket_connect(
-                "/v1/realtime",
-                headers={
-                    **self._bearer(value),
-                    "X-Amzn-Bedrock-GuardrailIdentifier": "permissive",
-                },
-            ) as websocket:
-                created = websocket.receive_json()
+        assert created["type"] == "session.created", created
+        assert events[-1]["type"] == "conversation.item.done", events
+        assert seen, "the guardrail check never ran on the item"
+        return seen
 
-        assert created["type"] == "session.created"
-        assert applied == [], "request headers were honoured for a client secret"
+    @pytest.mark.usefixtures("fake_backend")
+    def test_the_deployment_configuration_applies_to_a_secret_session(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The deployment's guardrail and project apply, whatever the headers say.
+
+        The secret is the untrusted-browser credential the guardrail exists
+        for, so a session it opens must run under the deployment's guardrail
+        even where a deployment-key request could have selected another.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", True)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", "gr-deploy")
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", "2")
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_mantle_project_override", True)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_project", "proj_deploy")
+
+        seen = self._configuration_seen_by_the_guardrail(app_client, monkeypatch)
+
+        assert seen["guardrail"] == {
+            "guardrailIdentifier": "gr-deploy",
+            "guardrailVersion": "2",
+        }, seen
+        assert seen["mantle_project"] == "proj_deploy", seen
+        assert seen["performance"] == (None, None), seen
+
+    @pytest.mark.usefixtures("fake_backend")
+    def test_a_secret_cannot_carry_the_deployment_key_headers(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no deployment default, the spoofed headers still select nothing.
+
+        The setters keep a caller-set value when nothing is configured, which
+        is exactly the case an untrusted holder would exploit.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", True)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", None)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", None)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_project", None)
+
+        seen = self._configuration_seen_by_the_guardrail(app_client, monkeypatch)
+
+        assert seen["guardrail"] is None, seen
+        assert seen["mantle_project"] == "", seen
+        assert seen["performance"] == (None, None), seen
 
 
 class TestSessionBounds:

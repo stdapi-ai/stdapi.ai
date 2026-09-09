@@ -5,17 +5,10 @@ from typing import Annotated, NoReturn
 from fastapi import APIRouter, Depends, Path, Query, Request, Response, WebSocket
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import TypeAdapter, ValidationError
-from starlette.datastructures import Headers
 
 from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate, enforce_tenant_endpoint_scope
-from stdapi.aws_bedrock import (
-    GUARDRAIL_CONFIG_VAR,
-    set_guardrail_configuration,
-    set_performance_configuration,
-)
-from stdapi.aws_bedrock_mantle import MANTLE_PROJECT_VAR, set_mantle_project
 from stdapi.config import SETTINGS
 from stdapi.models import is_model_wildcard
 from stdapi.models.capabilities import Capability, register_route_capability
@@ -27,6 +20,7 @@ from stdapi.monitoring import (
     log_response_params,
 )
 from stdapi.realtime import (
+    apply_deployment_configuration,
     mint_client_secret,
     read_client_secret,
     serve_realtime_session,
@@ -157,9 +151,6 @@ _SESSION_ADAPTER: TypeAdapter[SessionConfig] = TypeAdapter(SessionConfig)
 #: Largest SDP offer accepted, in bytes; a real offer is a few kilobytes.
 _MAX_OFFER_BYTES = 64 * 1024
 
-#: Empty headers, resetting per-request configuration an untrusted caller set.
-_NO_HEADERS = Headers()
-
 #: What the SIP-only call-control verbs answer, per verb.
 _SIP_ONLY_VERBS: dict[str, str] = {
     "accept": "answers an incoming SIP call",
@@ -232,15 +223,8 @@ async def _authenticate_call(request: Request) -> tuple[SessionConfig | None, bo
         return None, False
     PRINCIPAL.set(None)
     TENANT.set(None)
-    # The setters keep a caller-set header value when no deployment default is
-    # configured: reset the context vars first, so the untrusted secret holder
-    # cannot smuggle the deployment-key-only headers past them. None reads as
-    # unset everywhere the guardrail var is consumed.
-    GUARDRAIL_CONFIG_VAR.set(None)  # type: ignore[arg-type]
-    MANTLE_PROJECT_VAR.set("")
-    set_guardrail_configuration(_NO_HEADERS)
-    set_performance_configuration(_NO_HEADERS)
-    set_mantle_project(_NO_HEADERS)
+    # The middleware already read the caller's headers: replace what it set.
+    apply_deployment_configuration()
     if secret.tenant_key_id is not None:
         # The mint was tenant-authorized; the call keeps the tenant's scopes.
         TENANT.set(await resume_tenant(secret.tenant_key_id))
