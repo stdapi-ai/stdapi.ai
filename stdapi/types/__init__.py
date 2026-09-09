@@ -12,6 +12,15 @@ from stdapi.config import SETTINGS
 #: Regex pattern for parsing form bracket notation
 _BRACKET_PARSE_PATTERN = regex_compile(r"([^\[\]]+)|\[\]")
 
+#: Highest number of entries a form bracket index may address in one list.
+_MAX_FORM_LIST_LENGTH = 256
+
+#: Digits an in-range form bracket index can hold, bounding its integer conversion.
+_MAX_FORM_INDEX_DIGITS = len(str(_MAX_FORM_LIST_LENGTH))
+
+#: Highest number of segments a form bracket key may nest, base name included.
+_MAX_FORM_BRACKET_DEPTH = 16
+
 #: Regex pattern that a valid Files API file ID must match on input (both prefixes accepted).
 FILE_ID_PATTERN: str = r"^file[-_][a-z0-9]{32}$"
 
@@ -46,6 +55,34 @@ class BaseModelRequestWithExtra(BaseModel):
     __pydantic_extra__: JsonMapping = {}
 
 
+def _bracket_index(part: str) -> int:
+    """Read a numeric form bracket segment as a list index.
+
+    The segment is checked before it is converted: an index positions a value in
+    a list padded up to it, so an out-of-range one would turn a few characters
+    of field name into an arbitrarily long list.
+
+    Args:
+        part: Numeric bracket notation segment, e.g. "0".
+
+    Returns:
+        The index the segment addresses.
+
+    Raises:
+        ValueError: If the segment is not a decimal number, or addresses a
+            position past the supported list length.
+    """
+    if part.isdecimal() and len(part) <= _MAX_FORM_INDEX_DIGITS:
+        index = int(part)
+        if index < _MAX_FORM_LIST_LENGTH:
+            return index
+    msg = (
+        "Invalid form field name: a bracket index must address one of the first "
+        f"{_MAX_FORM_LIST_LENGTH} entries of a list."
+    )
+    raise ValueError(msg)
+
+
 def _ensure_list_size(lst: JsonList, idx: int) -> None:
     """Pad the list with ``None`` so *idx* can be assigned without IndexError.
 
@@ -71,11 +108,14 @@ def _navigate_bracket_part(
 
     Returns:
         The next level in the nested structure.
+
+    Raises:
+        ValueError: If *part* is not a supported list index.
     """
     is_array = not next_key or next_key.isdigit()
 
     if part.isdigit() and isinstance(current, list):
-        idx = int(part)
+        idx = _bracket_index(part)
         _ensure_list_size(current, idx)
         if current[idx] is None or not isinstance(current[idx], (dict, list)):
             current[idx] = [] if is_array else {}
@@ -98,11 +138,14 @@ def _set_bracket_leaf(current: JsonMappingOrList, leaf: str, value: JsonValue) -
         current: The container (dict or list) to set the value in.
         leaf: The final bracket notation segment.
         value: The value to set.
+
+    Raises:
+        ValueError: If *leaf* is not a supported list index.
     """
     if not leaf and isinstance(current, list):
         current.append(value)
     elif leaf.isdigit() and isinstance(current, list):
-        idx = int(leaf)
+        idx = _bracket_index(leaf)
         _ensure_list_size(current, idx)
         current[idx] = value
     elif isinstance(current, dict):
@@ -136,6 +179,10 @@ class BaseModelRequestWithFormExtra(BaseModelRequestWithExtra):
         Returns:
             Transformed dictionary with nested structures, or original data
             if not a dict.
+
+        Raises:
+            ValueError: If a field name nests more segments than supported, or
+                carries an unsupported list index.
         """
         if not isinstance(data, dict):
             return data
@@ -154,6 +201,13 @@ class BaseModelRequestWithFormExtra(BaseModelRequestWithExtra):
             parts = [p or "" for p in _BRACKET_PARSE_PATTERN.findall(key)]
             if not parts:
                 continue
+            if len(parts) > _MAX_FORM_BRACKET_DEPTH:
+                # Depth multiplies the size a single bracket index may ask for.
+                msg = (
+                    "Invalid form field name: brackets may not nest more than "
+                    f"{_MAX_FORM_BRACKET_DEPTH} levels."
+                )
+                raise ValueError(msg)
 
             *path, leaf = parts
             current: JsonMappingOrList = result

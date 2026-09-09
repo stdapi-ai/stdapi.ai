@@ -12,11 +12,19 @@ Ref: stdapi/types/__init__.py:BaseModelRequestWithFormExtra
      https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
+from pydantic import ValidationError
 
-from stdapi.types import BaseModelRequestWithFormExtra
+from stdapi.types import (
+    _MAX_FORM_BRACKET_DEPTH,
+    _MAX_FORM_LIST_LENGTH,
+    BaseModelRequestWithFormExtra,
+)
+
+if TYPE_CHECKING:
+    from starlette.testclient import TestClient
 
 pytestmark = pytest.mark.local
 
@@ -283,3 +291,106 @@ class TestBaseModelRequestWithFormExtra:
         assert extra == {
             "items": [{"name": "first", "value": 1}, {"name": "second", "value": 2}]
         }
+
+
+class TestFormBracketNameBounds:
+    """A bracket key may only describe a structure of a bounded size.
+
+    The field name is what a caller controls, and it is tiny next to the
+    structure it asks for: an index positions a value, so an unbounded one turns
+    a handful of characters into an arbitrarily long padded list, and an
+    unbounded nesting depth multiplies that by one padded list per level. Both
+    are bounded, and a name past either bound is refused rather than truncated —
+    a silently shortened list would send the backend parameters the caller never
+    asked for.
+
+    Ref: stdapi/types/__init__.py:_bracket_index
+    """
+
+    @staticmethod
+    def _key(depth: int) -> str:
+        """Build a bracket key nesting *depth* segments in total.
+
+        Returns:
+            A key such as ``a[b][b]`` for a depth of three.
+        """
+        return "a" + "[b]" * (depth - 1)
+
+    def test_last_supported_index_is_accepted(self) -> None:
+        """The highest in-range index still positions its value.
+
+        The list it produces is exactly the supported length, which pins the
+        bound to a value rather than to "large".
+        """
+        extra = _form_extra({f"param[{_MAX_FORM_LIST_LENGTH - 1}]": "last"})
+        assert len(extra["param"]) == _MAX_FORM_LIST_LENGTH
+        assert extra["param"][-1] == "last"
+        assert extra["param"][0] is None
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            pytest.param(f"param[{_MAX_FORM_LIST_LENGTH}]", id="leaf-one-past-the-cap"),
+            pytest.param("param[999999999]", id="leaf-far-past-the-cap"),
+            pytest.param("param[999999999][name]", id="intermediate-container"),
+            pytest.param("param[items][999999999]", id="leaf-under-a-dict-key"),
+            pytest.param(f"param[{'9' * 5000}]", id="index-of-5000-digits"),
+            pytest.param("param[²]", id="index-that-is-not-a-decimal-number"),
+        ],
+    )
+    def test_index_past_the_supported_length_is_rejected(self, key: str) -> None:
+        """An unusable index fails validation instead of padding a list to it.
+
+        Both bracket paths are covered: the leaf that assigns the value, and the
+        intermediate segment that creates the container below it. The last two
+        cases are ones Python's own integer conversion refuses — a number too
+        long to convert, and a digit that is not a decimal one — so the message
+        the caller reads has to come from the bound rather than from the
+        conversion.
+        """
+        with pytest.raises(ValidationError) as raised:
+            _form_extra({key: "value"})
+        message = str(raised.value)
+        assert "bracket index" in message
+        assert str(_MAX_FORM_LIST_LENGTH) in message
+        # Python's own integer-conversion limit must never be what refuses this.
+        assert "digits" not in message
+
+    def test_deepest_supported_nesting_is_accepted(self) -> None:
+        """A key nesting the maximum number of segments still builds its structure."""
+        extra = _form_extra({self._key(_MAX_FORM_BRACKET_DEPTH): "deep"})
+        current: Any = extra
+        for segment in ("a", *["b"] * (_MAX_FORM_BRACKET_DEPTH - 1)):
+            current = current[segment]
+        assert current == "deep"
+
+    def test_nesting_past_the_supported_depth_is_rejected(self) -> None:
+        """One segment too many fails validation, whatever the segments contain.
+
+        Depth is the second multiplier — a numeric segment pads a list of its
+        own at every level, so bounding one index still leaves a long name
+        asking for one padded list per level. The bound is on the name, so it
+        holds for the plain segments used here too.
+        """
+        with pytest.raises(ValidationError) as raised:
+            _form_extra({self._key(_MAX_FORM_BRACKET_DEPTH + 1): "value"})
+        message = str(raised.value)
+        assert "nest" in message
+        assert str(_MAX_FORM_BRACKET_DEPTH) in message
+
+    def test_rejected_bracket_key_answers_400(self, app_client: TestClient) -> None:
+        """A route taking extra form parameters refuses the name with a client error.
+
+        The refusal has to reach the caller as an invalid request, not as a
+        server error: the request is malformed, and the caller can fix it.
+
+        Ref: stdapi/routes/openai_videos.py:create_video
+        """
+        response = app_client.post(
+            "/v1/videos",
+            data={"model": "any-model", "prompt": "a", "param[999999999]": "1"},
+        )
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "bracket index" in error["message"]
