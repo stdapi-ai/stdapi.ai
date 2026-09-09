@@ -477,6 +477,11 @@ class TestMiddlewareCleanupDrain:
 class TestSharedResponsesStayBelowTheGzipThreshold:
     """Pre-rendered singleton responses must never reach the gzip minimum size.
 
+    Every payload listed here is fixed at import and bounded by its own shape.
+    The protected resource metadata is deliberately absent: it is the one
+    discovery payload whose size follows the deployment's configuration, so it
+    is rendered per request instead of being bounded.
+
     Ref: https://www.starlette.io/middleware/#gzipmiddleware
          stdapi/routes/core_root.py
     """
@@ -505,6 +510,70 @@ class TestSharedResponsesStayBelowTheGzipThreshold:
                 "place, permanently serving gzip to clients that did not ask "
                 "for it. Render this response per request instead of caching it."
             )
+
+
+class TestOAuthMetadataIsRenderedPerRequest:
+    """The protected resource metadata is built per request, never shared.
+
+    Its size follows the deployment's own OAuth configuration -- the
+    authorization servers it lists and the scopes it advertises -- so unlike
+    the fixed discovery payloads it can cross the compression threshold. A
+    shared response object would then keep the ``content-encoding: gzip`` the
+    middleware stamped on it, and the next client that did not ask for gzip
+    would read compressed bytes labelled as plain JSON.
+
+    Ref: https://www.rfc-editor.org/rfc/rfc9728.html#section-3
+         stdapi/routes/core_root.py:oauth_protected_resource
+    """
+
+    def test_a_compressed_response_leaves_the_next_client_intact(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A gzip request for a large document does not break the plain one after it."""
+        from importlib.util import find_spec, module_from_spec  # noqa: PLC0415
+
+        from fastapi import FastAPI  # noqa: PLC0415
+        from fastapi.testclient import TestClient as _TestClient  # noqa: PLC0415
+
+        minimum_size = _gzip_minimum_size()
+        resource = "https://gateway.example.com"
+        monkeypatch.setattr(SETTINGS, "oauth_resource_identifier", resource)
+        monkeypatch.setattr(
+            SETTINGS, "oauth_authorization_servers", ["https://issuer.example.com"]
+        )
+        monkeypatch.setattr(
+            SETTINGS,
+            "oauth_scopes_supported",
+            [f"stdapi.scope.{index:04d}" for index in range(minimum_size // 10)],
+        )
+        # Every payload is built at import, so the module is re-executed under
+        # the configured settings -- a private copy, never a reload, which would
+        # replace the running application's own payloads with these.
+        spec = find_spec("stdapi.routes.core_root")
+        assert spec is not None
+        assert spec.loader is not None
+        configured = module_from_spec(spec)
+        spec.loader.exec_module(configured)
+
+        app = FastAPI()
+        app.add_middleware(GZipMiddleware, minimum_size=minimum_size)
+        app.include_router(configured.router)
+        client = _TestClient(app)
+
+        compressed = client.get(
+            core_root.OAUTH_METADATA_PATH, headers={"accept-encoding": "gzip"}
+        )
+        assert compressed.headers["content-encoding"] == "gzip", (
+            "the document must be large enough to be compressed, or the "
+            "regression this pins cannot happen"
+        )
+
+        plain = client.get(
+            core_root.OAUTH_METADATA_PATH, headers={"accept-encoding": "identity"}
+        )
+
+        assert "content-encoding" not in plain.headers
+        assert plain.json()["resource"] == resource
 
 
 #: Application built in a subprocess, so the proxy-header settings apply at import.

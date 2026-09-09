@@ -206,15 +206,10 @@ _API_CATALOG_RESPONSE = JSONResponse(
 #: Seconds a client may reuse the protected resource metadata (RFC 9728 section 7.10).
 _OAUTH_METADATA_MAX_AGE = 3600
 
-#: Pre-rendered response for the protected resource metadata, None when not published.
-_OAUTH_METADATA_RESPONSE: JSONResponse | None = (
-    JSONResponse(
-        _OAUTH_METADATA,
-        headers={"cache-control": f"public, max-age={_OAUTH_METADATA_MAX_AGE}"},
-    )
-    if _OAUTH_METADATA is not None
-    else None
-)
+#: Caching directive carried by the protected resource metadata.
+_OAUTH_METADATA_HEADERS = {
+    "cache-control": f"public, max-age={_OAUTH_METADATA_MAX_AGE}"
+}
 
 
 @router.get("/")
@@ -253,12 +248,15 @@ async def oauth_protected_resource() -> JSONResponse:
         Protected resource metadata document, or 404 when no public URL is
         configured for this deployment.
     """
-    if _OAUTH_METADATA_RESPONSE is None:
+    if _OAUTH_METADATA is None:
         return JSONResponse(
             {"error": "OAuth 2.0 protected resource metadata is not configured"},
             status_code=404,
         )
-    return _OAUTH_METADATA_RESPONSE
+    # Built per request: this is the one discovery payload whose size follows
+    # the deployment's configuration, and compression rewrites the headers of
+    # the response object it is handed.
+    return JSONResponse(_OAUTH_METADATA, headers=_OAUTH_METADATA_HEADERS)
 
 
 @router.get("/.well-known/mcp/server-card.json")
