@@ -514,6 +514,33 @@ class TestAudioTranslationsResponseFormatBugs:
 
 
 @pytest.mark.local
+class TestAudioTranslationsWithoutAFile:
+    """POST /v1/audio/translations as a form that carries no audio file.
+
+    Ref: https://developers.openai.com/api/reference/resources/audio/subresources/translations/methods/create
+         stdapi/routes/openai_audio_translations.py:create_translation
+    """
+
+    def test_a_form_without_a_file_returns_400(
+        self, app_client: TestClientType
+    ) -> None:
+        """A form naming only the model is refused as a missing field, not a failure.
+
+        The upload is optional in the signature because the same route also
+        takes a JSON body, so the form that omits it is a client mistake the
+        route reports itself, naming the field the caller left out.
+        """
+        response = app_client.post(
+            "/v1/audio/translations", files={"model": (None, "amazon.transcribe")}
+        )
+
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert error["message"] == "Validation error at body.file: Field required"
+
+
+@pytest.mark.local
 class TestTranslateUnsupportedParameters:
     """Amazon Transcribe rejects the translation parameters it cannot honour.
 

@@ -2817,3 +2817,94 @@ class TestTranscribeOutputEncryption:
         (error,) = exc_info.value.errors()
         assert error["loc"] == ("aws_transcribe_output_encryption_key_arn",)
         assert "must be a KMS key ARN" in error["msg"]
+
+
+@pytest.mark.local
+class TestSubtitleContentDisposition:
+    """The ``Content-Disposition`` an ``srt``/``vtt`` response carries is header-safe.
+
+    Its filename comes from the caller's own upload, so it is arbitrary text,
+    while an HTTP header carries latin-1 only: a response naming the file in
+    UTF-8 could not be sent at all, and the request would fail after the
+    transcription had already run. The name is reduced to printable ASCII, and
+    the original is repeated in the RFC 6266 ``filename*`` parameter whenever
+    the reduction changed it.
+
+    Ref: https://www.rfc-editor.org/rfc/rfc6266#section-4.3
+         stdapi/models/audio/__init__.py:AudioModelBase._format_subtitle_response
+    """
+
+    @staticmethod
+    async def _disposition(filename: str | None) -> str:
+        """Return the ``Content-Disposition`` of a subtitle response for *filename*.
+
+        Args:
+            filename: Name the caller gave the uploaded audio file.
+
+        Returns:
+            The header value the response carries.
+        """
+        response = await DefaultAudioModel._format_subtitle_response(  # noqa: SLF001
+            "srt", "1\n00:00:00,000 --> 00:00:01,000\nhello\n", filename
+        )
+        return response.headers["content-disposition"]
+
+    async def test_an_ascii_filename_names_the_subtitle_file_directly(self) -> None:
+        """A name that is already printable ASCII is kept, with the subtitle extension."""
+        assert (
+            await self._disposition("meeting.mp3")
+            == 'attachment; filename="meeting.srt"'
+        )
+
+    @pytest.mark.parametrize("filename", [None, ".", "/"])
+    async def test_a_nameless_upload_falls_back_to_a_generic_name(
+        self, filename: str | None
+    ) -> None:
+        """Nothing forces the caller to name the upload, so a default is used.
+
+        A name that is all path and no file leaves nothing to echo either, and
+        must not append an extended parameter naming nothing.
+        """
+        assert await self._disposition(filename) == 'attachment; filename="audio.srt"'
+
+    async def test_a_non_latin_1_filename_is_carried_in_the_rfc_6266_parameter(
+        self,
+    ) -> None:
+        """A UTF-8 name is percent-encoded rather than written into the header raw.
+
+        Building the response at all is the assertion: an HTTP header value is
+        encoded as latin-1, so the raw name would raise before a single byte of
+        the paid transcription reached the caller.
+        """
+        header = await self._disposition("音声.mp3")
+
+        assert header == (
+            'attachment; filename="audio.srt"; '
+            "filename*=UTF-8''%E9%9F%B3%E5%A3%B0.srt"
+        )
+        header.encode("latin-1")
+
+    async def test_a_quote_or_backslash_cannot_break_out_of_the_filename(self) -> None:
+        """The quoted form stays one token, whatever the caller named the upload."""
+        header = await self._disposition('a"b\\c.mp3')
+
+        assert header.startswith('attachment; filename="abc.srt"; filename*=')
+        assert header.count('"') == 2
+
+    async def test_a_control_character_cannot_inject_a_second_header(self) -> None:
+        """A newline in the upload name must not end the header it is written into.
+
+        Control characters are dropped from both forms of the name, so nothing
+        the caller writes can start a header of its own.
+        """
+        header = await self._disposition("a\r\nX-Injected: 1.mp3")
+
+        assert header == 'attachment; filename="aX-Injected: 1.srt"'
+
+    async def test_a_very_long_filename_cannot_inflate_the_response_headers(
+        self,
+    ) -> None:
+        """The echoed name is bounded, so the header stays a header."""
+        header = await self._disposition("a" * 10_000 + ".mp3")
+
+        assert len(header) < 1_000

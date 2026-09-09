@@ -6,7 +6,9 @@ may support TTS, transcription, or both.
 """
 
 from pathlib import Path
+from re import compile as re_compile
 from typing import TYPE_CHECKING, Any, ClassVar, NotRequired, TypedDict
+from urllib.parse import quote
 
 from fastapi import Response
 
@@ -31,6 +33,45 @@ if TYPE_CHECKING:
         TranscriptionStreamEvent,
         TranslationCreateResponse,
     )
+
+#: Control characters, which no filename may carry into a header in any form.
+_CONTROL_CHARS_RE = re_compile(r"[\x00-\x1f\x7f]")
+
+#: Characters a quoted ``Content-Disposition`` filename cannot carry.
+_UNSAFE_FILENAME_RE = re_compile(r'[^\x20-\x7e]|["\\]')
+
+#: Longest caller-supplied name echoed back in a response header.
+_FILENAME_MAX_LEN = 200
+
+#: Name used when the caller supplied none, or none that survived sanitization.
+_DEFAULT_FILENAME = "audio"
+
+
+def _subtitle_content_disposition(
+    filename: str | None, response_format: AudioResponseFormat
+) -> str:
+    """Return a ``Content-Disposition`` naming the subtitle file.
+
+    The caller names the upload, so the name is arbitrary text while the header
+    it goes into carries printable ASCII: it is reduced to that, and the
+    original repeated as the RFC 6266 ``filename*`` parameter when the
+    reduction changed it, so a client can still recover it.
+
+    Args:
+        filename: Name the caller gave the audio file, if any.
+        response_format: Subtitle format, used as the file extension.
+
+    Returns:
+        The header value.
+    """
+    stem = _CONTROL_CHARS_RE.sub(
+        "", Path(filename or _DEFAULT_FILENAME).stem[:_FILENAME_MAX_LEN]
+    )
+    safe = _UNSAFE_FILENAME_RE.sub("", stem) or _DEFAULT_FILENAME
+    header = f'attachment; filename="{safe}.{response_format}"'
+    if stem and stem != safe:
+        header += f"; filename*=UTF-8''{quote(f'{stem}.{response_format}', safe='')}"
+    return header
 
 
 class TTSResponse(TypedDict):
@@ -239,7 +280,9 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
                 "application/x-subrip" if response_format == "srt" else "text/vtt"
             ),
             headers={
-                "Content-Disposition": f'attachment; filename="{Path(filename or "audio").stem}.{response_format}"'
+                "Content-Disposition": _subtitle_content_disposition(
+                    filename, response_format
+                )
             },
         )
 
