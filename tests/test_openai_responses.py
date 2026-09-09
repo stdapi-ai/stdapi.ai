@@ -12,7 +12,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from itertools import pairwise
-from typing import TYPE_CHECKING, Any, Literal, get_args
+from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
 import pytest
 from botocore.exceptions import ClientError
@@ -2694,6 +2694,160 @@ class TestCodeInterpreterTool:
             assert code_interp_done_count >= 1, (
                 "Expected at least one code_interpreter_call output_item.done from official API"
             )
+
+
+#: The raw stream of a model running a tool for itself, block for block.
+# Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_process_stream_events
+_SELF_SERVED_TOOL_STREAM: list[dict[str, Any]] = [
+    {"contentBlockDelta": {"delta": {"text": ""}, "contentBlockIndex": 0}},
+    {"contentBlockStop": {"contentBlockIndex": 0}},
+    {
+        "contentBlockStart": {
+            "start": {
+                "toolUse": {"toolUseId": "tooluse_1", "name": "nova_code_interpreter"}
+            },
+            "contentBlockIndex": 1,
+        }
+    },
+    {
+        "contentBlockDelta": {
+            "delta": {"toolUse": {"input": '{"code": "print(27)"}'}},
+            "contentBlockIndex": 1,
+        }
+    },
+    {"contentBlockStop": {"contentBlockIndex": 1}},
+    {
+        "contentBlockStart": {
+            "start": {
+                "toolResult": {
+                    "toolUseId": "tooluse_1",
+                    "type": "nova_code_interpreter_result",
+                }
+            },
+            "contentBlockIndex": 2,
+        }
+    },
+    {
+        "contentBlockDelta": {
+            "delta": {"toolResult": [{"json": {"stdOut": "27\n", "exitCode": 0}}]},
+            "contentBlockIndex": 2,
+        }
+    },
+    {"contentBlockStop": {"contentBlockIndex": 2}},
+    {"contentBlockDelta": {"delta": {"text": "27."}, "contentBlockIndex": 3}},
+    {"contentBlockStop": {"contentBlockIndex": 3}},
+    {"messageStop": {"stopReason": "end_turn"}},
+    {"metadata": {"usage": {"inputTokens": 10, "outputTokens": 5}}},
+]
+
+
+async def _stream_payloads(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Run a Bedrock stream through the Responses adapter and decode its events.
+
+    Args:
+        events: Raw Bedrock ConverseStream events, in order.
+
+    Returns:
+        The JSON payload of every emitted SSE event.
+    """
+
+    async def _events() -> AsyncGenerator[Any]:
+        for event in events:
+            yield event
+
+    request = ResponseCreateParams.model_validate(
+        {"model": "amazon.nova-2-lite-v1:0", "input": "Compute 27."}
+    )
+    return [
+        json.loads(cast("str", sse.data))
+        async for sse in responses_adapter.format_stream(
+            "resp_1",
+            0.0,
+            "amazon.nova-2-lite-v1:0",
+            _events(),
+            request,
+            suppress_tool_names=frozenset({"nova_code_interpreter"}),
+        )
+    ]
+
+
+@pytest.mark.local
+@pytest.mark.usefixtures("request_log")
+class TestSelfServedToolResultsAddNoOutputItem:
+    """A tool the model ran for itself contributes no item to the streamed output.
+
+    Its result arrives as a content block of its own, carrying nothing a client
+    can render: the non-streamed path skips it, and the streamed one has to agree.
+    An extra empty ``message`` item would answer the same request differently on
+    the two paths, shift the identifier of the real answer, and come back as a
+    blank assistant turn when the response is continued.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+         stdapi/models/chat/_adapters/_openai_responses.py:_handle_block_start
+    """
+
+    async def test_the_answer_is_the_only_item_of_the_completed_response(self) -> None:
+        """``response.completed`` carries the answer alone, at the first index.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+        """
+        payloads = await _stream_payloads(_SELF_SERVED_TOOL_STREAM)
+
+        completed = [p for p in payloads if p["type"] == "response.completed"]
+        assert len(completed) == 1, "expected exactly one terminal event"
+        output = completed[0]["response"]["output"]
+        assert [item["type"] for item in output] == ["message"]
+        assert output[0]["id"] == "resp_1-msg-0"
+        assert [part["text"] for part in output[0]["content"]] == ["27."]
+
+    async def test_the_result_block_opens_no_item_and_no_content_part(self) -> None:
+        """No lifecycle event announces the result block to the client.
+
+        The empty ``message`` this defect produced was preceded by a complete
+        ``output_item.added`` / ``content_part.added`` pair, so counting the
+        items of the terminal event alone would miss half of what a client sees.
+        """
+        payloads = await _stream_payloads(_SELF_SERVED_TOOL_STREAM)
+
+        counts = Counter(payload["type"] for payload in payloads)
+        assert counts["response.output_item.added"] == 1
+        assert counts["response.content_part.added"] == 1
+        assert counts["response.output_text.delta"] == 1
+
+    async def test_the_streamed_output_matches_the_non_streamed_one(self) -> None:
+        """The same answer, unstreamed, produces the same single item.
+
+        The two paths read the same Bedrock content, so a block one of them drops
+        and the other keeps is a divergence a client meets as an extra item.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_extract_output_items
+        """
+        payloads = await _stream_payloads(_SELF_SERVED_TOOL_STREAM)
+        completed = next(p for p in payloads if p["type"] == "response.completed")
+        streamed = completed["response"]["output"]
+
+        items = responses_adapter._extract_output_items(  # noqa: SLF001
+            [
+                {
+                    "toolUse": {
+                        "toolUseId": "tooluse_1",
+                        "name": "nova_code_interpreter",
+                        "input": {"code": "print(27)"},
+                    }
+                },
+                {
+                    "toolResult": {
+                        "toolUseId": "tooluse_1",
+                        "content": [{"json": {"stdOut": "27\n", "exitCode": 0}}],
+                    }
+                },
+                {"text": "27."},
+            ],
+            "resp_1",
+            frozenset({"nova_code_interpreter"}),
+        )
+
+        assert [item.id for item in items] == [item["id"] for item in streamed]
 
 
 class TestUsageLogging:

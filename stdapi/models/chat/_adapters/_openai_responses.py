@@ -2717,7 +2717,8 @@ def _handle_block_start(
     """Emit SSE events for a Bedrock ``contentBlockStart`` event.
 
     Initialises per-block state and emits ``response.output_item.added``
-    plus (for text blocks) ``response.content_part.added``.
+    plus (for text blocks) ``response.content_part.added``.  A block starting a
+    ``toolResult`` or an ``image`` opens nothing and emits nothing.
 
     For web-search system tools (``nova_grounding``), emits a
     ``web_search_call`` output item with ``in_progress`` status followed by
@@ -2804,6 +2805,13 @@ def _handle_block_start(
                 type="response.output_item.added",
             ),
         )
+    elif "toolResult" in start or "image" in start:
+        # Neither the result of a tool the model ran itself nor a raw image block
+        # has a Responses item, and the non-streamed path skips both.
+        state.block_kind = _BlockKind.SUPPRESSED
+        state.current_item_id = None
+        state.current_tool_name = None
+        state.current_tool_id = None
     else:
         state.current_item_id = f"{state.response_id}-msg-{state.output_index}"
         state.block_kind = _BlockKind.TEXT
@@ -3184,8 +3192,9 @@ def _handle_block_stop(state: _StreamState) -> Generator[JSONServerSentEvent]:
     ``output_item.done``; reasoning blocks emit ``reasoning_text.done`` +
     ``output_item.done``; non-suppressed tool blocks emit
     ``function_call_arguments.done`` + ``output_item.done``; web-search blocks
-    emit ``web_search_call.completed`` + ``output_item.done``; suppressed tool
-    blocks are only recorded in ``state.suppressed_tool_calls``.
+    emit ``web_search_call.completed`` + ``output_item.done``; a suppressed tool
+    call is only recorded in ``state.suppressed_tool_calls``, and a suppressed
+    block that is not one -- a tool result, an image -- records nothing.
 
     Args:
         state: Mutable stream state.

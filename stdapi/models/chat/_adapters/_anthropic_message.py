@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel
 from pydantic_core import to_json
 from sse_starlette import JSONServerSentEvent
 
@@ -28,6 +29,8 @@ from stdapi.monitoring import REQUEST_LOG, log_error_details, log_response_param
 from stdapi.types.anthropic_messages import (
     Base64ImageSource,
     Base64PDFSource,
+    BashCodeExecutionToolResultBlock,
+    BashCodeExecutionToolResultBlockParam,
     CacheControlEphemeralParam,
     CacheCreation,
     CitationCharLocation,
@@ -36,6 +39,8 @@ from stdapi.types.anthropic_messages import (
     CitationsSearchResultLocation,
     CitationsWebSearchResultLocation,
     CodeExecutionToolParam,
+    CodeExecutionToolResultBlock,
+    CodeExecutionToolResultBlockParam,
     ContentBlock,
     ContentBlockParam,
     ContentBlockSourceParam,
@@ -72,6 +77,8 @@ from stdapi.types.anthropic_messages import (
     TextBlockParam,
     TextCitation,
     TextDelta,
+    TextEditorCodeExecutionToolResultBlock,
+    TextEditorCodeExecutionToolResultBlockParam,
     ThinkingBlock,
     ThinkingBlockParam,
     ThinkingDelta,
@@ -87,6 +94,8 @@ from stdapi.types.anthropic_messages import (
     ToolResultBlockParam,
     ToolSearchToolBm25Param,
     ToolSearchToolRegexParam,
+    ToolSearchToolResultBlock,
+    ToolSearchToolResultBlockParam,
     ToolTextEditorParam,
     ToolUnionParam,
     ToolUseBlock,
@@ -95,14 +104,18 @@ from stdapi.types.anthropic_messages import (
     URLPDFSource,
     Usage,
     WebFetchToolParam,
+    WebFetchToolResultBlock,
+    WebFetchToolResultBlockParam,
     WebSearchResultBlock,
+    WebSearchResultBlockParam,
     WebSearchToolParam,
     WebSearchToolResultBlock,
+    WebSearchToolResultBlockParam,
 )
 from stdapi.utils import b64decode, b64encode
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_bedrock_runtime.literals import (
@@ -418,6 +431,49 @@ async def _map_tool_result_to_bedrock(
     return {"toolResult": result}
 
 
+def _map_server_tool_result_to_bedrock(
+    tool_use_id: str,
+    content: BaseModel | Sequence[WebSearchResultBlockParam | WebSearchResultBlock],
+) -> ContentBlockTypeDef | None:
+    """Convert the recorded result of a server-side tool to a Bedrock content block.
+
+    A server tool records its result in the assistant turn, which clients replay
+    as history on the next request.  Bedrock refuses a ``searchResult`` block
+    there, so the result is rendered as the text of a ``toolResult``, under the
+    identifier the tool call itself is rewritten to -- a result matching no call
+    is rejected.
+
+    Args:
+        tool_use_id: Identifier of the ``server_tool_use`` block this answers.
+        content: The block's content: the results a search returned, or the
+            single result -- or error -- every other server tool reports.
+
+    Returns:
+        Bedrock content block dict with ``toolResult``, or ``None`` when the
+        result carries nothing to replay.
+    """
+    failed = False
+    if isinstance(content, BaseModel):
+        payload = content.model_dump(exclude_none=True)
+        text = to_json(payload).decode()
+        failed = str(payload.get("type", "")).endswith("_error")
+    else:
+        # A search that matched nothing is still an answer: dropping it would
+        # leave the toolUse it replies to unpaired, which the backend refuses.
+        text = "\n".join(f"{result.title}: {result.url}" for result in content) or (
+            "No results."
+        )
+    if not text:
+        return None
+    tool_result: ToolResultBlockTypeDef = {
+        "toolUseId": f"tooluse_{tool_use_id.removeprefix('srvtoolu_')}",
+        "content": [{"text": text}],
+    }
+    if failed:
+        tool_result["status"] = "error"
+    return {"toolResult": tool_result}
+
+
 async def _map_document_to_bedrock(block: DocumentBlockParam) -> ContentBlockTypeDef:
     """Convert an Anthropic document block to a Bedrock content block.
 
@@ -492,7 +548,7 @@ def _map_thinking_to_bedrock(
     return {"reasoningContent": {"reasoningText": reasoning_text}}
 
 
-async def _map_content_block_to_bedrock(  # noqa: PLR0911
+async def _map_content_block_to_bedrock(  # noqa: C901, PLR0911 - one arm per block type
     block: ContentBlockParam,
 ) -> ContentBlockTypeDef | None:
     """Convert a single Anthropic content block to a Bedrock content block.
@@ -504,7 +560,8 @@ async def _map_content_block_to_bedrock(  # noqa: PLR0911
         block: Any Anthropic content block param variant.
 
     Returns:
-        Bedrock content block dict, or ``None`` when the caller must handle it.
+        Bedrock content block dict, ``None`` when the caller must handle the
+        block, or ``None`` when it carries nothing to send.
 
     Raises:
         ApiError: If the content block type is unsupported.
@@ -536,6 +593,21 @@ async def _map_content_block_to_bedrock(  # noqa: PLR0911
             }
         case ToolResultBlockParam():
             return await _map_tool_result_to_bedrock(block)
+        case (
+            WebSearchToolResultBlockParam()
+            | WebSearchToolResultBlock()
+            | WebFetchToolResultBlockParam()
+            | WebFetchToolResultBlock()
+            | CodeExecutionToolResultBlockParam()
+            | CodeExecutionToolResultBlock()
+            | BashCodeExecutionToolResultBlockParam()
+            | BashCodeExecutionToolResultBlock()
+            | TextEditorCodeExecutionToolResultBlockParam()
+            | TextEditorCodeExecutionToolResultBlock()
+            | ToolSearchToolResultBlockParam()
+            | ToolSearchToolResultBlock()
+        ):
+            return _map_server_tool_result_to_bedrock(block.tool_use_id, block.content)
         case ThinkingBlockParam(thinking=thinking, signature=signature):
             return _map_thinking_to_bedrock(thinking, signature)
         case RedactedThinkingBlockParam():
