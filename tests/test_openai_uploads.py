@@ -4,8 +4,8 @@ Broader ``/v1/uploads`` state-machine coverage (create -> add part ->
 complete/cancel against S3) lives in ``tests/test_openai_files.py::TestOpenAIUploads``,
 which shares the ``openai_files``-namespace fixtures with the ``/v1/files``
 tests. This module covers the ``purpose=batch`` default-expiry resolution, the
-bounded per-process session cache, the completion checksum, and the JSON-body
-part route's remote-source handling. Everything is offline (no AWS credentials,
+bounded per-process session cache, the completion checksum, the part size cap,
+and the JSON-body part route's remote-source handling. Everything is offline (no AWS credentials,
 no S3 calls, no network) except ``TestCompleteUploadChecksumOnS3``, which runs
 the checksum against a real two-part upload in the sandbox bucket.
 
@@ -16,6 +16,7 @@ Ref: stdapi/routes/openai_uploads.py:create_upload_endpoint
 
 import asyncio
 import io
+from base64 import b64encode
 from contextlib import suppress
 from datetime import UTC, datetime
 from hashlib import md5
@@ -26,6 +27,7 @@ from aiobotocore.session import get_session
 from botocore.exceptions import ClientError
 from openai import APIStatusError, BadRequestError
 from openai import NotFoundError as OpenAINotFoundError
+from openai.resources.uploads.uploads import DEFAULT_PART_SIZE
 
 from stdapi import input_file
 from stdapi.aws_s3 import BUCKET_TO_REGION
@@ -414,6 +416,198 @@ class TestAddUploadPartJsonBodyRemoteSources:
         assert error["type"] == "invalid_request_error"
         assert "an-unconfigured-external-bucket-xyz" in error["message"], error
         assert chunks == []
+
+
+class TestAddUploadPartSizeCap:
+    """POST /v1/uploads/{id}/parts refuses a part larger than a Part may carry.
+
+    The Uploads API documents "Each Part can be at most 64 MB", and the official
+    client splits at exactly that size, so a larger part is refused with 413
+    instead of being held whole in the server's memory: without the bound one
+    authenticated caller decides how much memory is left for every other request
+    the deployment is serving.
+
+    Both request shapes are covered, because they allocate in different places:
+    the binary form field is read out of the parsed body, while the JSON body is
+    the allocation itself and is bounded as it arrives.
+
+    Ref: https://developers.openai.com/api/reference/resources/uploads
+         openai.resources.uploads.uploads.DEFAULT_PART_SIZE
+         stdapi/routes/openai_uploads.py:add_upload_part
+    """
+
+    #: Part maximum the tests substitute, so the bound is asserted without a 64 MiB payload.
+    _CAP = 16
+
+    @pytest.fixture
+    def chunks(self, monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
+        """Shrink the part maximum and record what reaches storage.
+
+        Returns:
+            List each accepted part appends its bytes to.
+        """
+        monkeypatch.setattr(openai_uploads_routes, "_MAX_PART_SIZE", self._CAP)
+        recorded: list[bytes] = []
+
+        async def fake_add_part(_upload_id: str, chunk: bytes) -> tuple[str, int]:
+            recorded.append(chunk)
+            return _STUB_PART_ID, 0
+
+        monkeypatch.setattr(openai_uploads_routes, "add_part", fake_add_part)
+        return recorded
+
+    @classmethod
+    def _assert_refused(cls, response: Response, chunks: list[bytes]) -> None:
+        """Assert *response* is a 413 naming the maximum, and that nothing was stored."""
+        assert response.status_code == 413, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert str(cls._CAP) in error["message"], error
+        assert chunks == []
+
+    def test_the_maximum_is_the_one_the_official_client_uploads(self) -> None:
+        """The cap equals the part size the OpenAI client splits a file into.
+
+        A cap below it would refuse parts a compliant client sends unprompted,
+        and one above it would accept what the upstream API does not.
+
+        Ref: openai.resources.uploads.uploads.DEFAULT_PART_SIZE
+        """
+        assert openai_uploads_routes._MAX_PART_SIZE == DEFAULT_PART_SIZE  # noqa: SLF001
+        assert openai_uploads_routes._MAX_PART_SIZE == 64 * 1024 * 1024  # noqa: SLF001
+
+    def test_a_binary_part_at_the_maximum_is_stored_whole(
+        self, app_client: TestClient, chunks: list[bytes]
+    ) -> None:
+        """A part of exactly the maximum size is accepted and stored unchanged.
+
+        The bound is exclusive, and reading it must not truncate the part: a part
+        silently cut to the cap would assemble into a corrupt file.
+
+        Ref: stdapi/routes/openai_uploads.py:add_upload_part
+        """
+        payload = bytes(range(self._CAP))
+
+        response = app_client.post(
+            f"/v1/uploads/{_STUB_UPLOAD_ID}/parts",
+            files={"data": ("part.bin", payload, "application/octet-stream")},
+        )
+
+        assert response.status_code == 200, response.text
+        assert chunks == [payload]
+
+    def test_an_oversized_binary_part_is_refused(
+        self, app_client: TestClient, chunks: list[bytes]
+    ) -> None:
+        """One byte over the maximum is refused with 413 and never reaches storage.
+
+        Ref: stdapi/routes/openai_uploads.py:add_upload_part
+        """
+        response = app_client.post(
+            f"/v1/uploads/{_STUB_UPLOAD_ID}/parts",
+            files={
+                "data": ("part.bin", b"x" * (self._CAP + 1), "application/octet-stream")
+            },
+        )
+
+        self._assert_refused(response, chunks)
+
+    def test_a_json_part_at_the_maximum_is_stored_whole(
+        self, app_client: TestClient, chunks: list[bytes]
+    ) -> None:
+        """A base64 ``data`` value decoding to exactly the maximum is accepted.
+
+        Ref: stdapi/routes/openai_uploads.py:add_upload_part
+        """
+        payload = bytes(range(self._CAP))
+
+        response = app_client.post(
+            f"/v1/uploads/{_STUB_UPLOAD_ID}/parts",
+            json={"data": b64encode(payload).decode()},
+        )
+
+        assert response.status_code == 200, response.text
+        assert chunks == [payload]
+
+    def test_an_oversized_json_part_is_refused(
+        self, app_client: TestClient, chunks: list[bytes]
+    ) -> None:
+        """A base64 ``data`` value decoding past the maximum is refused with 413.
+
+        The encoded body is well under the body bound, so this is the resolved
+        content being measured rather than the request that carried it.
+
+        Ref: stdapi/routes/openai_uploads.py:add_upload_part
+        """
+        response = app_client.post(
+            f"/v1/uploads/{_STUB_UPLOAD_ID}/parts",
+            json={"data": b64encode(b"x" * (self._CAP + 1)).decode()},
+        )
+
+        self._assert_refused(response, chunks)
+
+    def test_an_oversized_remote_part_is_refused(
+        self,
+        app_client: TestClient,
+        chunks: list[bytes],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An HTTPS ``data`` value serving more than the maximum is refused with 413.
+
+        A remote reference carries none of its bytes in the request, so the body
+        bound cannot see it; the maximum still has to hold.
+
+        Ref: stdapi/routes/openai_uploads.py:add_upload_part
+             stdapi/input_file.py:_HttpSource._read
+        """
+        monkeypatch.setattr(SETTINGS, "max_input_file_size", 0)
+        session = _StubHttpSession(_StubHttpResponse(b"x" * (self._CAP + 1)))
+        monkeypatch.setattr(
+            input_file._HttpSource,  # noqa: SLF001
+            "_client_session",
+            lambda _self, _extra_headers=None: session,
+        )
+
+        response = app_client.post(
+            f"/v1/uploads/{_STUB_UPLOAD_ID}/parts",
+            json={"data": "https://example.com/chunk.bin"},
+        )
+
+        self._assert_refused(response, chunks)
+
+    def test_an_oversized_json_body_is_refused_before_it_is_parsed(
+        self,
+        app_client: TestClient,
+        chunks: list[bytes],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A JSON body too large to hold a part is refused while it is still arriving.
+
+        The bytes of a base64 body are the allocation, so measuring them after
+        the body has been read would already have paid for it.
+
+        Ref: stdapi/routes/openai_uploads.py:add_upload_part
+        """
+        monkeypatch.setattr(openai_uploads_routes, "_MAX_JSON_BODY_SIZE", 8)
+
+        response = app_client.post(
+            f"/v1/uploads/{_STUB_UPLOAD_ID}/parts",
+            json={"data": b64encode(bytes(range(self._CAP))).decode()},
+        )
+
+        self._assert_refused(response, chunks)
+
+    def test_the_json_body_bound_leaves_room_for_a_maximum_part(self) -> None:
+        """The body bound accepts a base64-encoded part of the maximum size.
+
+        Sized from the part maximum rather than chosen, so the two cannot drift
+        into a body bound that refuses parts the part maximum allows.
+
+        Ref: stdapi/routes/openai_uploads.py:_MAX_JSON_BODY_SIZE
+        """
+        encoded = (DEFAULT_PART_SIZE + 2) // 3 * 4
+
+        assert encoded <= openai_uploads_routes._MAX_JSON_BODY_SIZE  # noqa: SLF001
 
 
 class _StubStreamingBody:

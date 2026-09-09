@@ -269,7 +269,7 @@ curl -X POST "$BASE/v1/uploads" \
 
 ### Add parts
 
-Each part except the last must be at least 5 MiB (S3 minimum part size); the last part may be any size. An upload accepts at most 10,000 parts (S3's own ceiling).
+Each part except the last must be at least 5 MiB (S3 minimum part size); the last part may be any size. A part carries at most 64 MiB — the OpenAI per-part maximum, and the size the official client splits a file into — and a larger one is rejected with a 413 error. An upload accepts at most 10,000 parts (S3's own ceiling).
 
 **Binary upload (multipart/form-data):**
 
