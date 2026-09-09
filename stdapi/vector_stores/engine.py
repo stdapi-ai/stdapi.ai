@@ -20,7 +20,12 @@ from uuid import uuid7
 from botocore.exceptions import BotoCoreError, ClientError
 
 from stdapi.api_errors import ApiError
-from stdapi.cleanup import drain_tasks, schedule_cleanup
+from stdapi.cleanup import (
+    CLEANUPS,
+    drain_tasks,
+    run_scheduled_cleanups,
+    schedule_cleanup,
+)
 from stdapi.config import SETTINGS
 from stdapi.files import get_file, get_file_content, parse_file_id
 from stdapi.models import validate_model
@@ -811,6 +816,9 @@ async def index_files(
 
     Runs its own usage scope so the embeddings it bills are recorded: a usage
     entry written after the originating request's log was finalized is dropped.
+    It owns its cleanups for the same reason, and one more: a wave resumed from
+    the queue runs where no request ever bound one, so scheduling any would
+    raise and strand every file it names.
 
     One file is read, chunked and embedded at a time, and the wave holds one of
     the server's indexing slots while it does: the fan-out is caller-controlled,
@@ -824,29 +832,46 @@ async def index_files(
         request_id: Identifier correlating the work with its request.
     """
     with log_background_event("vector_store_indexing", request_id, record_usage=True):
+        cleanups = CLEANUPS.set([])
         try:
-            store = await read_store(store_id)
+            await _index_wave(store_id, file_ids, batch_id)
+        finally:
+            # Best effort, as a request's own drain is: whatever fails here has
+            # already been logged as critical by the event it ran under.
+            with suppress(Exception):
+                await run_scheduled_cleanups(request_id)
+            CLEANUPS.reset(cleanups)
+
+
+async def _index_wave(store_id: str, file_ids: list[str], batch_id: str) -> None:
+    """Index every file of a wave, one at a time, settling each as it ends.
+
+    Args:
+        store_id: A validated vector store identifier.
+        file_ids: The files to index, in order.
+        batch_id: The batch the files belong to, or ``""``.
+    """
+    try:
+        store = await read_store(store_id)
+    except (ApiError, BotoCoreError, ClientError, OSError) as exc:
+        log_error_details(f"Vector store indexing failed: {exc!r}", level="error")
+        return
+    # The lease attaching the files wrote; renewed for as long as this runs.
+    lease = now_utc_timestamp() + _INDEXING_LEASE_SECONDS
+    for file_id in file_ids:
+        lease = await _hold_slot(store_id, lease)
+        try:
+            status, usage_bytes = await _index_one_file(store, file_id, batch_id)
         except (ApiError, BotoCoreError, ClientError, OSError) as exc:
+            # Nothing else settles these files: an escape strands them in progress.
             log_error_details(f"Vector store indexing failed: {exc!r}", level="error")
-            return
-        # The lease attaching the files wrote; renewed for as long as this runs.
-        lease = now_utc_timestamp() + _INDEXING_LEASE_SECONDS
-        for file_id in file_ids:
-            lease = await _hold_slot(store_id, lease)
-            try:
-                status, usage_bytes = await _index_one_file(store, file_id, batch_id)
-            except (ApiError, BotoCoreError, ClientError, OSError) as exc:
-                # Nothing else settles these files: an escape strands them in progress.
-                log_error_details(
-                    f"Vector store indexing failed: {exc!r}", level="error"
-                )
-                status, usage_bytes = await _fail_file(
-                    store_id, file_id, "server_error", _FAILED_MESSAGE
-                )
-            finally:
-                _INDEXING_SEMAPHORE.release()
-            if status:
-                await _settle_counters(store_id, batch_id, status, usage_bytes)
+            status, usage_bytes = await _fail_file(
+                store_id, file_id, "server_error", _FAILED_MESSAGE
+            )
+        finally:
+            _INDEXING_SEMAPHORE.release()
+        if status:
+            await _settle_counters(store_id, batch_id, status, usage_bytes)
 
 
 async def _hold_slot(store_id: str, lease: int) -> int:
@@ -1103,10 +1128,13 @@ async def _store_chunks(
     counted = await _write_owned(store.id, file_id, count)
     if counted is None:
         return "", 0
+    # An unfinished replacement owns the older chunks too, under the same keys.
+    owned = max(len(chunks), counted.previous_chunk_count)
     try:
         await backend.put_vectors(store.id, _embedded_chunks(store, counted, chunks))
     except (ApiError, BotoCoreError, ClientError) as exc:
         log_error_details(f"Vector store indexing failed: {exc!r}", level="error")
+        await _discard_vectors(backend, store.id, file_id, owned)
         return await _fail_file(store.id, file_id, "server_error", _FAILED_MESSAGE)
 
     def complete(stored: FileRecord) -> None:
@@ -1116,6 +1144,7 @@ async def _store_chunks(
 
     settled = await _write_owned(store.id, file_id, complete)
     if settled is None:
+        await _discard_vectors(backend, store.id, file_id, owned)
         return "", 0
     # Chunks beyond the new count would stay searchable with stale text.
     stale = counted.previous_chunk_count
@@ -1125,6 +1154,36 @@ async def _store_chunks(
             [vector_key(file_id, index) for index in range(len(chunks), stale)],
         )
     return settled.status, settled.usage_bytes
+
+
+async def _discard_vectors(
+    backend: VectorIndex, store_id: str, file_id: str, count: int
+) -> None:
+    """Take back out of the index chunks no record names any more.
+
+    A file detached while its chunks were being written reclaims the keys its
+    record knows about — which are the ones not written yet — and the rest land
+    behind it with nothing left pointing at them: a search would keep answering
+    with a document the API reported as deleted, and its bytes are never
+    reclaimed. Only a file already gone, or on its way out, is swept: a record
+    still standing answers for its own chunks, including one an indexing that
+    replaced this one wrote. Deleting keys the index no longer holds is
+    harmless, which is what makes this safe against the reclaim having run
+    first.
+
+    Args:
+        backend: The backend serving the store.
+        store_id: A validated vector store identifier.
+        file_id: The file the chunks were written for.
+        count: Chunk keys this indexing may have written.
+    """
+    with suppress(ApiError, BotoCoreError, ClientError, OSError):
+        current = await read_record(FileRecord, file_key(store_id, file_id))
+        if current is not None and not current[0].detaching:
+            return
+        await backend.delete_vectors(
+            store_id, [vector_key(file_id, index) for index in range(count)]
+        )
 
 
 class _FileIndexingError(Exception):
