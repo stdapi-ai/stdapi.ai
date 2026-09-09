@@ -461,6 +461,76 @@ class TestLockedSecret:
         assert "issued for" in str(excinfo.value)
 
 
+class _RecordingTransport(WebRTCCallTransport):
+    """A transport that records every instance the module builds."""
+
+    __slots__ = ()
+
+    #: Every transport built since the recording class was installed.
+    instances: ClassVar[list[_RecordingTransport]] = []
+
+    def __init__(self, call_id: str, input_rate: int, output_rate: int) -> None:
+        """Record this transport, then prepare it as the real one does.
+
+        Args:
+            call_id: Identifier the call is addressed by.
+            input_rate: Sample rate the session reads the caller's speech at.
+            output_rate: Sample rate the session writes the model's speech at.
+        """
+        super().__init__(call_id, input_rate, output_rate)
+        type(self).instances.append(self)
+
+    @property
+    def peer_state(self) -> str | None:
+        """State of the negotiated peer connection, or None if never built."""
+        return None if self._pc is None else self._pc.connectionState
+
+
+@pytest.mark.usefixtures("fake_backend", "allow_private_candidates")
+class TestUnservableModel:
+    """A model that answers the offer and then turns out to serve no conversation.
+
+    The catalog check and the SDP answer run concurrently, so the media path is
+    already negotiated -- sockets bound, DTLS armed, track attached -- by the
+    time the model is resolved. A refusal that leaves it behind holds those
+    resources for the life of the process, and the caller can ask again.
+
+    Ref: stdapi/realtime_webrtc.py:open_call
+    """
+
+    async def test_the_refusal_takes_the_answered_media_path_down(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model with no live-conversation support closes what the offer opened."""
+        from stdapi import realtime, realtime_webrtc  # noqa: PLC0415
+        from stdapi.api_errors import UnsupportedModelError  # noqa: PLC0415
+
+        def _unservable(model_id: str) -> Any:  # noqa: ANN401
+            raise UnsupportedModelError(model_id)
+
+        monkeypatch.setattr(realtime, "get_realtime_model", _unservable)
+        _RecordingTransport.instances = []
+        monkeypatch.setattr(realtime_webrtc, "WebRTCCallTransport", _RecordingTransport)
+        client = _Client()
+        offer = await client.offer()
+        try:
+            with (
+                log_request_event(_fake_request()),
+                pytest.raises(UnsupportedModelError),
+            ):
+                await open_call(_fake_request(), _MODEL, RealtimeSessionConfig(), offer)
+
+            assert _RecordingTransport.instances, "the offer must have been answered"
+            transport = _RecordingTransport.instances[0]
+            assert transport.peer_state == "closed"
+            assert not transport.connected
+            assert _CALLS == {}
+            assert await drain_realtime_calls(_STEP_TIMEOUT) == 0
+        finally:
+            _RecordingTransport.instances = []
+            await client.close()
+
+
 class TestCallRegistry:
     """The per-instance call registry and its upstream-shaped failure mode.
 

@@ -771,9 +771,23 @@ async def open_call(
             route="openai_realtime",
         )
     )
+    # Answering binds sockets and arms the media path, so every step that can
+    # still refuse the call runs under the teardown that closes it again.
     try:
         answer_sdp = await transport.answer(offer_sdp)
         model_id = (await model_task).id
+        realtime_model = realtime.get_realtime_model(model_id)  # type: ignore[attr-defined]
+        if not isinstance(realtime_model, RealtimeModelBase):  # pragma: no cover
+            message = "This model cannot serve a live conversation."
+            raise ApiError(message, status=404)  # noqa: TRY301 - one teardown for every refusal
+        session = RealtimeSession(
+            transport,
+            realtime_model,
+            model_id,
+            config,
+            locked=locked,
+            fixed_formats=True,
+        )
     except BaseException:
         model_task.cancel()
         with suppress(BaseException):
@@ -781,15 +795,6 @@ async def open_call(
         with suppress(Exception):
             await transport.close(1000, "")
         raise
-    realtime_model = realtime.get_realtime_model(model_id)  # type: ignore[attr-defined]
-    if not isinstance(realtime_model, RealtimeModelBase):  # pragma: no cover
-        with suppress(Exception):
-            await transport.close(1000, "")
-        message = "This model cannot serve a live conversation."
-        raise ApiError(message, status=404)
-    session = RealtimeSession(
-        transport, realtime_model, model_id, config, locked=locked, fixed_formats=True
-    )
     tenant = TENANT.get()
     _CALLS[call_id] = RealtimeCall(
         transport, session, tenant.key_id if tenant is not None else None
