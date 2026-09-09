@@ -10,10 +10,10 @@ from re import IGNORECASE
 from re import compile as compile_regex
 from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Literal, Self
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from aiohttp import ClientError as AIOHTTPClientError
-from aiohttp import ClientSession
+from aiohttp import ClientResponseError, ClientSession
 from botocore.exceptions import ClientError
 from magic import from_buffer, from_file
 from pydantic_core.core_schema import (
@@ -89,6 +89,9 @@ _B64_REPR_LIMIT: int = 24
 
 #: Number of bytes to read for magic-based MIME detection.
 _MAGIC_PREFIX_SIZE: int = 8192
+
+#: Statuses with which an origin refuses a method rather than answering about the resource.
+_METHOD_REFUSAL_STATUSES: frozenset[int] = frozenset({403, 405})
 
 
 def _magic_detect(data: bytes) -> str:
@@ -617,6 +620,48 @@ class _S3Source(_FileSource):
             )
 
 
+def _is_method_refusal(error: AIOHTTPClientError) -> bool:
+    """Return whether *error* is an origin refusing the request method.
+
+    A URL signed for ``GET`` refuses every other method with 403, and an origin
+    that does not implement one answers 405.  Neither says anything about the
+    resource itself, which a ``GET`` may still return.
+
+    Args:
+        error: Failure raised while fetching a URL.
+
+    Returns:
+        True when the method was refused rather than the resource.
+    """
+    return (
+        isinstance(error, ClientResponseError)
+        and error.status in _METHOD_REFUSAL_STATUSES
+    )
+
+
+def _size_from_headers(resp: ClientResponse) -> int:
+    """Return the full size of the resource a response describes.
+
+    A ranged answer declares the length of the part it carries, so the size of
+    the whole resource is read from ``Content-Range``; every other response
+    declares it directly.
+
+    Args:
+        resp: Response to measure.
+
+    Returns:
+        The size in bytes, 0 when the origin declares none.
+    """
+    if content_range := resp.headers.get("Content-Range"):
+        total = content_range.rpartition("/")[2]
+        return int(total) if total.isdigit() else 0
+    return (
+        int(content_length)
+        if (content_length := resp.headers.get("Content-Length"))
+        else 0
+    )
+
+
 class _HttpSource(_FileSource):
     """Source backend for ``http(s)://`` URLs."""
 
@@ -656,43 +701,59 @@ class _HttpSource(_FileSource):
         )
 
     async def _resolve_metadata(self) -> None:
-        """Resolve content type and size via HTTP ``HEAD`` request.
+        """Resolve content type, size and filename of the target URL.
 
-        Falls back to a partial-read probe using ``python-magic`` when the
-        server does not supply a ``Content-Type`` header.
+        A ``HEAD`` probe follows redirects, so it describes the resource the
+        download itself will fetch rather than a redirect page.  An origin that
+        refuses the method — a URL signed for ``GET``, or a server without
+        ``HEAD`` support — is measured by the ranged read instead, which also
+        stands in for a missing ``Content-Type``.
 
         Raises:
             ApiError: When the HTTP request fails.
         """
+        probed = False
         async with self._client_session() as session:
             try:
-                async with session.head(self._url) as resp:
+                async with session.head(self._url, allow_redirects=True) as resp:
                     resp.raise_for_status()
-                    if content_type := resp.headers.get("Content-Type"):
-                        self._content_type = content_type.split(";", 1)[0].strip()
-                    self._size = (
-                        int(content_length)
-                        if (content_length := resp.headers.get("Content-Length"))
-                        else 0
-                    )
-                    self._filename = (
-                        filename
-                        if (
-                            filename := parse_content_disposition_filename(
-                                resp.headers.get("Content-Disposition", "")
-                            )
-                        )
-                        else (urlparse(self._url).path.rsplit("/", 1)[-1] or None)
-                    )
+                    self._metadata_from_headers(resp)
+                    probed = True
             except AIOHTTPClientError as error:
-                msg = f"Error downloading {strip_url_query(self._url)}: {error}"
-                raise ApiError(msg, status=ssrf_blocked_status(error)) from error
+                if not _is_method_refusal(error):
+                    raise self._download_error(error) from error
 
-        if not hasattr(self, "_content_type"):
-            await self._content_type_from_partial()
+        if not probed or not hasattr(self, "_content_type"):
+            await self._content_type_from_partial(probe_refused=not probed)
 
-    async def _content_type_from_partial(self) -> None:
-        """Download the first bytes to detect content type via magic.
+    def _metadata_from_headers(self, resp: ClientResponse) -> None:
+        """Record content type, size and filename from a response's headers.
+
+        Args:
+            resp: The response to read the metadata from.
+        """
+        if content_type := resp.headers.get("Content-Type"):
+            self._content_type = content_type.split(";", 1)[0].strip()
+        self._size = _size_from_headers(resp)
+        self._filename = (
+            filename
+            if (
+                filename := parse_content_disposition_filename(
+                    resp.headers.get("Content-Disposition", "")
+                )
+            )
+            else (urlparse(self._url).path.rsplit("/", 1)[-1] or None)
+        )
+
+    async def _content_type_from_partial(self, *, probe_refused: bool = False) -> None:
+        """Read the start of the resource to describe what the origin did not.
+
+        The content type is detected from the bytes themselves when no header
+        names it.
+
+        Args:
+            probe_refused: When ``True`` the origin answered no metadata at all,
+                so this response is also read for the size and the filename.
 
         Raises:
             ApiError: When the HTTP range request fails.
@@ -704,12 +765,35 @@ class _HttpSource(_FileSource):
                 async with session.get(self._url) as resp:
                     if resp.status not in (200, 206):
                         resp.raise_for_status()
-                    self._content_type = _magic_detect(
-                        await resp.content.read(_MAGIC_PREFIX_SIZE)
-                    )
+                    if probe_refused:
+                        self._metadata_from_headers(resp)
+                    prefix = await resp.content.read(_MAGIC_PREFIX_SIZE)
             except AIOHTTPClientError as error:
-                msg = f"Error downloading {strip_url_query(self._url)}: {error}"
-                raise ApiError(msg, status=ssrf_blocked_status(error)) from error
+                raise self._download_error(error) from error
+        if not hasattr(self, "_content_type"):
+            self._content_type = _magic_detect(prefix)
+
+    def _download_error(self, error: AIOHTTPClientError) -> ApiError:
+        """Return the refusal to report for a failed download of this URL.
+
+        The URL is named once, with its query redacted.  What the client
+        library says about the failure repeats the URL in full — a signed
+        link's query is a credential, so a response failure is described by its
+        status alone and every other failure has the URL redacted out of it.
+
+        Args:
+            error: The failure raised while fetching the URL.
+
+        Returns:
+            The error to raise.
+        """
+        detail = (
+            f"{error.status}, message={error.message!r}"
+            if isinstance(error, ClientResponseError)
+            else str(error).replace(self._url, self._repr)
+        )
+        msg = f"Error downloading {self._repr}: {detail}"
+        return ApiError(msg, status=ssrf_blocked_status(error))
 
     async def _read(self) -> bytes:
         """Download the full HTTP response body.
@@ -725,11 +809,10 @@ class _HttpSource(_FileSource):
                 async with session.get(self._url) as resp:
                     resp.raise_for_status()
                     if not (body := await self._read_capped(resp)):
-                        msg = f"Error downloading {strip_url_query(self._url)}: Empty body"
+                        msg = f"Error downloading {self._repr}: Empty body"
                         raise ApiError(msg)
             except AIOHTTPClientError as error:
-                msg = f"Error downloading {strip_url_query(self._url)}: {error}"
-                raise ApiError(msg, status=ssrf_blocked_status(error)) from error
+                raise self._download_error(error) from error
         return body
 
     async def _read_capped(self, resp: ClientResponse) -> bytes:
@@ -811,20 +894,29 @@ class _HttpSource(_FileSource):
 
         Returns:
             An ``S3Object`` pointing to the S3 object.
+
+        Raises:
+            ApiError: When the file cannot be downloaded.
         """
         content_type = self._content_type if hasattr(self, "_content_type") else None
-        async with self._client_session() as session, session.get(self._url) as resp:
-            resp.raise_for_status()
-            return await put_s3_object(
-                self._stream_capped(resp),
-                content_type,
-                region=region,
-                bucket=bucket,
-                key=key,
-                temporary=temporary,
-                content_disposition=content_disposition,
-                metadata=metadata,
-            )
+        try:
+            async with (
+                self._client_session() as session,
+                session.get(self._url) as resp,
+            ):
+                resp.raise_for_status()
+                return await put_s3_object(
+                    self._stream_capped(resp),
+                    content_type,
+                    region=region,
+                    bucket=bucket,
+                    key=key,
+                    temporary=temporary,
+                    content_disposition=content_disposition,
+                    metadata=metadata,
+                )
+        except AIOHTTPClientError as error:
+            raise self._download_error(error) from error
 
 
 class _DataUriSource(_FileSource):
@@ -1203,11 +1295,9 @@ class InputFile:
             if (match := (_S3_VIRTUAL_HOST_RE(value) or _S3_PATH_STYLE_RE(value))) and (
                 bucket := match["bucket"]
             ) in _ACCEPTED_BUCKETS:
-                origin, normalised, key = (
-                    _FileOrigin.S3_URI,
-                    f"s3://{bucket}/{match['key']}",
-                    match["key"],
-                )
+                # A URL encodes the object name; the object is stored decoded.
+                key = unquote(match["key"])
+                origin, normalised = _FileOrigin.S3_URI, f"s3://{bucket}/{key}"
             else:
                 origin, normalised, bucket, key = _FileOrigin.HTTP_URL, value, "", ""
         else:

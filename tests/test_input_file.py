@@ -17,10 +17,12 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, NoReturn, Self, cast
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 from botocore.exceptions import ClientError
 from pybase64 import b64encode
 
-from stdapi import aws_s3, input_file
+from stdapi import aws_s3, input_file, security
 from stdapi.api_errors import ApiError, denied_feature_unavailable
 from stdapi.aws_s3 import BUCKET_TO_REGION, UPLOAD_CHUNK_SIZE, S3Object
 from stdapi.cleanup import CLEANUPS
@@ -451,8 +453,14 @@ class _StubHttpSession:
     async def __aexit__(self, *_exc: object) -> None:
         """Leave the session context."""
 
-    def head(self, url: str) -> _StubHttpResponse:
-        """Serve the stubbed response to a ``HEAD``."""
+    def head(self, url: str, *, allow_redirects: bool = True) -> _StubHttpResponse:
+        """Serve the stubbed response to a ``HEAD``.
+
+        The stub answers for the resource itself, which the probe only ever
+        reaches by following redirects, so an unfollowed probe is refused here
+        rather than silently served the wrong body.
+        """
+        assert allow_redirects, "the metadata probe must land on the final resource"
         self.requests.append(f"HEAD {url}")
         return self.response
 
@@ -574,6 +582,478 @@ class TestHttpsSourceDownload:
         assert len(staged) <= 1024 + UPLOAD_CHUNK_SIZE, (
             "the upload must abort at the cap, not after the whole body is sent"
         )
+
+
+#: Body a local origin serves; a real signature so a sniffed type is right too.
+_ORIGIN_BODY: bytes = b"%PDF-1.7\n" + b"remote object\n" * 1024
+
+#: Loopback address of the local origin, the only one the SSRF policy is relaxed for.
+_LOOPBACK: str = "127.0.0.1"
+
+
+@pytest.fixture
+async def serve_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[Callable[[web.Application], Awaitable[str]]]:
+    """Start local origins the input downloader is allowed to reach.
+
+    Every connect target is validated before the connection is made, and
+    loopback is refused by that policy, so the test origin's own address is
+    allowed for the duration of the test and nothing else is.
+
+    Yields:
+        A coroutine returning the base URL of a started application.
+    """
+    monkeypatch.setattr(security, "_is_unsafe_ip", lambda ip: str(ip) != _LOOPBACK)
+    servers: list[TestServer] = []
+
+    async def _serve(app: web.Application) -> str:
+        server = TestServer(app, host=_LOOPBACK)
+        await server.start_server()
+        servers.append(server)
+        return str(server.make_url("")).rstrip("/")
+
+    yield _serve
+    for server in servers:
+        await server.close()
+
+
+def _serve_object(
+    requests: list[str],
+    *,
+    head_status: int = 200,
+    get_status: int = 200,
+    declares_total: bool = True,
+    declares_type: bool = True,
+) -> web.Application:
+    """Return an application serving ``/object.pdf`` and recording every request.
+
+    ``HEAD`` and ``GET`` are answered separately so a probe an origin refuses —
+    a URL signed for ``GET``, or a server that does not implement the method —
+    is reproduced exactly. The ``GET`` honours a single byte range, as an origin
+    a ranged probe is worth issuing against does.
+
+    Args:
+        requests: Collects ``"<method> <path>"`` for every request served.
+        head_status: Status answered to ``HEAD``.
+        get_status: Status answered to ``GET``.
+        declares_total: When ``False`` a ranged answer declares an unknown
+            total, as an origin streaming a resource of unknown length does.
+        declares_type: When ``False`` the origin names no content type.
+
+    Returns:
+        The application, ready to be started.
+    """
+
+    def _headers() -> dict[str, str]:
+        """Return the headers the origin describes the object with.
+
+        Returns:
+            A ``Content-Disposition``, and a ``Content-Type`` unless the origin
+            declares none.
+        """
+        return {
+            "Content-Disposition": 'attachment; filename="object.pdf"',
+            "Content-Type": "application/pdf" if declares_type else "",
+        }
+
+    async def _head(request: web.Request) -> web.Response:
+        requests.append(f"{request.method} {request.rel_url.path}")
+        if head_status != 200:
+            return web.Response(status=head_status)
+        return web.Response(body=_ORIGIN_BODY, headers=_headers())
+
+    async def _get(request: web.Request) -> web.Response:
+        requests.append(f"{request.method} {request.rel_url.path}")
+        if get_status != 200:
+            return web.Response(status=get_status)
+        headers = _headers()
+        if range_header := request.headers.get("Range"):
+            first, _, last = range_header.removeprefix("bytes=").partition("-")
+            start, stop = int(first), min(int(last) + 1, len(_ORIGIN_BODY))
+            total = str(len(_ORIGIN_BODY)) if declares_total else "*"
+            headers["Content-Range"] = f"bytes {start}-{stop - 1}/{total}"
+            return web.Response(
+                status=206, body=_ORIGIN_BODY[start:stop], headers=headers
+            )
+        return web.Response(body=_ORIGIN_BODY, headers=headers)
+
+    app = web.Application()
+    app.router.add_route("HEAD", "/object.pdf", _head)
+    app.router.add_get("/object.pdf", _get, allow_head=False)
+    return app
+
+
+@pytest.mark.usefixtures("input_files")
+class TestRemoteInputMetadata:
+    """A remote input is measured from the resource its download will fetch.
+
+    Both properties resolved here decide the request: the content type decides
+    how the attachment is described to the model, and the size decides whether
+    it travels inline. A probe that describes a redirect page instead of the
+    object, or that fails where the download would have succeeded, therefore
+    answers for something the caller never named — while upstream simply
+    accepts "a fully qualified URL to an image file" and fetches it.
+
+    Ref: https://developers.openai.com/api/docs/guides/images-vision
+         https://www.rfc-editor.org/rfc/rfc9110.html#name-content-range
+         stdapi/input_file.py:_HttpSource._resolve_metadata
+    """
+
+    async def test_the_probe_describes_the_target_of_a_redirect(
+        self, serve_origin: Callable[[web.Application], Awaitable[str]]
+    ) -> None:
+        """A redirecting URL is typed and sized from the object it redirects to.
+
+        The download follows the redirect, so a probe that stops at the 3xx
+        reports the redirect page's own type and length — an image arrives
+        described as a few hundred bytes of markup.
+        """
+        requests: list[str] = []
+        app = _serve_object(requests)
+
+        async def _redirect(request: web.Request) -> web.Response:
+            requests.append(f"{request.method} {request.rel_url.path}")
+            return web.Response(
+                status=302,
+                text="",
+                content_type="text/html",
+                headers={"Location": "/object.pdf"},
+            )
+
+        app.router.add_route("*", "/redirected.pdf", _redirect)
+        base = await serve_origin(app)
+
+        file = InputFile(f"{base}/redirected.pdf")
+
+        assert await file.get_content_type() == "application/pdf"
+        assert await file.get_size() == len(_ORIGIN_BODY)
+        assert requests == ["HEAD /redirected.pdf", "HEAD /object.pdf"], (
+            "the redirect is followed by the probe itself, not by a second download"
+        )
+
+    @pytest.mark.parametrize("head_status", [403, 405])
+    async def test_an_origin_refusing_the_probe_is_measured_by_a_ranged_read(
+        self,
+        serve_origin: Callable[[web.Application], Awaitable[str]],
+        head_status: int,
+    ) -> None:
+        """A URL whose origin refuses ``HEAD`` is still accepted as an input.
+
+        A pre-signed link signs the method it was issued for, so a ``HEAD``
+        against one signed for ``GET`` is refused with 403; other origins answer
+        405. Neither says anything about the object, which the ranged read then
+        reports in full.
+        """
+        requests: list[str] = []
+        base = await serve_origin(_serve_object(requests, head_status=head_status))
+
+        file = InputFile(f"{base}/object.pdf")
+
+        assert await file.get_content_type() == "application/pdf"
+        assert await file.get_size() == len(_ORIGIN_BODY), (
+            "the total size is read from the range, not the length of the part served"
+        )
+        assert await file.get_filename() == "object.pdf"
+        assert requests == ["HEAD /object.pdf", "GET /object.pdf"], (
+            "one ranged read answers for all three properties"
+        )
+
+    async def test_a_ranged_read_declaring_no_total_leaves_the_size_unknown(
+        self, serve_origin: Callable[[web.Application], Awaitable[str]]
+    ) -> None:
+        """An origin that declares no total size is read as declaring none at all.
+
+        A resource streamed without a known length is answered with an unknown
+        total. Taking the served part's own length for it would report a large
+        attachment as a few kilobytes, which is how it ends up sent by a route
+        that cannot carry it; an undeclared size is reported as undeclared.
+        """
+        requests: list[str] = []
+        base = await serve_origin(
+            _serve_object(requests, head_status=405, declares_total=False)
+        )
+
+        assert await InputFile(f"{base}/object.pdf").get_size() == 0
+
+    async def test_an_origin_naming_no_type_has_the_content_identified_for_it(
+        self, serve_origin: Callable[[web.Application], Awaitable[str]]
+    ) -> None:
+        """An input an origin describes with no content type is identified from its bytes.
+
+        The type decides how the attachment is sent on, so an origin that names
+        none cannot be left to make the input unusable: the same read that
+        measures it also identifies it.
+        """
+        requests: list[str] = []
+        base = await serve_origin(
+            _serve_object(requests, head_status=405, declares_type=False)
+        )
+
+        file = InputFile(f"{base}/object.pdf")
+
+        assert await file.get_content_type() == "application/pdf"
+        assert await file.get_size() == len(_ORIGIN_BODY)
+
+    async def test_a_ranged_read_that_is_refused_too_is_reported(
+        self, serve_origin: Callable[[web.Application], Awaitable[str]]
+    ) -> None:
+        """A URL refusing both requests is refused, with what the origin answered.
+
+        A signed link that has expired refuses every method, so the fallback is
+        no more entitled to an answer than the probe was — and the caller is
+        told the URL is unusable rather than left with an empty description.
+        """
+        requests: list[str] = []
+        base = await serve_origin(
+            _serve_object(requests, head_status=405, get_status=403)
+        )
+
+        with pytest.raises(ApiError) as exc:
+            await InputFile(f"{base}/object.pdf").get_size()
+
+        assert exc.value.status == 400
+        assert "403" in str(exc.value)
+        assert requests == ["HEAD /object.pdf", "GET /object.pdf"]
+
+    async def test_an_unreadable_url_is_refused_without_a_second_request(
+        self, serve_origin: Callable[[web.Application], Awaitable[str]]
+    ) -> None:
+        """A probe that fails because the object is missing is reported as such.
+
+        Only a refusal of the method is worth retrying with a ranged read; a
+        404 is the answer about the object itself, and asking twice would double
+        the cost of every unusable URL.
+        """
+        requests: list[str] = []
+        base = await serve_origin(_serve_object(requests, head_status=404))
+
+        with pytest.raises(ApiError) as exc:
+            await InputFile(f"{base}/object.pdf").get_size()
+
+        assert exc.value.status == 400
+        assert requests == ["HEAD /object.pdf"]
+
+    async def test_a_probe_blocked_by_the_egress_policy_is_not_retried(
+        self, serve_origin: Callable[[web.Application], Awaitable[str]]
+    ) -> None:
+        """A URL redirecting into a refused address is reported as forbidden, once.
+
+        The refusal comes from the deployment's own egress policy rather than
+        from the origin, so it is not the kind an origin can be asked again
+        about: reporting it as a method refusal would send a second request to
+        the same blocked target and answer 400 for what is a 403.
+        """
+        requests: list[str] = []
+        app = _serve_object(requests)
+
+        async def _redirect(request: web.Request) -> web.Response:
+            requests.append(f"{request.method} {request.rel_url.path}")
+            return web.Response(
+                status=302, headers={"Location": "http://169.254.169.254/"}
+            )
+
+        app.router.add_route("*", "/blocked.pdf", _redirect)
+        base = await serve_origin(app)
+
+        with pytest.raises(ApiError) as exc:
+            await InputFile(f"{base}/blocked.pdf").get_size()
+
+        assert exc.value.status == 403
+        assert requests == ["HEAD /blocked.pdf"]
+
+    async def test_a_refused_input_never_repeats_the_url_query(
+        self, serve_origin: Callable[[web.Application], Awaitable[str]]
+    ) -> None:
+        """The refusal redacts the query, which carries the signature of a signed link.
+
+        A signed URL's query is a credential for the object: quoting it back in
+        an error hands it to whoever reads the response or the log.
+        """
+        requests: list[str] = []
+        base = await serve_origin(_serve_object(requests, head_status=404))
+
+        with pytest.raises(ApiError) as exc:
+            await InputFile(f"{base}/object.pdf?X-Amz-Signature=00secret00").get_size()
+
+        assert "00secret00" not in str(exc.value)
+        assert "<redacted>" in str(exc.value)
+
+    async def test_an_unusable_url_is_refused_without_repeating_its_query(self) -> None:
+        """A URL refused before any request is reported with its query redacted too.
+
+        A malformed URL never reaches an origin, so the refusal comes from the
+        client library and quotes what it was given — which is the whole URL,
+        credential included.
+        """
+        with pytest.raises(ApiError) as exc:
+            await InputFile("https:///object.pdf?X-Amz-Signature=00secret00").get_size()
+
+        assert "00secret00" not in str(exc.value)
+        assert "<redacted>" in str(exc.value)
+        assert exc.value.status == 400
+
+
+@pytest.mark.usefixtures("input_files")
+class TestRemoteInputFetchFailures:
+    """A remote input that cannot be fetched is answered as a caller error.
+
+    Whichever way the attachment travels — read into the request, or staged
+    first because it is too large for that — it is fetched from an origin the
+    caller chose: a link that has expired, a host that has gone away, a redirect
+    into an address the deployment refuses to connect to. None of them is a
+    fault of this deployment, and none may surface as one.
+
+    Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/ShareObjectPreSignedURL.html
+         stdapi/input_file.py:_HttpSource._read
+         stdapi/input_file.py:_HttpSource.to_s3
+    """
+
+    async def test_a_url_that_fails_on_download_is_a_client_error(
+        self,
+        serve_origin: Callable[[web.Application], Awaitable[str]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An origin refusing the download is reported as a bad input, with its status."""
+        monkeypatch.setattr(SETTINGS, "max_input_file_size", 0)
+        requests: list[str] = []
+        base = await serve_origin(_serve_object(requests, get_status=403))
+
+        with pytest.raises(ApiError) as exc:
+            await InputFile(f"{base}/object.pdf").to_bytes()
+
+        assert exc.value.status == 400
+        assert "403" in str(exc.value)
+
+    async def test_a_url_that_fails_at_staging_is_a_client_error(
+        self,
+        serve_origin: Callable[[web.Application], Awaitable[str]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An origin refusing the staged download is reported as a bad input, not a fault."""
+        monkeypatch.setattr(input_file, "put_s3_object", _fake_upload)
+        requests: list[str] = []
+        base = await serve_origin(_serve_object(requests, get_status=404))
+
+        with pytest.raises(ApiError) as exc:
+            await InputFile(f"{base}/object.pdf").to_s3("us-east-1")
+
+        assert exc.value.status == 400
+        assert "404" in str(exc.value), (
+            "the caller needs to know what the origin answered for their URL"
+        )
+        assert requests == ["GET /object.pdf"]
+
+    async def test_a_staged_download_redirected_into_a_refused_target_is_forbidden(
+        self,
+        serve_origin: Callable[[web.Application], Awaitable[str]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A redirect into an address the egress policy blocks is refused as forbidden.
+
+        The block is a policy decision about where the deployment may connect,
+        which is reported as 403 on every other path an input takes; staging
+        must not be the one that reports it as a server fault.
+        """
+        monkeypatch.setattr(input_file, "put_s3_object", _fake_upload)
+
+        async def _redirect(_request: web.Request) -> web.Response:
+            return web.Response(
+                status=302, headers={"Location": "http://169.254.169.254/"}
+            )
+
+        app = web.Application()
+        app.router.add_route("*", "/object.pdf", _redirect)
+        base = await serve_origin(app)
+
+        with pytest.raises(ApiError) as exc:
+            await InputFile(f"{base}/object.pdf").to_s3("us-east-1")
+
+        assert exc.value.status == 403
+
+
+class _RecordingS3Client:
+    """S3 stand-in recording the key every ``HeadObject`` addressed."""
+
+    def __init__(self) -> None:
+        self.keys: list[str] = []
+
+    async def head_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
+        """Record the addressed key and answer with a minimal object description.
+
+        Returns:
+            The head of a small object.
+        """
+        self.keys.append(Key)
+        return {"ContentLength": len(_ORIGIN_BODY), "ContentType": "application/pdf"}
+
+
+@pytest.mark.usefixtures("input_files")
+class TestStoredInputAddressing:
+    """An S3 HTTP URL addresses the object the caller copied it from.
+
+    A URL carries its key percent-encoded — that is what the console and every
+    signed link produce — while the object itself is named by the decoded key.
+    Reading the URL form literally turns every key containing a space, an
+    accent or a reserved character into a file that does not exist.
+
+    Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/ShareObjectPreSignedURL.html
+         stdapi/input_file.py:InputFile._normalize_and_detect_origin
+    """
+
+    @staticmethod
+    def _record_s3(monkeypatch: pytest.MonkeyPatch) -> _RecordingS3Client:
+        """Answer the metadata lookup locally, recording what it addressed.
+
+        Returns:
+            The recording client.
+        """
+        client = _RecordingS3Client()
+        monkeypatch.setattr(input_file, "get_client", lambda *_a, **_kw: client)
+        return client
+
+    @pytest.mark.parametrize(
+        "url_form",
+        [
+            pytest.param(
+                "https://{bucket}.s3.us-east-1.amazonaws.com/{key}", id="host"
+            ),
+            pytest.param(
+                "https://s3.us-east-1.amazonaws.com/{bucket}/{key}", id="path"
+            ),
+        ],
+    )
+    async def test_an_encoded_url_key_is_decoded_before_the_object_is_read(
+        self, monkeypatch: pytest.MonkeyPatch, url_form: str
+    ) -> None:
+        """The key a URL encodes is decoded, in both URL forms."""
+        bucket = _allowed_bucket(monkeypatch)
+        client = self._record_s3(monkeypatch)
+        url = url_form.format(
+            bucket=bucket, key="reports/q1%202026%20%C3%A9t%C3%A9.pdf"
+        )
+
+        file = InputFile(url)
+        await file.get_size()
+
+        assert client.keys == ["reports/q1 2026 été.pdf"]
+        assert repr(file) == f"s3://{bucket}/reports/q1 2026 été.pdf"
+
+    async def test_a_stored_uri_key_is_taken_as_written(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A key given as an ``s3://`` URI is used verbatim.
+
+        Only the URL form is encoded. A key written directly is already the
+        object's own name, and decoding it a second time would address a
+        different object — one whose name happens to contain a percent sign.
+        """
+        bucket = _allowed_bucket(monkeypatch)
+        client = self._record_s3(monkeypatch)
+
+        await InputFile(f"s3://{bucket}/reports/q1%202026.pdf").get_size()
+
+        assert client.keys == ["reports/q1%202026.pdf"]
 
 
 async def test_create_multipart_session_rejects_unsafe_filename() -> None:
