@@ -223,6 +223,12 @@ Nothing about the API changes: the same fields, the same statuses, the same
 polling. A file only takes longer to settle. Indexing stays at-least-once and
 never bills twice — work that already completed is not redone.
 
+A request whose model usage is billed or attributed to *you* rather than to the
+deployment — an API key carrying an AWS credential of its own, or a caller the
+deployment attributes usage to — always gets the first row, whatever the
+setting: its indexing runs where the file was attached, so the same account
+keeps paying for it.
+
 Ask your administrator which of the two your deployment runs before designing a
 client around it.
 

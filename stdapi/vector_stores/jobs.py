@@ -31,6 +31,12 @@ What the design rests on, and what breaks if it is changed:
   server's own role can write to it, and it is still parsed into a model that
   forbids unknown fields, dispatched through an allowlist fixed at import, and
   re-validated identifier by identifier before any of it names an object key.
+- **A job signs as the server that runs it.** A request whose model
+  invocations run under an identity of their own -- a tenant's registered
+  AWS credential, a per-end-user role session -- keeps its wave in the server
+  that accepted it, where the indexing task inherits that identity. Carrying
+  the identity in the message would mean re-opening a role session outside
+  any request, hours after the one-hour cap on the session the request had.
 """
 
 from asyncio import CancelledError, Task, create_task, sleep, wait
@@ -48,10 +54,13 @@ from stdapi.cleanup import drain_tasks
 from stdapi.config import SETTINGS, SQS_QUEUE_URL_RE
 from stdapi.files import parse_file_id
 from stdapi.monitoring import (
+    PRINCIPAL,
     REQUEST_ID,
+    TENANT,
     add_server_warning,
     log_error_details,
     requests_in_flight,
+    tenant_aws_credential,
 )
 from stdapi.utils import try_parse_json
 from stdapi.vector_stores.engine import (
@@ -263,6 +272,30 @@ def _sanitized_request_id(request_id: str) -> str:
     )[:64]
 
 
+def _signs_as_the_request() -> bool:
+    """Whether the request's model invocations run under an identity of its own.
+
+    Mirrors what :func:`stdapi.aws.request_signing_credentials` resolves for
+    the request, restricted to what the in-process indexing task inherits: a
+    tenant or a verified caller, never the identifier a request body declares,
+    which the task's own log scope leaves behind.
+
+    Returns:
+        ``True`` when a job run outside the request would sign as the server
+        where the request signs as its tenant or its end user, or would be
+        refused the end user session it must run under.
+    """
+    if tenant_aws_credential() is not None:
+        return True
+    if SETTINGS.aws_bedrock_user_role_arn is None:
+        return False
+    return (
+        SETTINGS.aws_bedrock_user_role_require_identity
+        or PRINCIPAL.get() is not None
+        or TENANT.get() is not None
+    )
+
+
 async def enqueue_indexing(
     store_id: str, file_ids: Sequence[str], batch_id: str
 ) -> bool:
@@ -275,11 +308,15 @@ async def enqueue_indexing(
 
     Returns:
         Whether the job was handed over. ``False`` when no queue is configured,
-        when the wave is larger than one message may name, or when the send
-        failed — in every case the caller indexes the wave itself, which is
-        what a deployment without a queue always does.
+        when the request's embeddings are signed as its tenant or its end user
+        (a job would sign them as the server, and bill them to it), when the
+        wave is larger than one message may name, or when the send failed —
+        in every case the caller indexes the wave itself, which is what a
+        deployment without a queue always does.
     """
     if not (url := SETTINGS.aws_sqs_vector_store_queue_url):
+        return False
+    if _signs_as_the_request():
         return False
     if len(file_ids) > MAX_JOB_FILES:
         log_error_details(

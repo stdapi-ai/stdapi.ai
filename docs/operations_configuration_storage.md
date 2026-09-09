@@ -380,6 +380,8 @@ Attaching a file records the work on the queue before answering, and every serve
 
 The queue only ever carries identifiers — which store, which files, which batch — never file content, so no indexed data is stored a second time.
 
+A queued job runs under the server's own identity. A request whose embeddings are signed as someone else therefore keeps its indexing in the server that accepted it, exactly as without a queue: a request from an API key carrying a [tenant AWS credential](operations_authentication_security.md#tenant-aws-credentials), so the tenant's account keeps paying for its embeddings, and — under [`AWS_BEDROCK_USER_ROLE_ARN`](operations_configuration_bedrock.md#aws-bedrock-user-role-arn) — a request from an authenticated caller or a tenant key, or any request when [`AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY`](operations_configuration_bedrock.md#aws-bedrock-user-role-require-identity) is enabled, so its usage stays attributed to that user. Such a file settles as `failed` if that server stops before it finishes; attach it again.
+
 See [Durable indexing](api_openai_vector_stores.md#durable-indexing) for what a client observes, and [Resilience](operations_resilience.md#vector-store-indexing) for how it behaves during a deployment.
 
 !!! warning "Give the queue a dead-letter queue"

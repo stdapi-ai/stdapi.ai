@@ -480,6 +480,18 @@ Vector store [indexing](api_openai_vector_stores.md#indexing-is-asynchronous) ru
 -   A file the gateway genuinely cannot index is retried a bounded number of times, then reported as `failed` exactly as an unqueued deployment reports it, and its message is kept in your dead-letter queue.
 -   A task busy serving requests does not take jobs off the queue: indexing yields to the clients that are waiting.
 
+!!! note "One kind of request keeps its indexing in the task that accepted it"
+
+    A queued job runs under the server's own identity, so a request whose
+    embeddings are signed as someone else — an API key carrying a [tenant AWS
+    credential](operations_authentication_security.md#tenant-aws-credentials),
+    or an identified caller under
+    [`AWS_BEDROCK_USER_ROLE_ARN`](operations_configuration_bedrock.md#aws-bedrock-user-role-arn)
+    — is never handed to the queue, since that would bill its embeddings to the
+    deployment. Those files index exactly as they do without a queue, and settle
+    as `failed` if the task that accepted them stops first; attach them again.
+    Everything above applies to every other request.
+
 The queue needs a **standard** queue with a dead-letter queue behind it, and the [durable indexing permissions](operations_iam_permissions.md#durable-vector-store-indexing) on it. The Terraform module provisions both when `aws_sqs_vector_store_queue_create` is set.
 
 ### :material-connection: ALB Resilience
