@@ -650,6 +650,44 @@ def _validation_error_path(loc: Iterable[Any]) -> str:
     )
 
 
+#: How many distinct validation faults of one request are described in its log.
+_MAX_LOGGED_VALIDATION_ERRORS: Final = 20
+
+
+def _validation_error_details(errors: Iterable[Any]) -> list[str]:
+    """Describe validation errors by the field paths that failed, and how.
+
+    Every error also carries the value that failed to validate, which for a
+    missing or model-level fault is the entire request body: keeping only the
+    location and the message is what stops a request's own payload, and any
+    credential one of its fields holds, from being written to the log. The
+    result is deduplicated, since a union-typed field reports the same fault
+    once per branch, and capped, since the number of faults a body holds is the
+    caller's to choose.
+
+    Args:
+        errors: Location and message of each fault, as reported by Pydantic.
+
+    Returns:
+        One ``path: message`` line per distinct fault, followed by a count of
+        the faults left out when there were more than the cap.
+    """
+    details = list(
+        dict.fromkeys(
+            f"{path}: {msg}"
+            if (path := _validation_error_path(error.get("loc", ())))
+            else msg
+            for error in errors
+            if (msg := str(error.get("msg", "")))
+        )
+    )
+    if (dropped := len(details) - _MAX_LOGGED_VALIDATION_ERRORS) > 0:
+        details[_MAX_LOGGED_VALIDATION_ERRORS:] = [
+            f"and {dropped} more validation errors"
+        ]
+    return details
+
+
 @app.exception_handler(RequestValidationError)
 async def handle_validation_exception(
     request: Request, exc: RequestValidationError
@@ -675,11 +713,11 @@ async def handle_validation_exception(
             message = f"Validation error: {msg}"
         case _:
             message = "Validation error"
-    # The whole error list stays server-side: it is the only place the other
-    # union branches, and any further faults, remain visible for debugging.
+    # Every fault stays server-side, described but never quoted: the other union
+    # branches remain visible for debugging, the caller's payload never is.
+    details = _validation_error_details(errors)
     log_error_details(
-        [message, *(str(error) for error in errors)] if len(errors) > 1 else message,
-        level="warning",
+        [message, *details] if len(details) > 1 else message, level="warning"
     )
     return JSONResponse(*format_http_error(request, 400, message))
 

@@ -5322,16 +5322,15 @@ class TestMCPConnectorRouteWiring:
         assert response.status_code == 200, response.text
         assert len(self._warnings(capsys.readouterr().out)) == 1
 
-    def test_a_rejected_body_keeps_its_token_out_of_the_answer_only(
+    def test_a_rejected_body_keeps_its_token_out_of_the_answer_and_the_log(
         self, anthropic_app_client: TestClient, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A malformed connector entry is reported to the operator, token included.
+        """A malformed connector entry is diagnosed by field, never by value.
 
-        A body failing on several counts has its whole error list written to the
-        server log, values and all, because that is where a malformed request is
-        diagnosed.  The caller is told which field is wrong and nothing else, so
-        the token stays inside the deployment -- which is why the documentation
-        tells operators to rotate a token a `400` was answered for.
+        A body failing on several counts has every fault written to the server
+        log, so the operator can diagnose it, but each as the field that failed
+        rather than the value it held: the token the entry carried reaches
+        neither the caller's answer nor the deployment's log.
 
         Ref: docs/api_anthropic_messages.md
              stdapi/main.py:handle_validation_exception
@@ -5354,7 +5353,9 @@ class TestMCPConnectorRouteWiring:
 
         assert response.status_code == 400, response.text
         assert token not in response.text
-        assert token in capsys.readouterr().out
+        logged = capsys.readouterr().out
+        assert token not in logged, "the rejected entry's token reached the log"
+        assert "body.mcp_servers.0.type: Field required" in logged, logged
 
     def test_a_request_without_the_connector_logs_no_warning(
         self,

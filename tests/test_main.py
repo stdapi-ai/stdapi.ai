@@ -768,6 +768,152 @@ class TestValidationErrorSelection:
         assert "[" not in message, "the union wrappers Pydantic walked leaked out"
 
 
+class TestValidationErrorLogging:
+    """A rejected request is logged by field path, never by value.
+
+    Pydantic reports the value it could not validate alongside every error, and
+    for a missing or model-level fault that value is the whole request body:
+    logging it writes the caller's payload -- prompts, uploaded media and any
+    credential a field carries, such as an MCP server's authorization token --
+    into the request log, whatever the operator configured. Only the locations
+    and the messages are actionable, and they are all the operator gets.
+
+    Ref: https://docs.pydantic.dev/latest/errors/validation_errors/
+         https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+         stdapi/main.py:handle_validation_exception
+    """
+
+    #: Stands in for a credential a request body carries into the handler.
+    _SENTINEL = "sentinel-authorization-value"
+
+    def _body(self, **overrides: object) -> dict[str, Any]:
+        """Return a request body carrying a secret and failing validation twice.
+
+        Args:
+            **overrides: Fields to add to or replace in the body.
+
+        Returns:
+            The Anthropic Messages body: ``model`` is missing and ``temperature``
+            is unparseable, so two errors are reported.
+        """
+        return {
+            "messages": [{"role": "user", "content": "hi"}],
+            "temperature": "not-a-number",
+            "mcp_servers": [
+                {
+                    "type": "url",
+                    "url": "https://mcp.example.com/sse",
+                    "name": "example",
+                    "authorization_token": self._SENTINEL,
+                }
+            ],
+        } | overrides
+
+    @staticmethod
+    def _logged_details(
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        body: dict[str, Any],
+        path: str = "/anthropic/v1/messages",
+    ) -> tuple[list[dict[str, Any]], list[Any]]:
+        """Post *body* to *path* and return the log events and the first's details.
+
+        Args:
+            client: Client authenticated for *path*.
+            monkeypatch: Fixture used to capture the emitted log events.
+            body: The request body to post.
+            path: The route to post to.
+
+        Returns:
+            The captured events, and the ``error_detail`` entries of the first.
+        """
+        written: list[dict[str, Any]] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+
+        response = client.post(path, json=body)
+
+        assert response.status_code == 400, response.text
+        assert written, "the rejected request was not logged"
+        return written, list(written[0].get("error_detail", ()))
+
+    def test_the_rejected_values_are_not_written_to_the_log(
+        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The log names the fields that failed and reports none of their values.
+
+        The secret sits in a field the request never got far enough to use, and
+        the fault that reports the whole body as its input is the missing
+        ``model``: both are what the caller sent, and neither belongs in a log.
+        """
+        written, details = self._logged_details(
+            anthropic_app_client, monkeypatch, self._body()
+        )
+
+        assert self._SENTINEL not in str(written), "the request body reached the log"
+        assert "not-a-number" not in str(written), "a rejected value reached the log"
+        assert details == [
+            [
+                "Validation error at body.model: Field required",
+                "body.model: Field required",
+                (
+                    "body.temperature: Input should be a valid number, unable to "
+                    "parse string as a number"
+                ),
+            ]
+        ], details
+        assert written[0]["level"] == "warning", written[0]
+
+    def test_one_request_cannot_fill_the_log_with_validation_errors(
+        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Past the cap the log keeps a bounded sample and counts the remainder.
+
+        The number of faults a body can hold is the caller's to choose, and a log
+        event has a size a sink will accept: an operator gets the first of them
+        and how many were left out.
+        """
+        cap = stdapi_main._MAX_LOGGED_VALIDATION_ERRORS  # noqa: SLF001
+        faults = cap * 3
+        _, details = self._logged_details(
+            anthropic_app_client,
+            monkeypatch,
+            self._body(
+                model="amazon.nova-micro-v1:0",
+                max_tokens=1,
+                temperature=0.5,
+                messages=[{"role": "user"}] * faults,
+            ),
+        )
+
+        logged = details[0]
+        assert isinstance(logged, list)
+        # The reported message, the capped sample, and the count of the rest.
+        assert len(logged) == cap + 2, logged
+        assert len(set(logged)) == len(logged), "the same fault was logged twice"
+        assert logged[-1] == f"and {faults - cap} more validation errors", logged[-1]
+
+    def test_the_same_fault_is_described_once(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A field accepting several list shapes reports one fault, not one per shape.
+
+        ``input`` takes a string, a list of strings or a list of typed parts, so a
+        number fails every list branch identically: the branch names are what the
+        client-facing path drops, which leaves the same line several times over.
+        """
+        _, details = self._logged_details(
+            app_client, monkeypatch, {"input": 5}, path="/v1/moderations"
+        )
+
+        assert details == [
+            [
+                "Validation error at body.input.str: Input should be a valid string",
+                "body.input.str: Input should be a valid string",
+                "body.input: Input should be a valid list",
+            ]
+        ], details
+
+
 class TestRequestSetupErrors:
     """A header rejected before routing still answers with the API error envelope.
 
