@@ -5,6 +5,7 @@ from contextlib import contextmanager, suppress
 from re import compile as re_compile
 from time import monotonic
 from typing import TYPE_CHECKING, Literal
+from xml.sax.saxutils import escape
 
 from aws_sdk_polly.models import (
     CloseStreamEvent,
@@ -146,8 +147,8 @@ _JOB_MAX_BILLED_CHARACTERS = 100_000
 #: Total characters (SSML markup included) a synthesis job accepts
 _JOB_MAX_CHARACTERS = 200_000
 
-#: SSML markup, which Polly excludes from its billed character count
-_SSML_TAG = re_compile(r"<[^>]*>")
+#: SSML markup Polly does not bill, then an escape sequence it bills as one character
+_SSML_UNBILLED = re_compile(r"<[^>]*>|&(?:#[0-9]+|#[xX][0-9A-Fa-f]+|[A-Za-z0-9]+);")
 
 #: Key prefix of the audio objects a synthesis job writes
 _JOB_KEY_PREFIX = f"{SETTINGS.aws_s3_tmp_prefix}speech"
@@ -417,21 +418,28 @@ async def _detect_language(text: str) -> LanguageCodeType:
     return SETTINGS.default_tts_language  # type: ignore[return-value]
 
 
-def _prosody_document(text: str, speed: float) -> str:
-    """Wrap text in the SSML document carrying a non-default speaking rate.
+def _prosody_document(escaped_text: str, speed: float) -> str:
+    """Wrap escaped text in the SSML document carrying a non-default speaking rate.
 
     Args:
-        text: Text to speak at that rate.
+        escaped_text: Text to speak at that rate, with the characters markup
+            reserves already replaced by their escape sequences.
         speed: Speed multiplier for speech.
 
     Returns:
         A self-contained SSML document.
     """
-    return f'<speak><prosody rate="{int(speed * 100)}%">{text}</prosody></speak>'
+    return (
+        f'<speak><prosody rate="{int(speed * 100)}%">{escaped_text}</prosody></speak>'
+    )
 
 
 def _prepare_text_for_speech(input_text: str, speed: float) -> tuple[str, TextTypeType]:
     """Prepare text for speech synthesis with speed adjustment.
+
+    A speaking rate is carried by markup, and the text the caller wrote is not
+    markup: an "&" or a "<" in an ordinary sentence is escaped, so it is spoken
+    rather than read as the start of a tag the sentence never opened.
 
     Args:
         input_text: Original input text
@@ -443,7 +451,7 @@ def _prepare_text_for_speech(input_text: str, speed: float) -> tuple[str, TextTy
     if input_text.startswith(_SSML_DOCUMENT_PREFIX):
         return input_text, "ssml"
     if speed != 1.0:
-        return _prosody_document(input_text, speed), "ssml"
+        return _prosody_document(escape(input_text), speed), "ssml"
     return input_text, "text"
 
 
@@ -522,11 +530,13 @@ def _synthesis_transport(
             rejection naming the limit actually enforced.
     """
     # Counted by subtracting the markup, which never copies the document itself.
-    billed = (
-        len(text) - sum(map(len, _SSML_TAG.findall(text)))
-        if text_type == "ssml"
-        else len(text)
-    )
+    # An escape sequence stands for the one character it is billed as; a tag is
+    # matched first, so one inside a tag is not subtracted twice.
+    billed = len(text)
+    if text_type == "ssml":
+        for markup in _SSML_UNBILLED.finditer(text):
+            unbilled = markup.end() - markup.start()
+            billed -= unbilled if text[markup.start()] == "<" else unbilled - 1
     if billed <= _MAX_BILLED_CHARACTERS and len(text) <= _MAX_CHARACTERS:
         return "call"
     if streamable and billed <= _STREAM_MAX_BILLED_CHARACTERS:
@@ -706,6 +716,28 @@ async def _synthesize_long_text(
     return await _synthesis_job_audio(region, bucket, key), input_tokens
 
 
+def _stream_chunk_end(text: str, start: int, end: int) -> int:
+    """Return where the chunk starting at *start* ends.
+
+    Args:
+        text: Text being split, as it is sent.
+        start: Offset the chunk starts at.
+        end: Offset past the last character the chunk may hold, inside *text*.
+
+    Returns:
+        The offset the chunk ends at, on a space where the window holds one so
+        words stay whole, and never inside an escape sequence.
+    """
+    if (cut := text.rfind(" ", start, end)) != -1:
+        return cut + 1
+    # An unbroken run is cut at the limit, short of an escape sequence the
+    # window ends in the middle of -- half of one is markup nothing closes.
+    escaped = text.rfind("&", start, end)
+    if escaped > start and text.find(";", escaped, end) == -1:
+        return escaped
+    return end
+
+
 def _stream_text_events(text: str, speed: float) -> list[TextEvent]:
     """Split text into the events one incremental synthesis carries.
 
@@ -714,6 +746,11 @@ def _stream_text_events(text: str, speed: float) -> list[TextEvent]:
     sentence boundary. A speed envelope is rebuilt around every chunk, because
     an SSML document may not span events. Only text no caller wrote as a
     document reaches here, so a chunk is spoken as written whatever it contains.
+
+    Text carrying a speed envelope is escaped before it is cut, so a chunk both
+    holds whole escape sequences and is measured at the length actually sent:
+    escaping grows the text, and a budget spent on the text before it would
+    overrun the event limit on the characters markup reserves.
 
     Args:
         text: Plain text to synthesize, as the caller sent it.
@@ -725,14 +762,16 @@ def _stream_text_events(text: str, speed: float) -> list[TextEvent]:
     events = []
     spoken_as_written = speed == 1.0
     text_type = TextType("text" if spoken_as_written else "ssml")
+    if not spoken_as_written:
+        text = escape(text)
     start = 0
     while start < len(text):
         end = start + _MAX_BILLED_CHARACTERS
-        if end >= len(text):
-            chunk = text[start:]
-        else:
-            cut = text.rfind(" ", start, end)
-            chunk = text[start : end if cut == -1 else cut + 1]
+        chunk = (
+            text[start:]
+            if end >= len(text)
+            else text[start : _stream_chunk_end(text, start, end)]
+        )
         start += len(chunk)
         events.append(
             TextEvent(

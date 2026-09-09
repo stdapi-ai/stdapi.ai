@@ -82,6 +82,7 @@ from stdapi.utils import (
 )
 
 if TYPE_CHECKING:
+    from asyncio import Task
     from collections.abc import AsyncGenerator, Generator, Sequence
 
     from types_aiobotocore_bedrock.literals import RegionName
@@ -1159,6 +1160,22 @@ async def _one_chunk(data: bytes) -> AsyncGenerator[bytes]:
     yield data
 
 
+def _raise_audio_failure(sender: Task[None]) -> None:
+    """Re-raise the error the task feeding a live session failed with.
+
+    Args:
+        sender: The task running :func:`_send_stream_audio`.
+
+    Raises:
+        BaseException: Whatever the task failed with; nothing when it is still
+            running, was cancelled, or completed successfully.
+    """
+    if not sender.done() or sender.cancelled():
+        return
+    if (error := sender.exception()) is not None:
+        raise error
+
+
 async def _send_stream_audio(
     session: Any,  # noqa: ANN401
     audio_content: InputFile,
@@ -1167,7 +1184,9 @@ async def _send_stream_audio(
     """Feed one live session its audio, then tell it there is no more.
 
     A session waiting for the next frame has no other way to learn the recording
-    is over, and would sit until its idle timer fired.
+    is over, and would sit until its idle timer fired -- including when the
+    recording could not be read at all, which is why the end of the audio is
+    declared on the failing path too.
 
     Args:
         session: The open session.
@@ -1177,10 +1196,15 @@ async def _send_stream_audio(
     Raises:
         ApiError: The audio could not be decoded, or the session refused a frame.
     """
-    async with aclosing(_stream_audio_frames(audio_content)) as frames:
-        async for frame in frames:
-            await session.send(AudioStreamAudioEvent(AudioEvent(audio_chunk=frame)))
-            transcript.seconds += len(frame) / 2 / _STREAM_SAMPLE_RATE
+    try:
+        async with aclosing(_stream_audio_frames(audio_content)) as frames:
+            async for frame in frames:
+                await session.send(AudioStreamAudioEvent(AudioEvent(audio_chunk=frame)))
+                transcript.seconds += len(frame) / 2 / _STREAM_SAMPLE_RATE
+    except Exception:
+        with suppress(Exception):
+            await session.close_input()
+        raise
     await session.close_input()
 
 
@@ -1930,10 +1954,21 @@ class AudioModel(AudioModelBase[None, None]):
                             for part in transcript.read(event):
                                 yield part
                 except TimeoutError as exception:
+                    _raise_audio_failure(sender)
                     msg = (
                         "The audio could not be transcribed in time. Retry the request."
                     )
                     raise ApiError(msg, status=504) from exception
+                except ApiError:
+                    # A session no audio reached refuses on its own terms, which
+                    # name neither the upload nor anything the caller can act on.
+                    _raise_audio_failure(sender)
+                    raise
+                else:
+                    # The upload is read and decoded while the session is
+                    # answering, so a failure there is the request's answer even
+                    # though the session itself ended cleanly.
+                    await sender
                 finally:
                     sender.cancel()
                     with suppress(CancelledError, Exception):

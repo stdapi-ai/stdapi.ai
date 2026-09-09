@@ -43,6 +43,21 @@ async def _drain(stderr: StreamReader | None, seen: bytearray) -> None:
             seen.extend(chunk[: _STDERR_KEPT - len(seen)])
 
 
+def _task_error(task: Task[None]) -> BaseException | None:
+    """Return the error a task failed with, if it has failed.
+
+    Args:
+        task: The task to inspect.
+
+    Returns:
+        The error, or None while the task is still running and when it was
+        cancelled or completed successfully.
+    """
+    if not task.done() or task.cancelled():
+        return None
+    return task.exception()
+
+
 def _input_state(task: Task[None]) -> str:
     """Describe what became of the task feeding ffmpeg's stdin.
 
@@ -83,17 +98,25 @@ async def _process_input_stream(
 ) -> None:
     """Process input stream and feed to process.
 
+    A write that fails means ffmpeg is already gone, which its exit code
+    reports; a read that fails means the audio is incomplete, which only this
+    task ever learns, so it is raised rather than swallowed with it.
+
     Args:
         stream: StreamReader from AWS Polly.
         stdin: Process stdin to feed audio to.
+
+    Raises:
+        BaseException: Whatever reading the source failed with.
     """
     if stdin is not None:
         try:
             async for chunk in stream:
-                stdin.write(chunk)
-                await stdin.drain()
-        except OSError:  # pragma: no cover
-            return
+                try:
+                    stdin.write(chunk)
+                    await stdin.drain()
+                except OSError:  # pragma: no cover
+                    return
         finally:
             stdin.close()
             await stream.aclose()
@@ -240,6 +263,11 @@ async def encode_audio_stream(
         with suppress(TimeoutError):
             await wait_for(process.wait(), _PROCESS_EXIT_TIMEOUT)
             await wait_for(stderr_task, _PROCESS_EXIT_TIMEOUT)
+            # The source records its failure as it ends, which is also what
+            # gives ffmpeg its end of input: reading the state any earlier
+            # would read it before the failure is there.
+            with suppress(Exception):
+                await wait_for(input_task, _PROCESS_EXIT_TIMEOUT)
         if process.returncode != 0:
             log_error_details(
                 f"ffmpeg exited with code {process.returncode} after closing its "
@@ -248,6 +276,19 @@ async def encode_audio_stream(
             )
             msg = f"Failed to encode the audio to '{output_format}'."
             raise ApiError(msg, status=500)
+        if (input_error := _task_error(input_task)) is not None:
+            # A source that stopped early closes stdin exactly as a complete one
+            # does, so ffmpeg finalises the audio it had and exits successfully:
+            # the encode looks clean and the audio is short.
+            log_error_details(
+                f"The audio source failed before it was fully encoded, cutting "
+                f"the audio short. Command: {' '.join(ffmpeg_args)}. "
+                f"Input: {_input_state(input_task)}.{_decode_stderr(stderr_head)}"
+            )
+            if isinstance(input_error, ApiError):
+                raise input_error
+            msg = f"Failed to encode the audio to '{output_format}'."
+            raise ApiError(msg, status=500) from input_error
     except TimeoutError as exception:
         details = _decode_stderr(stderr_head)
         log_error_details(

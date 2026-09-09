@@ -526,6 +526,42 @@ class TestAudioTranscriptions:
             for word in ["format", "supported", "invalid", "flac", "mp3", "wav"]
         )
 
+    def test_streaming_unsupported_file_format_error(
+        self, openai_client: OpenAI, transcription_stream_model: str
+    ) -> None:
+        """``stream=true`` rejects a non-audio upload naming the file's format.
+
+        The upload is read while the transcript is already being streamed back,
+        so its rejection has to reach the caller as the request's own answer.
+        Measured before this was so: the caller waited seventeen seconds for a
+        generic "the request was rejected as invalid", which names neither the
+        file nor anything the caller can act on.
+
+        ``language`` is sent because it is what makes the recording transcribed
+        live rather than read whole first, which is the path under test.
+
+        Ref: https://developers.openai.com/api/docs/guides/speech-to-text
+             stdapi/models/audio/amazon_transcribe.py:AudioModel._live_transcript
+        """
+        with pytest.raises(BadRequestError) as exc_info:
+            # The refusal is the response itself, so it is raised here rather
+            # than reaching the caller as an event of a 200 that already began.
+            openai_client.audio.transcriptions.create(
+                file=("test.txt", io.BytesIO(b"This is not an audio file")),
+                model=transcription_stream_model,
+                language="en",
+                stream=True,
+            )
+
+        error = exc_info.value
+        assert error.status_code == 400
+        error_body = error.body
+        assert isinstance(error_body, dict)
+        assert error_body["type"] == "invalid_request_error"
+        assert "format" in str(error).lower(), (
+            "the rejection must say the upload is not a format that can be read"
+        )
+
     @pytest.mark.slow
     @pytest.mark.parametrize("audio_format", ["mp3", "wav", "flac"])
     def test_supported_audio_formats(

@@ -313,3 +313,108 @@ class TestFailedEncodeIsReported:
         chunks = [chunk async for chunk in encode_audio_stream(_feed(b"audio"), "mp3")]
         assert b"".join(chunks) == b"done"
         assert "error_detail" not in request_log
+
+
+class TestTruncatedSourceIsNotServedAsComplete:
+    """A source that stops early fails the request instead of ending it cleanly.
+
+    Closing the encoder's input is how it is told the audio is over, so a
+    source that dies mid-upload and a source that finished look identical to
+    it: it encodes what arrived and exits successfully. Without the source's
+    own state being consulted, the caller would receive a short recording under
+    a success status, with nothing anywhere saying it is incomplete.
+
+    Ref: https://developers.openai.com/api/reference/resources/audio
+         stdapi/media.py:encode_audio_stream
+    """
+
+    @staticmethod
+    async def _half_a_source(error: Exception) -> AsyncGenerator[bytes]:
+        """Yield one chunk, then fail the way an interrupted upload does."""
+        yield b"audio"
+        raise error
+
+    async def test_a_clean_exit_after_a_failed_source_still_raises(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A source failing mid-encode is an error even when the encoder exits 0.
+
+        The encoder is handed the same end-of-input a complete upload gives it,
+        so it finalises the partial audio and succeeds; only the source says
+        the audio is short.
+        """
+        monkeypatch.setattr(
+            "stdapi.media._ffmpeg_args",
+            lambda *_args: ["sh", "-c", "cat >/dev/null; echo -n partial"],
+        )
+        streamed = bytearray()
+
+        async def _consume() -> None:
+            async for chunk in encode_audio_stream(
+                self._half_a_source(ValueError("upload aborted")), "mp3"
+            ):
+                streamed.extend(chunk)
+
+        with pytest.raises(ApiError) as excinfo:
+            await _consume()
+
+        assert excinfo.value.status == 500
+        assert "mp3" in str(excinfo.value)
+        assert bytes(streamed) == b"partial", "bytes before the failure streamed"
+        details = "".join(map(str, request_log["error_detail"]))
+        assert "Input: failed with ValueError('upload aborted')" in details
+
+    async def test_a_source_failure_the_api_already_maps_is_kept(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A source raising an API error keeps that error's status and message.
+
+        The backend feeding the encoder answers with the same errors every
+        other route maps, and replacing one of them with a generic failure
+        would tell the caller less than the source already did.
+        """
+        monkeypatch.setattr(
+            "stdapi.media._ffmpeg_args",
+            lambda *_args: ["sh", "-c", "cat >/dev/null; echo -n partial"],
+        )
+        source_error = ApiError("The speech could not be produced in time.", status=504)
+
+        async def _consume() -> None:
+            async for _chunk in encode_audio_stream(
+                self._half_a_source(source_error), "flac"
+            ):
+                pass
+
+        with pytest.raises(ApiError) as excinfo:
+            await _consume()
+
+        assert excinfo.value is source_error
+        assert excinfo.value.status == 504
+        assert "error_detail" in request_log, "the truncation is still reported"
+
+    async def test_a_connection_reset_while_reading_the_source_still_raises(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A source dropping the connection is a failure, not an end of audio.
+
+        A dropped connection is the likeliest way a source stops early, and it
+        is raised as the same kind of error a full encoder pipe raises; only
+        the second means the audio arrived and the encoder went away.
+        """
+        monkeypatch.setattr(
+            "stdapi.media._ffmpeg_args",
+            lambda *_args: ["sh", "-c", "cat >/dev/null; echo -n partial"],
+        )
+
+        async def _consume() -> None:
+            async for _chunk in encode_audio_stream(
+                self._half_a_source(ConnectionResetError("connection reset")), "mp3"
+            ):
+                pass
+
+        with pytest.raises(ApiError) as excinfo:
+            await _consume()
+
+        assert excinfo.value.status == 500
+        details = "".join(map(str, request_log["error_detail"]))
+        assert "ConnectionResetError" in details

@@ -191,6 +191,33 @@ class TestAudioSpeech:
             "only the whitespace Polly normalises away may be missing"
         )
 
+    @pytest.mark.slow
+    def test_a_long_input_at_another_speed_keeps_its_reserved_characters(
+        self, openai_client: OpenAI, speech_generative_model: str
+    ) -> None:
+        """Reserved characters survive an input long enough to be cut into pieces.
+
+        A long input at a non-default speed is spoken in several pieces, and
+        each piece carries the speed envelope of its own. Reserved characters
+        both grow the piece and must never be cut in half, so a text dense in
+        them is where a length budget measured on the wrong string shows up --
+        as a rejection of an input well inside the documented limit.
+
+        Ref: https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create
+             stdapi/models/audio/amazon_polly.py:_stream_text_events
+        """
+        # Over the single-call limit, under OpenAI's 4,096-character maximum.
+        input_text = "Q&A: is 3 < 5 > 2, and Tom & Jerry? " * 100
+
+        response = openai_client.audio.speech.create(
+            model=speech_generative_model, voice="alloy", input=input_text, speed=1.5
+        )
+
+        audio_data = response.content
+        assert isinstance(audio_data, bytes)
+        assert len(audio_data) > 0
+        _assert_is_mp3(audio_data)
+
     @pytest.mark.image
     @pytest.mark.gateway("Amazon Polly is not available on the official OpenAI API")
     @pytest.mark.retry(
@@ -420,6 +447,31 @@ class TestAudioSpeech:
         assert isinstance(audio_data, bytes)
         assert len(audio_data) > 0
         assert response.response.headers.get("content-type") == "audio/mpeg"
+        _assert_is_mp3(audio_data)
+
+    def test_speed_accepts_the_characters_markup_reserves(
+        self, openai_client: OpenAI, speech_standard_model: str
+    ) -> None:
+        """``&``, ``<`` and ``>`` are spoken, not read as markup, at any speed.
+
+        ``input`` is plain text and the API places no restriction on it, so an
+        ordinary sentence -- "Q&A", "AT&T", "3 < 5" -- must be synthesized
+        whatever ``speed`` asks for. It is the same request at the default
+        speed, which is what makes a rejection here a defect rather than a
+        limit: the two cannot answer differently.
+
+        Ref: https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create
+             stdapi/models/audio/amazon_polly.py:_prepare_text_for_speech
+        """
+        reserved = "Q&A with Tom & Jerry: is 3 < 5 > 2?"
+
+        response = openai_client.audio.speech.create(
+            model=speech_standard_model, voice="alloy", input=reserved, speed=1.5
+        )
+
+        audio_data = response.content
+        assert isinstance(audio_data, bytes)
+        assert len(audio_data) > 0
         _assert_is_mp3(audio_data)
 
     @pytest.mark.image
