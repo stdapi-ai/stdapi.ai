@@ -15,6 +15,7 @@ from io import BytesIO
 from json import loads
 
 import pytest
+from fastapi.exceptions import RequestValidationError
 from PIL import Image
 from pybase64 import b64decode as pybase64_b64decode
 from pybase64 import b64encode
@@ -26,6 +27,7 @@ from stdapi.utils import (
     hide_security_details,
     match_bedrock_app_profile_arn,
     match_bedrock_prompt_router_arn,
+    missing_file_error,
     strip_url_query,
 )
 
@@ -370,3 +372,36 @@ class TestJsonResponseRendering:
 
         assert body == b'{"text":"a\\ud800b"}'
         assert loads(bytes(body).decode())["text"] == "a\ud800b"
+
+
+class TestMissingFileError:
+    """A body that carries no file is a client mistake, and reads as one.
+
+    The refusal has to be the same error FastAPI raises for any other missing
+    field, or the routes that report it outside request parsing answer an
+    unhandled failure instead of a 400 naming the field.
+
+    Ref: https://fastapi.tiangolo.com/tutorial/handling-errors/#requestvalidationerror-vs-validationerror
+         stdapi/utils.py:missing_file_error
+    """
+
+    def test_the_default_field_is_reported_as_missing(self) -> None:
+        """The error names ``body.file`` and the reason a client can act on."""
+        with pytest.raises(RequestValidationError) as exc_info:
+            missing_file_error()
+
+        assert exc_info.value.errors() == [
+            {
+                "type": "missing",
+                "loc": ("body", "file"),
+                "msg": "Field required",
+                "input": None,
+            }
+        ]
+
+    def test_the_field_is_the_one_the_route_asked_for(self) -> None:
+        """A route whose upload field is named otherwise reports that name."""
+        with pytest.raises(RequestValidationError) as exc_info:
+            missing_file_error("data")
+
+        assert exc_info.value.errors()[0]["loc"] == ("body", "data")

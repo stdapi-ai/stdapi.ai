@@ -1523,6 +1523,30 @@ class TestOpenAIFilesMalformedJsonBody:
 
 
 @pytest.mark.local
+class TestOpenAIFilesMultipartWithoutAFile:
+    """POST /v1/files as a form that carries no file (unit, no AWS).
+
+    Ref: https://developers.openai.com/api/reference/resources/files/methods/create
+         stdapi/routes/openai_files.py:upload
+    """
+
+    def test_multipart_without_a_file_returns_400(self, app_client: TestClient) -> None:
+        """A form naming only the purpose is refused as a missing field, not a failure.
+
+        The upload is optional in the signature because the same route also
+        takes a JSON body, so the form that omits it is a client mistake the
+        route reports itself -- and it has to read as the 400 any other missing
+        field produces, naming the field the caller left out.
+        """
+        response = app_client.post("/v1/files", files={"purpose": (None, "assistants")})
+
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert error["message"] == "Validation error at body.file: Field required"
+
+
+@pytest.mark.local
 class TestOpenAIFilesExpiresAfterBracketNotation:
     """POST /v1/files with the bracket-notation ``expires_after[seconds]`` form field.
 

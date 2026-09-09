@@ -220,11 +220,29 @@ def validation_error_handler() -> Generator[None]:
         ) from error
 
 
-def missing_file_error() -> Never:
-    """Raise a validation error for a missing required ``file`` body field."""
-    msg = "ValidationError"
-    raise ValidationError.from_exception_data(
-        msg, [{"type": "missing", "loc": ("body", "file"), "input": None, "ctx": {}}]
+def missing_file_error(field: str = "file") -> Never:
+    """Refuse a request body that carries no file, as a missing required field.
+
+    The routes that bind their own upload report it outside the body parsing
+    FastAPI does for them, so the refusal is raised in the form FastAPI raises
+    for every other missing field: anything else leaves the request unanswered
+    rather than refused with a 400 naming what the caller left out.
+
+    Args:
+        field: Body field the upload was expected under.
+
+    Raises:
+        RequestValidationError: Always, naming the field as missing.
+    """
+    raise RequestValidationError(
+        [
+            {
+                "type": "missing",
+                "loc": ("body", field),
+                "msg": "Field required",
+                "input": None,
+            }
+        ]
     )
 
 

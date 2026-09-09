@@ -417,6 +417,25 @@ class TestAddUploadPartJsonBodyRemoteSources:
         assert "an-unconfigured-external-bucket-xyz" in error["message"], error
         assert chunks == []
 
+    def test_a_form_without_the_part_data_returns_400(
+        self, app_client: TestClient
+    ) -> None:
+        """A form carrying no part is refused as a missing field, naming ``data``.
+
+        The field is optional in the signature because the same route also takes
+        a JSON body, so the form that omits it is reported by the route itself --
+        as the 400 any other missing field produces, and under this route's own
+        field name rather than the one the file routes use.
+        """
+        response = app_client.post(
+            f"/v1/uploads/{_STUB_UPLOAD_ID}/parts", files={"unrelated": (None, "value")}
+        )
+
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert error["message"] == "Validation error at body.data: Field required"
+
 
 class TestAddUploadPartSizeCap:
     """POST /v1/uploads/{id}/parts refuses a part larger than a Part may carry.

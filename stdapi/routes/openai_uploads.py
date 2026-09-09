@@ -210,7 +210,7 @@ async def add_upload_part(
             )
         chunk = await body.data.to_bytes()
     elif data is None:
-        missing_file_error()
+        missing_file_error("data")
     else:
         # One byte past the maximum is all it takes to know the part is too large.
         chunk = await data.read(_MAX_PART_SIZE + 1)

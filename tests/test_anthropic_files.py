@@ -612,6 +612,38 @@ class TestAnthropicFilesJsonBodySources:
         assert not uploaded_source, "no object may be created for a rejected source"
 
 
+class TestAnthropicFilesMultipartWithoutAFile:
+    """POST /anthropic/v1/files as a form that carries no file.
+
+    Ref: https://platform.claude.com/docs/en/api/errors
+         stdapi/routes/anthropic_files.py:upload
+    """
+
+    pytestmark = pytest.mark.local
+
+    def test_a_form_without_a_file_returns_400(
+        self, anthropic_app_client: TestClient
+    ) -> None:
+        """A form carrying no file is refused as a missing field, not as a failure.
+
+        The upload is optional in the signature because the same route also takes
+        a JSON body, so the form that omits it is a client mistake the route
+        reports itself -- and it has to reach the caller as the 400 envelope any
+        other missing field produces.
+        """
+        response = anthropic_app_client.post(
+            "/anthropic/v1/files", files={"unrelated": (None, "value")}
+        )
+
+        assert response.status_code == 400, response.text
+        body = response.json()
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "invalid_request_error"
+        assert body["error"]["message"] == (
+            "Validation error at body.file: Field required"
+        )
+
+
 class TestAnthropicFileContentDownloadHardening:
     """Browser-safety headers on the Anthropic ``/v1/files/{id}/content`` download.
 
