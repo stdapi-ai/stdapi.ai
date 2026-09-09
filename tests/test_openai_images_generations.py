@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from openai import BadRequestError, OpenAI
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from stdapi.api_errors import FeatureUnavailableError, UnsupportedModelError
 from stdapi.config import SETTINGS
@@ -24,7 +24,12 @@ from stdapi.monitoring import REQUEST_LOG, REQUEST_TIME, EventLog
 from stdapi.routes import openai_images_generations
 from stdapi.routes._images_common import build_images_response
 from stdapi.routes.openai_images_generations import stream_generator
-from stdapi.types.openai_images import ImageEditParams, ImageGenerateParams
+from stdapi.types.openai_images import (
+    ImageEditJsonBody,
+    ImageEditParams,
+    ImageGenerateParams,
+    ImageVariationJsonBody,
+)
 from tests.conftest import (
     image_returns_base64_only,
     image_size_supported,
@@ -1523,6 +1528,8 @@ class TestResponseFormatUrlRequiresBucket:
     then fail on the upload that cannot happen. The refusal is the same one the
     upload would have raised -- a feature this deployment cannot run, answered
     like every other: 503 to the caller, the missing setting to the operator.
+    A streamed request is the exception: its images come back inline, so it
+    needs no bucket and is served on the same deployment.
 
     Ref: https://stdapi.ai/api_openai_images_generations/
          stdapi/types/openai_images.py:_ImageBaseParams._validate_response_format
@@ -1581,6 +1588,83 @@ class TestResponseFormatUrlRequiresBucket:
         assert _generation_params(response_format="b64_json").response_format == (
             "b64_json"
         )
+
+    @pytest.mark.parametrize(
+        ("body_model", "body"),
+        [
+            (ImageGenerateParams, {"model": "m", "prompt": "p"}),
+            (
+                ImageEditJsonBody,
+                {"model": "m", "image": ["data:image/png;base64,AA=="]},
+            ),
+            (
+                ImageVariationJsonBody,
+                {"model": "m", "image": "data:image/png;base64,AA=="},
+            ),
+        ],
+        ids=["generations", "edits", "variations"],
+    )
+    def test_url_rejected_when_left_to_the_default(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        body_model: type[BaseModel],
+        body: dict[str, Any],
+    ) -> None:
+        """A body that omits the format falls back to ``url`` and is refused there too.
+
+        Omitting it is the ordinary request shape, so a guard reached only by
+        the explicit value would let the far more common request generate and
+        bill the images before the deployment discovers it cannot serve them.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
+
+        with pytest.raises(FeatureUnavailableError) as exc_info:
+            body_model.model_validate(body)
+
+        assert exc_info.value.status == 503
+
+    @pytest.mark.parametrize("response_format", [None, "url"])
+    def test_a_streamed_request_needs_no_bucket(
+        self, monkeypatch: pytest.MonkeyPatch, response_format: str | None
+    ) -> None:
+        """Streaming answers inline whatever the format, so it is served regardless.
+
+        A bucket-less deployment can stream images today, and does so whether
+        the caller named the format or left it at its default: refusing either
+        one would take a working capability away from that deployment.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
+        named = {} if response_format is None else {"response_format": response_format}
+
+        assert _generation_params(stream=True, **named).stream is True
+
+    def test_a_stream_field_on_an_endpoint_that_cannot_stream_is_not_the_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Variations take no ``stream``, so one sent anyway does not lift the refusal.
+
+        Extra parameters are carried through to the model, so the field name is
+        one a caller can set on a request that has no streaming mode at all.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
+
+        with pytest.raises(FeatureUnavailableError):
+            ImageVariationJsonBody.model_validate(
+                {"model": "m", "image": "data:image/png;base64,AA==", "stream": True}
+            )
+
+    def test_the_route_answers_the_default_refusal_as_a_503(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A request that names no format is refused before any image is generated."""
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
+
+        response = app_client.post(
+            "/v1/images/generations", json={"model": "m", "prompt": "p"}
+        )
+
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "feature_unavailable"
 
 
 @pytest.mark.local

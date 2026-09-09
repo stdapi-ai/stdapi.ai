@@ -302,26 +302,31 @@ class _ImageBaseParams(BaseModelRequestWithExtra):
         """
         return _DEFAULT_SIZE if value == "auto" else value
 
-    @field_validator("response_format", mode="after")
-    @classmethod
-    def _validate_response_format(cls, value: str) -> str:
+    @model_validator(mode="after")
+    def _validate_response_format(self) -> Self:
         """Refuse ``url`` when no bucket can host the images it points at.
 
         Refused here rather than at upload time, so a deployment that cannot
         serve the format never bills the caller for images it has to discard.
-
-        Args:
-            value: The response format to validate.
+        A streamed response carries its images inline whatever format was
+        asked for, so it needs no host and is left alone. Checked on the whole
+        request rather than on the field, which is only visited when the
+        caller names a format -- and most callers take the default.
 
         Returns:
-            The validated response format.
+            The validated request.
 
         Raises:
             FeatureUnavailableError: No bucket is configured to host the images.
         """
-        if value == "url":
+        # Only the requests that can stream declare ``stream``; on the others a
+        # field of that name is extra input, not a mode.
+        streamed = "stream" in type(self).model_fields and getattr(
+            self, "stream", False
+        )
+        if self.response_format == "url" and not streamed:
             require_url_response_bucket()
-        return value
+        return self
 
 
 # Ref: openai.types.image_generate_params.ImageGenerateParams
