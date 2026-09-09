@@ -15,6 +15,7 @@ from contextvars import copy_context
 from gc import collect
 from json import loads
 from logging import ERROR
+from re import compile as re_compile
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
@@ -71,6 +72,9 @@ if TYPE_CHECKING:
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
+
+#: Characters AWS accepts in a resource tag value, on every service tagged here.
+_TAG_VALUE_RE = re_compile(r"[a-zA-Z0-9\s._:/=+@-]*")
 
 
 def _make_request(method: str = "GET", path: str = "/test") -> StarletteRequest:
@@ -1234,6 +1238,41 @@ class TestRequestIdentity:
         request_log["request_user_id"] = "user-42"
 
         assert build_metadata()["stdapi-ai.user_id"] == "user-42"
+
+    @pytest.mark.usefixtures("request_id")
+    async def test_tagging_narrows_the_identity_to_the_tag_charset(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """An identity that becomes a resource tag is narrowed to what tags accept.
+
+        Request metadata and resource tags do not take the same characters:
+        ``,``, ``#`` and ``$`` are legal in the first and rejected by the
+        second, and all three are legal in the ``user`` field a client
+        declares. Left in, they fail the tagged call rather than the request
+        that carried them.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_CreateSession.html
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_StartAsyncInvoke.html
+        """
+        request_log["request_user_id"] = "acme,inc#42$ tail\r\nX"
+
+        tags = build_metadata(apn=True)
+
+        assert tags["stdapi-ai.user_id"] == "acmeinc42 tailX"
+        assert all(_TAG_VALUE_RE.fullmatch(value) for value in tags.values())
+        assert all(_TAG_VALUE_RE.fullmatch(key) for key in tags)
+
+    @pytest.mark.usefixtures("request_id")
+    async def test_request_metadata_keeps_what_only_tags_reject(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """Narrowing for tags must not narrow the attribution sent as metadata.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
+        """
+        request_log["request_user_id"] = "acme,inc#42$"
+
+        assert build_metadata()["stdapi-ai.user_id"] == "acme,inc#42$"
 
     def test_the_verified_caller_never_reaches_the_emitted_log_event(
         self,

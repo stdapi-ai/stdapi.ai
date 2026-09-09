@@ -337,6 +337,9 @@ _STDAPI_METADATA_PREFIX = "stdapi-ai."
 #: Strips characters not allowed in stdapi metadata values.
 _METADATA_VALUE_STRIP_RE = re_compile(r"[^a-zA-Z0-9\s:_@$#=/+,.\-]")
 
+#: Strips characters not allowed in a resource tag value, control whitespace included.
+_TAG_VALUE_STRIP_RE = re_compile(r"[^a-zA-Z0-9 ._:/=+@\-]")
+
 
 def _published_log_levels(level: LogLevel | Literal["disabled"]) -> set[LogLevel]:
     """Return the log levels to publish to stdout for the configured level.
@@ -1230,7 +1233,8 @@ def build_metadata(
         existing: Caller-supplied metadata from the request body, if any.
         apn: When ``True``, add ``aws-apn-id`` tag.
             Only set this when the result is used as resource tags, not as
-            request-level metadata.
+            request-level metadata: it also narrows the attributed identity to
+            the smaller character set a tag value accepts.
 
     Returns:
         Merged metadata dict with ``stdapi-ai.*`` keys always set.
@@ -1242,8 +1246,9 @@ def build_metadata(
     }
     metadata["stdapi-ai.request_id"] = REQUEST_ID.get()
     metadata["stdapi-ai.server_id"] = server.SERVER_NAME
+    strip = _TAG_VALUE_STRIP_RE if apn else _METADATA_VALUE_STRIP_RE
     if (user_id := resolve_request_identity()) and (
-        user_id := _METADATA_VALUE_STRIP_RE.sub("", user_id)[:256]
+        user_id := strip.sub("", user_id)[:256]
     ):
         metadata["stdapi-ai.user_id"] = user_id
     if apn:
