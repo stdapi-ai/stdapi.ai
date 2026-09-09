@@ -51,7 +51,7 @@ from typing import TYPE_CHECKING, Final, NoReturn
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from stdapi.api_errors import ApiError, FeatureUnavailableError, iam_denial_detail
+from stdapi.api_errors import FeatureUnavailableError, iam_denial_detail, unauthorized
 from stdapi.aws import get_client
 from stdapi.aws_dynamodb import (
     PARTITION_KEY,
@@ -239,20 +239,6 @@ def _hash_secret(secret: str, salt: bytes) -> bytes:
     return blake2b(secret.encode(), digest_size=_HASH_SIZE, salt=salt).digest()
 
 
-def _refuse(detail: str) -> NoReturn:
-    """Answer the detail-free 401 every refused credential gets.
-
-    Args:
-        detail: What was wrong, for the request log only.
-
-    Raises:
-        ApiError: Always, carrying nothing a caller could probe with.
-    """
-    log_error_details(detail)
-    msg = "Unauthorized"
-    raise ApiError(msg, status=401)
-
-
 def _malformed_record(key_id: str, what: str) -> FeatureUnavailableError:
     """Refuse a key whose stored record this build cannot trust.
 
@@ -388,7 +374,7 @@ def _reject_unknown(secret: str) -> NoReturn:
         ApiError: Always, identical to a wrong-secret refusal.
     """
     compare_digest(_hash_secret(secret, _DUMMY_SALT), _DUMMY_SALT + _DUMMY_SALT)
-    _refuse("Unknown tenant API key")
+    unauthorized("Unknown tenant API key")
 
 
 async def _lookup(key_id: str, secret: str) -> _Entry:
@@ -457,13 +443,13 @@ async def verify_tenant_key(credential: str) -> Tenant:
     """
     parsed = _parse(credential)
     if parsed is None:
-        _refuse("Malformed tenant API key")
+        unauthorized("Malformed tenant API key")
     key_id, secret = parsed
     entry = await _lookup(key_id, secret)
     if not compare_digest(_hash_secret(secret, entry.salt), entry.secret_hash):
-        _refuse("Invalid tenant API key")
+        unauthorized("Invalid tenant API key")
     if entry.disabled:
-        _refuse(f"Tenant API key '{key_id}' is disabled")
+        unauthorized(f"Tenant API key '{key_id}' is disabled")
     return entry.tenant
 
 
@@ -486,10 +472,10 @@ async def resume_tenant(key_id: str) -> Tenant:
             cannot be used.
     """
     if not _KEY_ID_RE(key_id):
-        _refuse("Malformed tenant key ID")
+        unauthorized("Malformed tenant key ID")
     entry = await _lookup(key_id, "")
     if entry.disabled:
-        _refuse(f"Tenant API key '{key_id}' is disabled")
+        unauthorized(f"Tenant API key '{key_id}' is disabled")
     return entry.tenant
 
 

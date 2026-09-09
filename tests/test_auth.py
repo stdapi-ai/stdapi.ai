@@ -9,7 +9,8 @@ Ref: stdapi/auth.py:AuthenticationHandler
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Self
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, Self
 
 import pytest
 from botocore.exceptions import ClientError
@@ -18,8 +19,15 @@ from pydantic import SecretStr
 
 import stdapi.auth
 from stdapi.api_errors import ApiError
-from stdapi.auth import AuthenticationHandler, authenticate, initialize_authentication
+from stdapi.auth import (
+    AuthenticationHandler,
+    authenticate,
+    enforce_tenant_endpoint_scope,
+    initialize_authentication,
+    verify_credential,
+)
 from stdapi.config import SETTINGS
+from stdapi.monitoring import TENANT, Tenant
 from tests._helpers import make_event_log
 
 if TYPE_CHECKING:
@@ -105,8 +113,16 @@ class _FakeSecretsManagerCM:
     stub has to satisfy that protocol rather than being a plain object.
     """
 
-    def __init__(self, secret_string: str | None) -> None:
+    def __init__(
+        self,
+        secret_string: str | None,
+        *,
+        binary: bool = False,
+        error_code: str = "ResourceNotFoundException",
+    ) -> None:
         self._secret_string = secret_string
+        self._binary = binary
+        self._error_code = error_code
         self.secret_ids: list[str] = []
 
     async def __aenter__(self) -> Self:
@@ -121,21 +137,31 @@ class _FakeSecretsManagerCM:
         return None
 
     async def get_secret_value(self, *, SecretId: str) -> dict[str, str]:  # noqa: N803
-        """Return the canned ``SecretString``, or raise the not-found ``ClientError``."""
+        """Return the canned secret value, or raise the not-found ``ClientError``.
+
+        A secret stored as binary answers with the response AWS really sends
+        for one: every member is optional, and the text member is simply absent.
+        """
         self.secret_ids.append(SecretId)
+        if self._binary:
+            return {"Name": SecretId}
         if self._secret_string is None:
             raise ClientError(
-                {"Error": {"Code": "ResourceNotFoundException", "Message": "missing"}},
+                {"Error": {"Code": self._error_code, "Message": "missing"}},
                 "GetSecretValue",
             )
         return {"SecretString": self._secret_string}
 
 
 def _stub_secretsmanager(
-    monkeypatch: pytest.MonkeyPatch, secret_string: str | None
+    monkeypatch: pytest.MonkeyPatch,
+    secret_string: str | None,
+    *,
+    binary: bool = False,
+    error_code: str = "ResourceNotFoundException",
 ) -> _FakeSecretsManagerCM:
     """Point ``stdapi.auth``'s AWS session at a canned Secrets Manager response."""
-    client = _FakeSecretsManagerCM(secret_string)
+    client = _FakeSecretsManagerCM(secret_string, binary=binary, error_code=error_code)
 
     def _create_client(service: str, **_kwargs: object) -> _FakeSecretsManagerCM:
         assert service == "secretsmanager"
@@ -151,12 +177,15 @@ def _stub_secretsmanager(
 
 
 class TestSecretsManagerApiKeySource:
-    """Third API-key source: a JSON secret in AWS Secrets Manager.
+    """Third API-key source: a secret in AWS Secrets Manager.
 
-    The secret holds a JSON document and ``api_key_secretsmanager_key`` selects the
-    field inside it, so both the AWS lookup and the key lookup can fail independently.
+    Both documented shapes have to work: a JSON document, where
+    ``api_key_secretsmanager_key`` selects the field inside it and the AWS lookup
+    and the key lookup can fail independently, and a plain string, which is the
+    key exactly as stored.
 
     Ref: stdapi/auth.py:AuthenticationHandler._get_api_key_from_secrets_manager
+         https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
     """
 
     async def test_secret_json_key_enables_authentication(
@@ -228,6 +257,184 @@ class TestSecretsManagerApiKeySource:
 
         with pytest.raises(ValueError, match="'stdapi/api-key' not found"):
             await handler.initialize()
+
+    async def test_a_denied_read_is_not_reported_as_a_missing_secret(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A denied read propagates as ``ClientError``, not as a "not found".
+
+        ``AccessDeniedException`` means the task role lacks
+        ``secretsmanager:GetSecretValue``; reporting it as a missing secret would
+        send the operator after the wrong fix.
+        """
+        _stub_secretsmanager(monkeypatch, None, error_code="AccessDeniedException")
+        handler = AuthenticationHandler()
+
+        with pytest.raises(ClientError) as exc:
+            await handler.initialize()
+        assert exc.value.response["Error"]["Code"] == "AccessDeniedException"
+
+    @pytest.mark.parametrize(
+        "secret_string",
+        ["my-plain-key", "sk-1234567890abcdef", "1234567890", '"quoted-key"', "true"],
+        ids=["plain", "prefixed", "digits-only", "quoted", "json-keyword"],
+    )
+    async def test_a_plain_string_secret_is_the_api_key(
+        self, monkeypatch: pytest.MonkeyPatch, secret_string: str
+    ) -> None:
+        """A secret that is not a JSON object is the key, byte for byte.
+
+        The documented plain-string deployment stores the key with no JSON around
+        it, so nothing may be parsed out of it: a key of digits keeps its leading
+        zeroes, and one that happens to be quoted keeps its quotes.
+        """
+        _stub_secretsmanager(monkeypatch, secret_string)
+        handler = AuthenticationHandler()
+
+        assert await handler.initialize() is True
+
+        handler.verify_credentials(SecretStr(secret_string))
+
+    async def test_a_binary_secret_fails_startup_naming_the_secret(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A secret stored as binary is refused with the secret's name, not a KeyError.
+
+        Neither documented shape can be read out of one, and startup is the only
+        moment an operator can be told which secret to re-create as text.
+        """
+        _stub_secretsmanager(monkeypatch, None, binary=True)
+        handler = AuthenticationHandler()
+
+        with pytest.raises(ValueError, match="'stdapi/api-key'") as exc:
+            await handler.initialize()
+        assert "text" in str(exc.value)
+
+    async def test_a_non_text_value_under_the_key_fails_startup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A JSON secret whose configured key holds an object names key and secret.
+
+        The value is hashed as text, so anything else is an operator error that
+        must be reported as one rather than crashing the hash.
+        """
+        _stub_secretsmanager(monkeypatch, '{"api_key": {"nested": "s3cr3t"}}')
+        handler = AuthenticationHandler()
+
+        with pytest.raises(ValueError, match="'api_key'") as exc:
+            await handler.initialize()
+        assert "stdapi/api-key" in str(exc.value)
+
+
+class TestRefusalSeverity:
+    """An ordinary refused credential is the client's fault, not an incident.
+
+    Every deployment sees wrong, expired and absent keys daily -- a mistyped
+    client key, a stale browser token, an internet scanner. Logged without the
+    401 they resolve to, they read as ``critical``, which
+    ``docs/operations_logging_monitoring.md`` tells operators to open a bug for
+    and which the shipped Terraform module pages them for.
+
+    Ref: stdapi/api_errors.py:unauthorized
+         stdapi/monitoring.py:_error_level
+         docs/operations_logging_monitoring.md
+    """
+
+    async def test_a_wrong_api_key_is_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A key that does not match the deployment's own is a warning."""
+        monkeypatch.setattr(SETTINGS, "api_key", SecretStr("good-key"))
+        monkeypatch.setattr(SETTINGS, "api_key_ssm_parameter", None)
+        monkeypatch.setattr(SETTINGS, "api_key_secretsmanager_secret", None)
+        handler = AuthenticationHandler()
+        assert await handler.initialize() is True
+
+        with pytest.raises(ApiError):
+            handler.verify_credentials(SecretStr("wrong-key"))
+
+        assert request_log["level"] == "warning"
+        assert request_log["error_detail"] == ["Invalid API key"]
+
+    async def test_a_missing_api_key_is_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A request carrying no credential at all is a warning too."""
+        monkeypatch.setattr(SETTINGS, "api_key", SecretStr("good-key"))
+        monkeypatch.setattr(SETTINGS, "api_key_ssm_parameter", None)
+        monkeypatch.setattr(SETTINGS, "api_key_secretsmanager_secret", None)
+        handler = AuthenticationHandler()
+        assert await handler.initialize() is True
+
+        with pytest.raises(ApiError):
+            handler.verify_credentials(None)
+
+        assert request_log["level"] == "warning"
+        assert request_log["error_detail"] == ["Missing API key"]
+
+    async def test_a_credential_the_user_pool_refused_is_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """With a user pool as the only method, its refusal is a warning.
+
+        A credential that is not shaped like a signed token never reaches the
+        pool, and must not fall through to the disabled key comparison either.
+
+        Ref: stdapi/auth.py:verify_credential
+        """
+        monkeypatch.setattr(stdapi.auth, "_auth_handler", AuthenticationHandler())
+        monkeypatch.setattr(SETTINGS, "tenant_api_keys", False)
+        monkeypatch.setattr(
+            stdapi.auth, "_cognito_authenticator", SimpleNamespace(enabled=True)
+        )
+
+        with pytest.raises(ApiError) as raised:
+            await verify_credential("opaque-credential")
+
+        assert raised.value.status == 401
+        assert str(raised.value) == "Unauthorized"
+        assert request_log["level"] == "warning"
+
+    async def test_a_credential_that_is_not_a_tenant_key_is_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """With tenant keys as the only method, anything else is a warning.
+
+        Ref: stdapi/auth.py:verify_credential
+        """
+        monkeypatch.setattr(stdapi.auth, "_auth_handler", AuthenticationHandler())
+        monkeypatch.setattr(SETTINGS, "tenant_api_keys", True)
+
+        with pytest.raises(ApiError) as raised:
+            await verify_credential("not-a-tenant-key")
+
+        assert raised.value.status == 401
+        assert str(raised.value) == "Unauthorized"
+        assert request_log["level"] == "warning"
+
+    async def test_an_out_of_scope_endpoint_is_a_warning(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """A tenant reaching an endpoint it is not scoped to is a warning.
+
+        Ref: stdapi/auth.py:enforce_tenant_endpoint_scope
+        """
+        tenant = Tenant(
+            key_id="A" * 16, name="acme", endpoints_allow=("/v1/chat/completions",)
+        )
+        token = TENANT.set(tenant)
+        try:
+            with pytest.raises(ApiError) as raised:
+                enforce_tenant_endpoint_scope(
+                    {"type": "http", "route": SimpleNamespace(path_format="/v1/files")}
+                )
+        finally:
+            TENANT.reset(token)
+
+        assert raised.value.status == 401
+        assert str(raised.value) == "Unauthorized"
+        assert request_log["level"] == "warning"
+        assert "A" * 16 in str(request_log["error_detail"][0])
 
 
 @pytest.mark.usefixtures("request_log")

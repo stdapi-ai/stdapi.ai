@@ -11,19 +11,12 @@ from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBea
 from pydantic import SecretBytes, SecretStr
 from pydantic_core import from_json
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import ApiError, unauthorized
 from stdapi.auth_cognito import CognitoAuthenticator
 from stdapi.aws import CONFIG
 from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
 from stdapi.exceptions import ServerError
-from stdapi.monitoring import (
-    PRINCIPAL,
-    TENANT,
-    EventLog,
-    Tenant,
-    add_server_warning,
-    log_error_details,
-)
+from stdapi.monitoring import PRINCIPAL, TENANT, EventLog, Tenant, add_server_warning
 from stdapi.tenant_keys import is_tenant_key, verify_tenant_key
 
 if TYPE_CHECKING:
@@ -156,37 +149,56 @@ class AuthenticationHandler:
     async def _get_api_key_from_secrets_manager() -> SecretStr:
         """Retrieve API key from AWS Secrets Manager.
 
+        Both documented shapes are accepted: a JSON object, where
+        ``api_key_secretsmanager_key`` selects the field holding the key, and a
+        plain string, which is the key exactly as stored. Anything that is not
+        a JSON object is therefore taken literally rather than parsed, so a key
+        of digits keeps its leading zeroes and a quoted one keeps its quotes.
+
         Returns:
             The API key string from Secrets Manager.
 
         Raises:
             ClientError: If there's an error retrieving the API key from Secrets Manager.
-            ValueError: If the secret or key is not found.
+            ValueError: If the secret or key is not found, if the secret holds
+                binary data, or if the selected field is not text.
         """
+        secret_name = SETTINGS.api_key_secretsmanager_secret
         async with AWS_SESSION.create_client(
             "secretsmanager", config=CONFIG, region_name=AWS_REGION
         ) as secrets_client:
             try:
-                secret_data = from_json(
-                    (
-                        await secrets_client.get_secret_value(
-                            SecretId=SETTINGS.api_key_secretsmanager_secret
-                        )
-                    )["SecretString"]
+                secret_value = await secrets_client.get_secret_value(
+                    SecretId=secret_name
                 )
             except ClientError as exc:
                 if exc.response["Error"]["Code"] == "ResourceNotFoundException":
-                    msg = f"Secret '{SETTINGS.api_key_secretsmanager_secret}' not found"
+                    msg = f"Secret '{secret_name}' not found"
                     raise ValueError(msg) from exc
                 raise
+        secret_string = secret_value.get("SecretString")
+        if secret_string is None:
+            msg = f"Secret '{secret_name}' holds no text value; store it as text"
+            raise ValueError(msg)
         try:
-            return SecretStr(secret_data[SETTINGS.api_key_secretsmanager_key])
+            document = from_json(secret_string)
+        except ValueError:
+            document = None
+        # Only a JSON object is read as a document; anything else is the key.
+        if not isinstance(document, dict):
+            return SecretStr(secret_string)
+        key_name = SETTINGS.api_key_secretsmanager_key
+        try:
+            api_key = document[key_name]
         except KeyError as exc:
-            msg = (
-                f"Key '{SETTINGS.api_key_secretsmanager_key}' not found in secret"
-                f" '{SETTINGS.api_key_secretsmanager_secret}'"
-            )
+            msg = f"Key '{key_name}' not found in secret '{secret_name}'"
             raise ValueError(msg) from exc
+        if not isinstance(api_key, str):
+            msg = f"Key '{key_name}' of secret '{secret_name}' does not hold text"
+            # The configuration is wrong, not a caller's type: startup reports
+            # every failure of this source the same way.
+            raise ValueError(msg)  # noqa: TRY004
+        return SecretStr(api_key)
 
     @property
     def enabled(self) -> bool:
@@ -236,9 +248,7 @@ class AuthenticationHandler:
             return
 
         if token is None:
-            log_error_details("Missing API key")
-            msg = "Unauthorized"
-            raise ApiError(msg, status=401)
+            unauthorized("Missing API key")
 
         if not compare_digest(
             blake2b(
@@ -247,9 +257,7 @@ class AuthenticationHandler:
             ).digest(),
             self._api_key_hash.get_secret_value(),
         ):
-            log_error_details("Invalid API key")
-            msg = "Unauthorized"
-            raise ApiError(msg, status=401)
+            unauthorized("Invalid API key")
 
 
 #: Global authentication handler instance
@@ -404,11 +412,9 @@ def _enforce_endpoint_scope(tenant: Tenant, path: str | None) -> None:
     if tenant.endpoints_allow is None and not tenant.endpoints_deny:
         return
     if path is None or not tenant.allows_endpoint(path):
-        log_error_details(
+        unauthorized(
             f"Tenant API key '{tenant.key_id}' is not allowed on this endpoint"
         )
-        msg = "Unauthorized"
-        raise ApiError(msg, status=401)
 
 
 async def verify_credential(credential: str | None) -> None:
@@ -444,15 +450,11 @@ async def verify_credential(credential: str | None) -> None:
                 return
         if not _auth_handler.enabled:
             # A disabled API key comparison accepts anything, so reject here instead.
-            log_error_details("Credentials rejected by the user pool")
-            msg = "Unauthorized"
-            raise ApiError(msg, status=401)
+            unauthorized("Credentials rejected by the user pool")
     elif not _auth_handler.enabled and SETTINGS.tenant_api_keys:
         # Same trap with tenant keys as the only method: never fall through to
         # the disabled comparison, which accepts anything.
-        log_error_details("Credentials rejected: not a tenant API key")
-        msg = "Unauthorized"
-        raise ApiError(msg, status=401)
+        unauthorized("Credentials rejected: not a tenant API key")
     _auth_handler.verify_credentials(SecretStr(credential) if credential else None)
 
 

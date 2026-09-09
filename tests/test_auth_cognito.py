@@ -516,7 +516,7 @@ class TestRejectedSignatures:
         An expired browser token is a daily event; logged without its status it
         resolves to ``critical`` and every one of them reads as an outage.
 
-        Ref: stdapi/auth_cognito.py:_unauthorized
+        Ref: stdapi/api_errors.py:unauthorized
              stdapi/monitoring.py:_error_level
         """
         harness = await make_authenticator()

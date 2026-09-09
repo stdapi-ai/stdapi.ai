@@ -2,7 +2,7 @@
 
 from asyncio import sleep
 from time import monotonic
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any
 
 from aiohttp import ClientError as HttpClientError
 from aiohttp import ClientSession, ClientTimeout
@@ -11,7 +11,7 @@ from jwt import decode as decode_token
 from jwt.exceptions import PyJWTError
 from pydantic_core import from_json
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import unauthorized
 from stdapi.config import SETTINGS, cognito_issuer_url
 from stdapi.exceptions import ServerError
 from stdapi.monitoring import Principal, log_error_details
@@ -66,21 +66,6 @@ _KEY_SET_RELOAD_COOLDOWN = 300.0
 
 #: Characters of a token key identifier kept when reporting it in the server log.
 _KEY_ID_LOG_LENGTH = 64
-
-
-def _unauthorized(reason: str) -> NoReturn:
-    """Reject the request with the opaque 401 every authentication failure shares.
-
-    Args:
-        reason: Why the credential was refused; recorded in the server log only,
-            so the response cannot be used to find which check failed.
-
-    Raises:
-        ApiError: Always, with status 401.
-    """
-    log_error_details(reason, status=401)
-    msg = "Unauthorized"
-    raise ApiError(msg, status=401)
 
 
 async def _fetch_key_set(url: str) -> Any:  # noqa: ANN401
@@ -201,16 +186,16 @@ class CognitoAuthenticator:
         try:
             header = get_unverified_header(token)
         except PyJWTError:
-            _unauthorized("Bearer token is not a signed token")
+            unauthorized("Bearer token is not a signed token")
         key_id = header.get("kid")
         if not isinstance(key_id, str) or not key_id:
-            _unauthorized("Bearer token carries no key identifier")
+            unauthorized("Bearer token carries no key identifier")
         key = self._keys.get(key_id)
         if key is None:
             await self._reload_keys(key_id)
             key = self._keys.get(key_id)
             if key is None:
-                _unauthorized(
+                unauthorized(
                     "Bearer token signed by the unknown key "
                     f"'{key_id[:_KEY_ID_LOG_LENGTH]}'"
                 )
@@ -224,7 +209,7 @@ class CognitoAuthenticator:
                 options=_DECODE_OPTIONS,
             )
         except PyJWTError as exception:
-            _unauthorized(f"Rejected bearer token: {exception}")
+            unauthorized(f"Rejected bearer token: {exception}")
         return self._principal(claims)
 
     def _principal(self, claims: dict[str, Any]) -> Principal:
@@ -249,15 +234,15 @@ class CognitoAuthenticator:
             username = claims.get("username")
         elif token_use == _USE_ID:
             if not self._accept_id_token:
-                _unauthorized("Identity tokens are not accepted by this deployment")
+                unauthorized("Identity tokens are not accepted by this deployment")
             application = claims.get("aud")
             username = claims.get("cognito:username")
         else:
-            _unauthorized("Bearer token is neither an access nor an identity token")
+            unauthorized("Bearer token is neither an access nor an identity token")
         if not isinstance(application, str) or application not in self._client_ids:
-            _unauthorized("Bearer token was issued to another application")
+            unauthorized("Bearer token was issued to another application")
         if not self._required_scopes <= scopes:
-            _unauthorized("Bearer token is missing a required scope")
+            unauthorized("Bearer token is missing a required scope")
         return Principal(
             subject=claims["sub"],
             username=username if isinstance(username, str) else None,

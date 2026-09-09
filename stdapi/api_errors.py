@@ -2,7 +2,7 @@
 
 import re
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, NoReturn
 
 from botocore.exceptions import (
     ClientError,
@@ -28,6 +28,12 @@ UNREACHABLE_ENDPOINT_ERRORS: Final = (
 
 #: Response key the AWS ``after-call`` hook records a denied call's IAM action under.
 DENIED_CALL_KEY: Final = "stdapiDeniedCall"
+
+#: HTTP status every refused credential answers with.
+_UNAUTHORIZED_STATUS: Final = 401
+
+#: The only thing a refused credential is ever told, whichever check refused it.
+_UNAUTHORIZED_MESSAGE: Final = "Unauthorized"
 
 #: How an AWS denial names the action it refused, and the resource it was attempted on.
 _DENIAL_RE: Final = re.compile(
@@ -161,6 +167,28 @@ class ApiError(Exception):
         if status is not None:
             self.status = status
         super().__init__(message)
+
+
+def unauthorized(reason: str) -> NoReturn:
+    """Refuse a credential with the one 401 every authentication failure shares.
+
+    Both audiences are served in one place: the caller always reads the bare
+    word "Unauthorized", so the response cannot be probed to find which check
+    refused it, while the operator reads *reason* in the request log — at the
+    ``warning`` an ordinary 401 deserves, a wrong, expired or absent credential
+    being the caller's mistake rather than an incident.
+
+    Args:
+        reason: Which check refused the credential, for the server log only.
+
+    Raises:
+        ApiError: Always, with status 401 and nothing a caller could probe with.
+    """
+    # Imported here: stdapi.monitoring imports this module (import cycle).
+    from stdapi.monitoring import log_error_details  # noqa: PLC0415
+
+    log_error_details(reason, status=_UNAUTHORIZED_STATUS)
+    raise ApiError(_UNAUTHORIZED_MESSAGE, status=_UNAUTHORIZED_STATUS)
 
 
 class TenantCredentialError(ApiError):

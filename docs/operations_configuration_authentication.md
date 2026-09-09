@@ -112,7 +112,7 @@ Use AWS Secrets Manager for secure key storage with automatic rotation support. 
 :   Name of the Secrets Manager secret containing the API key. The secret is retrieved from the current region detected by the running container, or defaults to the first region in `AWS_BEDROCK_REGIONS`.
 
 :octicons-code-24: **Format**
-:   Can be a plain string or JSON object
+:   Can be a plain string or JSON object, stored as text. A plain string is the key exactly as stored, character for character; only a JSON **object** is read as a document, with `API_KEY_SECRETSMANAGER_KEY` selecting the field. A secret stored as binary fails startup.
 
 :octicons-lock-24: **IAM Permissions Required**
 :   `secretsmanager:GetSecretValue`

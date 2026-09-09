@@ -357,6 +357,25 @@ class TestMalformedKeys:
         assert raised.value.status == 401
         assert str(raised.value) == "Unauthorized"
 
+    async def test_a_refused_key_is_a_warning_not_an_incident(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """The refusal keeps the severity an ordinary 401 deserves.
+
+        A mistyped tenant key is a daily event; recorded without the status it
+        resolves to ``critical``, which the shipped monitoring treats as an
+        outage worth paging for.
+
+        Ref: stdapi/api_errors.py:unauthorized
+             stdapi/monitoring.py:_error_level
+             docs/operations_logging_monitoring.md
+        """
+        with pytest.raises(ApiError):
+            await verify_tenant_key("sk-std-nonsense")
+
+        assert request_log["level"] == "warning"
+        assert request_log["error_detail"] == ["Malformed tenant API key"]
+
 
 class TestMinting:
     """A declared tenant gets its secret minted, delivered once, and recorded.
