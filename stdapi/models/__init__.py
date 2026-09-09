@@ -552,6 +552,11 @@ _INFERENCE_TYPES = {"INFERENCE_PROFILE", "ON_DEMAND"}
 #: TTL cache for application inference profiles and prompt routers
 _USER_PROFILES: dict[str, tuple[ModelDetails, AwareDatetime]] = {}
 
+#: Per-request details resolved from an ARN the caller named, keyed by model ID.
+_ARN_DETAILS: ContextVar[Mapping[str, ModelDetails] | None] = ContextVar(
+    "arn_details", default=None
+)
+
 #: TTL cache for Prompt Management prompts, keyed by versioned ARN
 _PROMPTS: dict[str, tuple[str, AwareDatetime]] = {}
 
@@ -878,9 +883,9 @@ class ModelBase[RequestT, ResponseT]:
 
         A plain registry lookup: caching it per instance would require
         ``__dict__`` (the hierarchy is fully slotted) and could serve details
-        made stale by a catalog refresh. A runtime-bound request reads the
-        entry a preferred Mantle model displaced, which the registry no longer
-        carries under this identifier.
+        made stale by a catalog refresh. A request naming an ARN reads the
+        details resolved for it, and a runtime-bound one the entry a preferred
+        Mantle model displaced.
 
         Returns:
             Model details including region, provider, and capabilities.
@@ -888,8 +893,8 @@ class ModelBase[RequestT, ResponseT]:
         Raises:
             KeyError: If the model is not found in the registry.
         """
-        if (runtime := _invoked_details(self._model_id)) is not None:
-            return runtime
+        if (resolved := _request_details(self._model_id)) is not None:
+            return resolved
         try:
             return _MODELS[self._model_id]
         except KeyError:
@@ -1562,6 +1567,9 @@ async def get_model_details(model_id: str) -> ModelDetails:
     model displaced: the two catalogues may name that model identically, so
     the catalog key alone cannot say which endpoint's entry is being invoked.
 
+    A request that named an ARN reads the details resolved for it, which route
+    to that caller's own inference profile or prompt router.
+
     Args:
         model_id: Bedrock model identifier, or a Marketplace endpoint ARN.
 
@@ -1572,8 +1580,8 @@ async def get_model_details(model_id: str) -> ModelDetails:
         KeyError: If the model is not found.
     """
     async with _CACHE["access_lock"]:
-        if (runtime := _invoked_details(model_id)) is not None:
-            return runtime
+        if (resolved := _request_details(model_id)) is not None:
+            return resolved
         try:
             return _MODELS[model_id]
         except KeyError:
@@ -2169,6 +2177,45 @@ def _invoked_details(model_id: str) -> ModelDetails | None:
     if _RUNTIME_BOUND.get() or tenant_aws_credential() is not None:
         return _DISPLACED_RUNTIME_MODELS.get(model_id)
     return None
+
+
+def _bind_arn_details(
+    resolved: ModelDetails, served: ModelDetails, *, from_arn: bool
+) -> None:
+    """Route this request through the ARN it named, and only this request.
+
+    The invocation path re-reads details by model ID rather than carrying the
+    ones the request resolved, and the entry stored under that ID belongs to
+    every caller: writing the ARN there would bill their requests to it too.
+    The resolved details are published to this request's context instead.
+
+    Nothing is bound when the request named no ARN, or when the tenant service
+    pin moved it onto another model, which that ARN does not name.
+
+    Args:
+        resolved: Details the request resolved its model to.
+        served: Details the request is served by.
+        from_arn: Whether the request named an ARN.
+    """
+    if not from_arn or resolved is not served:
+        return
+    _ARN_DETAILS.set({**(_ARN_DETAILS.get() or {}), served.id: served})
+
+
+def _request_details(model_id: str) -> ModelDetails | None:
+    """Return details this request resolved for *model_id* outside the catalogue.
+
+    Args:
+        model_id: Model identifier.
+
+    Returns:
+        The ARN the request named, else the displaced bedrock-runtime entry a
+        runtime-bound request invokes, else ``None`` for the catalogue's own.
+    """
+    named = _ARN_DETAILS.get()
+    if named is not None and (resolved := named.get(model_id)) is not None:
+        return resolved
+    return _invoked_details(model_id)
 
 
 def _pin_tenant_billable_service(
@@ -4730,7 +4777,8 @@ async def validate_model(
         output_modality=output_modality,
         input_modality=input_modality,
     )
-    if model_id.startswith("arn:"):
+    from_arn = model_id.startswith("arn:")
+    if from_arn:
         model = _marketplace_endpoint_from_arn(
             model_id
         ) or await _validate_model_from_arn(model_id)
@@ -4756,7 +4804,9 @@ async def validate_model(
         model_id = original_id = model.id
 
     # Before the scope check, so the check applies to the ID actually served.
-    model, model_id = _pin_tenant_billable_service(model, model_id)
+    served, model_id = _pin_tenant_billable_service(model, model_id)
+    _bind_arn_details(model, served, from_arn=from_arn)
+    model = served
 
     # On the resolved ID, after aliases, wildcards, ARNs, deprecation
     # fallbacks and the tenant service pin, so no indirection can launder a
@@ -4787,7 +4837,7 @@ async def _validate_model_from_arn(arn: str) -> ModelDetails | None:
         arn: Bedrock ARN of an inference profile, prompt router or model endpoint.
 
     Returns:
-        Resolved :class:`ModelDetails` with ``inference_profile`` set to *arn*.
+        Details private to this caller, routing *arn*'s own region to *arn*.
 
     Raises:
         ApiError: If *arn* does not match a valid inference profile, prompt router
@@ -4838,11 +4888,12 @@ async def _validate_model_from_arn(arn: str) -> ModelDetails | None:
 
         async with _CACHE["access_lock"]:
             try:
-                base_model = _MODELS[model_id].model_copy()
+                # Deep: the ARN below is this caller's own, and a shallow copy
+                # shares its containers with the entry everyone else resolves.
+                model = _MODELS[model_id].model_copy(deep=True)
             except KeyError:
                 msg = f"model {model_id} not found for ARN: {arn}"
                 raise ApiError(msg) from None
-        model = base_model.model_copy()
         if region not in model.regions:
             model.regions.append(region)
         model.set_inference_profile(region, arn)
