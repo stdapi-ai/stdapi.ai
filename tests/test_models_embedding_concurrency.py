@@ -10,11 +10,12 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan
      stdapi/models/embedding/__init__.py:EmbeddingModelBase._gather_bounded
 """
 
-from asyncio import sleep
+from asyncio import Event, sleep
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from stdapi.api_errors import ApiError
 from stdapi.models import InvokeResult
 from stdapi.models.embedding import _EMBED_CONCURRENCY
 from stdapi.models.embedding.amazon_nova_embed import EmbeddingModel as NovaModel
@@ -34,6 +35,9 @@ _INPUT_COUNT = _EMBED_CONCURRENCY * 3
 #: Event loop passes each fake invocation stays in flight; one is enough for every
 #: unbounded sibling to have started, the rest are margin.
 _YIELDS_PER_INVOCATION = 3
+
+#: Input whose invocation fails, inside the first wave the bound lets start.
+_FAILING_INPUT = _EMBED_CONCURRENCY // 2
 
 
 class _FanOutRecorder:
@@ -69,6 +73,54 @@ class _FanOutRecorder:
         self.active -= 1
         return InvokeResult(
             response=self._make_response([float(value.rsplit("-", 1)[1])]),
+            input_tokens=1,
+            output_tokens=0,
+        )
+
+
+class _CancelWatcher:
+    """Stands in for one model invocation, refusing one input and holding the rest.
+
+    Every invocation but the refused one waits on a gate only the test opens, so
+    what became of the siblings is read after the request has been answered
+    instead of being raced against it.
+    """
+
+    def __init__(self, make_response: Callable[[list[float]], Any]) -> None:
+        """Store the per-model response shape.
+
+        Args:
+            make_response: Wraps a vector into the response body of that model.
+        """
+        self._make_response = make_response
+        self.gate = Event()
+        self.started = 0
+        self.completed = 0
+
+    async def invoke(self, *args: object, **kwargs: object) -> InvokeResult[Any]:
+        """Embed one input, or refuse it when it is the one chosen to fail.
+
+        Args:
+            args: Positional call arguments; the input value is the last one.
+            kwargs: Keyword call arguments; the input value is ``value``.
+
+        Returns:
+            A response carrying the one vector identifying the embedded input.
+
+        Raises:
+            ApiError: When the input is the one chosen to fail.
+        """
+        index = int(
+            str(kwargs["value"] if "value" in kwargs else args[-1]).rsplit("-", 1)[1]
+        )
+        self.started += 1
+        if index == _FAILING_INPUT:
+            msg = "The backend refused this input."
+            raise ApiError(msg)
+        await self.gate.wait()
+        self.completed += 1
+        return InvokeResult(
+            response=self._make_response([float(index)]),
             input_tokens=1,
             output_tokens=0,
         )
@@ -157,3 +209,43 @@ class TestEmbeddingFanOutBound:
         assert response.embeddings == [
             [float(index)] for index in range(_INPUT_COUNT)
         ], "embeddings must be ordered like the inputs that produced them"
+
+    async def test_a_refused_input_stops_the_invocations_beside_it(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        model_class: type[EmbeddingModelBase[Any, Any]],
+        model_id: str,
+        invocation: str,
+        make_response: Callable[[list[float]], Any],
+    ) -> None:
+        """One refused input ends the whole fan-out instead of leaving it running.
+
+        The request is already answered with the error, so an invocation still
+        in flight bills the account for a vector nothing will read, and records
+        its usage into a request whose log is closed.
+        """
+        watcher = _CancelWatcher(make_response)
+        monkeypatch.setattr(model_class, invocation, staticmethod(watcher.invoke))
+        inputs: list[Any] = [f"input-{index}" for index in range(_INPUT_COUNT)]
+
+        with pytest.raises(ApiError):
+            await model_class(model_id).embed_text(
+                inputs, dimensions=None, extra_params={}
+            )
+
+        started_when_refused = watcher.started
+        watcher.gate.set()
+        for _ in range(_YIELDS_PER_INVOCATION):
+            await sleep(0)
+
+        assert watcher.completed == 0, (
+            f"{watcher.completed} invocations ran on past the refusal that "
+            "answered the request"
+        )
+        assert watcher.started == started_when_refused, (
+            f"{watcher.started - started_when_refused} invocations started "
+            "after the request was answered"
+        )
+        assert started_when_refused < _INPUT_COUNT, (
+            "the bound must have kept most inputs from ever starting"
+        )

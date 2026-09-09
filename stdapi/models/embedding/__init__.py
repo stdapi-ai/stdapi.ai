@@ -6,7 +6,7 @@ and are auto-loaded once on import.
 """
 
 from abc import abstractmethod
-from asyncio import Semaphore, gather
+from asyncio import Semaphore, ensure_future, gather
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel
@@ -15,7 +15,7 @@ from stdapi.api_errors import ApiError
 from stdapi.models import ModelBase, get_model, load_model_plugins
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Iterable, Sequence
+    from collections.abc import Coroutine, Iterable, Sequence
     from re import Pattern
 
     from stdapi.input_file import InputFileUrl
@@ -195,7 +195,9 @@ class EmbeddingModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         return values
 
     @staticmethod
-    async def _gather_bounded[T](invocations: Iterable[Awaitable[T]]) -> list[T]:
+    async def _gather_bounded[T](
+        invocations: Iterable[Coroutine[Any, Any, T]],
+    ) -> list[T]:
         """Await one invocation per input under the per-request concurrency bound.
 
         A model that embeds one input per call fans out a number of concurrent
@@ -203,24 +205,44 @@ class EmbeddingModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         hundreds. The bound keeps such a request running at a sustainable rate
         instead of throttling itself against the backend.
 
+        The first failure answers the request, so the invocations beside it are
+        cancelled: one left running bills the account for a vector nobody reads
+        and records its usage into a request already closed.
+
         Args:
-            invocations: Awaitables to run, one per input.
+            invocations: Invocation coroutines to run, one per input.
 
         Returns:
-            Their results, in the order the awaitables were given.
+            Their results, in the order the invocations were given.
+
+        Raises:
+            BaseException: Whatever the first failing invocation raised.
         """
         semaphore = Semaphore(_EMBED_CONCURRENCY)
 
-        async def _bounded(invocation: Awaitable[T]) -> T:
+        async def _bounded(invocation: Coroutine[Any, Any, T]) -> T:
             """Await one invocation while holding a slot of the bound.
 
             Returns:
                 Whatever the invocation returned.
             """
-            async with semaphore:
-                return await invocation
+            try:
+                async with semaphore:
+                    return await invocation
+            finally:
+                # Cancelled before its slot came up: closing it here keeps it
+                # from being reported as a coroutine that was never awaited.
+                invocation.close()
 
-        return await gather(*(_bounded(invocation) for invocation in invocations))
+        tasks = [ensure_future(_bounded(invocation)) for invocation in invocations]
+        try:
+            return await gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            # Await cancellation so asyncio doesn't log unretrieved exceptions at GC.
+            await gather(*tasks, return_exceptions=True)
+            raise
 
 
 _MODEL_REGISTRY: list[
