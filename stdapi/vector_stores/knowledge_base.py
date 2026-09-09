@@ -921,7 +921,9 @@ class KnowledgeBaseIndex:
         Only the documents this store attaches are removable. One of the corpus
         behind it is readable and never deletable: it was put there by something
         that maintains it, and removing it here would take it out of a corpus
-        this server does not own.
+        this server does not own. What decides is what the document is, not
+        where it is held: the store's own data source may itself keep the
+        corpus, and serve the store for search only.
 
         Args:
             store_id: A validated vector store identifier.
@@ -935,7 +937,11 @@ class KnowledgeBaseIndex:
         await self.read_document(store_id, file_id)
         holding, identifier = document_target(file_id)
         data_source_id = await _data_source_id(knowledge_base_id)
-        if holding and holding != data_source_id:
+        # Attached here: an uploaded file's own identifier, in the store's own data source.
+        custom: JsonMapping = identifier.get("custom") or {}
+        if (holding and holding != data_source_id) or not _is_file_id(
+            str(custom.get("id", ""))
+        ):
             self.refuse(
                 "a document of the corpus behind it cannot be removed: it is "
                 "maintained where that corpus comes from."

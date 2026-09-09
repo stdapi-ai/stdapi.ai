@@ -1558,6 +1558,181 @@ class TestDocumentsOfAnotherDataSource:
 
 
 @pytest.mark.local
+class TestCorpusInTheStoresOwnDataSource:
+    """The corpus is never deletable, even when the store's own data source holds it.
+
+    Issue #213: the refusal only held for a document of *another* data source.
+    A store served for search only — its one data source syncing a corpus from
+    a bucket — reports its passages under identifiers naming that same data
+    source, and detaching one removed the corpus document. What decides
+    deletability is what the document is: an uploaded file this API attached,
+    or anything else.
+
+    Ref: stdapi/vector_stores/knowledge_base.py:KnowledgeBaseIndex.delete_document
+         docs/api_openai_vector_stores.md, "Retrieve, detach"
+    """
+
+    @staticmethod
+    def _search_only(backend: _Backend) -> None:
+        """Serve a store whose only data source syncs its corpus from a bucket."""
+        backend.agent.data_source_types = {_DATA_SOURCE_ID: "S3"}
+        backend.agent.documents.append(
+            {
+                "knowledgeBaseId": _KB_ID,
+                "dataSourceId": _DATA_SOURCE_ID,
+                "identifier": {"dataSourceType": "S3", "s3": {"uri": _SYNCED_URI}},
+                "status": "INDEXED",
+                "updatedAt": _MOMENT,
+            }
+        )
+        backend.runtime.results = [
+            {
+                "content": {"type": "TEXT", "text": "The refund window is 30 days."},
+                "documentId": _SYNCED_URI,
+                "location": {"type": "S3", "s3Location": {"uri": _SYNCED_URI}},
+                "metadata": {
+                    "x-amz-bedrock-kb-source-uri": _SYNCED_URI,
+                    "x-amz-bedrock-kb-data-source-id": _DATA_SOURCE_ID,
+                },
+                "score": 0.27,
+            }
+        ]
+
+    @staticmethod
+    def _corpus_document(backend: _Backend, document_id: str) -> None:
+        """Hold a document ingested into the store's own data source under *document_id*."""
+        backend.agent.documents.append(
+            {
+                "knowledgeBaseId": _KB_ID,
+                "dataSourceId": _DATA_SOURCE_ID,
+                "identifier": {
+                    "dataSourceType": "CUSTOM",
+                    "custom": {"id": document_id},
+                },
+                "status": "INDEXED",
+                "updatedAt": _MOMENT,
+            }
+        )
+
+    def test_a_search_only_store_refuses_to_remove_a_synced_document(
+        self, app_client: TestClient, knowledge_base_backend: _Backend
+    ) -> None:
+        """The identifier a search hands back does not detach the corpus document.
+
+        Ref: stdapi/vector_stores/knowledge_base.py:KnowledgeBaseIndex.delete_document
+        """
+        self._search_only(knowledge_base_backend)
+        file_id = app_client.post(
+            f"/v1/vector_stores/{_STORE_ID}/search", json={"query": "refund window"}
+        ).json()["data"][0]["file_id"]
+        assert file_id.startswith("kbdoc_")
+
+        response = app_client.delete(f"/v1/vector_stores/{_STORE_ID}/files/{file_id}")
+
+        assert response.status_code == 400
+        message = _error_of(response)["message"]
+        assert "managed outside this server" in message
+        assert "cannot be removed" in message
+        assert "DeleteKnowledgeBaseDocuments" not in (
+            knowledge_base_backend.agent.operations()
+        )
+        assert len(knowledge_base_backend.agent.documents) == 1
+
+    def test_a_document_ingested_under_its_own_identifier_is_not_removable(
+        self, app_client: TestClient, knowledge_base_backend: _Backend
+    ) -> None:
+        """A document the operator put in the store's own data source is corpus too.
+
+        Its identifier is the one the listing reports, so no search and no
+        forging is needed to reach it.
+
+        Ref: stdapi/vector_stores/knowledge_base.py:KnowledgeBaseIndex.delete_document
+             stdapi/vector_stores/knowledge_base.py:document_file_id
+        """
+        self._corpus_document(knowledge_base_backend, "handbook-2026")
+        listed = app_client.get(f"/v1/vector_stores/{_STORE_ID}/files").json()["data"]
+        (file_id,) = [entry["id"] for entry in listed]
+        assert file_id.startswith("kbdoc_")
+
+        response = app_client.delete(f"/v1/vector_stores/{_STORE_ID}/files/{file_id}")
+
+        assert response.status_code == 400
+        assert "managed outside this server" in _error_of(response)["message"]
+        assert "DeleteKnowledgeBaseDocuments" not in (
+            knowledge_base_backend.agent.operations()
+        )
+        assert len(knowledge_base_backend.agent.documents) == 1
+
+    def test_an_uploaded_file_in_another_data_source_is_still_refused(
+        self,
+        app_client: TestClient,
+        knowledge_base_backend: _Backend,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Being an uploaded file is not enough: it must be in the store's own data source.
+
+        This API only ever attaches to the store's own data source, so a forged
+        identifier placing a file-shaped document in another one names nothing
+        this API put there.
+
+        Ref: stdapi/vector_stores/knowledge_base.py:KnowledgeBaseIndex.delete_document
+             stdapi/vector_stores/knowledge_base.py:document_target
+        """
+        monkeypatch.setattr(
+            SETTINGS, "aws_bedrock_knowledge_base_ids", [f"{_KB_ID}/{_DATA_SOURCE_ID}"]
+        )
+        knowledge_base_backend.agent.data_sources = [
+            _DATA_SOURCE_ID,
+            _OTHER_DATA_SOURCE_ID,
+        ]
+        knowledge_base_backend.agent.documents.append(
+            {
+                "knowledgeBaseId": _KB_ID,
+                "dataSourceId": _OTHER_DATA_SOURCE_ID,
+                "identifier": {"dataSourceType": "CUSTOM", "custom": {"id": _FILE_ID}},
+                "status": "INDEXED",
+                "updatedAt": _MOMENT,
+            }
+        )
+        forged = knowledge_base._encode_document_id(  # noqa: SLF001
+            "c", _OTHER_DATA_SOURCE_ID, _FILE_ID
+        )
+
+        response = app_client.delete(f"/v1/vector_stores/{_STORE_ID}/files/{forged}")
+
+        assert response.status_code == 400
+        assert "managed outside this server" in _error_of(response)["message"]
+        assert "DeleteKnowledgeBaseDocuments" not in (
+            knowledge_base_backend.agent.operations()
+        )
+        assert len(knowledge_base_backend.agent.documents) == 1
+
+    def test_an_attached_file_beside_the_corpus_still_deletes(
+        self, app_client: TestClient, knowledge_base_backend: _Backend
+    ) -> None:
+        """Only the document this API attached goes; the corpus beside it stays.
+
+        Ref: https://platform.openai.com/docs/api-reference/vector-stores-files/deleteFile
+             stdapi/vector_stores/knowledge_base.py:KnowledgeBaseIndex.delete_document
+        """
+        self._corpus_document(knowledge_base_backend, "handbook-2026")
+        app_client.post(
+            f"/v1/vector_stores/{_STORE_ID}/files", json={"file_id": _FILE_ID}
+        )
+        assert len(knowledge_base_backend.agent.documents) == 2
+
+        response = app_client.delete(f"/v1/vector_stores/{_STORE_ID}/files/{_FILE_ID}")
+
+        assert response.status_code == 200
+        assert response.json()["deleted"] is True
+        remaining = [
+            entry["identifier"]["custom"]["id"]
+            for entry in knowledge_base_backend.agent.documents
+        ]
+        assert remaining == ["handbook-2026"]
+
+
+@pytest.mark.local
 class TestSearch:
     """Searching a knowledge base store, and what its score means."""
 
