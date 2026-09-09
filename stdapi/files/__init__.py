@@ -8,6 +8,7 @@ from stdapi.files._core import encode_id_payload as encode_id_payload
 from stdapi.files._core import file_id_s3_key as file_id_s3_key
 from stdapi.files._core import get_file as get_file
 from stdapi.files._core import get_file_content as get_file_content
+from stdapi.files._core import head_is_expired as head_is_expired
 from stdapi.files._core import list_files as list_files
 from stdapi.files._core import parse_file_id as parse_file_id
 from stdapi.files._core import payload_created_at as payload_created_at

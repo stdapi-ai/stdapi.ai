@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import re
 from asyncio import gather, sleep
-from typing import TYPE_CHECKING, NoReturn, Self
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, NoReturn, Self, cast
 
 import pytest
 from botocore.exceptions import ClientError
@@ -22,9 +23,12 @@ from pybase64 import b64encode
 from stdapi import aws_s3, input_file
 from stdapi.api_errors import ApiError, denied_feature_unavailable
 from stdapi.aws_s3 import BUCKET_TO_REGION, UPLOAD_CHUNK_SIZE, S3Object
+from stdapi.cleanup import CLEANUPS
 from stdapi.config import SETTINGS
+from stdapi.files import encode_id_payload
 from stdapi.files._multipart import create_multipart_session
 from stdapi.input_file import (
+    FileIdInputFile,
     InlineMediaLimits,
     InputFile,
     inline_media_storage_error,
@@ -32,10 +36,11 @@ from stdapi.input_file import (
     plan_bedrock_media_transport,
     resolve_all_bedrock_content_blocks,
 )
+from stdapi.utils import now_utc_timestamp
 from tests._helpers import make_client_error
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 
 pytestmark = pytest.mark.local
 
@@ -1284,3 +1289,268 @@ class TestInlineMediaTransport:
         assert "30 bytes" in message, "the per-attachment size the model accepts"
         assert "60 bytes" in message, "the per-request size the model accepts"
         _assert_names_no_internals(message)
+
+
+#: Content the stored-object stub serves, and the length its metadata reports.
+_STORED_FILE_CONTENT = b"stored file content"
+
+
+class _StubFilesS3Client:
+    """Stub S3 holding one uploaded file, answering as S3 answers for a real one.
+
+    ``HeadObject`` carries the ``expires-at`` user metadata the Files API writes
+    at upload, alongside the fields every response carries.
+    """
+
+    def __init__(self, expires_at: int | None) -> None:
+        self.expires_at = expires_at
+        self.head_calls = 0
+        self.reads: list[str] = []
+        self.deleted: list[str] = []
+
+    async def head_object(self, **_kwargs: object) -> dict[str, Any]:
+        """Describe the stored object.
+
+        Returns:
+            The ``HeadObject`` response for the file.
+        """
+        self.head_calls += 1
+        return {
+            "ContentDisposition": 'attachment; filename="note.txt"',
+            "ContentType": "text/plain",
+            "ContentLength": len(_STORED_FILE_CONTENT),
+            "LastModified": datetime(2026, 1, 1, tzinfo=UTC),
+            "Metadata": {
+                "purpose": "user_data",
+                "expires-at": "" if self.expires_at is None else str(self.expires_at),
+            },
+        }
+
+    async def delete_object(self, **kwargs: object) -> None:
+        """Record the deletion an expired object is queued for."""
+        self.deleted.append(str(kwargs["Key"]))
+
+
+@pytest.fixture
+def stored_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[[int | None], tuple[str, _StubFilesS3Client]]:
+    """Serve one uploaded file from a stub, whatever storage the deployment has.
+
+    Returns:
+        A factory taking the expiry stored on the object — Unix seconds, or
+        ``None`` for a file that never expires — and returning the file
+        identifier a client references it by, with the stub answering for it.
+    """
+    bucket = "a-files-bucket"
+    monkeypatch.setattr(SETTINGS, "aws_s3_bucket", bucket)
+
+    def _serve(expires_at: int | None) -> tuple[str, _StubFilesS3Client]:
+        """Install the stub and mint an identifier resolving to it.
+
+        Returns:
+            The file identifier and the stub answering for it.
+        """
+        stub = _StubFilesS3Client(expires_at)
+
+        async def _read(_bucket: str, key: str) -> bytes:
+            """Serve the stored bytes, recording that they were read.
+
+            Returns:
+                The stored content.
+            """
+            stub.reads.append(key)
+            return _STORED_FILE_CONTENT
+
+        monkeypatch.setattr(input_file, "get_client", lambda *_a, **_k: stub)
+        monkeypatch.setattr(aws_s3, "get_client", lambda *_a, **_k: stub)
+        monkeypatch.setattr(input_file, "get_bytes_from_s3", _read)
+        return f"file-{encode_id_payload(bucket)}", stub
+
+    return _serve
+
+
+@pytest.fixture
+def scheduled_cleanups() -> Iterator[list[Awaitable[None]]]:
+    """Bind the cleanup context a request schedules its background work in.
+
+    Whatever the test leaves pending is dropped the way a request cancelled
+    before its cleanups run drops them.
+
+    Yields:
+        The pending cleanups, for the test to await when it wants them run.
+    """
+    token = CLEANUPS.set([])
+    pending = CLEANUPS.get()
+    try:
+        yield pending
+    finally:
+        CLEANUPS.reset(token)
+        for cleanup in pending:
+            cast("Coroutine[Any, Any, None]", cleanup).close()
+
+
+def _assert_expired(error: ApiError, file_id: str) -> None:
+    """Assert *error* is the refusal a client gets for a file that no longer exists."""
+    assert error.status == 404
+    assert error.code == "not_found"
+    message = str(error)
+    assert file_id in message, "the caller needs to know which file is gone"
+    assert "expired" in message.lower(), "and why it is gone"
+    _assert_names_no_internals(message)
+
+
+@pytest.mark.usefixtures("scheduled_cleanups")
+class TestUploadedFileExpiry:
+    """A file past its expiry is gone for inference too, not only for the Files API.
+
+    Expiry is what a client uses to bound how long content it uploaded stays
+    readable, so it has to hold on every path that reads the file — a request
+    attaching it to a model included. Storage deletes expired objects on its own
+    schedule, which is why the check is made against the clock at every read
+    rather than trusted to happen on time.
+
+    Ref: https://stdapi.ai/api_openai_files/
+         stdapi/input_file.py:_S3Source
+    """
+
+    async def test_the_metadata_of_an_expired_file_is_refused(
+        self, stored_file: Callable[[int | None], tuple[str, _StubFilesS3Client]]
+    ) -> None:
+        """Reading an expired file's metadata answers 404, as retrieving it does.
+
+        Ref: stdapi/input_file.py:_S3Source._resolve_metadata
+        """
+        file_id, _stub = stored_file(now_utc_timestamp() - 60)
+
+        with pytest.raises(ApiError) as exc:
+            await InputFile(f"file-id:{file_id}").get_size()
+
+        _assert_expired(exc.value, file_id)
+
+    async def test_the_content_of_an_expired_file_is_never_read(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stored_file: Callable[[int | None], tuple[str, _StubFilesS3Client]],
+    ) -> None:
+        """An expired file's bytes are refused without being downloaded.
+
+        With ``max_input_file_size`` disabled nothing measures the file before
+        reading it, so a check made only while resolving its size would let the
+        content through on exactly the deployments that set no limit.
+
+        Ref: stdapi/input_file.py:_S3Source._read
+        """
+        monkeypatch.setattr(SETTINGS, "max_input_file_size", 0)
+        file_id, stub = stored_file(now_utc_timestamp() - 60)
+
+        with pytest.raises(ApiError) as exc:
+            await InputFile(f"file-id:{file_id}").to_bytes()
+
+        _assert_expired(exc.value, file_id)
+        assert stub.reads == [], "the content of an expired file must not be read"
+
+    async def test_an_expired_file_is_not_handed_to_the_model_by_reference(
+        self, stored_file: Callable[[int | None], tuple[str, _StubFilesS3Client]]
+    ) -> None:
+        """An expired file is refused when it would travel as a stored reference.
+
+        Large attachments are handed to the model as a reference instead of
+        inline bytes, and that path reads no metadata of its own: the file would
+        otherwise expire for small requests and stay readable for big ones.
+
+        Ref: stdapi/input_file.py:_S3Source.to_s3
+        """
+        file_id, _stub = stored_file(now_utc_timestamp() - 60)
+        file = InputFile(f"file-id:{file_id}")
+
+        with pytest.raises(ApiError) as exc:
+            await file.to_s3(SETTINGS.aws_bedrock_regions[0])
+
+        _assert_expired(exc.value, file_id)
+
+    async def test_a_typed_file_id_is_checked_like_the_uri(
+        self, stored_file: Callable[[int | None], tuple[str, _StubFilesS3Client]]
+    ) -> None:
+        """Both spellings of a file reference expire together.
+
+        A chat content part names the file in a typed ``file_id`` field while a
+        string-overloaded field takes the ``file-id:`` URI: the same file, so
+        the same answer once it has expired.
+
+        Ref: stdapi/input_file.py:FileIdInputFile
+        """
+        file_id, _stub = stored_file(now_utc_timestamp() - 60)
+
+        with pytest.raises(ApiError) as exc:
+            await FileIdInputFile(file_id).get_size()
+
+        _assert_expired(exc.value, file_id)
+
+    async def test_an_expired_file_is_queued_for_deletion(
+        self,
+        stored_file: Callable[[int | None], tuple[str, _StubFilesS3Client]],
+        scheduled_cleanups: list[Awaitable[None]],
+    ) -> None:
+        """The refused object is deleted after the response, not left to storage alone.
+
+        A file whose expiry a request notices is removed there and then, so
+        content a client asked to expire does not sit in storage until the
+        storage-side sweep gets to it.
+
+        Ref: stdapi/files/_core.py:_get_file_impl
+        """
+        file_id, stub = stored_file(now_utc_timestamp() - 60)
+
+        with pytest.raises(ApiError):
+            await InputFile(f"file-id:{file_id}").get_size()
+
+        assert len(scheduled_cleanups) == 1, "the expired object is deleted once"
+        await scheduled_cleanups.pop()
+        stored_key = f"{SETTINGS.aws_s3_files_prefix}{file_id.removeprefix('file-')}"
+        assert stub.deleted == [stored_key]
+
+    async def test_a_file_within_its_expiry_costs_one_metadata_read(
+        self, stored_file: Callable[[int | None], tuple[str, _StubFilesS3Client]]
+    ) -> None:
+        """A live file is served, and the expiry check adds no second lookup.
+
+        Ref: stdapi/input_file.py:_S3Source._enforce_expiry
+        """
+        file_id, stub = stored_file(now_utc_timestamp() + 3600)
+        file = InputFile(f"file-id:{file_id}")
+
+        assert await file.get_size() == len(_STORED_FILE_CONTENT)
+        assert await file.to_bytes() == _STORED_FILE_CONTENT
+        assert stub.head_calls == 1, "the file is described once, then read"
+
+    async def test_a_file_with_no_expiry_is_served(
+        self, stored_file: Callable[[int | None], tuple[str, _StubFilesS3Client]]
+    ) -> None:
+        """A file uploaded without ``expires_after`` never expires.
+
+        Ref: stdapi/files/_core.py:_record_from_head
+        """
+        file_id, _stub = stored_file(None)
+
+        assert await InputFile(f"file-id:{file_id}").to_bytes() == _STORED_FILE_CONTENT
+
+    async def test_an_object_named_by_uri_keeps_its_own_lifetime(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An ``s3://`` input is not subject to the Files API expiry.
+
+        Expiry belongs to the file identifier a client uploaded and can delete;
+        an object the request names by URI is the caller's own reference to
+        storage, and whatever metadata it carries is theirs, not a lifetime this
+        server enforces on them.
+
+        Ref: stdapi/input_file.py:_S3Source._enforce_expiry
+        """
+        bucket = _allowed_bucket(monkeypatch)
+        stub = _StubFilesS3Client(now_utc_timestamp() - 60)
+        monkeypatch.setattr(input_file, "get_client", lambda *_a, **_k: stub)
+
+        assert await InputFile(f"s3://{bucket}/note.txt").get_size() == len(
+            _STORED_FILE_CONTENT
+        )

@@ -314,6 +314,19 @@ def _is_expired(record: FileRecord) -> bool:
     return record.expires_at is not None and now_utc_timestamp() >= record.expires_at
 
 
+def head_is_expired(payload: str, head: HeadObjectOutputTypeDef) -> bool:
+    """Return whether the file *head* describes has reached its expiry.
+
+    Every read of a stored file goes through it, so that an input referencing a
+    file expires at the same instant retrieving that file does.
+
+    Args:
+        payload: Bare 32-char base32 file payload.
+        head: ``HeadObject`` response dict.
+    """
+    return _is_expired(_record_from_head(payload, head))
+
+
 async def _force_s3_metadata(
     s3: S3Client,
     bucket: str,

@@ -39,9 +39,15 @@ from stdapi.aws_s3 import (
     copy_s3_object,
     get_bytes_from_s3,
     put_s3_object,
+    track_temporary_s3_objects,
 )
 from stdapi.config import DOWNLOAD_TIMEOUT, SETTINGS
-from stdapi.files import file_id_s3_key, parse_file_id, resolve_file_bucket
+from stdapi.files import (
+    file_id_s3_key,
+    head_is_expired,
+    parse_file_id,
+    resolve_file_bucket,
+)
 from stdapi.monitoring import log_error_details
 from stdapi.security import ssrf_blocked_status, ssrf_safe_connector
 from stdapi.server import HTTP_CLIENT_HEADERS
@@ -442,12 +448,13 @@ class _FileSource(ABC):
 class _S3Source(_FileSource):
     """Source backend for ``s3://`` URIs."""
 
-    __slots__ = ("_bucket", "_file_id", "_key", "_uri")
+    __slots__ = ("_bucket", "_expiry_checked", "_file_id", "_key", "_uri")
 
     _uri: str
     _bucket: str
     _key: str
     _file_id: str | None
+    _expiry_checked: bool
 
     def __init__(
         self, uri: str, bucket: str, key: str, *, file_id: str | None = None
@@ -472,6 +479,7 @@ class _S3Source(_FileSource):
         )
         self._uri = self._repr = uri
         self._file_id = file_id
+        self._expiry_checked = False
 
     async def _resolve_metadata(self) -> None:
         """Resolve content type and size via S3 ``HeadObject``.
@@ -493,9 +501,13 @@ class _S3Source(_FileSource):
                 "404",
                 "NoSuchKey",
             ):
-                msg = f"File 'file-{self._file_id}' not found or expired."
-                raise FileNotExistError(msg) from exc
+                raise self._gone_error(self._file_id) from exc
             raise
+        if (file_id := self._file_id) is not None:
+            self._expiry_checked = True
+            if head_is_expired(file_id, head):
+                track_temporary_s3_objects(self._bucket, self._key)
+                raise self._gone_error(file_id)
         self._size = head["ContentLength"]
         self._content_type = head["ContentType"]
         self._filename = (
@@ -508,6 +520,34 @@ class _S3Source(_FileSource):
             else self._key.rsplit("/", 1)[-1] or None
         )
 
+    @staticmethod
+    def _gone_error(file_id: str) -> FileNotExistError:
+        """Return the refusal for a Files API file that is deleted or expired.
+
+        One message for both, because the caller acts on neither differently and
+        the difference is not theirs to read.
+
+        Args:
+            file_id: Bare Files API identifier of the file.
+
+        Returns:
+            The error to raise.
+        """
+        return FileNotExistError(f"File 'file-{file_id}' not found or expired.")
+
+    async def _enforce_expiry(self) -> None:
+        """Reject a stored file that has reached its expiry, before it is handed on.
+
+        Nothing else reads the expiry a file carries: a path that measures the
+        file first has it checked already, while one that goes straight to the
+        content or to a reference reads the metadata here.
+
+        Raises:
+            FileNotExistError: When the file has expired.
+        """
+        if self._file_id is not None and not self._expiry_checked:
+            await self._resolve_metadata()
+
     async def _read(self) -> bytes:
         """Download the S3 object body.
 
@@ -515,9 +555,12 @@ class _S3Source(_FileSource):
             The complete file bytes.
 
         Raises:
+            FileNotExistError: When the source resolves a Files API ID whose
+                underlying object has expired.
             InputAccessDeniedError: When the caller named an object this server
                 is not allowed to read.
         """
+        await self._enforce_expiry()
         with caller_input_denial_guard(self._bucket, self._uri):
             return await get_bytes_from_s3(self._bucket, self._key)
 
@@ -554,10 +597,13 @@ class _S3Source(_FileSource):
             An ``S3Object`` pointing to the S3 object.
 
         Raises:
+            FileNotExistError: When the source resolves a Files API ID whose
+                underlying object has expired.
             InputAccessDeniedError: When the caller named a source object this
                 server is not allowed to read.
             ApiError: When the file cannot be uploaded or copied.
         """
+        await self._enforce_expiry()
         if self._region == region and bucket is None and key is None:
             return S3Object(bucket=self._bucket, key=self._key)
         with caller_input_denial_guard(self._bucket, self._uri):
