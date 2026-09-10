@@ -1025,7 +1025,7 @@ def _b64_noisy_rgb_png(size: int = 64) -> str:
 class TestOutputCompressionReEncoding:
     """``output_compression`` is applied when the image is re-encoded, and only then.
 
-    The parameter is documented as supported over 1-100% on generations and
+    The parameter is documented as supported over 0-100% on generations and
     edits, but it only reaches the encoder through the format conversion: a
     backend already producing the requested format streams its bytes through
     untouched. Asserting the produced payload, rather than the value handed to

@@ -63,7 +63,7 @@ curl -X POST "$BASE/v1/images/generations" \
 | `quality`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Quality setting (default: `auto`, supports OpenAI & model-specific); accepted and ignored by models with no quality control |
 | `style`                        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Model-specific style parameters; accepted and ignored by models with no style control |
 | `output_format`                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `png`, `jpeg`, or `webp` on every model; the gateway re-encodes when the model cannot produce the format natively |
-| `output_compression`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Compression level 1-100% (default: 100)                             |
+| `output_compression`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Compression level 0-100% (default: 100)                             |
 | `stream`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Generate images in streaming mode, sending each finished image as an `image_generation.completed` event |
 | `partial_images`               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted (0-3) but ignored — no available model currently streams partial images; the final image is always sent as a single event |
 | `background`                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepts `auto` (default) and `opaque`; `transparent` is unsupported — responses report `opaque` |
