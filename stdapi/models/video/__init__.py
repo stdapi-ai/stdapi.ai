@@ -95,6 +95,24 @@ class ReferenceImage(NamedTuple):
     base64_data: str
 
 
+async def resolve_reference_image(reference: InputFile) -> ReferenceImage:
+    """Resolve a reference image input into the pair model input builders take.
+
+    Args:
+        reference: The reference image as supplied by the caller.
+
+    Returns:
+        The reference image, with its media type and base64-encoded content.
+
+    Raises:
+        ApiError: 413 when the image exceeds the maximum input file size; 400
+            when it cannot be read from the origin it names.
+    """
+    return ReferenceImage(
+        await reference.get_content_type(), await reference.to_base64()
+    )
+
+
 class VideoGenerationStart(BaseModel):
     """Started video generation job.
 
@@ -200,7 +218,7 @@ class VideoModelBase(ModelBase[Any, Any]):
         *,
         seconds: int | None,
         size: str | None,
-        reference_image: InputFile | None,
+        reference_image: ReferenceImage | None,
         extra_params: JsonMapping,
     ) -> VideoGenerationStart:
         """Start an asynchronous video generation job.
@@ -209,7 +227,7 @@ class VideoModelBase(ModelBase[Any, Any]):
             prompt: Text prompt describing the video.
             seconds: Video duration in seconds, or None for the model default.
             size: Video size as "<width>x<height>", or None for the model default.
-            reference_image: Optional starting keyframe image.
+            reference_image: Optional starting keyframe image, already resolved.
             extra_params: Extra model parameters.
 
         Returns:
@@ -217,19 +235,11 @@ class VideoModelBase(ModelBase[Any, Any]):
         """
         seconds = seconds if seconds is not None else self.DEFAULT_SECONDS
         size = size or self.DEFAULT_SIZE
-        image = (
-            ReferenceImage(
-                await reference_image.get_content_type(),
-                await reference_image.to_base64(),
-            )
-            if reference_image is not None
-            else None
-        )
         body = self.build_generation_input(
             prompt,
             seconds=seconds,
             size=size,
-            reference_image=image,
+            reference_image=reference_image,
             extra_params=extra_params,
         )
         candidates = await compute_candidate_regions(self._model_id, s3_required=True)

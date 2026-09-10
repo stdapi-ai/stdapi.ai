@@ -621,19 +621,12 @@ class TestStartVideoGeneration:
         client = _StubRuntimeClient()
         self._patch_infra(monkeypatch, client)
 
-        class _Ref:
-            async def get_content_type(self) -> str:
-                return "image/webp"
-
-            async def to_base64(self) -> str:
-                return "aGVsbG8="
-
         with pytest.raises(ApiError, match="PNG or JPEG") as exc_info:
             await get_video_model("luma.ray-v2:0").start_video_generation(
                 "a cat",
                 seconds=5,
                 size="1280x720",
-                reference_image=_Ref(),  # type: ignore[arg-type]
+                reference_image=ReferenceImage("image/webp", "aGVsbG8="),
                 extra_params={},
             )
         assert exc_info.value.status == 400
