@@ -36,10 +36,7 @@ class _FastUpscaleJob(StabilityImageGenerationJobBase):
         self._validate_no_mask(mask)
         request: FastUpscaleRequest = {"image": self._get_one_image_from_list(images)}
         self._finalize_request(request)
-        body = self._encode_request(request)
-        return tuple(
-            self._get_image_from_response(body, index) for index in range(self._count)
-        )
+        return self._fan_out(request)
 
 
 class ImageModel(StabilityImageModelBase):

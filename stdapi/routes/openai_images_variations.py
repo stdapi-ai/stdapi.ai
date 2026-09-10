@@ -256,6 +256,5 @@ async def create_image_variations(
         job=job,
         results=await job.create_variations(images=[await input_image.to_base64()]),
         response_format=request.response_format,
-        output_image_count=request.n,
         input_image_count=1,
     )

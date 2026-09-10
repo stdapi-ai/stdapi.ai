@@ -22,7 +22,7 @@ from stdapi.config import SETTINGS
 from stdapi.models.image import ImageGenerationJobBase, ImageGenerationResponse
 from stdapi.monitoring import REQUEST_LOG, REQUEST_TIME, EventLog
 from stdapi.routes import openai_images_generations
-from stdapi.routes._images_common import build_images_response
+from stdapi.routes._images_common import build_images_response, image_usage
 from stdapi.routes.openai_images_generations import stream_generator
 from stdapi.types.openai_images import (
     ImageEditJsonBody,
@@ -1176,7 +1176,6 @@ class TestStreamGeneratorUsageMatchesNonStream:
                 job=job,
                 results=[ImageGenerationResponse(image="bbb", index=1)],
                 response_format="b64_json",
-                output_image_count=2,
             )
             assert non_stream.usage is not None
             assert (
@@ -1235,7 +1234,6 @@ class TestBuildImagesResponseUrlFormat:
                 ImageGenerationResponse(image="https://example.invalid/a", index=0)
             ],
             response_format="url",
-            output_image_count=1,
             input_image_count=2,
         )
 
@@ -1258,7 +1256,6 @@ class TestBuildImagesResponseUrlFormat:
             job=self._job(0, 0),
             results=[ImageGenerationResponse(image="aaa", index=0)],
             response_format="b64_json",
-            output_image_count=1,
         )
 
         assert response.data is not None
@@ -1863,3 +1860,57 @@ class TestStreamGeneratorPartialImages:
             for event in events
             if event["type"] == "image_generation.completed"
         ] == ["final0", "final1"]
+
+
+class TestImageUsageFallbacks:
+    """Usage substitutes image counts only for tokens the backend left unreported.
+
+    Image backends bill per image and several report no token counts at all, so
+    the request's own image counts stand in. A reported zero is a real count and
+    must not be replaced by one, or a free request bills as a paid one.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/routes/_images_common.py:image_usage
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    def _job(
+        count: int, input_tokens: int | None, output_tokens: int | None
+    ) -> ImageGenerationJobBase[Any]:
+        """Build a *count*-image job billed *input_tokens*/*output_tokens*."""
+        job = object.__new__(ImageGenerationJobBase)
+        job._count = count  # noqa: SLF001
+        job._input_tokens = input_tokens  # noqa: SLF001
+        job._output_tokens = output_tokens  # noqa: SLF001
+        return job
+
+    def test_unreported_tokens_fall_back_to_the_image_counts(self) -> None:
+        """A backend reporting nothing is billed the images the request carried."""
+        usage = image_usage(self._job(3, None, None), input_image_count=2)
+
+        assert usage.input_tokens == 2
+        assert usage.output_tokens == 3
+        assert usage.total_tokens == 5
+        assert usage.input_tokens_details is not None
+        assert usage.input_tokens_details.image_tokens == 2
+        assert usage.input_tokens_details.text_tokens == 0
+
+    def test_a_reported_zero_is_kept_as_a_real_count(self) -> None:
+        """Zero tokens is an answer, not a missing value to substitute."""
+        usage = image_usage(self._job(1, 0, 0), input_image_count=1)
+
+        assert usage.input_tokens == 0
+        assert usage.output_tokens == 0
+        assert usage.total_tokens == 0
+        assert usage.input_tokens_details is not None
+        assert usage.input_tokens_details.image_tokens == 0
+
+    def test_input_tokens_split_between_the_images_and_the_prompt(self) -> None:
+        """Image tokens are capped at the input image count; the rest is text."""
+        usage = image_usage(self._job(1, 7, 1), input_image_count=2)
+
+        assert usage.input_tokens_details is not None
+        assert usage.input_tokens_details.image_tokens == 2
+        assert usage.input_tokens_details.text_tokens == 5

@@ -6,34 +6,23 @@ Supported Models:
 """
 
 from re import compile as compile_regex
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from stdapi.models.image._stability import StabilityImageModelBase
 from stdapi.models.image.stability_stable_diffusion import TextToImageJob
 
-if TYPE_CHECKING:
-    from collections.abc import Awaitable, Iterable
-
-    from stdapi.models.image import ImageGenerationResponse
-
 
 class StabilityCoreTextToImageJob(TextToImageJob):
-    """Job for text-to-image models."""
+    """Job for text-to-image models.
+
+    Generation, edition and variation are inherited unchanged; these models
+    only accept a narrower set of output formats.
+    """
 
     __slots__ = ()
 
+    #: Supported output formats, narrower than the Stability default.
     _OUTPUT_FORMATS: ClassVar[frozenset[str]] = frozenset({"png", "jpeg"})
-
-    async def _generate_images_from_text(
-        self,
-    ) -> Iterable[Awaitable[ImageGenerationResponse]]:
-        """Generate images from text prompt."""
-        request = self._build_text_to_image_base_request()
-        request["aspect_ratio"] = self._get_aspect_ratio(self._width, self._height)
-        body = self._encode_request(request)
-        return tuple(
-            self._get_image_from_response(body, index) for index in range(self._count)
-        )
 
 
 class ImageModel(StabilityImageModelBase):
