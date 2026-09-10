@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
+import re
+import wave
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -38,6 +41,24 @@ _IDLE_SECONDS = 65.0
 
 #: Bytes of one millisecond of the session's speech (24 kHz, 16-bit, mono).
 _PCM24_BYTES_PER_MS = 48
+
+#: Sample rate of the session's audio, in hertz.
+_PCM24_RATE = 24000
+
+#: Question the caller speaks, which cannot be answered without the tool.
+_SPOKEN_QUESTION = "What is the weather in Paris?"
+
+#: City the spoken question names, as the tool call must carry it.
+_SPOKEN_LOCATION = "paris"
+
+#: Temperature the tool answers with: no weather answer for Paris reaches it by chance.
+_TOOL_TEMPERATURE_C = 47
+
+#: Renderings of `_TOOL_TEMPERATURE_C` a transcript may use, once normalised.
+_TEMPERATURE_SPELLINGS = ("47", "forty seven")
+
+#: Runs of anything but a letter or a digit, collapsed before matching a transcript.
+_NOT_ALPHANUMERIC = re.compile(r"[^a-z0-9]+")
 
 #: Milliseconds of the answer a caller hears before speaking over it.
 _BARGE_IN_MS = 200
@@ -72,6 +93,23 @@ _TOOL_SESSION: Any = {
         }
     ],
     "tool_choice": "required",
+}
+
+#: Tool session whose spoken answer must state what the tool returned.
+#:
+#: ``tool_choice`` stays ``auto`` for the whole session because the answering
+#: turn is part of it: upstream honours ``required`` per response, so a session
+#: left on it calls the tool again instead of ever speaking. Changing it between
+#: the two turns is not an option either -- that reopens the conversation, which
+#: is where the tool's answer lives.
+_SPOKEN_TOOL_SESSION: Any = {
+    **_TOOL_SESSION,
+    "instructions": (
+        "You do not know the weather yourself. Call the tool you are given, then "
+        "answer in one short sentence which states the temperature it returned, "
+        "in degrees Celsius."
+    ),
+    "tool_choice": "auto",
 }
 
 #: Fields a response object always carries, measured against upstream 2026-08-16.
@@ -141,6 +179,73 @@ async def _send_audio(connection: AsyncRealtimeConnection, pcm: bytes) -> None:
         await connection.input_audio_buffer.append(
             audio=base64.b64encode(view[start : start + _APPEND_BYTES]).decode()
         )
+
+
+def _spoken_audio(events: list[Any]) -> bytes:
+    """Return the speech an answer produced, from its audio deltas.
+
+    Args:
+        events: Events of one response, in order.
+
+    Returns:
+        24 kHz mono 16-bit samples, empty when the answer spoke nothing.
+    """
+    return b"".join(
+        base64.b64decode(event.delta)
+        for event in events
+        if event.type == "response.output_audio.delta"
+    )
+
+
+def _claimed_transcript(events: list[Any]) -> str:
+    """Return what the model says it said, from its transcript deltas.
+
+    Args:
+        events: Events of one response, in order.
+
+    Returns:
+        The concatenated transcript, empty when none was sent.
+    """
+    return "".join(
+        event.delta
+        for event in events
+        if event.type == "response.output_audio_transcript.delta"
+    )
+
+
+def _as_wav(pcm: bytes) -> bytes:
+    """Wrap the session's raw samples in a WAV container, for an upload.
+
+    Args:
+        pcm: 24 kHz mono 16-bit samples.
+
+    Returns:
+        The same samples as a WAV file.
+    """
+    container = io.BytesIO()
+    with wave.open(container, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(_PCM24_RATE)
+        wav.writeframes(pcm)
+    return container.getvalue()
+
+
+def _states_the_temperature(transcript: str) -> bool:
+    """Whether *transcript* states the temperature the tool returned.
+
+    A recognizer renders a spoken number either way -- "47" or "forty-seven" --
+    so every plausible spelling is accepted, on a transcript reduced to
+    lowercase words separated by single spaces.
+
+    Args:
+        transcript: Text to search.
+
+    Returns:
+        True when one of the spellings appears as a whole word.
+    """
+    normalized = f" {_NOT_ALPHANUMERIC.sub(' ', transcript.lower()).strip()} "
+    return any(f" {spelling} " in normalized for spelling in _TEMPERATURE_SPELLINGS)
 
 
 async def _play_answer_until(
@@ -607,3 +712,112 @@ class TestFunctionTools:
         ]
         assert answered[-1].response.output, f"the tool answered nothing: {kinds}"
         _assert_response_is_whole(answered[-1].response)
+
+    @pytest.mark.slow
+    async def test_a_spoken_question_is_answered_with_what_the_tool_returned(
+        self,
+        async_openai_client: AsyncOpenAI,
+        realtime_model: str,
+        speech_standard_model: str,
+        transcription_model: str,
+    ) -> None:
+        """The whole voice-agent loop, proved on the audio the caller receives.
+
+        The caller speaks a question it cannot answer alone, the model calls the
+        declared tool, the client answers it with a temperature no weather answer
+        for Paris reaches by chance, and the answer's speech is then transcribed
+        through the Transcriptions endpoint. What that transcript says is the
+        only evidence that the tool's output travelled the whole way into the
+        audio: ``response.output_audio_transcript`` is the model's own claim
+        about what it said, and a session that spoke something else would carry
+        it unchanged.
+
+        The question is synthesized rather than canned, and the tool call is
+        checked against the city it names, so the input path is load-bearing
+        too -- audio the model could make nothing of would still reach the tool,
+        but not with Paris in its arguments. Speech and transcription go through
+        the same client as the session, since ``openai_client`` drives the app on
+        another event loop than the one serving these routes.
+
+        One tool is declared and the instructions leave the model nothing else to
+        answer with, so what is asserted is the loop carrying a call, not a
+        judgement between tools.
+
+        Ref: https://developers.openai.com/api/docs/guides/realtime-function-calling
+             stdapi/realtime.py:RealtimeSession._answer_tool_call
+        """
+        # The Speech endpoint's `pcm` is 24 kHz mono 16-bit little-endian, which
+        # is exactly what `audio/pcm` means to a session: fed in unconverted.
+        question = (
+            await async_openai_client.audio.speech.create(
+                model=speech_standard_model,
+                voice="alloy",
+                input=_SPOKEN_QUESTION,
+                response_format="pcm",
+            )
+        ).content
+        assert question, "the speech endpoint returned no samples for the question"
+
+        async with async_openai_client.realtime.connect(
+            model=realtime_model
+        ) as connection:
+            await connection.recv()
+            await connection.session.update(session=_SPOKEN_TOOL_SESSION)
+            await _drain_until(connection, "session.updated")
+
+            await _send_audio(connection, question)
+            await connection.input_audio_buffer.commit()
+            await connection.response.create()
+            async with asyncio.timeout(_TURN_TIMEOUT):
+                called = await _drain_until(connection, "response.done")
+
+            assert "error" not in _types(called), [
+                event for event in called if event.type == "error"
+            ]
+            call = next(
+                (
+                    event
+                    for event in called
+                    if event.type == "response.function_call_arguments.done"
+                ),
+                None,
+            )
+            assert call is not None, (
+                f"the spoken question called no tool: {_types(called)}"
+            )
+            assert call.name == "get_weather", call
+            assert _SPOKEN_LOCATION in call.arguments.lower(), (
+                f"the tool call does not name the city that was spoken: {call}"
+            )
+
+            await connection.conversation.item.create(
+                item={
+                    "type": "function_call_output",
+                    "call_id": call.call_id,
+                    "output": (
+                        f'{{"temperature_c": {_TOOL_TEMPERATURE_C},'
+                        ' "condition": "rain"}'
+                    ),
+                }
+            )
+            await connection.response.create()
+            async with asyncio.timeout(_TURN_TIMEOUT):
+                answered = await _drain_until(connection, "response.done")
+
+        kinds = _types(answered)
+        assert "error" not in kinds, [
+            event for event in answered if event.type == "error"
+        ]
+        speech = _spoken_audio(answered)
+        assert speech, f"the answer to the tool spoke nothing: {kinds}"
+
+        transcribed = (
+            await async_openai_client.audio.transcriptions.create(
+                file=("answer.wav", io.BytesIO(_as_wav(speech))),
+                model=transcription_model,
+            )
+        ).text
+        assert _states_the_temperature(transcribed), (
+            f"the spoken answer does not state what the tool returned: "
+            f"{transcribed!r}, claimed {_claimed_transcript(answered)!r}"
+        )
