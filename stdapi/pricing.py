@@ -1875,6 +1875,15 @@ async def _load_price_catalog(diagnostics: list[str]) -> None:
         _state.pending_fetch_specs = None
 
 
+def _priced_model_keys() -> set[str]:
+    """Return the model keys the price catalog holds a Bedrock price for.
+
+    Returns:
+        Every :class:`PriceKey` model of a :attr:`Service.BEDROCK` entry.
+    """
+    return {key.model for key in _state.price_index if key.service == Service.BEDROCK}
+
+
 def _all_models_priced(model_ids: Iterable[str]) -> bool:
     """Check whether every model in *model_ids* has a Bedrock price-catalog entry.
 
@@ -1887,9 +1896,7 @@ def _all_models_priced(model_ids: Iterable[str]) -> bool:
     Returns:
         True if every model has at least one Bedrock :class:`PriceKey`.
     """
-    priced_keys = {
-        key.model for key in _state.price_index if key.service == Service.BEDROCK
-    }
+    priced_keys = _priced_model_keys()
     return all(resolve_model_key(model_id) in priced_keys for model_id in model_ids)
 
 
@@ -2193,8 +2200,10 @@ async def refresh_price_catalog_for_new_models(model_ids: Iterable[str]) -> None
                 # Left incomplete: the backoff loop owns the retries, and has
                 # already returned if it completed the catalog before this.
                 start_price_catalog()
+        # One scan of the reloaded index for the whole batch, not one per model.
+        priced_keys = _priced_model_keys()
         for model_id in due_ids:
-            if _all_models_priced((model_id,)):
+            if resolve_model_key(model_id) in priced_keys:
                 _state.unpriced_cooldown.pop(model_id, None)
             else:
                 _state.unpriced_cooldown[model_id] = now + _UNPRICED_MODEL_COOLDOWN_NS

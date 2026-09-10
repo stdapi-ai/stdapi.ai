@@ -28,6 +28,7 @@ from stdapi.aws_bedrock import (
     set_inference_configuration,
 )
 from stdapi.cleanup import schedule_cleanup
+from stdapi.config import SETTINGS
 from stdapi.input_file import FileIdInputFile, InputFile
 from stdapi.models import validate_model
 from stdapi.models.chat._adapters import _common, _openai_common
@@ -1406,6 +1407,34 @@ def extract_reasoning(
     }
 
 
+def _input_content_file(part: ResponseInputImage | ResponseInputFile) -> InputFile:
+    """Return the file an image or file input content part points at.
+
+    Args:
+        part: An image or file input content item.
+
+    Returns:
+        The input file the part carries, wherever it is read from.
+
+    Raises:
+        ApiError: If the part carries no file reference at all.
+    """
+    match part:
+        case ResponseInputImage(file_id=fid) if fid is not None:
+            return FileIdInputFile(fid)
+        case ResponseInputImage(image_url=url) if url is not None:
+            return InputFile(url)
+        case ResponseInputFile(file_id=fid) if fid is not None:
+            return FileIdInputFile(fid)
+        case ResponseInputFile(file_url=url) if url is not None:
+            return InputFile(url)
+        case ResponseInputFile(file_data=data) if data is not None:
+            return InputFile(data)
+        case _:
+            msg = f"Unsupported input content type: {getattr(part, 'type', type(part))}"
+            raise ApiError(msg)
+
+
 async def _convert_input_content(part: ResponseInputContent) -> ContentBlockTypeDef:
     """Convert a single ResponseInputContent part to a Bedrock content block.
 
@@ -1421,19 +1450,68 @@ async def _convert_input_content(part: ResponseInputContent) -> ContentBlockType
     match part:
         case ResponseInputText(text=text) | ResponseOutputTextContent(text=text):
             return {"text": text}
-        case ResponseInputImage(file_id=fid) if fid is not None:
-            return await FileIdInputFile(fid).to_bedrock_content_block()
-        case ResponseInputImage(image_url=url) if url is not None:
-            return await InputFile(url).to_bedrock_content_block()
-        case ResponseInputFile(file_id=fid) if fid is not None:
-            return await FileIdInputFile(fid).to_bedrock_content_block()
-        case ResponseInputFile(file_url=url) if url is not None:
-            return await InputFile(url).to_bedrock_content_block()
-        case ResponseInputFile(file_data=data) if data is not None:
-            return await InputFile(data).to_bedrock_content_block()
+        case ResponseInputImage() | ResponseInputFile():
+            return await _input_content_file(part).to_bedrock_content_block()
         case _:
             msg = f"Unsupported input content type: {getattr(part, 'type', type(part))}"
             raise ApiError(msg)
+
+
+async def _convert_input_contents(
+    parts: list[ResponseInputContent],
+) -> list[ContentBlockTypeDef]:
+    """Convert the content parts of one item, resolving the file ones together.
+
+    Each file part is described by its own call to the storage or the URL it
+    names, so the parts of one message are resolved concurrently -- bounded by
+    ``max_concurrent_input_downloads`` -- instead of one round trip after
+    another.  The blocks keep the order of the parts, and so do failures: the
+    first part that cannot be resolved is the one that answers the request,
+    and the parts beside it are cancelled.
+
+    Args:
+        parts: The content parts of a message or of a tool result.
+
+    Returns:
+        One Bedrock content block per part, in the order of *parts*.
+
+    Raises:
+        ApiError: If a part's content type is not supported.
+    """
+    semaphore = Semaphore(SETTINGS.max_concurrent_input_downloads)
+
+    async def _resolve(file: InputFile) -> ContentBlockTypeDef:
+        """Describe one input file while holding a slot of the concurrency bound.
+
+        Returns:
+            The Bedrock content block of that file.
+        """
+        async with semaphore:
+            return await file.to_bedrock_content_block()
+
+    resolutions: list[ContentBlockTypeDef | Task[ContentBlockTypeDef]] = []
+    try:
+        for part in parts:
+            if not isinstance(part, (ResponseInputImage, ResponseInputFile)):
+                resolutions.append(await _convert_input_content(part))
+                continue
+            # The file is built here and not inside the task: an InputFile
+            # registers itself with the request that resolves it later, and a
+            # task only ever sees a copy of that request's context.
+            resolutions.append(create_task(_resolve(_input_content_file(part))))
+        return [
+            await resolution if isinstance(resolution, Task) else resolution
+            for resolution in resolutions
+        ]
+    except BaseException:
+        pending = [
+            resolution for resolution in resolutions if isinstance(resolution, Task)
+        ]
+        for task in pending:
+            task.cancel()
+        # Await cancellation so asyncio doesn't log unretrieved exceptions at GC.
+        await gather(*pending, return_exceptions=True)
+        raise
 
 
 def _has_cache_breakpoint(part: object) -> bool:
@@ -1492,8 +1570,10 @@ async def _map_message_item(
         blocks: list[ContentBlockTypeDef] = [{"text": content}] if content else []
     else:
         blocks = []
-        for part in content:
-            blocks.append(await _convert_input_content(part))
+        for part, block in zip(
+            content, await _convert_input_contents(content), strict=True
+        ):
+            blocks.append(block)
             if cache_point is not None and _has_cache_breakpoint(part):
                 blocks.append(cache_point)
 
@@ -1612,14 +1692,25 @@ async def _map_function_call_output(
             _openai_common.parse_tool_content(output)
         ]
     else:
-        tool_content = []
-        for part in output:
-            if isinstance(part, (ResponseInputText, ResponseOutputTextContent)):
-                tool_content.append(_openai_common.parse_tool_content(part.text))
-            else:
-                # Image/document/video blocks share their shape with toolResult
-                # content blocks.
-                tool_content.append(await _convert_input_content(part))  # type: ignore[arg-type]
+        # Image/document/video blocks share their shape with toolResult content
+        # blocks, and are resolved together like a message's own parts.
+        blocks = iter(
+            await _convert_input_contents(
+                [
+                    part
+                    for part in output
+                    if not isinstance(
+                        part, (ResponseInputText, ResponseOutputTextContent)
+                    )
+                ]
+            )
+        )
+        tool_content = [
+            _openai_common.parse_tool_content(part.text)  # type: ignore[misc]
+            if isinstance(part, (ResponseInputText, ResponseOutputTextContent))
+            else next(blocks)
+            for part in output
+        ]
     _common.append_or_merge(
         bedrock_messages,
         "user",
@@ -3608,6 +3699,10 @@ async def _stream_file_search_round(
 ) -> AsyncGenerator[JSONServerSentEvent]:
     """Run one round of searches, emitting each as its ``file_search_call`` item.
 
+    The queries a round carries are the ones the model asked for together, so
+    they all start at once -- as they already do off the streaming path -- and
+    their items are still emitted strictly in call order.
+
     Args:
         state: Mutable stream state.
         tool: The ``file_search`` tool definition from the request.
@@ -3624,17 +3719,35 @@ async def _stream_file_search_round(
         ApiError: 404 when a named store does not exist, 400 when its backend
             cannot express the requested filter or score threshold.
     """
-    for index, query in enumerate(queries, start=1):
-        item_id = f"{state.response_id}-fs-{round_index}-{index}"
-        for sse in _open_file_search_item(state, item_id, query):
-            yield sse
-        call, answered, results = await _execute_file_search_call(
-            tool, query, item_id, include_results=include_results
+    item_ids = [
+        f"{state.response_id}-fs-{round_index}-{index}"
+        for index in range(1, len(queries) + 1)
+    ]
+    searches = [
+        create_task(
+            _execute_file_search_call(
+                tool, query, item_id, include_results=include_results
+            )
         )
-        items.append(answered)
-        grounding.extend(results)
-        for sse in _emit_file_search_item(state, call):
-            yield sse
+        for item_id, query in zip(item_ids, queries, strict=True)
+    ]
+    try:
+        for item_id, query, search_task in zip(
+            item_ids, queries, searches, strict=True
+        ):
+            for sse in _open_file_search_item(state, item_id, query):
+                yield sse
+            call, answered, results = await search_task
+            items.append(answered)
+            grounding.extend(results)
+            for sse in _emit_file_search_item(state, call):
+                yield sse
+    finally:
+        # Drop the searches still pending when the round is abandoned early.
+        for search_task in searches:
+            search_task.cancel()
+        # Await cancellation so asyncio doesn't log unretrieved exceptions at GC.
+        await gather(*searches, return_exceptions=True)
 
 
 async def _stream_unanswered_file_search(

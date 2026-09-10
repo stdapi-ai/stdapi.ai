@@ -15,6 +15,7 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-management.html
      stdapi/models/__init__.py:resolve_bedrock_prompt
 """
 
+from asyncio import gather, sleep
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -43,6 +44,9 @@ pytestmark = pytest.mark.local
 
 #: Prompt ARN used across the tests, without version suffix.
 _PROMPT_ARN = "arn:aws:bedrock:us-east-1:123456789012:prompt/ABCDE12345"
+
+#: A second prompt ARN, so a test can name two prompts at once.
+_OTHER_PROMPT_ARN = "arn:aws:bedrock:us-east-1:123456789012:prompt/FGHIJ67890"
 
 #: Model the stubbed prompt variant is bound to.
 _PROMPT_MODEL = "vendor.model-v1"
@@ -678,6 +682,98 @@ class TestResolveBedrockPrompt:
         await resolve_bedrock_prompt(_PROMPT_ARN, "2")
         assert [call["promptVersion"] for call in prompt_enabled.calls] == ["1", "2"]
         assert cached == first
+
+
+class _CountingPromptClient:
+    """A ``bedrock-agent`` client recording how many reads it serves at once.
+
+    Attributes:
+        calls: The ``GetPrompt`` requests it received, in arrival order.
+        peak: The most reads it ever had in flight together.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.peak = 0
+        self._in_flight = 0
+
+    async def get_prompt(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        """Record the call and answer it after one turn of the event loop.
+
+        Args:
+            **kwargs: ``GetPrompt`` request parameters.
+
+        Returns:
+            The canned TEXT prompt payload.
+        """
+        self.calls.append(kwargs)
+        self._in_flight += 1
+        self.peak = max(self.peak, self._in_flight)
+        try:
+            await sleep(0)
+            return _text_prompt()
+        finally:
+            self._in_flight -= 1
+
+
+class TestPromptLookupsDoNotWaitOnEachOther:
+    """One request reading a prompt never holds up another reading a different one.
+
+    The resolved model is cached for every caller, so the cache read and write
+    are serialised; the ``GetPrompt`` call between them is not, because two
+    prompts share nothing but the cache. Two callers naming the *same* uncached
+    prompt still issue a single read, so a cold cache cannot turn a burst of
+    requests into a burst of identical control-plane calls.
+
+    Ref: stdapi/models/__init__.py:_get_prompt_model_id
+         stdapi/models/__init__.py:_single_flight
+    """
+
+    @pytest.fixture
+    def counting_prompts(
+        self, prompt_enabled: _StubBedrockAgentClient, monkeypatch: pytest.MonkeyPatch
+    ) -> _CountingPromptClient:
+        """Serve ``GetPrompt`` from a client counting its concurrent reads.
+
+        Returns:
+            The client every resolution goes through.
+        """
+        del prompt_enabled
+        client = _CountingPromptClient()
+        monkeypatch.setattr(models_module, "get_client", lambda *_args: client)
+        return client
+
+    async def test_two_prompts_are_read_at_the_same_time(
+        self, counting_prompts: _CountingPromptClient
+    ) -> None:
+        """Two callers naming different prompts overlap their ``GetPrompt`` calls.
+
+        Ref: stdapi/models/__init__.py:_get_prompt_model_id
+        """
+        await gather(
+            resolve_bedrock_prompt(_PROMPT_ARN, "1"),
+            resolve_bedrock_prompt(_OTHER_PROMPT_ARN, "1"),
+        )
+
+        assert len(counting_prompts.calls) == 2
+        assert counting_prompts.peak == 2, (
+            "one prompt's read must not serialise another's"
+        )
+
+    async def test_one_uncached_prompt_is_read_once(
+        self, counting_prompts: _CountingPromptClient
+    ) -> None:
+        """Concurrent callers naming one uncached prompt share a single read.
+
+        Ref: stdapi/models/__init__.py:_single_flight
+        """
+        first, second = await gather(
+            resolve_bedrock_prompt(_PROMPT_ARN, "1"),
+            resolve_bedrock_prompt(_PROMPT_ARN, "1"),
+        )
+
+        assert len(counting_prompts.calls) == 1
+        assert first == second
 
 
 class TestPromptConverseRequest:

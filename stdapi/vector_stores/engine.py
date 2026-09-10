@@ -9,7 +9,7 @@ degrades against what that backend declares rather than discovering a gap
 mid-request.
 """
 
-from asyncio import Semaphore, Task, create_task, wait_for
+from asyncio import Semaphore, Task, create_task, gather, wait_for
 from base64 import b32hexencode
 from contextlib import suppress
 from dataclasses import dataclass
@@ -90,6 +90,7 @@ from stdapi.vector_stores.registry import (
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Sequence
 
+    from stdapi.files import FileRecord as StoredFile
     from stdapi.input_file import InputFileUrl
     from stdapi.types.openai_vector_stores import (
         Attributes,
@@ -673,6 +674,50 @@ async def touch_store(record: StoreRecord) -> None:
         record.last_active_at = now
 
 
+async def _read_attached_files(
+    store_id: str, pending: Sequence[PendingFile]
+) -> tuple[list[StoredFile], list[FileRecord]]:
+    """Read the uploaded files and the store records they would replace.
+
+    The two live in different record spaces and neither read depends on the
+    other, so they run together.  They are awaited in the order they used to
+    run in: a request naming a file that does not exist is still answered with
+    that, whatever the store's own records did.
+
+    Args:
+        store_id: The store the files are being attached to.
+        pending: The files to index.
+
+    Returns:
+        The uploaded file of every pending entry, and the records the store
+        already holds for them.
+
+    Raises:
+        ApiError: With 404 when one of the files does not exist.
+    """
+    sources_read = create_task(
+        gather_bounded(
+            [get_file(parse_file_id(entry.file_id)) for entry in pending], RECORD_WAVE
+        )
+    )
+    # Re-attaching replaces the record, so its outcome and chunks move with it.
+    existing_read = create_task(
+        gather_records(
+            FileRecord, [file_key(store_id, entry.file_id) for entry in pending]
+        )
+    )
+    try:
+        return await sources_read, [
+            existing[0] for existing in await existing_read if existing is not None
+        ]
+    except BaseException:
+        sources_read.cancel()
+        existing_read.cancel()
+        # Await cancellation so asyncio doesn't log unretrieved exceptions at GC.
+        await gather(sources_read, existing_read, return_exceptions=True)
+        raise
+
+
 async def attach_files(
     store: StoreRecord, pending: Sequence[PendingFile], *, batch_id: str
 ) -> list[FileRecord]:
@@ -708,9 +753,7 @@ async def attach_files(
     for entry in pending:
         unique.setdefault(entry.file_id, entry)
     pending = list(unique.values())
-    sources = await gather_bounded(
-        [get_file(parse_file_id(entry.file_id)) for entry in pending], RECORD_WAVE
-    )
+    sources, existing_records = await _read_attached_files(store.id, pending)
     records = [
         FileRecord(
             id=entry.file_id,
@@ -722,14 +765,6 @@ async def attach_files(
             batch_id=batch_id,
         )
         for entry, source in zip(pending, sources, strict=True)
-    ]
-    # Re-attaching replaces the record, so its outcome and chunks move with it.
-    existing_records = [
-        existing[0]
-        for existing in await gather_records(
-            FileRecord, [file_key(store.id, record.id) for record in records]
-        )
-        if existing is not None
     ]
     # A file still being reclaimed would take the record replacing it with it.
     for existing in existing_records:

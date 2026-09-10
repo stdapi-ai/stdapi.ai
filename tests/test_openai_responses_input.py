@@ -4,6 +4,7 @@ Ref: https://developers.openai.com/api/reference/resources/responses/methods/cre
      stdapi/models/chat/_adapters/_openai_responses.py:map_input
 """
 
+from asyncio import Event, sleep, wait_for
 from base64 import b64encode
 from typing import Any, cast
 
@@ -11,6 +12,7 @@ import pytest
 from pydantic import TypeAdapter
 
 from stdapi.api_errors import ApiError
+from stdapi.config import SETTINGS
 from stdapi.models.chat._adapters import _openai_responses as adapter
 from stdapi.models.chat._adapters._openai_responses import (
     _map_tool_choice,
@@ -75,6 +77,12 @@ _PNG_BYTES = b"\x89PNG\r\n\x1a\n-fake-png-body"
 
 #: Minimal JPEG payload (magic bytes plus filler).
 _JPEG_BYTES = b"\xff\xd8\xff\xe0-fake-jpeg-body"
+
+#: Seconds a stubbed part waits for the parts beside it to start.
+_FAN_OUT_TIMEOUT = 5.0
+
+#: Event loop passes a part deliberately made slower than its siblings takes.
+_SLOW_YIELDS = 3
 
 
 def _parse(payload: dict[str, object]) -> object:
@@ -1562,3 +1570,298 @@ class TestReplayedReasoningSignatureRequirement:
             },
             {"reasoningContent": {"reasoningText": {"text": "second"}}},
         ]
+
+
+class _FanOutInputFiles:
+    """Drives the stubbed input-file loader over the parts of one input item.
+
+    Every part waits until as many parts as the test expects are in flight
+    before it answers, so a loader called one part after another never gets
+    past the first one.
+    """
+
+    def __init__(self, expected: int) -> None:
+        """Hold every resolution until *expected* of them have started.
+
+        Args:
+            expected: How many parts must be in flight before any answers.
+        """
+        self.expected = expected
+        self.started: list[str] = []
+        self.completed: list[str] = []
+        self.active = 0
+        self.peak = 0
+        self.all_started = Event()
+        self.gate = Event()
+        self.failures: dict[str, ApiError] = {}
+        self.slow: set[str] = set()
+        self.held: set[str] = set()
+
+    async def resolve(self, source: str) -> dict[str, object]:
+        """Resolve one part, once the parts beside it are in flight too.
+
+        Args:
+            source: The image URL or file payload the part carries.
+
+        Returns:
+            A Bedrock image block naming that source.
+
+        Raises:
+            ApiError: When the test made this source fail.
+        """
+        self.started.append(source)
+        self.active += 1
+        self.peak = max(self.peak, self.active)
+        if len(self.started) >= self.expected:
+            self.all_started.set()
+        await wait_for(self.all_started.wait(), _FAN_OUT_TIMEOUT)
+        for _ in range(_SLOW_YIELDS if source in self.slow else 0):
+            await sleep(0)
+        if source in self.held:
+            await self.gate.wait()
+        self.active -= 1
+        if (error := self.failures.get(source)) is not None:
+            raise error
+        self.completed.append(source)
+        return {"image": {"format": "png", "source": {"bytes": source.encode()}}}
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Serve this driver as the adapter's input-file loader.
+
+        Args:
+            monkeypatch: Patcher applied to the adapter module.
+        """
+        resolve = self.resolve
+
+        class _StubInputFile:
+            def __init__(self, source: str) -> None:
+                self.source = source
+
+            async def to_bedrock_content_block(self) -> dict[str, object]:
+                return await resolve(self.source)
+
+        monkeypatch.setattr(adapter, "InputFile", _StubInputFile)
+
+
+def _image_message(*urls: str) -> ResponseInputItem:
+    """Build a user message carrying one ``input_image`` part per URL.
+
+    Args:
+        urls: The image URLs the message carries.
+
+    Returns:
+        The parsed message input item.
+    """
+    return cast(
+        "ResponseInputItem",
+        _parse(
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_image", "image_url": url, "detail": "auto"}
+                    for url in urls
+                ],
+            }
+        ),
+    )
+
+
+def _image_block(url: str) -> dict[str, object]:
+    """Return the Bedrock block the stubbed loader answers for *url*.
+
+    Args:
+        url: The source the part carries.
+
+    Returns:
+        The expected Bedrock image block.
+    """
+    return {"image": {"format": "png", "source": {"bytes": url.encode()}}}
+
+
+class TestInputFilePartsResolveTogether:
+    """The file parts of one input item are described concurrently.
+
+    Every image or file part costs a call to the storage or the URL it names
+    before the request can be built, and those calls are independent of one
+    another. Their order still decides everything the caller sees: the blocks
+    keep the order of the parts, and the first part that cannot be resolved is
+    the one that answers the request.
+
+    Ref: https://developers.openai.com/api/docs/guides/images-vision
+         stdapi/models/chat/_adapters/_openai_responses.py:_convert_input_contents
+    """
+
+    async def test_the_file_parts_of_a_message_resolve_together(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A message's parts are all in flight before the first one answers.
+
+        Resolved one after another, the first part would wait for a barrier
+        the parts behind it can only reach once it has answered.
+        """
+        urls = [f"https://x/{index}.png" for index in range(3)]
+        driver = _FanOutInputFiles(len(urls))
+        driver.install(monkeypatch)
+
+        messages, _ = await map_input([_image_message(*urls)], None)
+
+        assert messages[0]["content"] == [_image_block(url) for url in urls], (
+            "blocks must keep the order of the parts that produced them"
+        )
+        assert sorted(driver.completed) == urls, "every part must be resolved"
+
+    async def test_the_file_parts_of_a_tool_result_resolve_together(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ``function_call_output`` resolves its file parts together too.
+
+        Its text parts are not resolved at all, and every block still lands at
+        the index of the part it came from.
+        """
+        urls = [f"https://x/{index}.png" for index in range(2)]
+        driver = _FanOutInputFiles(len(urls))
+        driver.install(monkeypatch)
+        item = FunctionCallOutput(
+            type="function_call_output",
+            call_id="call_1",
+            output=[
+                ResponseInputImage(type="input_image", image_url=urls[0]),
+                ResponseInputText(type="input_text", text="see attachments"),
+                ResponseInputImage(type="input_image", image_url=urls[1]),
+            ],
+        )
+
+        messages, _ = await map_input([item], None)
+
+        assert messages[0]["content"][0]["toolResult"]["content"] == [
+            _image_block(urls[0]),
+            {"text": "see attachments"},
+            _image_block(urls[1]),
+        ]
+
+    async def test_no_more_parts_resolve_at_once_than_the_bound(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A message carrying many files never exceeds the download bound.
+
+        The bound is what keeps one request from amplifying into an unbounded
+        number of simultaneous outbound fetches.
+        """
+        bound = SETTINGS.max_concurrent_input_downloads
+        urls = [f"https://x/{index}.png" for index in range(bound * 2)]
+        driver = _FanOutInputFiles(bound)
+        driver.install(monkeypatch)
+
+        messages, _ = await map_input([_image_message(*urls)], None)
+
+        assert messages[0]["content"] == [_image_block(url) for url in urls]
+        assert driver.peak == bound, (
+            f"{len(urls)} parts resolved {driver.peak} at once; the bound is {bound}"
+        )
+
+    async def test_a_failing_part_answers_with_its_own_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The status of the part that failed is the status of the request.
+
+        The parts are resolved together, so the answer must still be the one
+        the failing part gave rather than whatever the request would have been
+        refused with.
+        """
+        urls = ["https://x/0.png", "https://x/1.png"]
+        driver = _FanOutInputFiles(len(urls))
+        driver.failures[urls[1]] = ApiError(
+            "The attached file is too large.", status=413
+        )
+        driver.install(monkeypatch)
+
+        with pytest.raises(ApiError) as exc_info:
+            await map_input([_image_message(*urls)], None)
+
+        assert exc_info.value.status == 413
+        assert str(exc_info.value) == "The attached file is too large."
+
+    async def test_the_first_part_in_order_answers_whichever_failed_first(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A later part failing sooner does not take the answer from an earlier one.
+
+        Resolved one after another, the earlier part is the one that failed
+        the request; running them together must not make the answer depend on
+        which fetch happened to fail first.
+        """
+        urls = ["https://x/0.png", "https://x/1.png", "https://x/2.png"]
+        driver = _FanOutInputFiles(len(urls))
+        driver.slow.add(urls[1])
+        driver.failures[urls[1]] = ApiError(
+            "The second file is unreadable.", status=413
+        )
+        driver.failures[urls[2]] = ApiError("The third file is unreadable.", status=400)
+        driver.install(monkeypatch)
+
+        with pytest.raises(ApiError) as exc_info:
+            await map_input([_image_message(*urls)], None)
+
+        assert str(exc_info.value) == "The second file is unreadable."
+        assert exc_info.value.status == 413
+
+    async def test_a_failing_part_stops_the_parts_beside_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The failure that answers the request ends the fetches beside it.
+
+        The caller already holds the error, so a fetch left running downloads
+        content for a request that no longer exists.
+        """
+        urls = ["https://x/0.png", "https://x/1.png"]
+        driver = _FanOutInputFiles(len(urls))
+        driver.failures[urls[0]] = ApiError("The first file is unreadable.", status=400)
+        driver.held.add(urls[1])
+        driver.install(monkeypatch)
+
+        with pytest.raises(ApiError, match="first file"):
+            await map_input([_image_message(*urls)], None)
+
+        driver.gate.set()
+        for _ in range(_SLOW_YIELDS):
+            await sleep(0)
+
+        assert driver.completed == [], (
+            "a part still being fetched must not outlive the request"
+        )
+
+    async def test_a_part_that_names_no_file_stops_the_parts_beside_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A part refused before it is fetched ends the fetches already started.
+
+        The refusal happens while the parts before it are already in flight,
+        which must leave nothing running behind the answered request.
+        """
+        url = "https://x/0.png"
+        driver = _FanOutInputFiles(2)
+        driver.install(monkeypatch)
+        item = cast(
+            "ResponseInputItem",
+            _parse(
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_image", "image_url": url, "detail": "auto"},
+                        {"type": "input_image", "detail": "auto"},
+                    ],
+                }
+            ),
+        )
+
+        with pytest.raises(ApiError, match="Unsupported input content type"):
+            await map_input([item], None)
+
+        for _ in range(_SLOW_YIELDS):
+            await sleep(0)
+
+        assert driver.completed == [], (
+            "a part still being fetched must not outlive the request"
+        )

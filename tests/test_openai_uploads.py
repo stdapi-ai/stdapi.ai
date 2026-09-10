@@ -1128,6 +1128,135 @@ class TestCompleteUploadChecksum:
         assert s3.reads == 1, "the stored bytes must be the ones verified"
 
 
+async def _count_loop_turns(work: Any) -> tuple[Any, int]:  # noqa: ANN401
+    """Await *work* while counting how many turns the event loop took meanwhile.
+
+    Args:
+        work: The coroutine to await.
+
+    Returns:
+        ``(result, turns)`` -- what *work* returned, and how many times a task
+        running beside it was resumed before it finished.
+    """
+    turns = 0
+
+    async def spin() -> None:
+        """Take a loop turn for as long as anything lets it."""
+        nonlocal turns
+        while True:
+            turns += 1
+            await asyncio.sleep(0)
+
+    spinner = asyncio.create_task(spin())
+    try:
+        return await work, turns
+    finally:
+        spinner.cancel()
+        with suppress(asyncio.CancelledError):
+            await spinner
+
+
+class TestUploadHashingOffTheEventLoop:
+    """Hashing an upload's bytes never holds the event loop for their whole length.
+
+    A part carries up to 64 MiB and the assembled object has no bound at all,
+    so folding either into an MD5 inline would stall every other request served
+    by the same process for as long as the digest takes. The digest itself is a
+    sequence -- the bytes have to go in in order -- so what moves off the loop
+    is one buffer at a time, never the ordering.
+
+    Ref: stdapi/files/_multipart.py:_update_digest
+         stdapi/files/_multipart.py:_object_md5
+    """
+
+    async def test_a_large_buffer_is_folded_in_without_blocking(self) -> None:
+        """A buffer above the inline bound leaves the loop free, and hashes correctly.
+
+        Ref: stdapi/files/_multipart.py:_update_digest
+        """
+        data = b"x" * (_multipart._MD5_INLINE_MAX_BYTES + 1)  # noqa: SLF001
+        digest = md5(usedforsecurity=False)
+
+        _, turns = await _count_loop_turns(_multipart._update_digest(digest, data))  # noqa: SLF001
+
+        assert digest.hexdigest() == md5(data, usedforsecurity=False).hexdigest()
+        assert turns, "a large buffer must be hashed off the event loop"
+
+    async def test_a_small_buffer_is_folded_in_inline(self) -> None:
+        """Below the bound the thread hop costs more than the hash, so it is skipped.
+
+        Ref: stdapi/files/_multipart.py:_MD5_INLINE_MAX_BYTES
+        """
+        data = b"y" * _multipart._MD5_INLINE_MAX_BYTES  # noqa: SLF001
+        digest = md5(usedforsecurity=False)
+
+        _, turns = await _count_loop_turns(_multipart._update_digest(digest, data))  # noqa: SLF001
+
+        assert digest.hexdigest() == md5(data, usedforsecurity=False).hexdigest()
+        assert turns == 0, "a small buffer must not pay for an executor round trip"
+
+    async def test_a_stored_object_hashes_in_the_order_it_is_read(
+        self, s3: _StubMultipartS3Client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Chunks hashed beside the read still go into the digest in file order.
+
+        Ref: stdapi/files/_multipart.py:_object_md5
+        """
+        monkeypatch.setattr(_multipart, "_MD5_INLINE_MAX_BYTES", 0)
+        monkeypatch.setattr(_multipart, "UPLOAD_CHUNK_SIZE", 7)
+        s3.assembled = payload = b"one chunk, then another, then a third, and more."
+
+        digest, turns = await _count_loop_turns(
+            _multipart._object_md5(s3, "bucket", "key")  # noqa: SLF001
+        )
+
+        assert digest == md5(payload, usedforsecurity=False).hexdigest()
+        assert turns, "the object must not be hashed on the event loop"
+
+    async def test_a_concurrent_part_cannot_reorder_the_running_digest(
+        self, s3: _StubMultipartS3Client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two parts hashed at once still leave the digest naming the parts it covers.
+
+        The completion checksum trusts the running digest only while it covers
+        exactly the parts S3 holds, in their order, which the parts signature is
+        what asserts. Hashing off the loop opens a window between folding the
+        bytes and folding the signature, and a part landing inside it must not
+        be able to reorder one against the other: here the second part's bytes
+        would otherwise be hashed first, and the upload would be re-read from S3
+        -- or refused outright -- despite matching its declared checksum.
+
+        Ref: stdapi/files/_multipart.py:add_part
+        """
+        monkeypatch.setattr(_multipart, "_MD5_INLINE_MAX_BYTES", 0)
+        first, second = b"the first part, ", b"and the second part."
+        # The later part is folded in first unless the two updates are ordered.
+        delays = iter((0.05, 0.0))
+
+        async def staggered_to_thread(func: Any, /, *args: Any) -> Any:  # noqa: ANN401
+            """Run *func* after a delay chosen so the second caller finishes first."""
+            await asyncio.sleep(next(delays, 0.0))
+            return func(*args)
+
+        monkeypatch.setattr(_multipart, "to_thread", staggered_to_thread)
+        session = await _multipart.create_multipart_session(
+            "f.bin", "text/plain", "assistants", len(first) + len(second)
+        )
+
+        added = await asyncio.gather(
+            _multipart.add_part(session.upload_id, first),
+            _multipart.add_part(session.upload_id, second),
+        )
+        await _multipart.complete_multipart_session(
+            session.upload_id,
+            [part_id for part_id, _ in added],
+            md5(first + second, usedforsecurity=False).hexdigest(),
+        )
+
+        assert s3.assembled == first + second
+        assert s3.reads == 0, "the running digest still answers for these parts"
+
+
 #: Minimum size S3 enforces on every part of a multipart upload except the last.
 _S3_MIN_PART_SIZE: int = 5 * 1024 * 1024
 
