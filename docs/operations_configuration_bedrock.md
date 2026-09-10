@@ -36,6 +36,8 @@ The Amazon Bedrock capabilities the gateway turns on for you, and the ARNs it is
 | [`AWS_BEDROCK_GUARDRAIL_VERSION`](#aws-bedrock-guardrail-version)                                 | None    | Bedrock Guardrails version number (required with identifier)                                        |
 | [`AWS_BEDROCK_GUARDRAIL_TRACE`](#aws-bedrock-guardrail-trace)                                     | None    | Guardrails trace level: `disabled`, `enabled`, or `enabled_full`                                    |
 | [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](#aws-bedrock-allow-guardrail-override)                   | `false` | Allow users to override global guardrail configuration via request headers (security: default off)  |
+| [`AWS_BEDROCK_GUARDRAIL_CHECKS_PROMPT_ATTACK`](#bedrock-guardrail-checks)                         | `false` | Detect prompt attacks on the Moderations API when it classifies with inline guardrail checks         |
+| [`AWS_BEDROCK_GUARDRAIL_CHECKS_PII_ENTITIES`](#bedrock-guardrail-checks)                          | empty   | PII entity types to detect on the Moderations API when it classifies with inline guardrail checks    |
 | [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](#aws-bedrock-session-encryption-key-arn)               | None    | KMS key ARN encrypting Amazon Bedrock session storage (Responses API `store=true`)                     |
 | [`AWS_BEDROCK_BATCH_ROLE_ARN`](#aws-bedrock-batch-role-arn)                                       | None    | Service role Amazon Bedrock assumes to run batch inference jobs; unset disables the Batch APIs        |
 | [`AWS_BEDROCK_USER_ROLE_ARN`](#aws-bedrock-user-role-arn)                                         | None    | Run each end user's model calls under a role session of their own, so AWS reports their spend separately |
@@ -157,6 +159,42 @@ export AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE=true
     export AWS_BEDROCK_GUARDRAIL_TRACE=enabled
     export AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE=false  # Default: prevent overrides
     ```
+
+### Inline Guardrail Checks { #bedrock-guardrail-checks }
+
+When no guardrail resource is configured, the [Moderations API](api_openai_moderations.md) classifies with [inline guardrail checks](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html) — content filters, evaluated without creating anything in Amazon Bedrock. These two settings add a check beside them. Each is billed separately, and a detection raises the result's `flagged` field without raising any OpenAI moderation category, because neither has one.
+
+They apply to `amazon.bedrock-runtime-guardrail-checks` only. A classification served by a guardrail resource applies the prompt attack filter and sensitive-information policy configured on the guardrail itself.
+
+#### `AWS_BEDROCK_GUARDRAIL_CHECKS_PROMPT_ATTACK` { #aws-bedrock-guardrail-checks-prompt-attack }
+
+:octicons-package-24: **Purpose**
+:   Detect jailbreaks, prompt injection and prompt leakage
+
+:octicons-gear-24: **Default**
+:   `false` (not evaluated)
+
+```bash
+export AWS_BEDROCK_GUARDRAIL_CHECKS_PROMPT_ATTACK=true
+```
+
+#### `AWS_BEDROCK_GUARDRAIL_CHECKS_PII_ENTITIES` { #aws-bedrock-guardrail-checks-pii-entities }
+
+:octicons-package-24: **Purpose**
+:   Detect personally identifiable information, of the entity types listed
+
+:octicons-gear-24: **Options**
+:   `ADDRESS`, `AGE`, `AWS_ACCESS_KEY`, `AWS_SECRET_KEY`, `CA_HEALTH_NUMBER`, `CA_SOCIAL_INSURANCE_NUMBER`, `CREDIT_DEBIT_CARD_CVV`, `CREDIT_DEBIT_CARD_EXPIRY`, `CREDIT_DEBIT_CARD_NUMBER`, `DRIVER_ID`, `EMAIL`, `INTERNATIONAL_BANK_ACCOUNT_NUMBER`, `IP_ADDRESS`, `LICENSE_PLATE`, `MAC_ADDRESS`, `NAME`, `PASSWORD`, `PHONE`, `PIN`, `SWIFT_CODE`, `UK_NATIONAL_HEALTH_SERVICE_NUMBER`, `UK_NATIONAL_INSURANCE_NUMBER`, `UK_UNIQUE_TAXPAYER_REFERENCE_NUMBER`, `URL`, `USERNAME`, `US_BANK_ACCOUNT_NUMBER`, `US_BANK_ROUTING_NUMBER`, `US_INDIVIDUAL_TAX_IDENTIFICATION_NUMBER`, `US_PASSPORT_NUMBER`, `US_SOCIAL_SECURITY_NUMBER`, `VEHICLE_IDENTIFICATION_NUMBER`
+
+:octicons-gear-24: **Default**
+:   Empty (nothing detected). An unknown entity type fails startup.
+
+```bash
+export AWS_BEDROCK_GUARDRAIL_CHECKS_PII_ENTITIES=EMAIL,PHONE,US_SOCIAL_SECURITY_NUMBER
+```
+
+!!! warning "Choose the entity types deliberately"
+    Broad types match ordinary prose: a city name is an `ADDRESS`, a documentation link is a `URL`. Listing them flags inputs that carry no personal data at all. Start from the types your policy actually covers, and add rather than remove.
 
 ### Per-Request Guardrail Configuration
 
