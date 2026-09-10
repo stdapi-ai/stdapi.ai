@@ -21,6 +21,7 @@ from stdapi.monitoring import (
 )
 from stdapi.realtime import (
     apply_deployment_configuration,
+    check_session_tools,
     mint_client_secret,
     read_client_secret,
     serve_realtime_session,
@@ -86,11 +87,15 @@ async def create_realtime_client_secret(
         The client secret, the moment it expires, and the session it opens.
 
     Raises:
-        ApiError: When the session names a model pattern.
+        ApiError: When the session names a model pattern, or declares a tool no
+            session can serve.
     """
     log_request_params(request)
     params = request or ClientSecretCreateParams()
     session: SessionConfig = params.session or RealtimeSessionConfig()
+    # Refused here rather than at connect: the response echoes the session back,
+    # so a secret must never be minted for a configuration nothing can open.
+    check_session_tools(session)
     if session.model is not None and is_model_wildcard(session.model):
         # The secret outlives the request that minted it, so its model is fixed
         # here: a pattern would be read again, later, and could mean another model.

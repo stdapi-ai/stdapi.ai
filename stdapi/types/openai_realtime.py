@@ -179,14 +179,20 @@ class AudioConfig(BaseModel):
     )
 
 
-# Ref: openai.types.realtime.realtime_function_tool.RealtimeFunctionTool
+# Ref: openai.types.realtime.realtime_function_tool_param.RealtimeFunctionToolParam
 class FunctionTool(BaseModel):
     """One function the model may call during the session."""
 
     type: Literal["function"] = Field(
         default="function", description="Kind of tool being declared."
     )
-    name: str = Field(description="Name the model calls the function by.")
+    name: str | None = Field(
+        default=None,
+        description=(
+            "Name the model calls the function by; an entry without one is "
+            "ignored, since nothing can be called."
+        ),
+    )
     description: str | None = Field(
         default=None,
         description="What the function does, which is how the model decides to call it.",
@@ -206,11 +212,11 @@ class McpServerTool(BaseModel):
     )
 
 
-#: Either kind of tool a session may declare, told apart by its ``type``.
-SessionTool = Annotated[FunctionTool | McpServerTool, Field(discriminator="type")]
+#: Either kind of tool a session may declare; an entry with no ``type`` is a function.
+SessionTool = FunctionTool | McpServerTool
 
 
-# Ref: openai.responses.tool_choice_function.ToolChoiceFunction
+# Ref: openai.types.responses.tool_choice_function.ToolChoiceFunction
 class FunctionToolChoice(BaseModel):
     """The one function every answer must start by calling."""
 
@@ -218,6 +224,17 @@ class FunctionToolChoice(BaseModel):
         default="function", description="Kind of tool being named."
     )
     name: str = Field(description="Name of that function.")
+
+
+# Ref: openai.types.responses.tool_choice_mcp.ToolChoiceMcp
+class McpToolChoice(BaseModel):
+    """UNSUPPORTED: a remote MCP server's tool every answer would start with."""
+
+    type: Literal["mcp"] = Field(description="Kind of tool being named.")
+    server_label: str = Field(description="Name the remote server is referred to by.")
+    name: str | None = Field(
+        default=None, description="Name of that server's tool, if only one is meant."
+    )
 
 
 class RealtimeSessionConfig(BaseModel):
@@ -250,14 +267,15 @@ class RealtimeSessionConfig(BaseModel):
             "opens and fixed for the rest of it; remote MCP servers are refused."
         ),
     )
-    tool_choice: Literal["auto", "none", "required"] | FunctionToolChoice | None = (
-        Field(
-            default=None,
-            description=(
-                "How the model picks among the tools: 'none' declares none at all, "
-                "'required' and a named function make every answer start with a call."
-            ),
-        )
+    tool_choice: (
+        Literal["auto", "none", "required"] | FunctionToolChoice | McpToolChoice | None
+    ) = Field(
+        default=None,
+        description=(
+            "How the model picks among the tools: 'none' declares none at all, "
+            "'required' and a named function make every answer start with a call. "
+            "Naming a remote MCP server's tool is accepted and ignored."
+        ),
     )
     parallel_tool_calls: bool | None = Field(
         default=None,
