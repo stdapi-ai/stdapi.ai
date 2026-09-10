@@ -2601,6 +2601,7 @@ def _build_response_object(
         status=status,
         incomplete_details=incomplete_details,
         error=error,
+        background=request.background,
         completed_at=int(time()) if status == "completed" else None,
         instructions=request.instructions,
         metadata=request.metadata,
@@ -2611,6 +2612,7 @@ def _build_response_object(
         prompt_cache_options=request.prompt_cache_options,
         prompt_cache_retention=request.prompt_cache_retention,
         reasoning=request.reasoning,
+        safety_identifier=request.safety_identifier,
         # Responses' own ServiceTiers excludes the Bedrock-only "reserved" value,
         # which map_service_tier's wider (Chat Completions) signature allows for;
         # a Responses request can never actually carry it (rejected upstream).
