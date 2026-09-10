@@ -36,6 +36,7 @@ from stdapi.types.anthropic_messages import (
     CitationCharLocation,
     CitationContentBlockLocation,
     CitationPageLocation,
+    CitationsDelta,
     CitationsSearchResultLocation,
     CitationsWebSearchResultLocation,
     CodeExecutionToolParam,
@@ -115,7 +116,13 @@ from stdapi.types.anthropic_messages import (
 from stdapi.utils import b64decode, b64encode
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
+    from collections.abc import (
+        AsyncGenerator,
+        AsyncIterator,
+        Callable,
+        Mapping,
+        Sequence,
+    )
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_bedrock_runtime.literals import (
@@ -1230,86 +1237,90 @@ def _map_search_result_from_bedrock(
     )
 
 
-def _map_citations_from_bedrock(citations: list[dict[str, Any]]) -> list[TextCitation]:
+def _map_citation_from_bedrock(citation: Mapping[str, Any]) -> TextCitation | None:
+    """Convert one Bedrock citation output to an Anthropic text citation.
+
+    Args:
+        citation: Bedrock citation output, complete or streamed as a delta.
+
+    Returns:
+        Anthropic text citation, or ``None`` when the cited location has no
+        Anthropic equivalent.
+    """
+    cited_text = next(
+        (item["text"] for item in citation.get("sourceContent", []) if "text" in item),
+        "",
+    )
+    title = citation.get("title")
+    source = citation.get("source", "")
+
+    match citation.get("location", {}):
+        case {"documentChar": loc}:
+            return CitationCharLocation(
+                type="char_location",
+                cited_text=cited_text,
+                document_index=loc.get("documentIndex", 0),
+                document_title=title,
+                start_char_index=loc.get("start", 0),
+                end_char_index=loc.get("end", 0),
+            )
+        case {"documentPage": loc}:
+            return CitationPageLocation(
+                type="page_location",
+                cited_text=cited_text,
+                document_index=loc.get("documentIndex", 0),
+                document_title=title,
+                start_page_number=loc.get("start", 0),
+                end_page_number=loc.get("end", 0),
+            )
+        case {"documentChunk": loc}:
+            return CitationContentBlockLocation(
+                type="content_block_location",
+                cited_text=cited_text,
+                document_index=loc.get("documentIndex", 0),
+                document_title=title,
+                start_block_index=loc.get("start", 0),
+                end_block_index=loc.get("end", 0),
+            )
+        case {"web": loc}:
+            return CitationsWebSearchResultLocation(
+                type="web_search_result_location",
+                cited_text=cited_text,
+                url=loc.get("url", source),
+                title=title,
+                encrypted_index="",
+            )
+        case {"searchResultLocation": loc}:
+            return CitationsSearchResultLocation(
+                type="search_result_location",
+                cited_text=cited_text,
+                search_result_index=loc.get("searchResultIndex", 0),
+                source=source,
+                title=title,
+                start_block_index=loc.get("start", 0),
+                end_block_index=loc.get("end", 0),
+            )
+        case _:
+            return None
+
+
+def _map_citations_from_bedrock(
+    citations: Sequence[Mapping[str, Any]],
+) -> list[TextCitation]:
     """Convert Bedrock citation outputs to Anthropic text citations.
 
     Args:
-        citations: List of Bedrock citation output dicts.
+        citations: Bedrock citation outputs.
 
     Returns:
-        List of Anthropic text citation objects.
+        List of Anthropic text citation objects, without the ones whose cited
+        location has no Anthropic equivalent.
     """
-    result: list[TextCitation] = []
-    for citation in citations:
-        cited_text = next(
-            (
-                item["text"]
-                for item in citation.get("sourceContent", [])
-                if "text" in item
-            ),
-            "",
-        )
-        title = citation.get("title")
-        source = citation.get("source", "")
-        location = citation.get("location", {})
-
-        match location:
-            case {"documentChar": loc}:
-                result.append(
-                    CitationCharLocation(
-                        type="char_location",
-                        cited_text=cited_text,
-                        document_index=loc.get("documentIndex", 0),
-                        document_title=title,
-                        start_char_index=loc.get("start", 0),
-                        end_char_index=loc.get("end", 0),
-                    )
-                )
-            case {"documentPage": loc}:
-                result.append(
-                    CitationPageLocation(
-                        type="page_location",
-                        cited_text=cited_text,
-                        document_index=loc.get("documentIndex", 0),
-                        document_title=title,
-                        start_page_number=loc.get("start", 0),
-                        end_page_number=loc.get("end", 0),
-                    )
-                )
-            case {"documentChunk": loc}:
-                result.append(
-                    CitationContentBlockLocation(
-                        type="content_block_location",
-                        cited_text=cited_text,
-                        document_index=loc.get("documentIndex", 0),
-                        document_title=title,
-                        start_block_index=loc.get("start", 0),
-                        end_block_index=loc.get("end", 0),
-                    )
-                )
-            case {"web": loc}:
-                result.append(
-                    CitationsWebSearchResultLocation(
-                        type="web_search_result_location",
-                        cited_text=cited_text,
-                        url=loc.get("url", source),
-                        title=title,
-                        encrypted_index="",
-                    )
-                )
-            case {"searchResultLocation": loc}:
-                result.append(
-                    CitationsSearchResultLocation(
-                        type="search_result_location",
-                        cited_text=cited_text,
-                        search_result_index=loc.get("searchResultIndex", 0),
-                        source=source,
-                        title=title,
-                        start_block_index=loc.get("start", 0),
-                        end_block_index=loc.get("end", 0),
-                    )
-                )
-    return result
+    return [
+        mapped
+        for citation in citations
+        if (mapped := _map_citation_from_bedrock(citation)) is not None
+    ]
 
 
 async def _map_content_block_from_bedrock(  # noqa: PLR0911
@@ -1506,13 +1517,14 @@ def _make_block_start_event(
 
 
 def _make_block_delta_event(
-    index: int, delta: TextDelta | ThinkingDelta | SignatureDelta | InputJSONDelta
+    index: int,
+    delta: TextDelta | ThinkingDelta | SignatureDelta | InputJSONDelta | CitationsDelta,
 ) -> JSONServerSentEvent:
     """Create a ``content_block_delta`` SSE event.
 
     Args:
         index: Zero-based content block index.
-        delta: Delta payload (text, thinking, or input JSON).
+        delta: Delta payload (text, thinking, input JSON, or citation).
 
     Returns:
         JSON server-sent event.
@@ -1569,6 +1581,9 @@ def _map_delta(
 ) -> JSONServerSentEvent | None:
     """Convert a Bedrock content block delta to an Anthropic SSE delta event.
 
+    A citation whose location has no Anthropic equivalent is skipped, exactly as
+    the non-streamed path skips it.
+
     Args:
         index: Zero-based content block index.
         delta: Bedrock content block delta dict.
@@ -1593,6 +1608,12 @@ def _map_delta(
             return _make_block_delta_event(
                 index,
                 InputJSONDelta(type="input_json_delta", partial_json=partial_json),
+            )
+        case {"citation": citation} if (
+            mapped := _map_citation_from_bedrock(citation)
+        ) is not None:
+            return _make_block_delta_event(
+                index, CitationsDelta(type="citations_delta", citation=mapped)
             )
         case _:
             return None
