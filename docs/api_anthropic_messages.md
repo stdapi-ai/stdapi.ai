@@ -55,7 +55,7 @@ curl -X POST "$BASE/v1/messages" \
 | Text messages                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Full support for all text content                                                            |
 | Image input (`image`)                 |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | HTTP URLs, data URIs, base64                                                                 |
 | Document input (`document`)           |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | PDF (base64/URL), plain text, content blocks                                                 |
-| Document citations                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Citation locations in responses (PDF only on some models)                                    |
+| Document citations                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Citation locations in responses, streaming and non-streaming alike (PDF only on some models) |
 | Search result input (`search_result`) |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Pass search results as context                                                               |
 | System messages                       |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | System prompts                                                                               |
 | Image & Document input from S3        | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | S3 URLs                                                                                      |
@@ -393,6 +393,26 @@ Enable `citations` on document blocks to get precise source references in respon
 !!! note "Citation Support"
     Citation support varies by model and document format. PDF documents generally have the best citation support across models.
 
+When the response streams, each citation arrives as a `citations_delta` inside a `content_block_delta` event and belongs to the `text` block it is sent on, so a streamed answer carries the same citations as the same request answered in one piece:
+
+```json
+{
+  "type": "content_block_delta",
+  "index": 0,
+  "delta": {
+    "type": "citations_delta",
+    "citation": {
+      "type": "char_location",
+      "cited_text": "The capital of France is Paris.",
+      "document_index": 0,
+      "document_title": "Geography",
+      "start_char_index": 0,
+      "end_char_index": 31
+    }
+  }
+}
+```
+
 ### Server Tools
 
 Server tools are built-in capabilities that foundation models can use directly without requiring you to implement backend integrations. Different model providers support different server tools through their native tool formats.
@@ -436,7 +456,7 @@ curl -X POST "$BASE/v1/messages" \
 **Limitations:**
 
 - **No citation text in response blocks**: Unlike native Anthropic `web_search`, the `web_search_tool_result` content block carries only the `url` and `title` of each result — never `cited_text` or `encrypted_index`. The cited content itself is reflected only through the text content of the response.
-- **No streaming citation data**: Citation information is not emitted in streaming events. The `server_tool_use` block is streamed as a start event with empty input — no citation delta is produced.
+- **No streamed search metadata**: the `server_tool_use` block is streamed as a start event with empty input, so the search terms are not visible while the answer streams. Any citation the model reports is streamed as a `citations_delta` event on the text block it supports.
 - **No search filtering on non-Claude models**: Amazon's `systemTool` grounding has no equivalent for `allowed_domains`, `blocked_domains`, `max_uses`, or `user_location`. Requests to a system-tool web search model (e.g. Amazon Nova 2) that set any of these fields are rejected with a `400 Bad Request` rather than silently running an unfiltered search. Anthropic Claude models forward these fields natively and are unaffected.
 - **Not served on the OpenAI GPT models**: Amazon Bedrock serves their web search on the [Bedrock Mantle](features.md#bedrock-mantle-models) endpoint alone, and the Messages route reaches them through `bedrock-runtime`. A `web_search` tool sent to one is rejected with a `400 Bad Request` naming the two ways to route the model to Mantle, rather than reaching the model as a function tool it cannot answer.
 
