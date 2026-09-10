@@ -47,13 +47,16 @@ from stdapi.input_file import reset_current_input_files
 from stdapi.models import validate_model
 from stdapi.models.realtime import (
     InputTranscript,
+    NamedTool,
     OutputAudio,
     OutputTranscript,
     RealtimeModelBase,
+    RealtimeTool,
     ResponseFinished,
     ResponseStarted,
     SpeechStarted,
     SpeechStopped,
+    ToolCall,
     UsageReport,
     get_realtime_model,
 )
@@ -68,6 +71,8 @@ from stdapi.tenant_keys import resume_tenant
 from stdapi.types.openai_realtime import (
     FORMAT_SAMPLE_RATES,
     PCM_SAMPLE_RATE,
+    FunctionTool,
+    FunctionToolChoice,
     RealtimeSessionConfig,
     SessionConfig,
     TranscriptionSessionConfig,
@@ -82,7 +87,7 @@ if TYPE_CHECKING:
     from fastapi import WebSocket
     from types_aiobotocore_bedrock.literals import RegionName
 
-    from stdapi.models.realtime import BackendEvent, RealtimeBackendSession
+    from stdapi.models.realtime import BackendEvent, RealtimeBackendSession, ToolChoice
     from stdapi.types import JsonList, JsonMapping
 
 #: Prefix every ephemeral client secret carries, as upstream mints them.
@@ -130,6 +135,9 @@ _STOP_TASKS: Final[set[Task[None]]] = set()
 
 #: Close code and reason sent to every session still open at shutdown.
 _SHUTDOWN_CLOSE: Final = (1001, "server_shutdown")
+
+#: Answer given to a tool call of an answer the client stopped listening to.
+_CANCELLED_TOOL_RESULT: Final = '{"error": "The answer was cancelled."}'
 
 #: Message closing a session that failed in a way nothing else answered for.
 _UNEXPECTED_ERROR: Final = "The request could not be completed. Retry the request."
@@ -653,11 +661,17 @@ class _Item:
         "previous_id",
         "role",
         "status",
+        "tool",
         "truncated",
     )
 
     def __init__(
-        self, item_id: str, role: str, content: JsonList, status: str = "completed"
+        self,
+        item_id: str,
+        role: str,
+        content: JsonList,
+        status: str = "completed",
+        tool: JsonMapping | None = None,
     ) -> None:
         """Hold one item of the conversation.
 
@@ -666,11 +680,14 @@ class _Item:
             role: Who the item belongs to.
             content: The item's content parts.
             status: Status to report.
+            tool: The fields of a tool call or of its answer, which are
+                reported instead of a message's role and content.
         """
         self.id = item_id
         self.role = role
         self.content = content
         self.status = status
+        self.tool = tool
         self.audio_ms = 0
         self.truncated = False
         self.previous_id: str | None = None
@@ -685,6 +702,13 @@ def _item_body(item: _Item) -> JsonMapping:
     Returns:
         The item, in the shape the client expects.
     """
+    if item.tool is not None:
+        return {
+            "id": item.id,
+            "object": "realtime.item",
+            "status": item.status,
+            **item.tool,
+        }
     return {
         "id": item.id,
         "object": "realtime.item",
@@ -710,16 +734,29 @@ def _is_offset(value: Any) -> TypeIs[int]:  # noqa: ANN401
 class _Response:
     """The answer being spoken, and what it has produced so far."""
 
-    __slots__ = ("audio_bytes", "cancelled", "id", "item_id", "started", "transcript")
+    __slots__ = (
+        "audio_bytes",
+        "calls",
+        "cancelled",
+        "checked",
+        "id",
+        "item_done",
+        "item_id",
+        "started",
+        "transcript",
+    )
 
     def __init__(self) -> None:
         """Start an answer that has produced nothing yet."""
         self.id = f"resp_{uuid4().hex}"
         self.item_id = f"item_{uuid4().hex}"
         self.transcript: list[str] = []
+        self.calls: JsonList = []
         self.audio_bytes = 0
         self.started = False
         self.cancelled = False
+        self.checked = False
+        self.item_done = False
 
 
 class _Metering:
@@ -788,6 +825,7 @@ class RealtimeSession:
         "_metering",
         "_model",
         "_model_id",
+        "_pending_calls",
         "_pending_item",
         "_response",
         "_session_id",
@@ -838,6 +876,7 @@ class RealtimeSession:
         self._items: dict[str, _Item] = {}
         self._last_item_id: str | None = None
         self._pending_item: str | None = None
+        self._pending_calls: dict[str, str] = {}
         self._suppressed = False
         self._stopping = False
         self._closing: tuple[int, str] | None = None
@@ -1013,11 +1052,16 @@ class RealtimeSession:
                 "credential was issued for cannot be changed.",
             )
             return
+        try:
+            _check_tools(parsed, self._model)
+        except ApiError as exception:
+            await self._error("invalid_request_error", exception.args[0])
+            return
         if self._backend is not None and not self._same_backend_settings(parsed):
             await self._error(
                 "invalid_request_error",
-                "The instructions, voice and audio formats cannot be changed once "
-                "the model has answered. Open a new session to change them.",
+                "The instructions, voice, audio formats and tools cannot be changed "
+                "once the model has answered. Open a new session to change them.",
             )
             return
         self._config = parsed
@@ -1054,6 +1098,8 @@ class RealtimeSession:
         current = self._config
         return (
             _instructions(current) == _instructions(other)
+            and _session_tools(current) == _session_tools(other)
+            and _session_tool_choice(current) == _session_tool_choice(other)
             and current.audio.input.format.type == other.audio.input.format.type
             and current.audio.output.format.type == other.audio.output.format.type
             and current.audio.output.voice == other.audio.output.voice
@@ -1105,6 +1151,9 @@ class RealtimeSession:
         if not isinstance(item, dict):
             await self._error("invalid_request_error", "'item' must be an object.")
             return
+        if item.get("type") == "function_call_output":
+            await self._answer_tool_call(item)
+            return
         content = item.get("content") or []
         if not isinstance(content, list):
             await self._error("invalid_request_error", "'content' must be an array.")
@@ -1131,6 +1180,44 @@ class RealtimeSession:
             item.get("id") or f"item_{uuid4().hex}",
             role if isinstance(role, str) else "user",
             [{"type": "input_text", "text": text}],
+        )
+        await self._add_item(tracked, created=True)
+        await self._finish_item(tracked)
+
+    async def _answer_tool_call(self, item: JsonMapping) -> None:
+        """Give the model what one of its tool calls returned.
+
+        Args:
+            item: The ``function_call_output`` item the client sent.
+        """
+        call_id = item.get("call_id")
+        output = item.get("output")
+        if not isinstance(call_id, str) or not isinstance(output, str):
+            await self._error(
+                "invalid_request_error",
+                "'call_id' and 'output' are required to answer a function call.",
+            )
+            return
+        if self._pending_calls.pop(call_id, None) is None:
+            await self._error(
+                "invalid_request_error",
+                f"No function call '{call_id}' is waiting for an answer in this "
+                "session.",
+            )
+            return
+        checked = await apply_guardrail_to_text(output, source="INPUT")
+        backend = await self._ensure_backend()
+        await backend.send_tool_result(call_id, checked)
+        item_id = item.get("id")
+        tracked = _Item(
+            item_id if isinstance(item_id, str) and item_id else f"item_{uuid4().hex}",
+            "user",
+            [],
+            tool={
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": checked,
+            },
         )
         await self._add_item(tracked, created=True)
         await self._finish_item(tracked)
@@ -1318,6 +1405,7 @@ class RealtimeSession:
         audio = self._config.audio
         self._check_format(audio.input.format.type, self._model.INPUT_SAMPLE_RATES)
         self._check_format(audio.output.format.type, self._model.OUTPUT_SAMPLE_RATES)
+        _check_tools(self._config, self._model)
         self._backend = await self._stack.enter_async_context(
             self._model.open_session(
                 instructions=_instructions(self._config),
@@ -1326,6 +1414,8 @@ class RealtimeSession:
                 voice=audio.output.voice,
                 max_output_tokens=_max_output_tokens(self._config),
                 speech_output=self._speech_output(),
+                tools=_session_tools(self._config),
+                tool_choice=_session_tool_choice(self._config),
             )
         )
         self._backend_task = create_task(self._drive_backend())
@@ -1379,7 +1469,7 @@ class RealtimeSession:
             if self._client_task is not None:
                 self._client_task.cancel()
 
-    async def _report(self, event: BackendEvent) -> None:
+    async def _report(self, event: BackendEvent) -> None:  # noqa: C901 - one arm per backend event
         """Render one backend event.
 
         Args:
@@ -1398,6 +1488,8 @@ class RealtimeSession:
                 await self._report_answer(event.text)
             case OutputAudio():
                 await self._report_audio(event.audio)
+            case ToolCall():
+                await self._report_tool_call(event)
             case ResponseFinished() if self._suppressed:
                 # The cancelled answer still ran: report nothing, bill everything.
                 self._suppressed = False
@@ -1546,6 +1638,87 @@ class RealtimeSession:
             }
         )
 
+    async def _report_tool_call(self, call: ToolCall) -> None:
+        """Report one tool the model called, as an answer that is over.
+
+        The answer ends with the call because that is what makes a client run
+        the tool, and the model says nothing more until it has the result.
+
+        Args:
+            call: What the model called, and with which arguments.
+        """
+        if self._suppressed:
+            # Unreported, but still answered: a model left waiting for a result
+            # never speaks again, and the session would run to its own timeout.
+            if (backend := self._backend) is not None:
+                await backend.send_tool_result(call.call_id, _CANCELLED_TOOL_RESULT)
+            return
+        if self._response is None:
+            await self._start_response()
+        if (response := self._response) is None:  # pragma: no cover - cancelled
+            return
+        # Whatever was said before the call settles first: the client reads the
+        # items of an answer in the order they are announced as done.
+        await self._finish_output_item(
+            response, "completed", await self._checked_transcript(response)
+        )
+        index = 1 if response.started else 0
+        called: JsonMapping = {
+            "type": "function_call",
+            "name": call.name,
+            "call_id": call.call_id,
+            "arguments": call.arguments,
+        }
+        item = _Item(
+            f"item_{uuid4().hex}",
+            "assistant",
+            [],
+            status="in_progress",
+            # Announced empty, as upstream does: the arguments are what the
+            # events between the two item events carry.
+            tool={**called, "arguments": ""},
+        )
+        await self._send_event(
+            {
+                "type": "response.output_item.added",
+                "response_id": response.id,
+                "output_index": index,
+                "item": _item_body(item),
+            }
+        )
+        await self._add_item(item)
+        for kind, fields in (
+            ("delta", {"delta": call.arguments}),
+            ("done", {"arguments": call.arguments, "name": call.name}),
+        ):
+            await self._send_event(
+                {
+                    "type": f"response.function_call_arguments.{kind}",
+                    "response_id": response.id,
+                    "item_id": item.id,
+                    "output_index": index,
+                    "call_id": call.call_id,
+                    **fields,
+                }
+            )
+        item.status = "completed"
+        item.tool = called
+        body = _item_body(item)
+        response.calls.append(body)
+        self._pending_calls[call.call_id] = item.id
+        while len(self._pending_calls) > _MAX_TRACKED_ITEMS:
+            del self._pending_calls[next(iter(self._pending_calls))]
+        await self._send_event(
+            {
+                "type": "response.output_item.done",
+                "response_id": response.id,
+                "output_index": index,
+                "item": body,
+            }
+        )
+        await self._finish_item(item)
+        await self._finish_response(interrupted=False)
+
     async def _open_output_item(self) -> _Response | None:
         """Announce the item and content part the answer is written into.
 
@@ -1656,13 +1829,31 @@ class RealtimeSession:
             return
         self._response = None
         try:
-            transcript = await apply_guardrail_to_text(
-                "".join(response.transcript), source="OUTPUT"
-            )
+            transcript = await self._checked_transcript(response)
             await self._report_finished(response, transcript, interrupted=interrupted)
         finally:
             # Billed per answer: a dropped socket would take the whole session with it.
             self._record_usage()
+
+    async def _checked_transcript(self, response: _Response) -> str:
+        """Return everything the answer said, checked exactly once.
+
+        Args:
+            response: The answer, in progress or over.
+
+        Returns:
+            What it said, as the guardrail leaves it.
+
+        Raises:
+            GuardrailInterventionError: The guardrail blocked the answer.
+        """
+        text = "".join(response.transcript)
+        if response.checked:
+            return text
+        response.checked = True
+        checked = await apply_guardrail_to_text(text, source="OUTPUT")
+        response.transcript = [checked]
+        return checked
 
     async def _report_finished(
         self, response: _Response, transcript: str, *, interrupted: bool
@@ -1679,7 +1870,26 @@ class RealtimeSession:
             if response.cancelled
             else ("incomplete" if interrupted else "completed")
         )
-        if response.started:
+        await self._finish_output_item(response, status, transcript)
+        await self._send_event(
+            {
+                "type": "response.done",
+                "response": self._response_view(response, status, transcript),
+            }
+        )
+
+    async def _finish_output_item(
+        self, response: _Response, status: str, transcript: str
+    ) -> None:
+        """Close the item the answer was spoken or written into, once.
+
+        Args:
+            response: The answer the item belongs to.
+            status: Status to report for it.
+            transcript: Everything it said, checked.
+        """
+        if response.started and not response.item_done:
+            response.item_done = True
             done_type = (
                 "response.output_audio.done"
                 if self._speech_output()
@@ -1730,12 +1940,6 @@ class RealtimeSession:
                     item.content = self._assistant_content(transcript)
                     item.audio_ms = self._audio_ms(response.audio_bytes)
                 await self._finish_item(item)
-        await self._send_event(
-            {
-                "type": "response.done",
-                "response": self._response_view(response, status, transcript),
-            }
-        )
 
     def _record_usage(self) -> None:
         """Record what the backend billed since the last record, and flush it."""
@@ -1850,6 +2054,9 @@ class RealtimeSession:
         input_tokens = totals.input_speech_tokens + totals.input_text_tokens
         output_tokens = totals.output_speech_tokens + totals.output_text_tokens
         audio = self._config.audio.output
+        output: JsonList = list(response.calls)
+        if response.started:
+            output.insert(0, self._item_view(response, status, transcript))
         return {
             "id": response.id,
             "object": "realtime.response",
@@ -1866,9 +2073,7 @@ class RealtimeSession:
             },
             # Always null: a response carries no metadata to attach any to.
             "metadata": None,
-            "output": [self._item_view(response, status, transcript)]
-            if response.started
-            else [],
+            "output": output,
             "usage": {
                 "total_tokens": totals.total_tokens or input_tokens + output_tokens,
                 "input_tokens": input_tokens,
@@ -1969,6 +2174,72 @@ async def _finish_reader(task: Task[None]) -> None:
     task.cancel()
     with suppress(CancelledError, Exception):
         await task
+
+
+def _session_tools(config: SessionConfig) -> tuple[RealtimeTool, ...]:
+    """Return the tools the conversation opens with.
+
+    Args:
+        config: The session configuration.
+
+    Returns:
+        Every declared function, empty when the session declared none or asked
+        for none of them to be called.
+    """
+    if isinstance(config, TranscriptionSessionConfig) or config.tool_choice == "none":
+        return ()
+    return tuple(
+        RealtimeTool(
+            name=tool.name,
+            description=tool.description or "",
+            parameters=tool.parameters,
+        )
+        for tool in config.tools or ()
+        if isinstance(tool, FunctionTool)
+    )
+
+
+def _session_tool_choice(config: SessionConfig) -> ToolChoice:
+    """Return how the model picks among the session's tools.
+
+    Args:
+        config: The session configuration.
+
+    Returns:
+        The choice, in the vocabulary a model class takes.
+    """
+    if isinstance(config, TranscriptionSessionConfig):
+        return "auto"
+    choice = config.tool_choice
+    if isinstance(choice, FunctionToolChoice):
+        return NamedTool(choice.name)
+    return "required" if choice == "required" else "auto"
+
+
+def _check_tools(config: SessionConfig, model: RealtimeModelBase[Any, Any]) -> None:
+    """Refuse tools the session cannot serve, before anything is opened.
+
+    Args:
+        config: The session configuration.
+        model: The model serving the session.
+
+    Raises:
+        ApiError: A remote MCP server was attached, or this model calls no tools.
+    """
+    if isinstance(config, TranscriptionSessionConfig) or not config.tools:
+        return
+    if any(not isinstance(tool, FunctionTool) for tool in config.tools):
+        msg = (
+            "Only function tools are available in a session; a remote MCP server "
+            "cannot be attached to one."
+        )
+        raise ApiError(msg)
+    if not model.TOOLS_SUPPORTED:
+        msg = (
+            "This model does not call tools. Open the session without 'tools', or "
+            "choose a model that supports them."
+        )
+        raise ApiError(msg)
 
 
 def _deep_merge(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:

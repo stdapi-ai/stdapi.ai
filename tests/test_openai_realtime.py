@@ -55,6 +55,25 @@ _MANUAL_TURN_SESSION: Any = {
     },
 }
 
+#: Session declaring one tool the model must call, with turns the caller ends.
+_TOOL_SESSION: Any = {
+    **_MANUAL_TURN_SESSION,
+    "instructions": "Use the tools you are given, then answer in one sentence.",
+    "tools": [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get the current weather for a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {"location": {"type": "string"}},
+                "required": ["location"],
+            },
+        }
+    ],
+    "tool_choice": "required",
+}
+
 #: Fields a response object always carries, measured against upstream 2026-08-16.
 _RESPONSE_FIELDS = (
     "status_details",
@@ -520,3 +539,71 @@ class TestRealtimeSession:
         assert closed is not None, raised.value
         assert closed.code == _ERROR_CLOSE_CODE, closed
         assert closed.reason == "invalid_request_error.invalid_api_key", closed
+
+
+class TestFunctionTools:
+    """The session calls a tool the client declared, and speaks its answer.
+
+    Ref: https://developers.openai.com/api/docs/guides/realtime-function-calling
+         stdapi/realtime.py:RealtimeSession._report_tool_call
+    """
+
+    @pytest.mark.slow
+    async def test_a_required_tool_is_called_and_its_answer_is_used(
+        self, async_openai_client: AsyncOpenAI, realtime_model: str
+    ) -> None:
+        """A written turn produces a function call, and its output is answered.
+
+        ``tool_choice='required'`` is what makes this a test of the session
+        rather than of the model's judgement: the call is asked for, so the
+        assertion is on the gateway carrying it, not on the model choosing it.
+        """
+        async with async_openai_client.realtime.connect(
+            model=realtime_model
+        ) as connection:
+            await connection.recv()
+            await connection.session.update(session=_TOOL_SESSION)
+            await _drain_until(connection, "session.updated")
+            await connection.conversation.item.create(
+                item={
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "What is the weather in Paris?"}
+                    ],
+                }
+            )
+            await connection.response.create()
+
+            async with asyncio.timeout(_TURN_TIMEOUT):
+                called = await _drain_until(connection, "response.done")
+                call = next(
+                    event
+                    for event in called
+                    if event.type == "response.function_call_arguments.done"
+                )
+                await connection.conversation.item.create(
+                    item={
+                        "type": "function_call_output",
+                        "call_id": call.call_id,
+                        "output": '{"temperature_c": 14, "condition": "rain"}',
+                    }
+                )
+                await connection.response.create()
+                answered = await _drain_until(connection, "response.done")
+
+        kinds = _types(called)
+        assert "error" not in kinds, [
+            event for event in called if event.type == "error"
+        ]
+        assert call.name == "get_weather", call
+        assert "location" in call.arguments, call
+        called_item = next(
+            item for item in called[-1].response.output if item.type == "function_call"
+        )
+        assert called_item.call_id == call.call_id, called_item
+        assert "error" not in _types(answered), [
+            event for event in answered if event.type == "error"
+        ]
+        assert answered[-1].response.output, f"the tool answered nothing: {kinds}"
+        _assert_response_is_whole(answered[-1].response)

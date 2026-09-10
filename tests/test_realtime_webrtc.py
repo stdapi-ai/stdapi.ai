@@ -38,6 +38,7 @@ from stdapi.models.realtime import (
     RealtimeModelBase,
     ResponseFinished,
     ResponseStarted,
+    ToolCall,
     UsageReport,
 )
 from stdapi.monitoring import TENANT, Tenant, log_request_event
@@ -55,7 +56,7 @@ from stdapi.realtime_webrtc import (
     hangup_call,
     open_call,
 )
-from stdapi.types.openai_realtime import RealtimeSessionConfig
+from stdapi.types.openai_realtime import FunctionTool, RealtimeSessionConfig
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
@@ -99,6 +100,7 @@ class _FakeSession(RealtimeBackendSession):
         self._script = script
         self.audio = bytearray()
         self.texts: list[str] = []
+        self.tool_results: list[tuple[str, str]] = []
         self.ended = 0
         self.region = "us-east-1"
         self.closed = asyncio.Event()
@@ -114,6 +116,10 @@ class _FakeSession(RealtimeBackendSession):
     async def end_turn(self) -> None:
         """Record that the caller ended a turn."""
         self.ended += 1
+
+    async def send_tool_result(self, call_id: str, output: str) -> None:
+        """Record one answer to a tool the model called."""
+        self.tool_results.append((call_id, output))
 
     async def events(self) -> AsyncGenerator[BackendEvent]:
         """Replay the script once a turn ended, then wait for the close.
@@ -137,6 +143,7 @@ class _FakeModel(RealtimeModelBase[Any, Any]):
     OUTPUT_SAMPLE_RATES = frozenset({8000, 16000, 24000})
     DEFAULT_VOICE = "fake"
     MAX_SESSION_SECONDS = 60.0
+    TOOLS_SUPPORTED = True
 
     script: ClassVar[list[BackendEvent]] = []
     opened: ClassVar[list[_FakeSession]] = []
@@ -412,6 +419,65 @@ class TestLoopbackCall:
                 event
                 for event in drained
                 if event.get("type") == "response.output_audio.delta"
+            ]
+        finally:
+            hangup_call(call_id)
+            await _drain_call_tasks()
+            await client.close()
+
+    async def test_a_function_call_and_its_answer_ride_the_data_channel(
+        self, fake_backend: type[_FakeModel]
+    ) -> None:
+        """A call is announced on the channel, and its result goes back on it.
+
+        The transport carries the tool vocabulary exactly as the WebSocket
+        does: a browser peered straight at the gateway runs the same agent as
+        one behind a relay.
+
+        Ref: https://developers.openai.com/api/docs/guides/realtime-function-calling
+             stdapi/realtime.py:RealtimeSession._report_tool_call
+        """
+        fake_backend.script = [
+            ResponseStarted(),
+            ToolCall(
+                call_id="call-1", name="get_weather", arguments='{"location":"Seattle"}'
+            ),
+        ]
+        config = RealtimeSessionConfig(
+            tools=[
+                FunctionTool(
+                    name="get_weather", description="Get the weather for a city."
+                )
+            ]
+        )
+
+        client, call_id = await _open_loopback_call(config)
+        try:
+            await client.next_event("session.created")
+            client.channel.send(json.dumps({"type": "input_audio_buffer.commit"}))
+            called = await client.next_event("response.function_call_arguments.done")
+            assert called["name"] == "get_weather"
+            assert called["arguments"] == '{"location":"Seattle"}'
+            client.channel.send(
+                json.dumps(
+                    {
+                        "type": "conversation.item.create",
+                        "item": {
+                            "type": "function_call_output",
+                            "call_id": called["call_id"],
+                            "output": '{"temperature_c": 14}',
+                        },
+                    }
+                )
+            )
+            while True:
+                # The call's own item settles first; the answer's follows it.
+                settled = await client.next_event("conversation.item.done")
+                if settled["item"]["type"] == "function_call_output":
+                    break
+            assert settled["item"]["call_id"] == called["call_id"]
+            assert fake_backend.opened[0].tool_results == [
+                ("call-1", '{"temperature_c": 14}')
             ]
         finally:
             hangup_call(call_id)
