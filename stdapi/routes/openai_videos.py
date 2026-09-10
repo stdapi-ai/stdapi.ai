@@ -11,6 +11,7 @@ Two request formats are supported for creation:
   S3 URI, or Files API ID.
 """
 
+from asyncio import create_task, gather
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from typing import Annotated, Literal
 
@@ -33,6 +34,7 @@ from stdapi.models.video import (
     get_video_model,
     list_video_jobs,
     open_video_content,
+    resolve_reference_image,
     video_expires_at,
 )
 from stdapi.monitoring import REQUEST_TIME, log_request_params, log_response_params
@@ -257,7 +259,8 @@ async def create_video(
 
     Raises:
         ApiError: With 404 if the model does not exist; 400 on unsupported
-            options or invalid values.
+            options or invalid values; 413 when the reference image is larger
+            than the maximum accepted input file.
     """
     if "application/json" in http_request.headers.get("content-type", ""):
         with validation_error_handler():
@@ -296,11 +299,29 @@ async def create_video(
             error_status=400,
         )
     ).id
+    # Reading the reference image is an independent network call from the prompt
+    # guardrail call below: start it now so both run concurrently.
+    reference_task = (
+        create_task(resolve_reference_image(reference))
+        if reference is not None
+        else None
+    )
+    try:
+        prompt = await apply_guardrail_to_text(request.prompt, source="INPUT")
+    except BaseException:
+        # Consume the task's result or exception so a failed read never logs as
+        # "exception was never retrieved" once this coroutine exits; BaseException
+        # so a request cancellation also stops the read.
+        if reference_task is not None:
+            reference_task.cancel()
+            await gather(reference_task, return_exceptions=True)
+        raise
+    image = await reference_task if reference_task is not None else None
     start = await get_video_model(model_id).start_video_generation(
-        await apply_guardrail_to_text(request.prompt, source="INPUT"),
+        prompt,
         seconds=int(request.seconds) if request.seconds else None,
         size=request.size,
-        reference_image=reference,
+        reference_image=image,
         extra_params=get_extra_model_parameters(model_id, request),
     )
     return log_response_params(

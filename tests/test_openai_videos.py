@@ -13,11 +13,12 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 """
 
 import time
+from asyncio import Event, sleep, wait_for
 from base64 import b64encode
 from contextlib import suppress
 from io import BytesIO
 from os import getenv
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 import httpx
 import pytest
@@ -25,8 +26,14 @@ from openai import BadRequestError
 from PIL import Image
 
 from stdapi.api_errors import ApiError
+from stdapi.aws_bedrock import GuardrailInterventionError
 from stdapi.config import SETTINGS
-from stdapi.models.video import VideoGenerationStart, VideoJob, VideoListing
+from stdapi.models.video import (
+    ReferenceImage,
+    VideoGenerationStart,
+    VideoJob,
+    VideoListing,
+)
 from stdapi.routes import openai_videos
 from tests._helpers import make_model_details
 
@@ -53,7 +60,7 @@ class _StubVideoModel:
         *,
         seconds: int | None,
         size: str | None,
-        reference_image: object,
+        reference_image: ReferenceImage | None,
         extra_params: dict[str, Any],
     ) -> VideoGenerationStart:
         """Record the call and return a fixed started job."""
@@ -205,7 +212,9 @@ class TestOpenAIVideoRoutes:
             "the effective duration and size reported by the backend are echoed"
         )
         (call,) = video_backend.calls
-        assert call["reference_image"] is not None
+        assert call["reference_image"] == ReferenceImage("image/png", "aGVsbG8="), (
+            "the data URI reaches the model resolved into a media type and payload"
+        )
         assert call["extra_params"] == {"seed": 7}
         assert call["seconds"] is None
         assert call["size"] is None
@@ -216,12 +225,14 @@ class TestOpenAIVideoRoutes:
         """A multipart request with a binary reference image succeeds.
 
         Multipart values are strings, so extras are JSON-decoded before reaching
-        the model ("true" becomes ``True``), and the uploaded file becomes the
-        reference image.
+        the model ("true" becomes ``True``), and the uploaded file reaches it as
+        the reference image, with the media type read from the content rather
+        than from the part's own declaration.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/types/__init__.py:BaseModelRequestWithFormExtra._deserialize_forms
         """
+        frame = _reference_frame("8x8")
         response = app_client.post(
             "/v1/videos",
             data={
@@ -231,7 +242,7 @@ class TestOpenAIVideoRoutes:
                 "size": "960x540",
                 "loop": "true",
             },
-            files={"input_reference": ("frame.png", b"png-bytes", "image/png")},
+            files={"input_reference": ("frame.png", frame, "application/octet-stream")},
         )
         assert response.status_code == 200, response.text
         body = response.json()
@@ -240,7 +251,9 @@ class TestOpenAIVideoRoutes:
         assert body["size"] == "960x540"
         (call,) = video_backend.calls
         assert (call["seconds"], call["size"]) == (5, "960x540")
-        assert call["reference_image"] is not None
+        assert call["reference_image"] == ReferenceImage(
+            "image/png", b64encode(frame).decode()
+        ), "the uploaded part reaches the model as its media type and payload"
         assert call["extra_params"] == {"loop": True}, (
             "form values are JSON-decoded, so 'true' must reach the model as True"
         )
@@ -270,7 +283,9 @@ class TestOpenAIVideoRoutes:
         )
         assert response.status_code == 200, response.text
         (call,) = video_backend.calls
-        assert call["reference_image"] is not None
+        assert call["reference_image"] == ReferenceImage(
+            "image/png", data_uri.partition(",")[2]
+        )
         assert call["extra_params"] == {}, (
             "the bracketed key must not leak into the provider parameters"
         )
@@ -665,6 +680,135 @@ class TestOpenAIVideoRoutes:
         err = response.json()["error"]
         assert err["type"] == "invalid_request_error"
         assert "still being processed" in err["message"]
+
+
+@pytest.mark.local
+class TestOpenAIVideoReferenceResolution:
+    """POST /v1/videos: how the reference image is read next to the prompt guardrail.
+
+    Reading the reference image and screening the prompt are independent calls,
+    so a request carrying both must not pay for them one after the other -- while
+    a refused prompt still answers first and still stops the read.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/routes/openai_videos.py:create_video
+    """
+
+    #: A JSON creation body whose reference image is an inline PNG data URI.
+    _BODY: ClassVar[dict[str, str]] = {
+        "model": "amazon.nova-reel-v1:0",
+        "prompt": "a cat",
+        "input_reference": "data:image/png;base64,aGVsbG8=",
+    }
+
+    def test_reference_is_read_while_the_prompt_is_screened(
+        self,
+        app_client: TestClient,
+        video_backend: _StubVideoModel,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The reference read and the guardrail call overlap in time.
+
+        Each side waits for the other to have started, so the request can only
+        complete when both are in flight at once: a route that awaited them one
+        after the other never releases the first wait.
+
+        Ref: stdapi/models/video/__init__.py:resolve_reference_image
+             stdapi/aws_bedrock.py:apply_guardrail_to_text
+        """
+        guardrail_started = Event()
+        reference_started = Event()
+
+        async def _apply_guardrail(text: str, *, source: str) -> str:
+            assert source == "INPUT"
+            guardrail_started.set()
+            await wait_for(reference_started.wait(), timeout=10)
+            return text
+
+        async def _resolve_reference_image(_reference: object) -> ReferenceImage:
+            reference_started.set()
+            await wait_for(guardrail_started.wait(), timeout=10)
+            return ReferenceImage("image/png", "aGVsbG8=")
+
+        monkeypatch.setattr(openai_videos, "apply_guardrail_to_text", _apply_guardrail)
+        monkeypatch.setattr(
+            openai_videos, "resolve_reference_image", _resolve_reference_image
+        )
+
+        response = app_client.post("/v1/videos", json=self._BODY)
+
+        assert response.status_code == 200, response.text
+        (call,) = video_backend.calls
+        assert call["reference_image"] == ReferenceImage("image/png", "aGVsbG8=")
+
+    def test_refused_prompt_stops_the_reference_read(
+        self,
+        app_client: TestClient,
+        video_backend: _StubVideoModel,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A refused prompt answers 400 and leaves no reference read running.
+
+        The read is started before the prompt is screened, so a refusal has to
+        stop it: otherwise the request answers while its download continues to
+        run, and its outcome is never collected.
+
+        Ref: stdapi/routes/openai_videos.py:create_video
+        """
+        reference_started = Event()
+        cancellations: list[bool] = []
+
+        async def _apply_guardrail(_text: str, *, source: str) -> str:
+            assert source == "INPUT"
+            await wait_for(reference_started.wait(), timeout=10)
+            msg = "Content blocked by the content filters."
+            raise GuardrailInterventionError(msg)
+
+        async def _resolve_reference_image(_reference: object) -> ReferenceImage:
+            reference_started.set()
+            try:
+                await sleep(10)
+            except BaseException:
+                cancellations.append(True)
+                raise
+            return ReferenceImage("image/png", "aGVsbG8=")
+
+        monkeypatch.setattr(openai_videos, "apply_guardrail_to_text", _apply_guardrail)
+        monkeypatch.setattr(
+            openai_videos, "resolve_reference_image", _resolve_reference_image
+        )
+
+        response = app_client.post("/v1/videos", json=self._BODY)
+
+        assert response.status_code == 400, response.text
+        assert response.json()["error"]["code"] == "content_filter"
+        assert cancellations == [True], "the pending reference read must be stopped"
+        assert not video_backend.calls
+
+    def test_oversized_reference_is_refused(
+        self,
+        app_client: TestClient,
+        video_backend: _StubVideoModel,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A reference image over the input size limit answers 413, not 500.
+
+        The read now happens in the route rather than inside the model, so its
+        refusal has to reach the client as the same status it would on any other
+        route that accepts a file.
+
+        Ref: stdapi/input_file.py:enforce_size_limit
+             stdapi/models/video/__init__.py:resolve_reference_image
+        """
+        monkeypatch.setattr(SETTINGS, "max_input_file_size", 1)
+
+        response = app_client.post("/v1/videos", json=self._BODY)
+
+        assert response.status_code == 413, response.text
+        err = response.json()["error"]
+        assert err["type"] == "invalid_request_error"
+        assert "maximum allowed size" in err["message"]
+        assert not video_backend.calls
 
 
 @pytest.mark.local
