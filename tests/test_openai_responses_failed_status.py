@@ -10,14 +10,18 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from stdapi.models.chat._default import ChatModel
 from stdapi.routes import openai_responses
 from stdapi.types.openai_responses import Response, ResponseCreateParams, ResponseError
 from tests._helpers import make_model_details
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from sse_starlette import EventSourceResponse
     from starlette.testclient import TestClient
 
+    from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
     from stdapi.models import ModelDetails
 
 pytestmark = pytest.mark.local
@@ -74,6 +78,33 @@ def failed_chat_backend(monkeypatch: pytest.MonkeyPatch) -> _StubFailedChatModel
     return stub
 
 
+@pytest.fixture
+def failing_converse_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the backend call alone, leaving the real response adapter in place.
+
+    Only model validation and the generation call are replaced, so the Response
+    object the route returns is the one the adapter builds from the request.
+    """
+
+    async def _validate_model(
+        model_id: str, *_args: object, **_kwargs: object
+    ) -> ModelDetails:
+        return make_model_details(model_id)
+
+    async def _malformed_output(
+        _self: ChatModel, _request: ConverseRequestBaseTypeDef
+    ) -> dict[str, Any]:
+        return {
+            "output": {"message": {"role": "assistant", "content": []}},
+            "stopReason": "malformed_model_output",
+            "usage": {"inputTokens": 1, "outputTokens": 0, "totalTokens": 1},
+        }
+
+    monkeypatch.setattr(openai_responses, "validate_model", _validate_model)
+    monkeypatch.setattr(openai_responses, "get_chat_model", ChatModel)
+    monkeypatch.setattr(ChatModel, "converse", _malformed_output)
+
+
 @pytest.mark.usefixtures("failed_chat_backend")
 def test_synchronous_failed_response_returns_502(app_client: TestClient) -> None:
     """A synchronous ``status="failed"`` Response is surfaced as a 502 error envelope.
@@ -116,27 +147,35 @@ def test_failed_response_without_error_uses_the_fallback_message(
     assert error["type"] == "server_error"
 
 
-@pytest.mark.usefixtures("failed_chat_backend")
+@pytest.mark.usefixtures("failing_converse_backend")
 def test_background_failed_response_stays_200(app_client: TestClient) -> None:
     """A background request returns the failed terminal state as a 200 Response.
 
     ``background`` responses are polled, so the terminal ``failed`` state and
     its ``error`` object must stay readable on the Response object instead of
-    being raised as an HTTP error.
+    being raised as an HTTP error. ``background`` is echoed on that object, as
+    upstream reports it on every Response it returns.
 
     Ref: https://developers.openai.com/api/docs/guides/background
+         https://developers.openai.com/api/reference/resources/responses/methods/retrieve
     """
     response = app_client.post(
         "/v1/responses",
-        json={"model": "amazon.nova-pro-v1:0", "input": "hi", "background": True},
+        json={
+            "model": "amazon.nova-pro-v1:0",
+            "input": "hi",
+            "background": True,
+            "safety_identifier": "user-1",
+        },
     )
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["object"] == "response"
     assert body["status"] == "failed"
     assert body["background"] is True
+    assert body["safety_identifier"] == "user-1"
     assert body["error"] == {
         "code": "server_error",
-        "message": "The model failed to generate output.",
+        "message": "The model failed to generate a valid response.",
     }
     assert body["output"] == []

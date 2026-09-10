@@ -1474,6 +1474,56 @@ class TestEchoFields:
         )
         assert snapshots[-1]["completed_at"] >= 1234
 
+    async def test_background_and_safety_identifier_are_echoed(self) -> None:
+        """background, safety_identifier and user come back on the response object.
+
+        All three are accepted and ignored, and upstream still reports each one
+        on the Response it returns, so a client reading them back gets the value
+        it sent rather than ``null``.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
+             https://developers.openai.com/api/docs/guides/background
+        """
+        response = await format_response(
+            "resp-1",
+            1234.56,
+            "model",
+            _bedrock_response([{"text": "hi"}]),
+            _request(background=True, safety_identifier="user-1", user="legacy"),
+        )
+        assert response.background is True
+        assert response.safety_identifier == "user-1"
+        assert response.user == "legacy"
+
+    async def test_streamed_snapshots_echo_background_and_safety_identifier(
+        self,
+    ) -> None:
+        """Every streamed snapshot carries background and safety_identifier.
+
+        A streaming client only ever sees the Response object through these
+        snapshots, so both fields must be on the ``response.created`` snapshot
+        and on the terminal one, not only on the non-streaming object.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+        """
+        events = await _collect(
+            format_stream(
+                "resp-1",
+                1234.56,
+                "model",
+                _stream(_text_stream_events()),
+                _request(background=True, safety_identifier="user-1"),
+            )
+        )
+        snapshots = [
+            payload["response"]
+            for payload in (_payload(sse) for sse in events)
+            if "response" in payload
+        ]
+        assert snapshots, "the stream carries at least one response snapshot"
+        assert all(snapshot["background"] is True for snapshot in snapshots)
+        assert all(snapshot["safety_identifier"] == "user-1" for snapshot in snapshots)
+
 
 class TestStreamedModeration:
     """The streamed terminal event carries the moderation field.
