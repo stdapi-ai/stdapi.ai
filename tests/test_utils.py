@@ -31,6 +31,7 @@ from stdapi.utils import (
     match_bedrock_app_profile_arn,
     match_bedrock_prompt_router_arn,
     missing_file_error,
+    parse_content_disposition_filename,
     strip_url_query,
 )
 
@@ -533,3 +534,62 @@ class TestBase64DecodedLength:
 
         assert b64_decoded_len("") == 0
         assert b64_decoded_len(prefix, len(prefix)) == 0
+
+
+class TestContentDispositionFilename:
+    """A filename read back from a stored header is the one that was written.
+
+    The Files API stores a client-supplied filename inside a quoted
+    ``filename="..."`` value and reads it back with this parser, so the parser is
+    the second half of the sanitiser: a name it re-interprets is a name the API
+    reports differently from what it stored. Since ``*`` is a character the Files
+    API keeps, a filename may contain the literal ``filename*=``, and a parser
+    scanning the whole header for the RFC 5987 form would prefer that inner match
+    and percent-decode it — handing back the ``/`` and ``"`` the sanitiser exists
+    to exclude.
+
+    Ref: https://www.rfc-editor.org/rfc/rfc6266#section-4.1
+         https://www.rfc-editor.org/rfc/rfc5987#section-3.2
+         stdapi/utils.py:parse_content_disposition_filename
+         stdapi/files/_core.py:_sanitize_filename
+    """
+
+    @pytest.mark.parametrize(
+        ("stored", "expected"),
+        [
+            ("report.pdf", "report.pdf"),
+            ("Q3: results.pdf", "Q3: results.pdf"),
+            ("a;b.txt", "a;b.txt"),
+            ("star*.txt", "star*.txt"),
+            ("a filename*=x/../b.txt", "a filename*=x/../b.txt"),
+            (
+                "x filename*=UTF-8%27%27%2Fetc%2Fpasswd",
+                "x filename*=UTF-8%27%27%2Fetc%2Fpasswd",
+            ),
+        ],
+    )
+    def test_a_stored_filename_reads_back_unchanged(
+        self, stored: str, expected: str
+    ) -> None:
+        """Whatever the Files API stored is what it reports, byte for byte."""
+        header = f'attachment; filename="{stored}"'
+
+        assert parse_content_disposition_filename(header) == expected
+
+    def test_a_real_extended_parameter_is_still_preferred(self) -> None:
+        """A genuine ``filename*`` parameter still wins over the ASCII fallback."""
+        header = (
+            "attachment; filename=\"fallback.pdf\"; filename*=UTF-8''h%C3%A9llo.pdf"
+        )
+
+        assert parse_content_disposition_filename(header) == "héllo.pdf"
+
+    def test_an_unquoted_filename_is_read(self) -> None:
+        """A header written without quotes is still understood."""
+        assert parse_content_disposition_filename("inline; filename=plain.txt") == (
+            "plain.txt"
+        )
+
+    def test_a_header_with_no_filename_yields_an_empty_string(self) -> None:
+        """Nothing to extract is an empty string, never a partial match."""
+        assert parse_content_disposition_filename("attachment") == ""

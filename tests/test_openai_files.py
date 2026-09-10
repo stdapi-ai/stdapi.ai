@@ -72,6 +72,37 @@ _PART_A: bytes = b"A" * _MIN_PART_SIZE
 #: Second (last) part — may be any size.
 _PART_B: bytes = b"B" * 1024
 
+#: Boundary of the hand-built multipart body used for filenames no SDK can send.
+_BOUNDARY: str = "stdapi-filename-boundary"
+
+#: Anthropic API version header value, required by the official endpoint.
+_ANTHROPIC_VERSION: str = "2023-06-01"
+
+#: Beta header the Anthropic Files API is served under.
+_ANTHROPIC_FILES_BETA: str = "files-api-2025-04-14"
+
+
+def _multipart_body(filename: str, content: bytes, mime_type: str) -> bytes:
+    """Return a ``multipart/form-data`` body whose file part declares *filename* verbatim.
+
+    Args:
+        filename: Value of the part's ``filename`` parameter, empty included.
+        content: Bytes of the file part.
+        mime_type: Content type declared for the part.
+
+    Returns:
+        The encoded request body.
+    """
+    return (
+        (
+            f"--{_BOUNDARY}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            f"Content-Type: {mime_type}\r\n\r\n"
+        ).encode()
+        + content
+        + f"\r\n--{_BOUNDARY}--\r\n".encode()
+    )
+
 
 def _error_envelope(error: APIStatusError, status: int) -> dict[str, Any]:
     """Return the inner ``error`` object of *error* after checking status and type.
@@ -947,6 +978,7 @@ class _StubS3CopyStore:
     def __init__(self) -> None:
         self.objects: dict[tuple[str, str], dict[str, Any]] = {}
         self.copy_object_calls: list[dict[str, Any]] = []
+        self.put_object_calls: list[dict[str, Any]] = []
         self.create_multipart_calls: list[dict[str, Any]] = []
         self.head_object_calls: list[tuple[str, str]] = []
         self.tag_sets: list[list[dict[str, str]]] = []
@@ -971,6 +1003,18 @@ class _StubS3CopyStore:
     ) -> dict[str, Any]:
         self.head_object_calls.append((Bucket, Key))
         return self.objects[Bucket, Key]
+
+    async def put_object(
+        self,
+        *,
+        Bucket: str,  # noqa: N803
+        Key: str,  # noqa: N803
+        Body: bytes,  # noqa: N803
+        **kwargs: Any,  # noqa: ANN401
+    ) -> dict[str, Any]:
+        self.put_object_calls.append({"Bucket": Bucket, "Key": Key, **kwargs})
+        self.put(Bucket, Key, kwargs, len(Body))
+        return {}
 
     async def copy_object(
         self,
@@ -1125,6 +1169,77 @@ class TestUploadFileS3SourceMetadataUnit:
         assert create["ContentType"] == _SOURCE_CONTENT_TYPE
         assert create["ContentDisposition"] == f'attachment; filename="{_SOURCE_KEY}"'
         assert create["Metadata"] == {"purpose": "batch", "expires-at": ""}
+
+
+@pytest.mark.local
+class TestUploadedFilenameStorageUnit:
+    """The name ``POST /v1/files`` stores an upload under (route, stubbed S3).
+
+    The record the response is built from is rebuilt out of the stored object's
+    own metadata, so asserting on the answered ``filename`` covers the whole
+    round trip: what was written, and what reading it back yields.
+
+    Ref: https://platform.claude.com/docs/en/api/files/upload
+         stdapi/files/_core.py:upload_file
+    """
+
+    def test_a_path_like_filename_is_stored_as_its_last_component(
+        self, app_client: TestClient, stub_s3: _StubS3CopyStore
+    ) -> None:
+        """A form part naming ``reports/q3.pdf`` yields a file named ``q3.pdf``.
+
+        A multipart part carries whatever name the client typed, so this is the
+        path a separator actually arrives on.
+
+        Ref: stdapi/files/_core.py:_sanitize_filename
+        """
+        response = app_client.post(
+            "/v1/files",
+            files={"file": ("reports/q3.pdf", _MINIMAL_PDF, "application/pdf")},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["filename"] == "q3.pdf"
+        (put,) = stub_s3.put_object_calls
+        assert put["ContentDisposition"] == 'attachment; filename="q3.pdf"'
+
+    def test_an_empty_filename_is_stored_as_unnamed_plus_its_extension(
+        self, app_client: TestClient, stub_s3: _StubS3CopyStore
+    ) -> None:
+        """A form part with an empty name yields a file named ``unnamed.pdf``.
+
+        Ref: https://platform.claude.com/docs/en/api/files/upload
+             stdapi/files/_core.py:_sanitize_filename
+        """
+        response = app_client.post(
+            "/v1/files",
+            content=_multipart_body("", _MINIMAL_PDF, "application/pdf"),
+            headers={"content-type": f"multipart/form-data; boundary={_BOUNDARY}"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["filename"] == "unnamed.pdf"
+        (put,) = stub_s3.put_object_calls
+        assert put["ContentDisposition"] == 'attachment; filename="unnamed.pdf"'
+
+    def test_a_json_body_carrying_only_content_is_named_from_its_media_type(
+        self, app_client: TestClient, stub_s3: _StubS3CopyStore
+    ) -> None:
+        """A data URI, which has no name at all, is named from the type it declares.
+
+        Ref: https://platform.claude.com/docs/en/api/files/upload
+             stdapi/files/_core.py:_sanitize_filename
+        """
+        data_uri = (
+            f"data:application/pdf;base64,{base64.b64encode(_MINIMAL_PDF).decode()}"
+        )
+
+        response = app_client.post("/v1/files", json={"file": data_uri})
+
+        assert response.status_code == 200, response.text
+        assert response.json()["filename"] == "unnamed.pdf"
+        (put,) = stub_s3.put_object_calls
+        assert put["ContentDisposition"] == 'attachment; filename="unnamed.pdf"'
 
 
 @pytest.mark.local
@@ -3489,3 +3604,131 @@ class TestFileContentDownloadHardening:
         assert response.headers["content-type"].startswith("text/html")
         assert response.headers["content-disposition"] == "attachment"
         assert response.headers["x-content-type-options"] == "nosniff"
+
+
+class TestUploadedFilenames:
+    """The name an upload is stored and reported under, on both file surfaces.
+
+    Only the final path component of the name a client sends is kept, and a name
+    that is empty becomes ``unnamed`` plus the extension of the file's media
+    type.  Both upload routes share one store, so both answer the same way.
+
+    Ref: https://platform.claude.com/docs/en/api/files/upload
+         https://developers.openai.com/api/reference/resources/files/methods/create
+         stdapi/files/_core.py:upload_file
+    """
+
+    def test_a_path_like_filename_is_accepted(self, openai_client: OpenAI) -> None:
+        """``reports/q3.pdf`` uploads, and the file is named after its last component.
+
+        A separator in the name is legal upstream, so refusing it would turn a
+        valid upload into a 400.  Which component survives is pinned on the
+        surface that documents it, below.
+
+        Ref: https://developers.openai.com/api/reference/resources/files/methods/create
+             stdapi/files/_core.py:upload_file
+        """
+        result = openai_client.files.create(
+            file=("reports/q3.pdf", io.BytesIO(_MINIMAL_PDF), "application/pdf"),
+            purpose="assistants",
+        )
+        try:
+            assert result.filename.endswith("q3.pdf"), result.filename
+        finally:
+            openai_client.files.delete(result.id)
+
+    def test_a_filename_carrying_a_colon_is_stored_as_sent(
+        self, openai_client: OpenAI
+    ) -> None:
+        """``Q3: results.pdf`` is reported back character for character.
+
+        Nothing upstream forbids the punctuation a filesystem dislikes, and the
+        stored name is never used as a path, so the whole name is kept.
+
+        Ref: https://developers.openai.com/api/reference/resources/files/methods/create
+             stdapi/files/_core.py:upload_file
+        """
+        result = openai_client.files.create(
+            file=("Q3: results.pdf", io.BytesIO(_MINIMAL_PDF), "application/pdf"),
+            purpose="assistants",
+        )
+        try:
+            assert result.filename == "Q3: results.pdf"
+        finally:
+            openai_client.files.delete(result.id)
+
+    def test_an_upload_session_accepts_a_path_like_filename(
+        self, openai_client: OpenAI
+    ) -> None:
+        """A session declared for ``data/train.jsonl`` is created, not refused.
+
+        The session's declared name reaches the assembled file, so it is held to
+        the same rule as a direct upload.
+
+        Ref: https://developers.openai.com/api/reference/resources/uploads/methods/create
+             stdapi/files/_multipart.py:create_multipart_session
+        """
+        upload = openai_client.uploads.create(
+            bytes=len(_TEXT_FILE),
+            filename="data/train.jsonl",
+            mime_type="text/plain",
+            purpose="assistants",
+        )
+        try:
+            assert upload.filename.endswith("train.jsonl"), upload.filename
+        finally:
+            openai_client.uploads.cancel(upload.id)
+
+    def test_the_anthropic_surface_keeps_only_the_final_path_component(
+        self, anthropic_client: Anthropic, is_bedrock_direct: bool
+    ) -> None:
+        """Uploading ``reports/q3.pdf`` stores and reports it as ``q3.pdf``.
+
+        This is the surface that states the rule, so it is where the surviving
+        component is asserted exactly.
+
+        Ref: https://platform.claude.com/docs/en/api/files/upload
+             stdapi/files/_core.py:upload_file
+        """
+        if is_bedrock_direct:
+            pytest.skip("Files API not available on Bedrock")
+        created = anthropic_client.beta.files.upload(
+            file=("reports/q3.pdf", io.BytesIO(_MINIMAL_PDF), "application/pdf")
+        )
+        try:
+            assert created.filename == "q3.pdf"
+        finally:
+            anthropic_client.beta.files.delete(created.id)
+
+    def test_an_empty_filename_becomes_unnamed_plus_the_type_extension(
+        self, anthropic_client: Anthropic, is_bedrock_direct: bool
+    ) -> None:
+        """A part sent with an empty ``filename`` is stored as ``unnamed.pdf``.
+
+        The body is hand-built because no SDK can send this: an empty name makes
+        httpx drop the ``filename`` parameter altogether, which turns the part
+        into a plain form field rather than a file.
+
+        Ref: https://platform.claude.com/docs/en/api/files/upload
+             stdapi/files/_core.py:upload_file
+        """
+        if is_bedrock_direct:
+            pytest.skip("Files API not available on Bedrock")
+        http_client = anthropic_client._client  # noqa: SLF001
+        response = http_client.post(
+            f"{anthropic_client.base_url}v1/files",
+            content=_multipart_body("", _MINIMAL_PDF, "application/pdf"),
+            headers={
+                **anthropic_client.auth_headers,
+                "anthropic-version": _ANTHROPIC_VERSION,
+                "anthropic-beta": _ANTHROPIC_FILES_BETA,
+                "content-type": f"multipart/form-data; boundary={_BOUNDARY}",
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        created = response.json()
+        try:
+            assert created["filename"] == "unnamed.pdf"
+        finally:
+            anthropic_client.beta.files.delete(created["id"])

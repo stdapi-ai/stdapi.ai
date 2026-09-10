@@ -320,11 +320,13 @@ Files are stored in S3 under the prefix configured by [`AWS_S3_FILES_PREFIX`](op
 
 **`file-id:` is refused on upload.** `POST /v1/files` answers `400` for a `file-id:` input, because resolving it there would silently clone an existing file. It is accepted only on string-overloaded file fields — see [the URI scheme](#referencing-uploaded-files-via-the-file-id-uri-scheme).
 
+**Filenames are kept, not policed.** Only the last component of the part's `filename` is kept, with anything up to the final `/` or `\` dropped: `reports/q3.pdf` is stored and listed as `q3.pdf`. Every other character is kept exactly as sent, up to 500 of them — punctuation a filesystem dislikes included, since the name is never used as a path. An absent or empty `filename` becomes `unnamed` plus the extension of the file's `mime_type`, or `unnamed` when the type implies none. Only a double quote (`"`) and control characters are refused, with a `400`.
+
 ### Errors
 
 | HTTP | Cause                                                                               |
 |------|-------------------------------------------------------------------------------------|
-| 400  | Invalid filename characters                                                         |
+| 400  | A filename over 500 characters once its path is dropped, or one carrying a double quote or a control character |
 | 400  | `file-id:` URI passed to the upload endpoint (`POST /v1/files`)                     |
 | 400  | Malformed ID after the `file-id:` prefix in a Messages content block                |
 | 400  | More than 100 distinct `ids` on a listing request, or an `ids` entry that is not a file ID |
