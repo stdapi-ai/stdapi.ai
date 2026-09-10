@@ -3,7 +3,7 @@
 The ``model`` parameter selects the moderation model: an AWS Bedrock
 guardrail (``amazon.bedrock-runtime-guardrail`` for the server's default
 guardrail, or an explicit ``<id>``, ``<id>:<version>``, or ARN), inline
-guardrail content filter checks (``amazon.bedrock-runtime-guardrail-checks``,
+guardrail checks (``amazon.bedrock-runtime-guardrail-checks``,
 no guardrail resource needed) or Amazon Comprehend toxicity detection
 (``amazon.comprehend-toxicity``). OpenAI moderation model names are aliases:
 ``omni-moderation-*`` for the default guardrail (falling back to guardrail
@@ -92,10 +92,13 @@ _INPUT_BATCH_SIZE: int = 10
         "other guardrail policies (denied topics, word filters, sensitive "
         "information) surface through the overall `flagged` field.\n"
         "- **`amazon.bedrock-runtime-guardrail-checks`** (inline guardrail "
-        "content filter checks) — text inputs only, no guardrail resource "
-        "needed. Content filter checks map to the same OpenAI categories, "
-        "with severity scores (`0.0` to `1.0`) reported directly. Available "
-        "only in the regions this server is configured for that support it.\n"
+        "checks) — text inputs only, no guardrail resource needed. Content "
+        "filter checks map to the same OpenAI categories, with severity "
+        "scores (`0.0` to `1.0`) reported directly; when the server enables "
+        "them, prompt attack (jailbreak, prompt injection, prompt leakage) "
+        "and personal data detection surface through the overall `flagged` "
+        "field, which has no OpenAI category. Available only in the regions "
+        "this server is configured for that support it.\n"
         "- **`amazon.comprehend-toxicity`** (toxicity detection) — English "
         "text only, no images. `flagged` can be true even with every "
         "category `false` and every score `0.0`: it also reflects the "
