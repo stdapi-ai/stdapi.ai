@@ -1,12 +1,13 @@
-"""AWS S3 multipart helpers run their independent calls concurrently (unit).
+"""AWS S3 helpers: concurrent multipart calls, and the headers a copy sets (unit).
 
-Stubbed S3 clients record call overlap and order in-process: no AWS call is
-made. Each blocking stub only releases once the expected number of calls is
-in flight, so a regression to sequential awaits fails the test's timeout
-instead of hanging the run.
+Stubbed S3 clients record call overlap, order and arguments in-process: no AWS
+call is made. Each blocking stub only releases once the expected number of
+calls is in flight, so a regression to sequential awaits fails the test's
+timeout instead of hanging the run.
 
 Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html
      https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPartCopy.html
+     https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
      stdapi/aws_s3.py
 """
 
@@ -20,9 +21,9 @@ from stdapi import aws_s3
 from stdapi.api_errors import ApiError
 from stdapi.aws_s3 import (
     S3Object,
+    _multipart_copy_parts,
     copy_s3_object,
     get_s3_bucket_for_region,
-    multipart_copy_parts,
     put_object_and_get_url,
     require_s3_bucket_for_region,
 )
@@ -42,25 +43,30 @@ _OVERLAP_TIMEOUT: float = 5.0
 class _BarrierCopyClient:
     """Stub S3 client whose part copies all block until *expected* are in flight."""
 
-    def __init__(self, expected: int, *, size: int = 0) -> None:
+    def __init__(
+        self, expected: int, *, size: int = 0, content_type: str = "text/plain"
+    ) -> None:
         self.expected = expected
         self.size = size
+        self.content_type = content_type
         self.in_flight = 0
         self.max_in_flight = 0
         self.copy_ranges: dict[int, str] = {}
         self.completed_parts: list[dict[str, Any]] | None = None
         self.aborted = False
         self.single_copies: list[dict[str, Any]] = []
+        self.create_kwargs: dict[str, Any] = {}
         self._all_started = Event()
 
     async def head_object(self, **_kwargs: object) -> dict[str, Any]:
-        return {"ContentLength": self.size}
+        return {"ContentLength": self.size, "ContentType": self.content_type}
 
     async def copy_object(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
         self.single_copies.append(kwargs)
         return {}
 
-    async def create_multipart_upload(self, **_kwargs: object) -> dict[str, Any]:
+    async def create_multipart_upload(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        self.create_kwargs = kwargs
         return {"UploadId": "mpu-1"}
 
     async def upload_part_copy(
@@ -117,7 +123,7 @@ class TestMultipartCopyParts:
     """Ranged server-side copies fan out concurrently, bounded, in part order.
 
     Ref: https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPartCopy.html
-         stdapi/aws_s3.py:multipart_copy_parts
+         stdapi/aws_s3.py:_multipart_copy_parts
     """
 
     async def test_part_copies_overlap_and_stay_ordered(self) -> None:
@@ -129,7 +135,7 @@ class TestMultipartCopyParts:
         """
         stub = _BarrierCopyClient(expected=3)
         parts = await wait_for(
-            multipart_copy_parts(
+            _multipart_copy_parts(
                 cast("Any", stub),
                 bucket="dest",
                 key="dk",
@@ -161,7 +167,7 @@ class TestMultipartCopyParts:
         """
         stub = _BarrierCopyClient(expected=aws_s3.MULTIPART_COPY_CONCURRENCY)
         parts = await wait_for(
-            multipart_copy_parts(
+            _multipart_copy_parts(
                 cast("Any", stub),
                 bucket="dest",
                 key="dk",
@@ -231,6 +237,9 @@ class TestCopyS3ObjectMultipart:
         assert call["Key"] == "dk"
         assert call["TaggingDirective"] == "REPLACE"
         assert call["Tagging"] == aws_s3.S3_TAGGING
+        assert call["MetadataDirective"] == "COPY", (
+            "a copy naming no metadata must inherit the source's"
+        )
         assert stub.completed_parts is None, "no multipart upload may be started"
 
     async def test_part_failure_aborts_upload_and_propagates(
@@ -247,6 +256,110 @@ class TestCopyS3ObjectMultipart:
         assert exc_info.value.response["Error"]["Code"] == "SlowDown"
         assert stub.aborted is True
         assert stub.completed_parts is None
+
+
+class TestCopyS3ObjectMetadata:
+    """A copy asked for a disposition or metadata writes them itself.
+
+    S3 replaces an object's whole system-metadata block or none of it, so a copy
+    that sets either of them must restate the source's content type alongside —
+    otherwise the destination is served as ``binary/octet-stream``. Correcting
+    that afterwards costs a second full server-side copy of the payload.
+
+    Ref: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
+         stdapi/aws_s3.py:copy_s3_object
+    """
+
+    @pytest.fixture(autouse=True)
+    def _small_parts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Shrink the size thresholds so tests do not handle 5 GiB objects."""
+        monkeypatch.setattr(aws_s3, "_COPY_OBJECT_MAX_BYTES", 20)
+        monkeypatch.setattr(aws_s3, "_MULTIPART_COPY_PART_SIZE", 10)
+
+    async def test_single_copy_replaces_the_whole_metadata_block(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The one CopyObject carries the disposition, the metadata and the source type."""
+        stub = _BarrierCopyClient(expected=1, size=20, content_type="application/pdf")
+        monkeypatch.setattr(aws_s3, "get_client", lambda *_: stub)
+
+        await wait_for(
+            copy_s3_object(
+                "src",
+                "sk",
+                dest_bucket="dest",
+                dest_key="dk",
+                content_disposition='attachment; filename="doc.pdf"',
+                metadata={"purpose": "batch"},
+            ),
+            timeout=_OVERLAP_TIMEOUT,
+        )
+
+        (call,) = stub.single_copies
+        assert call["MetadataDirective"] == "REPLACE"
+        assert call["ContentDisposition"] == 'attachment; filename="doc.pdf"'
+        assert call["Metadata"] == {"purpose": "batch"}
+        assert call["ContentType"] == "application/pdf"
+        assert call["Tagging"] == aws_s3.S3_TAGGING
+
+    async def test_multipart_copy_declares_them_on_the_created_upload(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Above the single-copy limit they reach ``CreateMultipartUpload`` instead.
+
+        Nothing later in a multipart copy can set them: the create call is the
+        object's only chance to be anything but ``binary/octet-stream``.
+
+        Ref: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html
+        """
+        stub = _BarrierCopyClient(expected=3, size=25, content_type="application/pdf")
+        monkeypatch.setattr(aws_s3, "get_client", lambda *_: stub)
+
+        await wait_for(
+            copy_s3_object(
+                "src",
+                "sk",
+                dest_bucket="dest",
+                dest_key="dk",
+                content_disposition='attachment; filename="doc.pdf"',
+                metadata={"purpose": "batch"},
+            ),
+            timeout=_OVERLAP_TIMEOUT,
+        )
+
+        assert stub.single_copies == []
+        assert (
+            stub.create_kwargs["ContentDisposition"] == 'attachment; filename="doc.pdf"'
+        )
+        assert stub.create_kwargs["Metadata"] == {"purpose": "batch"}
+        assert stub.create_kwargs["ContentType"] == "application/pdf"
+        assert stub.create_kwargs["Tagging"] == aws_s3.S3_TAGGING
+        assert "MetadataDirective" not in stub.create_kwargs, (
+            "CreateMultipartUpload has no MetadataDirective parameter"
+        )
+
+    async def test_metadata_alone_still_replaces_the_disposition(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Replacing metadata drops the source's disposition, which is S3's own rule.
+
+        The copy must not send an empty ``Content-Disposition``: the header is
+        simply absent from a replaced block the caller named nothing for.
+        """
+        stub = _BarrierCopyClient(expected=1, size=20)
+        monkeypatch.setattr(aws_s3, "get_client", lambda *_: stub)
+
+        await wait_for(
+            copy_s3_object(
+                "src", "sk", dest_bucket="dest", dest_key="dk", metadata={"a": "b"}
+            ),
+            timeout=_OVERLAP_TIMEOUT,
+        )
+
+        (call,) = stub.single_copies
+        assert call["MetadataDirective"] == "REPLACE"
+        assert call["Metadata"] == {"a": "b"}
+        assert "ContentDisposition" not in call
 
 
 class _PipelinedUploadClient:

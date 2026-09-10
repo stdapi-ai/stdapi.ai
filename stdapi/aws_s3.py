@@ -5,7 +5,7 @@ from asyncio import Semaphore, Task, create_task, gather
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import parse_qsl, urlencode
 from uuid import uuid4
 
@@ -323,7 +323,7 @@ async def get_text_from_s3(s3_bucket: str, s3_key: str) -> str:
     return (await get_bytes_from_s3(s3_bucket, s3_key)).decode()
 
 
-async def multipart_copy_parts(
+async def _multipart_copy_parts(
     s3: S3Client,
     *,
     bucket: str,
@@ -387,6 +387,8 @@ async def copy_s3_object(
     dest_region: RegionName | None = None,
     content_type: str | None = None,
     temporary: bool = False,
+    content_disposition: str | None = None,
+    metadata: dict[str, str] | None = None,
 ) -> S3Object:
     """Copy an S3 object between buckets using server-side copy.
 
@@ -404,6 +406,10 @@ async def copy_s3_object(
         content_type: Optional MIME type used to derive the file extension
             when auto-generating *dest_key*.
         temporary: If ``True``, the object will be deleted when the request ends.
+        content_disposition: ``Content-Disposition`` to set on the copy. When
+            ``None``, the source object's own value is inherited.
+        metadata: User-defined metadata to set on the copy. When ``None``, the
+            source object's own metadata is inherited.
 
     Returns:
         An :class:`S3Object` referencing the copied object.
@@ -414,7 +420,19 @@ async def copy_s3_object(
         ValueError: If the source object has an invalid size.
     """
     s3 = get_client("s3", dest_region)
-    size = (await s3.head_object(Bucket=source_bucket, Key=source_key))["ContentLength"]
+    head = await s3.head_object(Bucket=source_bucket, Key=source_key)
+    size = head["ContentLength"]
+
+    # S3 replaces the whole metadata block or none of it, so a copy setting any
+    # of these has to restate the source's content type alongside them.
+    replaced: dict[str, Any] = {}
+    if content_disposition is not None or metadata is not None:
+        replaced = {
+            "ContentType": head.get("ContentType", "binary/octet-stream"),
+            "Metadata": metadata or {},
+        }
+        if content_disposition is not None:
+            replaced["ContentDisposition"] = content_disposition
 
     dest_bucket = dest_bucket or (
         require_s3_bucket_for_region(dest_region, feature=_INPUT_STORAGE_FEATURE)
@@ -430,17 +448,19 @@ async def copy_s3_object(
             CopySource=copy_source,
             Tagging=S3_TAGGING,
             TaggingDirective="REPLACE",
+            MetadataDirective="REPLACE" if replaced else "COPY",
+            **replaced,
         )
     else:
         upload_id: str | None = None
         try:
             upload_id = (
                 await s3.create_multipart_upload(
-                    Bucket=dest_bucket, Key=dest_key, Tagging=S3_TAGGING
+                    Bucket=dest_bucket, Key=dest_key, Tagging=S3_TAGGING, **replaced
                 )
             )["UploadId"]
 
-            parts = await multipart_copy_parts(
+            parts = await _multipart_copy_parts(
                 s3,
                 bucket=dest_bucket,
                 key=dest_key,

@@ -574,15 +574,16 @@ class _S3Source(_FileSource):
         bucket: str | None = None,
         key: str | None = None,
         temporary: bool = True,
-        content_disposition: str | None = None,  # noqa: ARG002
-        metadata: dict[str, str] | None = None,  # noqa: ARG002
+        content_disposition: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> S3Object:
         """Ensure the file is on S3 in *region* and return an ``S3Object``.
 
-        - S3 files already in *region* are returned as-is.
-        - S3 files in another region are copied via server-side copy.
-          ``content_disposition`` and ``metadata`` are not applied during
-          server-side copy and are silently ignored.
+        - S3 files already in *region*, with no explicit destination, are
+          returned as-is: they keep whatever they already carry, since the
+          source object is not the server's to rewrite.
+        - Every other case is a server-side copy, which sets
+          ``content_disposition`` and ``metadata`` on the destination.
 
         This is a **terminal method** — calling it consumes the source.
 
@@ -617,6 +618,8 @@ class _S3Source(_FileSource):
                 dest_key=key,
                 dest_region=region,
                 temporary=temporary,
+                content_disposition=content_disposition,
+                metadata=metadata,
             )
 
 

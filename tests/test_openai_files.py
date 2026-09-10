@@ -15,7 +15,6 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 import base64
 import io
 import time
-from asyncio import Event, wait_for
 from binascii import crc32
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -27,10 +26,12 @@ from openai import APIStatusError, BadRequestError, OpenAI
 from openai import NotFoundError as OpenAINotFoundError
 from openai.types import FileObject
 
+from stdapi import aws_s3, input_file
 from stdapi.api_errors import ApiError
-from stdapi.aws_s3 import EXPIRING_S3_TAG_SET, S3Object
+from stdapi.aws_s3 import EXPIRING_S3_TAG_SET
 from stdapi.config import SETTINGS
 from stdapi.files import FileRecord, _core, _multipart
+from stdapi.input_file import InputFile
 from stdapi.routes import openai_files as openai_files_routes
 from stdapi.server import AWS_APN_ID
 from tests._helpers import make_client_error
@@ -41,8 +42,6 @@ if TYPE_CHECKING:
     import httpx
     from anthropic import Anthropic
     from starlette.testclient import TestClient
-
-    from stdapi.input_file import InputFile
 
 #: Minimal valid PDF bytes for testing document endpoints.
 _MINIMAL_PDF: bytes = (
@@ -915,137 +914,216 @@ class TestCreateMultipartSessionUnit:
         assert "stdapi-ai.expires" not in stub_s3.create_kwargs["Tagging"]
 
 
-class _FakeS3SourceInputFile:
-    """Fake ``InputFile`` mimicking ``_S3Source``, whose ``to_s3`` ignores the requested metadata.
+#: Externally owned bucket an ``s3://`` upload source is read from.
+_SOURCE_BUCKET: str = "an-external-source-bucket"
 
-    Exactly like a real S3-to-S3 server-side copy.
+#: Key of that source object, which is also the filename the upload derives.
+_SOURCE_KEY: str = "source-object-name"
 
-    Ref: stdapi/input_file.py:_S3Source.to_s3
-    """
+#: Content type the source object carries, and which the stored file must keep.
+_SOURCE_CONTENT_TYPE: str = "text/plain"
 
-    def __init__(self, filename: str) -> None:
-        self._filename = filename
+#: The ``s3://`` upload source the S3-to-S3 copy tests hand to ``upload_file``.
+_SOURCE_URI: str = f"s3://{_SOURCE_BUCKET}/{_SOURCE_KEY}"
 
-    async def get_filename(self) -> str | None:
-        return self._filename
-
-    async def to_s3(
-        self,
-        _region: object,
-        *,
-        bucket: str | None = None,
-        key: str | None = None,
-        temporary: bool = False,
-        content_disposition: str | None = None,
-        metadata: dict[str, str] | None = None,
-    ) -> S3Object:
-        return S3Object(bucket=bucket or "", key=key or "")
+#: Bucket the stubbed Files API stores its objects in.
+_FILES_BUCKET: str = "bucket"
 
 
-class _StubS3SourceCorrectionClient:
-    """Stub S3 client modelling an object already copied with the *source's* own metadata.
+class _StubS3CopyStore:
+    """Stub S3 client serving server-side copies from one in-memory object store.
 
-    ``upload_file`` must detect the mismatch against what it requested and issue
-    a corrective ``copy_object`` with ``MetadataDirective=REPLACE``.
+    Source and destination share the store, so a ``HeadObject`` reads back
+    exactly what the copy wrote, as S3 does: a ``copy_object`` without
+    ``MetadataDirective=REPLACE`` leaves the *source's* content type,
+    ``Content-Disposition`` and user metadata on the destination, and a
+    multipart copy keeps only what its ``CreateMultipartUpload`` declared.
+
+    Ref: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
+         https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html
     """
 
     def __init__(self) -> None:
-        self.content_disposition = 'attachment; filename="source-object-name"'
-        self.metadata: dict[str, str] = {"purpose": "fine-tune", "expires-at": ""}
-        self.copy_object_kwargs: dict[str, Any] | None = None
-        self.head_object_calls = 0
+        self.objects: dict[tuple[str, str], dict[str, Any]] = {}
+        self.copy_object_calls: list[dict[str, Any]] = []
+        self.create_multipart_calls: list[dict[str, Any]] = []
+        self.head_object_calls: list[tuple[str, str]] = []
+        self.tag_sets: list[list[dict[str, str]]] = []
+        self._multipart_source: tuple[str, str] = ("", "")
 
-    async def head_object(self, **_kwargs: object) -> dict[str, Any]:
-        self.head_object_calls += 1
-        return {
-            "ContentDisposition": self.content_disposition,
-            "ContentType": "application/octet-stream",
-            "Metadata": self.metadata,
-            "ContentLength": 42,
+    def put(self, bucket: str, key: str, headers: dict[str, Any], size: int) -> None:
+        """Store the object *headers* describe, filling S3's own defaults in."""
+        self.objects[bucket, key] = {
+            "ContentType": headers.get("ContentType", "binary/octet-stream"),
+            "ContentDisposition": headers.get("ContentDisposition", ""),
+            "Metadata": headers.get("Metadata", {}),
+            "ContentLength": size,
             "LastModified": datetime.now(UTC),
         }
 
-    async def copy_object(self, **kwargs: object) -> dict[str, Any]:
-        self.copy_object_kwargs = kwargs
-        self.content_disposition = cast("str", kwargs["ContentDisposition"])
-        self.metadata = cast("dict[str, str]", kwargs["Metadata"])
+    async def head_object(
+        self,
+        *,
+        Bucket: str,  # noqa: N803
+        Key: str,  # noqa: N803
+        **_kwargs: object,
+    ) -> dict[str, Any]:
+        self.head_object_calls.append((Bucket, Key))
+        return self.objects[Bucket, Key]
+
+    async def copy_object(
+        self,
+        *,
+        Bucket: str,  # noqa: N803
+        Key: str,  # noqa: N803
+        CopySource: dict[str, str],  # noqa: N803
+        **kwargs: Any,  # noqa: ANN401
+    ) -> dict[str, Any]:
+        self.copy_object_calls.append({"Bucket": Bucket, "Key": Key, **kwargs})
+        source = self.objects[CopySource["Bucket"], CopySource["Key"]]
+        replaced = kwargs.get("MetadataDirective") == "REPLACE"
+        self.put(Bucket, Key, kwargs if replaced else source, source["ContentLength"])
         return {}
+
+    async def create_multipart_upload(
+        self,
+        *,
+        Bucket: str,  # noqa: N803
+        Key: str,  # noqa: N803
+        **kwargs: Any,  # noqa: ANN401
+    ) -> dict[str, Any]:
+        self.create_multipart_calls.append({"Bucket": Bucket, "Key": Key, **kwargs})
+        return {"UploadId": "mpu-1"}
+
+    async def upload_part_copy(
+        self,
+        *,
+        PartNumber: int,  # noqa: N803
+        CopySource: dict[str, str],  # noqa: N803
+        **_kwargs: object,
+    ) -> dict[str, Any]:
+        self._multipart_source = (CopySource["Bucket"], CopySource["Key"])
+        return {"CopyPartResult": {"ETag": f'"etag-{PartNumber}"'}}
+
+    async def complete_multipart_upload(
+        self,
+        *,
+        Bucket: str,  # noqa: N803
+        Key: str,  # noqa: N803
+        **_kwargs: object,
+    ) -> dict[str, Any]:
+        size = self.objects[self._multipart_source]["ContentLength"]
+        self.put(Bucket, Key, self.create_multipart_calls[-1], size)
+        return {}
+
+    async def put_object_tagging(self, **kwargs: object) -> dict[str, Any]:
+        tagging = cast("dict[str, list[dict[str, str]]]", kwargs["Tagging"])
+        self.tag_sets.append(tagging["TagSet"])
+        return {}
+
+
+@pytest.fixture
+def stub_s3(monkeypatch: pytest.MonkeyPatch) -> _StubS3CopyStore:
+    """Serve the upload source and the Files bucket from one stubbed S3 store."""
+    stub = _StubS3CopyStore()
+    stub.put(_SOURCE_BUCKET, _SOURCE_KEY, {"ContentType": _SOURCE_CONTENT_TYPE}, 42)
+    for module in (_core, aws_s3, input_file):
+        monkeypatch.setattr(module, "get_client", lambda *_: stub)
+    monkeypatch.setattr(_core, "_require_bucket", lambda: _FILES_BUCKET)
+    monkeypatch.setattr(_core, "BUCKET_TO_REGION", {_FILES_BUCKET: "us-east-1"})
+    monkeypatch.setattr(input_file, "_ACCEPTED_BUCKETS", frozenset({_SOURCE_BUCKET}))
+    return stub
 
 
 @pytest.mark.local
 class TestUploadFileS3SourceMetadataUnit:
-    """``upload_file`` forces purpose/filename onto S3-to-S3 copy sources (unit, stubbed S3).
+    """The copy storing an S3-sourced upload carries its metadata (unit, stubbed S3).
 
     Issue #99(a): a server-side copy (used for ``s3://``/``file-id:`` upload
-    sources) keeps the *source* object's own metadata and content-disposition,
-    silently dropping the requested ``purpose``/filename. Without a fix, the
-    resulting file both displays and is filtered as ``user_data`` regardless of
-    what was requested, and lists under the source's raw key as its filename.
+    sources) keeps the *source* object's own metadata and content-disposition
+    unless it is told to replace them, silently dropping the requested
+    ``purpose``/filename — the file would then display and be filtered as
+    ``user_data`` regardless of what was requested, and list under the source's
+    raw key as its filename. The one copy that stores the file must carry them:
+    a corrective second copy reaches the same record only by duplicating the
+    whole payload server-side.
 
     Ref: https://platform.openai.com/docs/api-reference/files/create
          stdapi/input_file.py:_S3Source.to_s3
          stdapi/files/_core.py:upload_file
     """
 
-    @pytest.fixture
-    def stub_s3(self, monkeypatch: pytest.MonkeyPatch) -> _StubS3SourceCorrectionClient:
-        """Patch the S3 client, bucket resolution, and region map with stubs."""
-        stub = _StubS3SourceCorrectionClient()
-        monkeypatch.setattr(_core, "get_client", lambda *_: stub)
-        monkeypatch.setattr(_core, "_require_bucket", lambda: "bucket")
-        monkeypatch.setattr(_core, "BUCKET_TO_REGION", {"bucket": "us-east-1"})
-        return stub
-
-    async def test_purpose_and_filename_are_forced_onto_s3_copy_source(
-        self, stub_s3: _StubS3SourceCorrectionClient
+    async def test_the_storing_copy_carries_the_requested_purpose_and_filename(
+        self, stub_s3: _StubS3CopyStore
     ) -> None:
-        """A requested purpose/filename reach the record despite the copy dropping them.
+        """The requested purpose and filename reach the record, in a single copy.
+
+        The call counts are what tell this apart from a corrective copy landing
+        the same record: one ``CopyObject``, and one ``HeadObject`` on the
+        stored object — the one building the record.
+
+        Ref: stdapi/files/_core.py:upload_file
+             stdapi/aws_s3.py:copy_s3_object
+        """
+        record = await _core.upload_file(InputFile(_SOURCE_URI), purpose="batch")
+
+        assert record.purpose == "batch"
+        assert record.filename == _SOURCE_KEY
+        assert record.content_type == _SOURCE_CONTENT_TYPE
+        (copy,) = stub_s3.copy_object_calls
+        assert copy["MetadataDirective"] == "REPLACE"
+        assert copy["ContentDisposition"] == f'attachment; filename="{_SOURCE_KEY}"'
+        assert copy["ContentType"] == _SOURCE_CONTENT_TYPE
+        assert copy["Metadata"] == {"purpose": "batch", "expires-at": ""}
+        assert [bucket for bucket, _ in stub_s3.head_object_calls].count(
+            _FILES_BUCKET
+        ) == 1
+
+    async def test_a_ttl_upload_stamps_expires_at_into_that_same_copy(
+        self, stub_s3: _StubS3CopyStore
+    ) -> None:
+        """The computed expiry, which no source object can already carry, reaches the copy.
 
         Ref: stdapi/files/_core.py:upload_file
         """
-        fake_file = cast("InputFile", _FakeS3SourceInputFile("wanted.jsonl"))
+        record = await _core.upload_file(
+            InputFile(_SOURCE_URI), purpose="batch", expires_after=3600
+        )
 
-        record = await _core.upload_file(fake_file, purpose="batch")
+        assert record.expires_at is not None
+        (copy,) = stub_s3.copy_object_calls
+        assert copy["Metadata"]["expires-at"] == str(record.expires_at)
 
-        assert record.purpose == "batch"
-        assert record.filename == "wanted.jsonl"
-        assert stub_s3.copy_object_kwargs is not None
-        assert stub_s3.copy_object_kwargs["MetadataDirective"] == "REPLACE"
-
-    async def test_matching_metadata_skips_the_corrective_copy(
-        self, stub_s3: _StubS3SourceCorrectionClient
+    async def test_a_large_source_keeps_its_content_type_in_one_multipart_copy(
+        self, stub_s3: _StubS3CopyStore, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When the copy already carries the requested metadata, no extra copy is issued.
+        """Above the single-copy limit the multipart create carries the metadata.
 
-        A single ``HeadObject`` call is a discriminating check: a broken guard
-        that unconditionally treats the copy as mismatched would trigger
-        ``_force_s3_metadata`` (and hence its own extra ``HeadObject`` re-fetch)
-        even though nothing here actually needs correcting.
+        ``CreateMultipartUpload`` decides the whole header block of the object
+        it creates: one declaring nothing yields ``binary/octet-stream``
+        whatever the source was, so the file would be served as a download of
+        an unknown type — and repairing that afterwards means copying every
+        byte of a multi-gigabyte object a second time.
 
-        Ref: stdapi/files/_core.py:upload_file
+        Ref: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html
+             stdapi/aws_s3.py:copy_s3_object
         """
-        stub_s3.content_disposition = 'attachment; filename="wanted.jsonl"'
-        stub_s3.metadata = {"purpose": "batch", "expires-at": ""}
-        fake_file = cast("InputFile", _FakeS3SourceInputFile("wanted.jsonl"))
+        monkeypatch.setattr(aws_s3, "_COPY_OBJECT_MAX_BYTES", 20)
+        monkeypatch.setattr(aws_s3, "_MULTIPART_COPY_PART_SIZE", 10)
+        stub_s3.put(
+            _SOURCE_BUCKET, _SOURCE_KEY, {"ContentType": _SOURCE_CONTENT_TYPE}, 25
+        )
 
-        record = await _core.upload_file(fake_file, purpose="batch")
+        record = await _core.upload_file(InputFile(_SOURCE_URI), purpose="batch")
 
+        assert record.content_type == _SOURCE_CONTENT_TYPE
+        assert record.filename == _SOURCE_KEY
         assert record.purpose == "batch"
-        assert stub_s3.copy_object_kwargs is None
-        assert stub_s3.head_object_calls == 1
-
-
-class _StubS3ExpiryTaggingClient(_StubS3SourceCorrectionClient):
-    """Stub S3 client also recording every tag set written onto the object."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.tag_sets: list[list[dict[str, str]]] = []
-
-    async def put_object_tagging(self, **kwargs: object) -> dict[str, Any]:
-        tagging = cast("dict[str, list[dict[str, str]]]", kwargs["Tagging"])
-        self.tag_sets.append(tagging["TagSet"])
-        return {}
+        assert stub_s3.copy_object_calls == []
+        (create,) = stub_s3.create_multipart_calls
+        assert create["ContentType"] == _SOURCE_CONTENT_TYPE
+        assert create["ContentDisposition"] == f'attachment; filename="{_SOURCE_KEY}"'
+        assert create["Metadata"] == {"purpose": "batch", "expires-at": ""}
 
 
 @pytest.mark.local
@@ -1062,17 +1140,8 @@ class TestUploadFileExpiryTagUnit:
          stdapi/files/_core.py:upload_file
     """
 
-    @pytest.fixture
-    def stub_s3(self, monkeypatch: pytest.MonkeyPatch) -> _StubS3ExpiryTaggingClient:
-        """Patch the S3 client, bucket resolution, and region map with stubs."""
-        stub = _StubS3ExpiryTaggingClient()
-        monkeypatch.setattr(_core, "get_client", lambda *_: stub)
-        monkeypatch.setattr(_core, "_require_bucket", lambda: "bucket")
-        monkeypatch.setattr(_core, "BUCKET_TO_REGION", {"bucket": "us-east-1"})
-        return stub
-
     async def test_expires_after_tags_the_object_for_lifecycle_cleanup(
-        self, stub_s3: _StubS3ExpiryTaggingClient
+        self, stub_s3: _StubS3CopyStore
     ) -> None:
         """An upload with a TTL carries the expiry tag, alongside the attribution one.
 
@@ -1085,9 +1154,9 @@ class TestUploadFileExpiryTagUnit:
         Ref: stdapi/files/_core.py:upload_file
              stdapi/aws_s3.py:EXPIRING_S3_TAG_SET
         """
-        fake_file = cast("InputFile", _FakeS3SourceInputFile("wanted.jsonl"))
-
-        record = await _core.upload_file(fake_file, purpose="batch", expires_after=3600)
+        record = await _core.upload_file(
+            InputFile(_SOURCE_URI), purpose="batch", expires_after=3600
+        )
 
         assert record.expires_at is not None
         assert len(stub_s3.tag_sets) == 1
@@ -1097,92 +1166,16 @@ class TestUploadFileExpiryTagUnit:
         assert tags["aws-apn-id"] == AWS_APN_ID
 
     async def test_an_upload_without_a_ttl_is_never_tagged_for_expiry(
-        self, stub_s3: _StubS3ExpiryTaggingClient
+        self, stub_s3: _StubS3CopyStore
     ) -> None:
         """A file with no expiry must not be tagged: the rule would delete it.
 
         Ref: stdapi/files/_core.py:upload_file
         """
-        fake_file = cast("InputFile", _FakeS3SourceInputFile("wanted.jsonl"))
-
-        record = await _core.upload_file(fake_file, purpose="batch")
+        record = await _core.upload_file(InputFile(_SOURCE_URI), purpose="batch")
 
         assert record.expires_at is None
         assert stub_s3.tag_sets == []
-
-
-class TestForceS3MetadataMultipart:
-    """The metadata-forcing self-copy above 5 GiB fans its parts out concurrently.
-
-    Ref: https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPartCopy.html
-         stdapi/files/_core.py:_force_s3_metadata
-         stdapi/aws_s3.py:multipart_copy_parts
-    """
-
-    async def test_multipart_metadata_fix_copies_parts_concurrently(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Ranged self-copies overlap and complete in part-number order.
-
-        Each stubbed part copy blocks until all three are in flight, so this
-        test fails (times out) if the metadata fix regresses to sequential
-        copies. The requested metadata must still reach the multipart create.
-        """
-        monkeypatch.setattr(_core, "_COPY_OBJECT_MAX_BYTES", 20)
-        monkeypatch.setattr(_core, "_METADATA_FIX_PART_SIZE", 10)
-        all_started = Event()
-        in_flight = 0
-        create_kwargs: dict[str, Any] = {}
-        copy_ranges: dict[int, str] = {}
-        completed: list[dict[str, Any]] = []
-
-        class _StubS3Client:
-            async def create_multipart_upload(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
-                create_kwargs.update(kwargs)
-                return {"UploadId": "mpu-1"}
-
-            async def upload_part_copy(
-                self,
-                *,
-                PartNumber: int,  # noqa: N803
-                CopySourceRange: str,  # noqa: N803
-                **_kwargs: object,
-            ) -> dict[str, Any]:
-                nonlocal in_flight
-                in_flight += 1
-                if in_flight >= 3:
-                    all_started.set()
-                # Times out (instead of hanging) if copies are sequential.
-                await wait_for(all_started.wait(), timeout=5)
-                copy_ranges[PartNumber] = CopySourceRange
-                return {"CopyPartResult": {"ETag": f'"etag-{PartNumber}"'}}
-
-            async def complete_multipart_upload(
-                self,
-                *,
-                MultipartUpload: dict[str, Any],  # noqa: N803
-                **_kwargs: object,
-            ) -> dict[str, Any]:
-                completed.extend(MultipartUpload["Parts"])
-                return {}
-
-        await wait_for(
-            _core._force_s3_metadata(  # noqa: SLF001
-                cast("Any", _StubS3Client()),
-                "bucket",
-                "key",
-                25,
-                "text/plain",
-                'attachment; filename="wanted.jsonl"',
-                {"purpose": "batch", "expires-at": ""},
-            ),
-            timeout=5,
-        )
-
-        assert create_kwargs["ContentType"] == "text/plain"
-        assert create_kwargs["Metadata"] == {"purpose": "batch", "expires-at": ""}
-        assert [part["PartNumber"] for part in completed] == [1, 2, 3]
-        assert copy_ranges == {1: "bytes=0-9", 2: "bytes=10-19", 3: "bytes=20-24"}
 
 
 class _StubCompleteS3Client:
