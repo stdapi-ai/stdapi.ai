@@ -15,7 +15,12 @@ from typing import Any
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from stdapi.config import AWS_SESSION, SETTINGS, _Settings
+from stdapi.config import (
+    AWS_SESSION,
+    GUARDRAIL_CHECKS_PII_ENTITIES,
+    SETTINGS,
+    _Settings,
+)
 
 pytestmark = pytest.mark.local
 
@@ -488,6 +493,66 @@ class TestGuardrailSettingsCrossValidation:
             aws_bedrock_mantle_preferred_models=[],
         )
         assert settings.aws_bedrock_allow_guardrail_override is False
+
+
+class TestInlineGuardrailCheckSettings:
+    """The inline guardrail checks the Moderations API adds to its content filter.
+
+    Both settings are off by default: each extra check is billed separately and
+    changes what ``flagged`` means, so an upgrade must not turn either on.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeGuardrailChecks.html
+         stdapi/config.py:_Settings
+    """
+
+    def test_both_checks_are_off_by_default(self) -> None:
+        """An unconfigured deployment requests the content filter only."""
+        settings = _Settings()
+        assert settings.aws_bedrock_guardrail_checks_prompt_attack is False
+        assert settings.aws_bedrock_guardrail_checks_pii_entities == ()
+
+    def test_pii_entities_comma_list_is_parsed_and_deduplicated(self) -> None:
+        """A comma-separated entity list is parsed, stripped and de-duplicated.
+
+        Order is preserved because it is the order the entity types are sent in,
+        which keeps the request payload stable across restarts.
+        """
+        settings = _Settings(
+            aws_bedrock_guardrail_checks_pii_entities=" EMAIL , PHONE ,,EMAIL"  # type: ignore[arg-type]
+        )
+        assert settings.aws_bedrock_guardrail_checks_pii_entities == ("EMAIL", "PHONE")
+
+    def test_pii_entities_are_case_normalized(self) -> None:
+        """A lowercase entity type is accepted and normalized to the AWS spelling."""
+        settings = _Settings(
+            aws_bedrock_guardrail_checks_pii_entities="email"  # type: ignore[arg-type]
+        )
+        assert settings.aws_bedrock_guardrail_checks_pii_entities == ("EMAIL",)
+
+    def test_unknown_pii_entity_fails_startup_naming_the_value(self) -> None:
+        """A typo fails startup instead of silently detecting nothing.
+
+        An entity type the API does not know is rejected by AWS on every
+        request, so it has to be caught once at startup rather than turning
+        every moderation call into a 400.
+        """
+        with pytest.raises(ValidationError, match="EMIAL") as excinfo:
+            _Settings(
+                aws_bedrock_guardrail_checks_pii_entities="EMAIL,EMIAL"  # type: ignore[arg-type]
+            )
+        (error,) = excinfo.value.errors()
+        assert error["loc"] == ("aws_bedrock_guardrail_checks_pii_entities",)
+
+    def test_every_documented_entity_type_is_accepted(self) -> None:
+        """The whole published entity list is accepted as configured."""
+        settings = _Settings(
+            aws_bedrock_guardrail_checks_pii_entities=tuple(
+                GUARDRAIL_CHECKS_PII_ENTITIES
+            )
+        )
+        assert set(settings.aws_bedrock_guardrail_checks_pii_entities) == set(
+            GUARDRAIL_CHECKS_PII_ENTITIES
+        )
 
 
 class TestApiKeySourceExclusivity:

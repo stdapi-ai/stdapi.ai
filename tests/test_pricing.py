@@ -2464,11 +2464,12 @@ class TestGuardrailsIngestion:
         assert price is not None
         assert price.amount == Decimal("0.00007")
 
-    def test_an_uninvoked_check_is_not_ingested_at_all(self) -> None:
-        """Only the content filter is ever requested, so the other checks' rates are dropped.
+    def test_each_check_prices_its_own_model(self) -> None:
+        """The three checks are billed at three rates, so each gets its own key.
 
-        Keeping them would either overwrite the content-filter rate or mint a
-        model key per check that nothing prices against.
+        A request may ask for any combination of them and pays each one it
+        asked for; folding the rows onto one key would charge a single check's
+        rate whatever was requested.
         """
         results, diagnostics = self._ingest(
             self._item(
@@ -2482,9 +2483,28 @@ class TestGuardrailsIngestion:
             ),
         )
         assert diagnostics == []
-        assert [(key.model, price.amount) for key, price in results.items()] == [
-            (normalize_model_key(GUARDRAIL_CHECKS_MODERATION_MODEL), Decimal("0.00007"))
-        ]
+        assert {key.model: price.amount for key, price in results.items()} == {
+            normalize_model_key(GUARDRAIL_CHECKS_MODERATION_MODEL): Decimal("0.00007"),
+            normalize_model_key(
+                guardrail_policy_model("checks-prompt-attack")
+            ): Decimal("0.00008"),
+            normalize_model_key(
+                guardrail_policy_model("checks-sensitive-information")
+            ): Decimal("0.0001"),
+        }
+
+    def test_an_unknown_check_is_reported_rather_than_mispriced(self) -> None:
+        """A check this app never requests keys under no model and is reported.
+
+        Minting a key for it would publish a rate nothing bills against, while
+        silently dropping it would hide a check AWS started charging for.
+        """
+        results, diagnostics = self._ingest(
+            self._item("USE1-GuardrailChecks-QuantumCheckUnitsConsumed", "0.00042")
+        )
+        assert results == {}
+        assert len(diagnostics) == 1
+        assert "QuantumCheckUnitsConsumed" in diagnostics[0]
 
 
 class TestWebSearchIngestion:
@@ -5250,7 +5270,18 @@ _SYNTHETIC_MODEL_PROBES: Final[tuple[tuple[Service, str, Dimension], ...]] = (
         guardrail_policy_model("automated-reasoning"),
         Dimension.TEXT_UNITS,
     ),
+    # Each inline guardrail check is requested, and billed, on its own.
     (Service.BEDROCK, GUARDRAIL_CHECKS_MODERATION_MODEL, Dimension.TEXT_UNITS),
+    (
+        Service.BEDROCK,
+        guardrail_policy_model("checks-prompt-attack"),
+        Dimension.TEXT_UNITS,
+    ),
+    (
+        Service.BEDROCK,
+        guardrail_policy_model("checks-sensitive-information"),
+        Dimension.TEXT_UNITS,
+    ),
     # The built-in web search tool's one flat per-query rate.
     (Service.BEDROCK, WEB_SEARCH_MODEL, Dimension.GROUNDING_REQUESTS),
     # A managed knowledge base's per-retrieval rate, which reaches the loaded

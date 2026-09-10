@@ -223,6 +223,8 @@ Grouped by page. The defaults work; open a page when a Tier 1 or Tier 2 row abov
     | [`AWS_BEDROCK_DEPRECATED_MODELS`](operations_configuration_models.md#bedrock-deprecated-models) | Models & routing |
     | [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](operations_configuration_models.md#bedrock-deprecated-model-fallback) | Models & routing |
     | [`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](operations_configuration_models.md#bedrock-external-web-access) | Models & routing |
+    | [`AWS_BEDROCK_GUARDRAIL_CHECKS_PII_ENTITIES`](operations_configuration_bedrock.md#aws-bedrock-guardrail-checks-pii-entities) | Bedrock features |
+    | [`AWS_BEDROCK_GUARDRAIL_CHECKS_PROMPT_ATTACK`](operations_configuration_bedrock.md#aws-bedrock-guardrail-checks-prompt-attack) | Bedrock features |
     | [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](operations_configuration_bedrock.md#aws-bedrock-guardrail-identifier) | Bedrock features |
     | [`AWS_BEDROCK_GUARDRAIL_TRACE`](operations_configuration_bedrock.md#aws-bedrock-guardrail-trace) | Bedrock features |
     | [`AWS_BEDROCK_GUARDRAIL_VERSION`](operations_configuration_bedrock.md#aws-bedrock-guardrail-version) | Bedrock features |

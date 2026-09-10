@@ -10,7 +10,7 @@ Classify content for harm with [Amazon Bedrock Guardrails](https://aws.amazon.co
 
 ## At a glance
 
-- :material-shield-check: **Three backends behind one endpoint:** your own Bedrock guardrail (categories, thresholds, denied topics, word filters and sensitive-information policies configured in AWS), inline guardrail content filter checks, or Amazon Comprehend toxicity detection.
+- :material-shield-check: **Three backends behind one endpoint:** your own Bedrock guardrail (categories, thresholds, denied topics, word filters and sensitive-information policies configured in AWS), inline guardrail checks, or Amazon Comprehend toxicity detection.
 - :material-flash: **Works out of the box.** Guardrail checks and Comprehend need no setup at all, so `/v1/moderations` answers on any deployment, with or without a guardrail configured.
 - :material-swap-horizontal: **OpenAI model names are aliases.** `omni-moderation-latest` and `text-moderation-latest` resolve to an AWS backend, so an existing integration changes its base URL and nothing else.
 - :material-image-multiple: **Text and images.** Every element of an `input` array is classified independently and gets its own entry in `results`; PNG and JPEG images are classified by guardrail-resource models.
@@ -45,7 +45,7 @@ curl -X POST "$BASE/v1/moderations" \
 | Empty string input               |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Returns an unflagged result without calling AWS (OpenAI parity); whitespace-only strings are **not** covered by this shortcut and are classified normally (billed Comprehend call) |
 | `model`                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Guardrail, Comprehend, or an OpenAI moderation model alias (see below)    |
 | **Output**                       |                                         |                                                                           |
-| `flagged`                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Also raised by guardrail policies without a mapped category, and on Comprehend by the overall toxicity score or unmapped labels such as profanity |
+| `flagged`                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Also raised by guardrail policies and [inline checks](#inline-guardrail-checks) without a mapped category, and on Comprehend by the overall toxicity score or unmapped labels such as profanity |
 | `categories` / `category_scores` |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }   | Mapped categories only; OpenAI categories without a counterpart stay `false` / `0.0` |
 | `category_applied_input_types`   |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Reflects each classified element's modality                               |
 | **Usage tracking**               |                                         |                                                                           |
@@ -78,7 +78,7 @@ The moderation models appear in the [`/v1/models`](api_openai_models.md) and [`/
 | Model                              | OpenAI aliases                                       | Notes                                                                 |
 |------------------------------------|------------------------------------------------------|------------------------------------------------------------------------|
 | `amazon.bedrock-runtime-guardrail` | `omni-moderation-latest`, `omni-moderation-2024-09-26` | The server's default guardrail. Text and image inputs. Listed only when a guardrail is configured |
-| `amazon.bedrock-runtime-guardrail-checks` | `omni-moderation-*` when no guardrail is configured | Inline guardrail content filter checks ([`InvokeGuardrailChecks`](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html)) — no guardrail resource needed. Text inputs only. Listed only when a configured Bedrock region offers the operation |
+| `amazon.bedrock-runtime-guardrail-checks` | `omni-moderation-*` when no guardrail is configured | Inline guardrail checks ([`InvokeGuardrailChecks`](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html)) — no guardrail resource needed: content filters always, plus [prompt attack and personal data detection](#inline-guardrail-checks) when the server enables them. Text inputs only. Listed only when a configured Bedrock region offers the operation |
 | `<guardrail-id>`, `<guardrail-id>:<version>`, or guardrail ARN | —                        | Any explicit guardrail (requires guardrail override to be allowed)     |
 
 ### ![Amazon Comprehend](styles/logo_amazon_comprehend.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Comprehend
@@ -96,7 +96,7 @@ The moderation models appear in the [`/v1/models`](api_openai_models.md) and [`/
 | Image inputs              | :material-check-circle:{ .success role="img" aria-label="Supported" } PNG and JPEG                           | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } Not supported  | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } Not supported  |
 | Mapped categories         | `hate`, `harassment`, `sexual`, `violence`, `illicit`                       | `hate`, `harassment`, `sexual`, `violence`, `illicit`  | `hate`, `harassment`, `sexual`, `violence`, `violence/graphic` |
 | Category scores           | Quantized confidence levels (`0.0` / `0.25` / `0.5` / `0.75`)               | Severity scores in `0.2` increments (`0.0` – `1.0`)    | Continuous scores (`0.0` – `1.0`)                       |
-| Custom policies           | Denied topics, word filters, PII, prompt attacks, contextual grounding      | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } Content filters only | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } Fixed toxicity labels |
+| Custom policies           | Denied topics, word filters, PII, prompt attacks, contextual grounding      | :material-minus-circle:{ .partial role="img" aria-label="Partial" } Content filters, plus [prompt attack and personal data detection](#inline-guardrail-checks) when enabled | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } Fixed toxicity labels |
 | Tunable thresholds        | Per-filter strengths configured on the guardrail                            | Fixed flagging threshold (score ≥ 0.5)                 | Fixed flagging threshold (score ≥ 0.5)                 |
 | `moderation` request parameter | :material-check-circle:{ .success role="img" aria-label="Supported" } Applied to generations natively    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } Moderations API only | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } Moderations API only |
 | Input length              | ApplyGuardrail text unit limits                                             | InvokeGuardrailChecks text unit limits                 | Unlimited (split into 1 KB segments transparently)     |
@@ -109,7 +109,7 @@ The `model` parameter selects the moderation model:
 |----------------------------------------------|--------------------------------------------------------------------------------------------------|
 | Omitted                                      | The server's default guardrail; when none is configured, guardrail checks in a supported region, then Comprehend toxicity detection as a last resort |
 | `amazon.bedrock-runtime-guardrail`           | The server's default guardrail (an error when none is configured)                                |
-| `amazon.bedrock-runtime-guardrail-checks`    | Inline guardrail content filter checks, even when a guardrail is configured (an error when no configured region offers the operation) |
+| `amazon.bedrock-runtime-guardrail-checks`    | Inline guardrail checks, even when a guardrail is configured (an error when no configured region offers the operation) |
 | `omni-moderation-*`                          | Same as an omitted model                                                                         |
 | `amazon.comprehend-toxicity` / `text-moderation-*` | Comprehend toxicity detection, even when a guardrail is configured                          |
 | `<guardrail-id>` or `<guardrail-id>:<version>` | That guardrail (requires guardrail override to be allowed)                                     |
@@ -158,6 +158,17 @@ An input is flagged when its overall toxicity or any label score reaches `0.5`. 
 
 With either model, OpenAI sub-categories without a counterpart (e.g. `self-harm`, `sexual/minors`) are always `false`.
 
+### Additional Inline Checks { #inline-guardrail-checks }
+
+`amazon.bedrock-runtime-guardrail-checks` always evaluates content filters. A server can add two more checks to it, each covering something the OpenAI moderation categories have no field for — so a detection raises the top-level `flagged` field while every category stays `false`, exactly as a guardrail's denied topics and sensitive-information policies already do:
+
+| Check | Detects | Enabled by |
+|---|---|---|
+| Prompt attack | Jailbreaks, prompt injection and prompt leakage | [`AWS_BEDROCK_GUARDRAIL_CHECKS_PROMPT_ATTACK`](operations_configuration_bedrock.md#bedrock-guardrail-checks) |
+| Personal data | The PII entity types the server lists (e.g. `EMAIL`, `PHONE`, `US_SOCIAL_SECURITY_NUMBER`) | [`AWS_BEDROCK_GUARDRAIL_CHECKS_PII_ENTITIES`](operations_configuration_bedrock.md#bedrock-guardrail-checks) |
+
+Both are off unless the server enables them: each is [billed as a check of its own](#billing), and each changes what `flagged` means for every caller. Neither affects a classification served by a guardrail resource, which applies the prompt attack filter and sensitive-information policy configured on the guardrail itself.
+
 ## Working with the Moderations API
 
 ### Inputs
@@ -187,7 +198,15 @@ Each result's `category_applied_input_types` reflects the classified element's m
     | `amazon.bedrock-runtime-guardrail-automated-reasoning` | Automated reasoning |
 
     A guardrail applying several policies therefore produces several usage entries for one request, and its cost is their sum.
-- **Guardrail checks** — AWS bills per text unit and per requested check; the gateway requests the `contentFilter` check only. Billed text units appear in [usage logs and cost tracking](operations_logging_monitoring.md) as `text_units` under the `amazon.bedrock-runtime-guardrail-checks` model.
+- **Guardrail checks** — AWS bills per text unit and per requested check, each check at its own rate; see [Amazon Bedrock pricing](https://aws.amazon.com/bedrock/pricing/). Billed text units appear in [usage logs and cost tracking](operations_logging_monitoring.md) as `text_units`, under one model per requested check:
+
+    | Model | Check |
+    |---|---|
+    | `amazon.bedrock-runtime-guardrail-checks` | Content filters (always requested) |
+    | `amazon.bedrock-runtime-guardrail-checks-prompt-attack` | Prompt attack detection |
+    | `amazon.bedrock-runtime-guardrail-checks-sensitive-information` | Personal data detection |
+
+    A request therefore produces one usage entry per enabled check, and its cost is their sum.
 - **Comprehend** — AWS bills toxicity detection per 100-character unit with a 3-unit minimum per call; see [Amazon Comprehend pricing](https://aws.amazon.com/comprehend/pricing/). Billed units appear in [usage logs and cost tracking](operations_logging_monitoring.md) as `comprehend_units` under the `amazon.comprehend-toxicity` model.
 
 ## Limits and behaviour to know

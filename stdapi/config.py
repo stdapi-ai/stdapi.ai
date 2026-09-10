@@ -172,6 +172,43 @@ EMPTY_CLEARS: frozenset[str] = frozenset({"aws_bedrock_mantle_preferred_models"}
 #: Guardrail trace levels accepted wherever a guardrail is configured.
 GuardrailTrace = Literal["disabled", "enabled", "enabled_full"]
 
+#: PII entity types the inline guardrail sensitive information check can detect.
+GUARDRAIL_CHECKS_PII_ENTITIES: frozenset[str] = frozenset(
+    {
+        "ADDRESS",
+        "AGE",
+        "AWS_ACCESS_KEY",
+        "AWS_SECRET_KEY",
+        "CA_HEALTH_NUMBER",
+        "CA_SOCIAL_INSURANCE_NUMBER",
+        "CREDIT_DEBIT_CARD_CVV",
+        "CREDIT_DEBIT_CARD_EXPIRY",
+        "CREDIT_DEBIT_CARD_NUMBER",
+        "DRIVER_ID",
+        "EMAIL",
+        "INTERNATIONAL_BANK_ACCOUNT_NUMBER",
+        "IP_ADDRESS",
+        "LICENSE_PLATE",
+        "MAC_ADDRESS",
+        "NAME",
+        "PASSWORD",
+        "PHONE",
+        "PIN",
+        "SWIFT_CODE",
+        "UK_NATIONAL_HEALTH_SERVICE_NUMBER",
+        "UK_NATIONAL_INSURANCE_NUMBER",
+        "UK_UNIQUE_TAXPAYER_REFERENCE_NUMBER",
+        "URL",
+        "USERNAME",
+        "US_BANK_ACCOUNT_NUMBER",
+        "US_BANK_ROUTING_NUMBER",
+        "US_INDIVIDUAL_TAX_IDENTIFICATION_NUMBER",
+        "US_PASSPORT_NUMBER",
+        "US_SOCIAL_SECURITY_NUMBER",
+        "VEHICLE_IDENTIFICATION_NUMBER",
+    }
+)
+
 
 class ModelAliasConfig(BaseModel):
     """A model alias that carries configuration alongside its target model.
@@ -1076,6 +1113,56 @@ class _Settings(BaseSettings):
             "Configure Amazon Bedrock Guardrails to include safeguards in model input and responses. "
             "Whether or not to enable the guardrail trace."
         ),
+    )
+
+    aws_bedrock_guardrail_checks_prompt_attack: bool = Field(
+        default=False,
+        description=(
+            "Detect prompt attacks (jailbreaks, prompt injection and prompt leakage) "
+            "on the Moderations API (POST /v1/moderations) when it classifies with "
+            "inline Amazon Bedrock guardrail checks, which need no guardrail "
+            "resource. A detected prompt attack sets the result's 'flagged' field; "
+            "it maps to no OpenAI moderation category, so no category is raised.\n\n"
+            "AWS bills this as a separate check, on top of the content filter that "
+            "is always evaluated.\n\n"
+            "Has no effect on classifications served by a guardrail resource, which "
+            "applies the prompt attack filter its own configuration defines.\n\n"
+            "Defaults to False: the content filter alone is evaluated."
+        ),
+    )
+
+    aws_bedrock_guardrail_checks_pii_entities: Annotated[tuple[str, ...], NoDecode] = (
+        Field(
+            default=(),
+            description=(
+                "Detect personally identifiable information on the Moderations API "
+                "(POST /v1/moderations) when it classifies with inline Amazon Bedrock "
+                "guardrail checks, which need no guardrail resource. Set it to the PII "
+                "entity types to look for; leave it empty to detect none. A detected "
+                "entity sets the result's 'flagged' field; it maps to no OpenAI "
+                "moderation category, so no category is raised.\n\n"
+                "Choose the entity types deliberately: broad ones such as ADDRESS, NAME "
+                "or URL match ordinary prose (a city name is an address), which flags "
+                "inputs that carry no personal data.\n\n"
+                "AWS bills this as a separate check, on top of the content filter that "
+                "is always evaluated, at one rate whatever the number of entity types.\n\n"
+                "Accepted values: ADDRESS, AGE, AWS_ACCESS_KEY, AWS_SECRET_KEY, "
+                "CA_HEALTH_NUMBER, CA_SOCIAL_INSURANCE_NUMBER, CREDIT_DEBIT_CARD_CVV, "
+                "CREDIT_DEBIT_CARD_EXPIRY, CREDIT_DEBIT_CARD_NUMBER, DRIVER_ID, EMAIL, "
+                "INTERNATIONAL_BANK_ACCOUNT_NUMBER, IP_ADDRESS, LICENSE_PLATE, "
+                "MAC_ADDRESS, NAME, PASSWORD, PHONE, PIN, SWIFT_CODE, "
+                "UK_NATIONAL_HEALTH_SERVICE_NUMBER, UK_NATIONAL_INSURANCE_NUMBER, "
+                "UK_UNIQUE_TAXPAYER_REFERENCE_NUMBER, URL, USERNAME, "
+                "US_BANK_ACCOUNT_NUMBER, US_BANK_ROUTING_NUMBER, "
+                "US_INDIVIDUAL_TAX_IDENTIFICATION_NUMBER, US_PASSPORT_NUMBER, "
+                "US_SOCIAL_SECURITY_NUMBER, VEHICLE_IDENTIFICATION_NUMBER.\n\n"
+                "Has no effect on classifications served by a guardrail resource, which "
+                "applies the sensitive information policy its own configuration defines.\n\n"
+                "Environment variable format: Comma-separated string\n"
+                "Example: 'EMAIL,PHONE,US_SOCIAL_SECURITY_NUMBER'\n\n"
+                "Defaults to empty: no personally identifiable information is detected."
+            ),
+        )
     )
 
     aws_bedrock_allow_guardrail_override: bool = Field(
@@ -2703,6 +2790,37 @@ class _Settings(BaseSettings):
         if isinstance(value, str):
             value = [item for item in (v.strip() for v in value.split(",")) if item]
         return list(dict.fromkeys(value))
+
+    @field_validator("aws_bedrock_guardrail_checks_pii_entities", mode="before")
+    @classmethod
+    def _parse_guardrail_checks_pii_entities(
+        cls, value: str | list[str] | tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Parse the PII entity types, rejecting any the check does not define.
+
+        Args:
+            value: A comma-separated string of entity types, or a sequence.
+
+        Returns:
+            The entity types in configured order, upper-cased and de-duplicated.
+
+        Raises:
+            ValueError: When an entity type is not one the check can detect.
+        """
+        entities = tuple(
+            entity.upper()
+            for entity in cls._parse_comma_list(
+                value if isinstance(value, str) else list(value)
+            )
+        )
+        if unknown := sorted(set(entities) - GUARDRAIL_CHECKS_PII_ENTITIES):
+            msg = (
+                f"aws_bedrock_guardrail_checks_pii_entities: unknown PII entity "
+                f"type(s) {', '.join(unknown)}. Accepted types: "
+                f"{', '.join(sorted(GUARDRAIL_CHECKS_PII_ENTITIES))}."
+            )
+            raise ValueError(msg)
+        return tuple(dict.fromkeys(entities))
 
     @field_validator("aws_bedrock_knowledge_base_ids")
     @classmethod

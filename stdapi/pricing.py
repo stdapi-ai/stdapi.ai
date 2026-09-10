@@ -924,12 +924,20 @@ _GUARDRAIL_POLICY_SLUGS: Final[tuple[tuple[str, str], ...]] = (
     ("automatedreasoningpolicy", "automated-reasoning"),
 )
 
+#: Inline guardrail check usagetype fragment to the check slug it prices (ordered).
+_GUARDRAIL_CHECK_SLUGS: Final[tuple[tuple[str, str], ...]] = (
+    ("contentfiltercheck", "checks"),
+    ("promptattackcheck", "checks-prompt-attack"),
+    ("sensitiveinformationcheck", "checks-sensitive-information"),
+)
+
 
 def guardrail_policy_model(policy: str) -> str:
     """Build the synthetic model a guardrail policy's usage is billed against.
 
     Args:
-        policy: The policy slug (see :data:`_GUARDRAIL_POLICY_SLUGS`).
+        policy: The policy or check slug (see :data:`_GUARDRAIL_POLICY_SLUGS`
+            and :data:`_GUARDRAIL_CHECK_SLUGS`).
 
     Returns:
         The synthetic model string.
@@ -946,32 +954,28 @@ def _guardrail_model(usagetype: str) -> str:
     """Build the synthetic guardrail model string for a Bedrock Guardrails row.
 
     Guardrails rows carry no `model` attribute, and their usagetype names the
-    evaluated policy rather than a model, so the billed model is read from the
-    usagetype instead. AWS prices each policy separately and ApplyGuardrail
-    reports each policy's units separately, so every policy gets its own model
-    rather than sharing one: a guardrail applies every policy the operator
-    configured, and their rates sum.
+    evaluated policy or inline check rather than a model, so the billed model
+    is read from the usagetype instead. AWS prices each of them separately and
+    reports their units separately, so every one gets its own model rather than
+    sharing one: a request pays for every policy or check it asked for, and
+    their rates sum.
 
     Args:
         usagetype: The usagetype attribute.
 
     Returns:
         The synthetic model string the guardrail usage records bill against,
-        or "" when the usagetype names no guardrail, a check the gateway never
-        requests, or a policy this app does not model.
+        or "" when the usagetype names no guardrail, or a policy or check this
+        app does not model.
     """
     if not _is_guardrail_usagetype(usagetype):
         return ""
     normalized = _normalize_usagetype(usagetype)
     if "check" in normalized:
-        # InvokeGuardrailChecks is only ever called with the content filter,
-        # so the other checks' rates would fold a rate this app never pays
-        # onto the same key.
-        return (
-            guardrail_policy_model("checks")
-            if "contentfiltercheck" in normalized
-            else ""
-        )
+        for fragment, check in _GUARDRAIL_CHECK_SLUGS:
+            if fragment in normalized:
+                return guardrail_policy_model(check)
+        return ""
     for fragment, policy in _GUARDRAIL_POLICY_SLUGS:
         if fragment in normalized:
             return guardrail_policy_model(policy)
@@ -1504,15 +1508,13 @@ def _ingest_native_item(
         and _is_guardrail_usagetype(usagetype)
         and not _guardrail_model(usagetype)
     ):
-        # Guardrails rows are keyed by policy rather than model, so an
-        # unmapped one would mint a model key of its own that nothing ever
-        # prices against. A check the gateway never invokes is expected; a
-        # policy AWS added since is not, and bills at nothing until mapped.
-        if "check" not in _normalize_usagetype(usagetype):
-            diagnostics.append(
-                f"Unmodeled Bedrock Guardrails policy usagetype {usagetype!r}: "
-                "its usage is billed at no cost until it is mapped."
-            )
+        # Guardrails rows are keyed by policy or inline check rather than by
+        # model, so an unmapped one would mint a model key of its own that
+        # nothing ever prices against, and bills at nothing until mapped.
+        diagnostics.append(
+            f"Unmodeled Bedrock Guardrails usagetype {usagetype!r}: its usage "
+            "is billed at no cost until its policy or check is mapped."
+        )
         return
 
     if (
