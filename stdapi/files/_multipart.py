@@ -53,7 +53,7 @@ from stdapi.files._core import (
     FileRecord,
     _record_from_head,
     _require_bucket,
-    _validate_filename,
+    _sanitize_filename,
     decode_id_payload,
     encode_id_payload,
     file_id_s3_key,
@@ -458,9 +458,10 @@ async def create_multipart_session(
         expires_after: Seconds from creation until the final file expires, or ``None``.
 
     Raises:
-        ApiError: ``aws_s3_bucket`` not configured (503) or invalid filename.
+        ApiError: ``aws_s3_bucket`` not configured (503), or a filename the
+            stored metadata cannot hold (400).
     """
-    filename = _validate_filename(filename)
+    filename = _sanitize_filename(filename, mime_type)
     bucket = _require_bucket()
     upload_id, file_id = _multipart_ids_from_bucket(bucket)
     s3_key = file_id_s3_key(file_id)
