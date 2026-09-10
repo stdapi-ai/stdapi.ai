@@ -872,6 +872,34 @@ _CD_FILENAME_RE = compile_regex(
 )
 
 
+def _content_disposition_params(header: str) -> list[str]:
+    """Split a ``Content-Disposition`` value into parameters, respecting quoting.
+
+    A semicolon inside a quoted value does not separate parameters, and neither
+    does anything else there: a filename is attacker-supplied, so a parameter
+    name appearing inside one must not be read as a parameter of its own.
+
+    Args:
+        header: The raw ``Content-Disposition`` header value.
+
+    Returns:
+        The header's parameters, in the order written.
+    """
+    params: list[str] = []
+    buffer: list[str] = []
+    quoted = False
+    for char in header:
+        if char == '"':
+            quoted = not quoted
+        if char == ";" and not quoted:
+            params.append("".join(buffer))
+            buffer = []
+        else:
+            buffer.append(char)
+    params.append("".join(buffer))
+    return params
+
+
 def parse_content_disposition_filename(header: str) -> str:
     """Extract a filename from a ``Content-Disposition`` header value.
 
@@ -884,10 +912,13 @@ def parse_content_disposition_filename(header: str) -> str:
     Returns:
         The extracted filename, or an empty string if none is found.
     """
-    if match := _CD_FILENAME_STAR_RE.search(header):
-        return unquote(match.group(1))
-    if match := _CD_FILENAME_RE.search(header):
-        return match.group(1) or match.group(2) or ""
+    params = _content_disposition_params(header)
+    for param in params:
+        if match := _CD_FILENAME_STAR_RE.fullmatch(param.strip()):
+            return unquote(match.group(1))
+    for param in params:
+        if match := _CD_FILENAME_RE.fullmatch(param.strip()):
+            return match.group(1) or match.group(2) or ""
     return ""
 
 

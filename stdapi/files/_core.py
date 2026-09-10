@@ -30,6 +30,7 @@ from binascii import crc32 as _crc32
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import chain
+from mimetypes import guess_extension
 from re import compile as re_compile
 from typing import TYPE_CHECKING
 from uuid import uuid7
@@ -63,11 +64,14 @@ if TYPE_CHECKING:
     #: S3 object metadata fields for stored files.
     _FileMetadata = TypedDict("_FileMetadata", {"expires-at": str, "purpose": str})
 
-#: Characters forbidden in filenames per the Anthropic Files API specification.
-_FILENAME_FORBIDDEN_RE = re_compile(r'[<>:"|?*\\/]|[\x00-\x1f]')
+#: Characters a quoted ``Content-Disposition`` filename cannot carry: a quote ends it, controls are not header text.
+_FILENAME_FORBIDDEN_RE = re_compile(r'["\x00-\x1f\x7f]')
 
-#: Maximum filename length per the Anthropic spec.
+#: Maximum filename length the Files API reports.
 _FILENAME_MAX_LEN: int = 500
+
+#: Filename given to an upload that carries none, before its media type's extension.
+_UNNAMED_FILENAME = "unnamed"
 
 #: OpenAI purpose stored for files uploaded without a purpose (OpenAI's "any purpose" value).
 DEFAULT_PURPOSE = "user_data"
@@ -105,22 +109,35 @@ class FileRecord:
     expires_at: int | None
 
 
-def _validate_filename(filename: str) -> str:
-    """Validate filename characters and length.
+def _sanitize_filename(filename: str, mime_type: str) -> str:
+    """Return the name a file is stored and reported under.
 
-    Raises:
-        ApiError: Forbidden characters or exceeds the 500-character limit.
+    Only the final component of *filename* is kept, so a client sending a path
+    names the file it ends with instead of being refused.  A name left empty by
+    that becomes ``unnamed`` plus the extension *mime_type* implies, when it
+    implies one.
+
+    Args:
+        filename: Filename as the client sent it, possibly a path or empty.
+        mime_type: Media type stored with the file, read for the fallback extension.
 
     Returns:
-        Validated filename.
+        The filename to report and to write to ``Content-Disposition``.
+
+    Raises:
+        ApiError: The kept name exceeds 500 characters, or carries a character
+            a ``Content-Disposition`` header cannot hold.
     """
-    if len(filename) > _FILENAME_MAX_LEN:
+    name = filename.rpartition("/")[2].rpartition("\\")[2]
+    if not name:
+        name = _UNNAMED_FILENAME + (guess_extension(mime_type) or "")
+    if len(name) > _FILENAME_MAX_LEN:
         msg = f"Filename exceeds maximum length of {_FILENAME_MAX_LEN} characters."
         raise ApiError(msg)
-    if _FILENAME_FORBIDDEN_RE.search(filename):
-        msg = 'Filename contains forbidden characters (< > : " | ? * \\ / or control chars).'
+    if _FILENAME_FORBIDDEN_RE.search(name):
+        msg = 'Filename cannot be stored: remove any quote (") or control character.'
         raise ApiError(msg)
-    return filename
+    return name
 
 
 def _require_bucket() -> str:
@@ -338,7 +355,8 @@ async def upload_file(
         region: AWS region for bucket selection; ``None`` uses the default bucket.
 
     Raises:
-        ApiError: ``aws_s3_bucket`` not configured (503) or invalid filename.
+        ApiError: ``aws_s3_bucket`` not configured (503), or a filename the
+            stored metadata cannot hold (400).
     """
     bucket = (
         require_s3_bucket_for_region(region, feature=_FEATURE)
@@ -355,7 +373,12 @@ async def upload_file(
         "expires-at": str(expires_at) if expires_at is not None else "",
         "purpose": purpose or DEFAULT_PURPOSE,
     }
-    content_disposition = f'attachment; filename="{_validate_filename(await file.get_filename() or "upload")}"'
+    # Both are resolved from the same metadata lookup, so reading the media
+    # type for the fallback name costs nothing beyond the filename itself.
+    filename = _sanitize_filename(
+        await file.get_filename() or "", await file.get_content_type()
+    )
+    content_disposition = f'attachment; filename="{filename}"'
     await file.to_s3(
         BUCKET_TO_REGION[bucket],
         bucket=bucket,
@@ -407,7 +430,7 @@ async def put_file_content(
         content_type,
         bucket=bucket,
         key=file_id_s3_key(payload),
-        content_disposition=f'attachment; filename="{_validate_filename(filename)}"',
+        content_disposition=f'attachment; filename="{_sanitize_filename(filename, content_type)}"',
         metadata={
             "expires-at": str(expires_at) if expires_at is not None else "",
             "purpose": purpose,

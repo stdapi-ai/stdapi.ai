@@ -366,7 +366,7 @@ curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/cancel" \
 | Feature                  |                  Status                  | Notes                                                        |
 |--------------------------|:----------------------------------------:|--------------------------------------------------------------|
 | `bytes` (declared size)  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 byte – 8 GiB; validated at completion against actual assembled size |
-| `filename`               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Carried through to the final file object                     |
+| `filename`               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Carried through to the final file object; only its last path component is kept |
 | `mime_type`              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Set as the S3 `ContentType` for the assembled object         |
 | `purpose`                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Echoed to the final file object                              |
 | Part data (binary)       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Standard `multipart/form-data` binary upload via the `data` field |
@@ -500,11 +500,22 @@ part size and part count rules under [Uploads API](#uploads-api), and the
 expiry range and its lazy enforcement under
 [Upload with expiry](#upload-with-expiry).
 
+**Filenames are kept, not policed.** A file is named after the last component of
+the `filename` it was uploaded with, with anything up to the final `/` or `\`
+dropped: `reports/q3.pdf` is stored and listed as `q3.pdf`. Every other
+character is kept exactly as sent, up to 500 of them — punctuation a filesystem
+dislikes included, since the name is never used as a path. An upload that
+declares no name at all — an empty `filename`, or a JSON body carrying only
+content — is named `unnamed` plus the extension of its media type, or `unnamed`
+when the type implies none. Only a double quote (`"`) and control characters are
+refused, with a `400`.
+
 ### Errors { #error-reference }
 
 | HTTP | Cause                                                              |
 |------|--------------------------------------------------------------------|
-| 400  | Invalid `expires_after` range, bad filename, size mismatch, or unknown part ID |
+| 400  | Invalid `expires_after` range, size mismatch, or unknown part ID     |
+| 400  | A filename over 500 characters once its path is dropped, or one carrying a double quote or a control character |
 | 400  | `part_ids` not listed in ascending upload order on `/v1/uploads/{upload_id}/complete` |
 | 400  | A non-last part under 5 MiB, or an upload past its 10,000-part limit |
 | 400  | `file-id:` URI passed to an ingest endpoint (`POST /v1/files`, `POST /v1/uploads/{upload_id}/parts`) |

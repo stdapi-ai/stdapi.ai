@@ -29,6 +29,7 @@ from stdapi.aws_s3 import BUCKET_TO_REGION, UPLOAD_CHUNK_SIZE, S3Object
 from stdapi.cleanup import CLEANUPS
 from stdapi.config import SETTINGS
 from stdapi.files import encode_id_payload
+from stdapi.files._core import _sanitize_filename
 from stdapi.files._multipart import create_multipart_session
 from stdapi.input_file import (
     FileIdInputFile,
@@ -1107,29 +1108,108 @@ class TestStoredInputAddressing:
         assert client.keys == ["reports/q1%202026.pdf"]
 
 
+@pytest.mark.parametrize(
+    ("sent", "stored"),
+    [
+        pytest.param("reports/q3.pdf", "q3.pdf", id="path"),
+        pytest.param("/var/../reports/q3.pdf", "q3.pdf", id="relative-path"),
+        pytest.param(r"C:\reports\q3.pdf", "q3.pdf", id="windows-path"),
+        pytest.param("Q3: results.pdf", "Q3: results.pdf", id="colon"),
+        pytest.param("what?.pdf", "what?.pdf", id="question-mark"),
+        pytest.param("a*b<c>d|e.pdf", "a*b<c>d|e.pdf", id="shell-glob-and-redirection"),
+        pytest.param("2026-09-09T10:00:00.log", "2026-09-09T10:00:00.log", id="stamp"),
+        pytest.param("a" * 500, "a" * 500, id="at-the-length-cap"),
+    ],
+)
+def test_only_the_final_path_component_of_a_filename_is_kept(
+    sent: str, stored: str
+) -> None:
+    """A filename is stored as sent, minus any path leading up to it.
+
+    The uploading client's name is kept whole wherever a
+    ``Content-Disposition`` header can hold it: the characters a filesystem
+    dislikes are irrelevant here, because the name is never a path.  A leading
+    path is dropped rather than refused, since a legal upload must not become a
+    400.
+
+    Ref: https://platform.claude.com/docs/en/api/files/upload
+         stdapi/files/_core.py:_sanitize_filename
+    """
+    assert _sanitize_filename(sent, "application/pdf") == stored
+
+
+@pytest.mark.parametrize(
+    ("mime_type", "stored"),
+    [
+        pytest.param("application/pdf", "unnamed.pdf", id="pdf"),
+        pytest.param("text/plain", "unnamed.txt", id="text"),
+        pytest.param("application/x-nonesuch", "unnamed", id="unknown-type"),
+        pytest.param("", "unnamed", id="no-type"),
+    ],
+)
+def test_a_filename_that_is_absent_or_only_a_path_falls_back_to_unnamed(
+    mime_type: str, stored: str
+) -> None:
+    """A name that survives no path component becomes ``unnamed`` plus the type's extension.
+
+    The extension is dropped rather than guessed when the media type names
+    none, so the fallback never invents a type the bytes do not have.
+
+    Ref: https://platform.claude.com/docs/en/api/files/upload
+         stdapi/files/_core.py:_sanitize_filename
+    """
+    assert _sanitize_filename("", mime_type) == stored
+    assert _sanitize_filename("reports/", mime_type) == stored
+
+
 async def test_create_multipart_session_rejects_unsafe_filename() -> None:
-    """A filename with header-injection characters is rejected before any S3 call.
+    """A filename carrying a quote is rejected before any S3 call.
 
-    The filename ends up in the object's ``Content-Disposition`` header, so the
-    forbidden-character and length checks run ahead of the bucket lookup — which
-    is why this test needs no AWS access.
+    The filename ends up in the object's ``Content-Disposition`` header, whose
+    quoted form a quote would close early, so it is one of the few names that
+    cannot be kept.  The check runs ahead of the bucket lookup — which is why
+    this test needs no AWS access.
 
-    Ref: stdapi/files/_core.py:_validate_filename
+    Ref: stdapi/files/_core.py:_sanitize_filename
          stdapi/files/_multipart.py:create_multipart_session
     """
     with pytest.raises(ApiError) as exc:
         await create_multipart_session('bad"name.txt', "text/plain", "", 10)
     assert exc.value.status == 400
-    assert "forbidden characters" in str(exc.value), exc.value.args
+    assert "cannot be stored" in str(exc.value), exc.value.args
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        pytest.param('bad"name.txt', id="quote"),
+        pytest.param("bad\nname.txt", id="newline"),
+        pytest.param("bad\x7fname.txt", id="delete"),
+    ],
+)
+def test_a_filename_a_stored_header_cannot_hold_is_refused(filename: str) -> None:
+    """Only what breaks the header the name is written to is refused.
+
+    A quote closes the quoted value early, and a control character cannot
+    appear in a header value at all; both would corrupt the stored metadata
+    rather than merely look odd.
+
+    Ref: https://www.rfc-editor.org/rfc/rfc9110.html#name-field-values
+         stdapi/files/_core.py:_sanitize_filename
+    """
+    with pytest.raises(ApiError, match="cannot be stored") as exc:
+        _sanitize_filename(filename, "text/plain")
+    assert exc.value.status == 400
 
 
 async def test_create_multipart_session_rejects_overlong_filename() -> None:
     """A filename longer than 500 characters is rejected before any S3 call.
 
     The filename is interpolated into the object's ``Content-Disposition`` header, and
-    500 is the Anthropic Files API cap the gateway mirrors.
+    500 is the Files API cap the gateway mirrors.
 
-    Ref: stdapi/files/_core.py:_validate_filename
+    Ref: https://platform.claude.com/docs/en/api/files/upload
+         stdapi/files/_core.py:_sanitize_filename
          stdapi/files/_multipart.py:create_multipart_session
     """
     with pytest.raises(ApiError, match="maximum length of 500") as exc:
@@ -1137,18 +1217,31 @@ async def test_create_multipart_session_rejects_overlong_filename() -> None:
     assert exc.value.status == 400
 
 
+def test_the_length_cap_applies_to_the_kept_component_only() -> None:
+    """An over-long path whose final component fits is accepted, not refused.
+
+    The cap describes the name the API reports, and that is what is left once
+    the path is dropped; measuring the value as sent would refuse a filename
+    the response would have shown as well within the limit.
+
+    Ref: https://platform.claude.com/docs/en/api/files/upload
+         stdapi/files/_core.py:_sanitize_filename
+    """
+    assert _sanitize_filename("a" * 600 + "/q3.pdf", "application/pdf") == "q3.pdf"
+
+
 async def test_filename_length_check_runs_before_the_character_check() -> None:
     """At exactly 500 characters the length branch passes and the character check runs.
 
     The length branch is evaluated first, so it would mask the character rejection for
-    any name at or above the cap; a 500-character name carrying a forbidden character
-    must still report the character failure.
+    any name at or above the cap; a 500-character name carrying a quote must still
+    report the character failure.
 
-    Ref: stdapi/files/_core.py:_validate_filename
+    Ref: stdapi/files/_core.py:_sanitize_filename
     """
     filename = 'a"' + "a" * 498
     assert len(filename) == 500
-    with pytest.raises(ApiError, match="forbidden characters") as exc:
+    with pytest.raises(ApiError, match="cannot be stored") as exc:
         await create_multipart_session(filename, "text/plain", "", 10)
     assert exc.value.status == 400
 
