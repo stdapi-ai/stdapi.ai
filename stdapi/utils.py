@@ -590,7 +590,7 @@ def _convert_image(
         content: The binary content of the input image to be converted.
         output_format: The desired output format for the image.
         compression: The level of compression or quality for the output image.
-            For "JPEG" and "WEBP", this represents the "quality" (1-100).
+            For "JPEG" and "WEBP", this represents the "quality" (0-100).
             For "PNG", this represents the compression level (0-9), calculated
             proportionally based on the input quality.
 

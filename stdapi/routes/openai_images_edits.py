@@ -274,7 +274,7 @@ async def edit_images(
         int,
         Form(
             description="The compression level (0-100%) for the generated images.",
-            ge=1,
+            ge=0,
             le=100,
         ),
     ] = 100,

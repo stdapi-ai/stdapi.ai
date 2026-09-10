@@ -350,7 +350,7 @@ class ImageGenerateParams(_ImageBaseParams):
     output_compression: int = Field(
         description="Compression level (0-100%) for generated images.",
         default=100,
-        ge=1,
+        ge=0,
         le=100,
     )
     output_format: ImageOutputFormats | None = Field(
@@ -426,7 +426,7 @@ class _ImageEditCommonParams(_ImageBaseParams):
     output_compression: int = Field(
         description="Compression level (0-100%) for generated images.",
         default=100,
-        ge=1,
+        ge=0,
         le=100,
     )
     output_format: ImageOutputFormats | None = Field(
