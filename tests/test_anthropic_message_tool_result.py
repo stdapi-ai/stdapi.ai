@@ -1,4 +1,7 @@
-"""Anthropic ``tool_result`` content parts → Bedrock ``toolResult`` blocks (no AWS calls).
+"""Anthropic ``tool_result`` content parts → Bedrock ``toolResult`` blocks.
+
+Every test but the last one maps blocks in process and makes no API call; the last
+one drives the tool loop end to end against the selected target.
 
 Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
      https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
@@ -8,6 +11,7 @@ Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
 from __future__ import annotations
 
 from base64 import b64encode
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -23,9 +27,23 @@ from stdapi.types.anthropic_messages import (
     ToolResultBlockParam,
 )
 
-pytestmark = pytest.mark.local
+if TYPE_CHECKING:
+    from anthropic import Anthropic
+    from anthropic.types import ToolParam
+
+#: Side-effect-only tool: its result carries nothing back to the model.
+_RECORD_EVENT_TOOL: ToolParam = {
+    "name": "record_event",
+    "description": "Record an event in the audit log. Returns nothing.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"name": {"type": "string", "description": "Event name."}},
+        "required": ["name"],
+    },
+}
 
 
+@pytest.mark.local
 def test_tool_result_content_accepts_document_and_search_result_blocks() -> None:
     """``ToolResultBlockParam.content`` validates every upstream part type.
 
@@ -69,6 +87,7 @@ def test_tool_result_content_accepts_document_and_search_result_blocks() -> None
     assert tool_reference.tool_name == "lookup"
 
 
+@pytest.mark.local
 async def test_map_tool_result_to_bedrock_maps_document_block() -> None:
     """A ``document`` block inside a tool result maps to a Bedrock document block.
 
@@ -103,6 +122,7 @@ async def test_map_tool_result_to_bedrock_maps_document_block() -> None:
     assert "status" not in result["toolResult"], "a successful result carries no status"
 
 
+@pytest.mark.local
 async def test_map_tool_result_to_bedrock_keeps_mixed_text_and_image_parts() -> None:
     """Text and image parts of one tool result keep their order and their kinds.
 
@@ -140,6 +160,7 @@ async def test_map_tool_result_to_bedrock_keeps_mixed_text_and_image_parts() -> 
     assert third == {"text": "chart above"}
 
 
+@pytest.mark.local
 async def test_map_tool_result_to_bedrock_maps_search_result_block() -> None:
     """A ``search_result`` block inside a tool result maps to a Bedrock block.
 
@@ -167,6 +188,7 @@ async def test_map_tool_result_to_bedrock_maps_search_result_block() -> None:
     assert content_item["searchResult"]["content"] == [{"text": "snippet"}]
 
 
+@pytest.mark.local
 async def test_map_tool_result_to_bedrock_rejects_tool_reference_block() -> None:
     """A ``tool_reference`` block has no Bedrock equivalent.
 
@@ -193,6 +215,7 @@ async def test_map_tool_result_to_bedrock_rejects_tool_reference_block() -> None
     )
 
 
+@pytest.mark.local
 async def test_map_tool_result_keeps_an_mcp_tool_use_id_intact() -> None:
     """An ``mcptoolu_`` identifier reaches Bedrock unchanged.
 
@@ -211,3 +234,101 @@ async def test_map_tool_result_keeps_an_mcp_tool_use_id_intact() -> None:
     )
     result = await _map_tool_result_to_bedrock(block)
     assert result["toolResult"]["toolUseId"] == mcp_id
+
+
+@pytest.mark.local
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({}, id="omitted"),
+        pytest.param({"content": ""}, id="empty string"),
+        pytest.param({"content": []}, id="empty list"),
+    ],
+)
+async def test_map_tool_result_to_bedrock_sends_an_empty_result_as_empty_text(
+    payload: dict[str, object],
+) -> None:
+    """Every spelling of an empty tool result reaches the model as empty text.
+
+    A tool called for its side effect returns nothing, which a client expresses by
+    omitting ``content``, by sending an empty string or by sending an empty list.
+    All three must arrive as one empty text part: a result carrying no part at all
+    is refused by some models, and dropping the block entirely would leave the
+    ``tool_use`` it answers unpaired, which every model refuses.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolResultBlock.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_result_to_bedrock
+    """
+    block = ToolResultBlockParam.model_validate(
+        {"type": "tool_result", "tool_use_id": "toolu_1"} | payload
+    )
+    result = await _map_tool_result_to_bedrock(block)
+    assert result == {"toolResult": {"toolUseId": "1", "content": [{"text": ""}]}}
+
+
+@pytest.mark.local
+async def test_map_tool_result_to_bedrock_keeps_the_error_status_of_an_empty_result() -> (
+    None
+):
+    """An empty result reporting a failure still reaches the model as an error.
+
+    ``is_error`` is what tells the model the call failed rather than returned
+    nothing, so filling in the empty content must not drop it.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_result_to_bedrock
+    """
+    block = ToolResultBlockParam.model_validate(
+        {"type": "tool_result", "tool_use_id": "toolu_1", "is_error": True}
+    )
+    result = await _map_tool_result_to_bedrock(block)
+    assert result["toolResult"]["content"] == [{"text": ""}]
+    assert result["toolResult"]["status"] == "error"
+
+
+def test_a_tool_loop_answered_with_an_empty_result_continues(
+    anthropic_client: Anthropic, anthropic_chat_vision_model: str
+) -> None:
+    """A tool answered with a ``tool_result`` carrying no content is served.
+
+    This is the agent loop of a side-effect-only tool: the model asks for the
+    call, the client runs it, and the result it sends back carries nothing.  The
+    request must be answered rather than refused; which content the model then
+    produces is its own decision and is not asserted.  The model is the one the
+    other tool-loop tests of this route use, since forcing a call with
+    ``tool_choice`` ``any`` is proven on it.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls
+         stdapi/types/anthropic_messages.py:ToolResultBlockParam
+    """
+    question = "Record the event named 'signup', then confirm it in one sentence."
+    call = anthropic_client.messages.create(
+        model=anthropic_chat_vision_model,
+        max_tokens=300,
+        messages=[{"role": "user", "content": question}],
+        tools=[_RECORD_EVENT_TOOL],
+        tool_choice={"type": "any"},
+    )
+    tool_uses = [block for block in call.content if block.type == "tool_use"]
+    assert tool_uses, "the model must ask for the tool before its result can be sent"
+
+    answer = anthropic_client.messages.create(
+        model=anthropic_chat_vision_model,
+        max_tokens=300,
+        messages=[
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": call.content},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": tool_use.id}
+                    for tool_use in tool_uses
+                ],
+            },
+        ],
+        tools=[_RECORD_EVENT_TOOL],
+    )
+    assert answer.type == "message"
+    assert answer.content, "the empty result must still be answered"
+    assert answer.usage.output_tokens > 0

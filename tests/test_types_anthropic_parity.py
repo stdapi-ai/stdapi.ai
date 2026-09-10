@@ -10,10 +10,13 @@ Ref: https://platform.claude.com/docs/en/api/messages
      stdapi/types/anthropic_messages.py:MessageCreateParams
 """
 
-from typing import get_args
+from typing import Required, get_args, get_origin, get_type_hints
 
 import pytest
 from anthropic.types import WebSearchToolResultError as SdkWebSearchToolResultError
+from anthropic.types.tool_result_block_param import (
+    ToolResultBlockParam as SdkToolResultBlockParam,
+)
 from pydantic import ValidationError
 
 from stdapi.types.anthropic_messages import (
@@ -21,6 +24,7 @@ from stdapi.types.anthropic_messages import (
     ThinkingConfigAdaptiveParam,
     ThinkingConfigEnabledParam,
     ToolInputSchema,
+    ToolResultBlockParam,
     WebSearchToolRequestErrorParam,
     WebSearchToolResultError,
 )
@@ -133,6 +137,84 @@ class TestThinkingConfigEnabledParamParity:
             {"type": "enabled", "budget_tokens": 1024, "display": "omitted"}
         )
         assert config.model_dump()["display"] == "omitted"
+
+
+class TestToolResultContentParity:
+    """``content`` is optional on a ``tool_result`` block, as upstream declares it.
+
+    A tool called only for its side effect answers with an empty result — a block
+    carrying just ``type`` and ``tool_use_id`` — which Anthropic documents and the
+    SDK types as valid.  Rejecting it kills a conformant agent loop mid-turn.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls
+         https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/tool_result_block_param.py
+         stdapi/types/anthropic_messages.py:ToolResultBlockParam
+    """
+
+    def test_required_fields_match_the_sdk(self) -> None:
+        """Only the keys the SDK marks ``Required`` are mandatory on the mirror.
+
+        The SDK's own ``__required_keys__`` reports nothing on a ``total=False``
+        TypedDict here, so the annotations are read instead.
+        """
+        hints = get_type_hints(SdkToolResultBlockParam, include_extras=True)
+        sdk_required = {
+            name for name, hint in hints.items() if get_origin(hint) is Required
+        }
+        assert sdk_required, "the SDK annotations must state which keys are required"
+        required = {
+            name
+            for name, field in ToolResultBlockParam.model_fields.items()
+            if field.is_required()
+        }
+        assert required == sdk_required
+
+    def test_a_block_without_content_validates(self) -> None:
+        """A block carrying only ``type`` and ``tool_use_id`` validates."""
+        block = ToolResultBlockParam.model_validate(
+            {"type": "tool_result", "tool_use_id": "toolu_1"}
+        )
+        assert block.tool_use_id == "toolu_1"
+        assert block.content is None, "an omitted content stays absent, not invented"
+
+    def test_a_request_replaying_an_empty_tool_result_validates(self) -> None:
+        """A whole request whose tool turn is answered with an empty result validates.
+
+        The content-block union is resolved left to right, so a block failing
+        ``ToolResultBlockParam`` is reported as a 422 against the whole request
+        instead of reaching a model — which is what an agent loop hits when a tool
+        returns nothing.
+        """
+        params = MessageCreateParams.model_validate(
+            {
+                **_BASE_REQUEST,
+                "messages": [
+                    {"role": "user", "content": "record the event"},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_1",
+                                "name": "record_event",
+                                "input": {"name": "signup"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [{"type": "tool_result", "tool_use_id": "toolu_1"}],
+                    },
+                ],
+            }
+        )
+        content = params.messages[2].content
+        assert isinstance(content, list)
+        (block,) = content
+        assert isinstance(block, ToolResultBlockParam), (
+            "the block must resolve to a tool result, not to another union member"
+        )
+        assert block.content is None
 
 
 class TestTopPRange:
