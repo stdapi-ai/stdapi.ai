@@ -11,7 +11,7 @@ Every failure mode of these clients is a hang rather than an exception, so
 nothing here ever waits on the SDK unbounded.
 """
 
-from asyncio import CancelledError, Task, create_task, shield
+from asyncio import CancelledError, Task, create_task, ensure_future, shield
 from asyncio import timeout as async_timeout
 from contextlib import asynccontextmanager, suppress
 from copy import deepcopy
@@ -72,6 +72,9 @@ _CLOSE_TIMEOUT: Final = 5.0
 
 #: Strong references to detached close tasks, held until completion.
 _CLOSE_TASKS: Final[set[Task[None]]] = set()
+
+#: Strong references to in-flight opens, held so an abandoned one still releases.
+_OPEN_TASKS: Final[set[Task[Any]]] = set()
 
 #: Statuses of modeled stream errors that ``AWS_ERROR_MAP`` does not name.
 _STREAM_ERROR_STATUS: Final[dict[str, int]] = {
@@ -624,7 +627,8 @@ async def _open_session[IE: SerializeableShape, OE: DeserializeableShape](
 
     Raises:
         BaseException: Whatever the SDK raised, with the half-open stream closed
-            first; a stream that never answers raises ``TimeoutError``.
+            first; a stream that never answers raises ``TimeoutError``. A stream
+            the SDK returns after this was cancelled is closed on arrival.
     """
     session: BidiSession[IE, OE] | None = None
     try:
@@ -633,7 +637,20 @@ async def _open_session[IE: SerializeableShape, OE: DeserializeableShape](
         async with async_timeout(
             SETTINGS.aws_connect_timeout if open_timeout is None else open_timeout
         ):
-            session = BidiSession(await open_stream(client, region), region, service)
+            # The open runs in its own task: cancelling the await -- which the
+            # timeout above does -- would otherwise leave the SDK's in-flight
+            # request with nobody to close the stream it still returns.
+            opening = ensure_future(open_stream(client, region))
+            _OPEN_TASKS.add(opening)
+            opening.add_done_callback(_OPEN_TASKS.discard)
+            try:
+                stream = await shield(opening)
+            except CancelledError:
+                opening.add_done_callback(
+                    lambda task: _release_orphaned_stream(task, region, service)
+                )
+                raise
+            session = BidiSession(stream, region, service)
             if prime is not None:
                 await prime(session)
             await session.await_open()
@@ -661,16 +678,35 @@ async def _close_session(session: BidiSession[Any, Any]) -> None:
         await shield(task)
 
 
-async def drain_stream_closes(timeout: float) -> int:  # noqa: ASYNC109 -- shared drain contract
-    """Await the stream closes still releasing a connection after their caller left.
+def _release_orphaned_stream(
+    opening: Task[Any], region: RegionName, service: str
+) -> None:
+    """Close a stream that arrived after the caller of its open had left.
 
     Args:
-        timeout: Seconds allowed before the unfinished closes are cancelled.
+        opening: The completed open, whose stream nobody holds.
+        region: Region it was opened in.
+        service: AWS service it was opened on.
+    """
+    if opening.cancelled() or opening.exception() is not None:
+        return
+    task = create_task(BidiSession(opening.result(), region, service).aclose())
+    _CLOSE_TASKS.add(task)
+    task.add_done_callback(_CLOSE_TASKS.discard)
+
+
+async def drain_stream_closes(timeout: float) -> int:  # noqa: ASYNC109 -- shared drain contract
+    """Await the opens and closes still releasing a connection after their caller left.
+
+    Args:
+        timeout: Seconds allowed before the unfinished ones are cancelled.
 
     Returns:
-        Number of closes that had not finished at the deadline.
+        Number of opens and closes that had not finished at the deadline.
     """
-    return await drain_tasks(_CLOSE_TASKS, timeout)
+    # Opens first: one that still lands registers the close releasing it.
+    unfinished = await drain_tasks(_OPEN_TASKS, timeout)
+    return unfinished + await drain_tasks(_CLOSE_TASKS, timeout)
 
 
 def _log_region_failover(

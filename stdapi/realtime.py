@@ -187,7 +187,7 @@ def _alaw_decode_table() -> array[int]:
             if exponent == 0
             else ((mantissa << 4) + 0x108) << (exponent - 1)
         )
-        table[encoded] = -sample if value & 0x80 else sample
+        table[encoded] = sample if value & 0x80 else -sample
     return table
 
 
@@ -1366,11 +1366,18 @@ class RealtimeSession:
             # A stream closed by the teardown fails by design; nothing owes for it.
             if not self._stopping:
                 await self._fail(exception)
+        except Exception as exception:  # noqa: BLE001
+            # Nothing else reads this task: an escape would end the session
+            # silently, on a timeout, with the failure reported nowhere.
+            log_error_details("\n".join(format_exception(exception)), level="critical")
+            if not self._stopping:
+                await self._fail(ApiError(_UNEXPECTED_ERROR, status=500))
         else:
             # The backend ended the conversation, so the client cannot send into it.
             self._closing = self._closing or (1000, "session_ended")
-        if self._client_task is not None:
-            self._client_task.cancel()
+        finally:
+            if self._client_task is not None:
+                self._client_task.cancel()
 
     async def _report(self, event: BackendEvent) -> None:
         """Render one backend event.
@@ -1380,21 +1387,9 @@ class RealtimeSession:
         """
         match event:
             case SpeechStarted():
-                await self._send_event(
-                    {
-                        "type": "input_audio_buffer.speech_started",
-                        "audio_start_ms": event.offset_ms,
-                        "item_id": self._pending_item or "",
-                    }
-                )
+                await self._report_speech_started(event.offset_ms)
             case SpeechStopped():
-                await self._send_event(
-                    {
-                        "type": "input_audio_buffer.speech_stopped",
-                        "audio_end_ms": event.offset_ms,
-                        "item_id": self._pending_item or "",
-                    }
-                )
+                await self._report_speech_stopped(event.offset_ms)
             case InputTranscript():
                 await self._report_input_transcript(event.text)
             case ResponseStarted():
@@ -1411,6 +1406,43 @@ class RealtimeSession:
                 await self._finish_response(interrupted=event.interrupted)
             case UsageReport():
                 self._metering.totals = event
+
+    async def _report_speech_started(self, offset_ms: int) -> None:
+        """Announce a detected turn, naming the item it will become.
+
+        The identifier is what a client addresses the turn by, and it is minted
+        here when the caller does not end its own turns: nothing else has
+        created one by the time the speech is detected.
+
+        Args:
+            offset_ms: Where the speech starts in the caller's audio.
+        """
+        if self._pending_item is None:
+            self._pending_item = f"item_{uuid4().hex}"
+        await self._send_event(
+            {
+                "type": "input_audio_buffer.speech_started",
+                "audio_start_ms": offset_ms,
+                "item_id": self._pending_item,
+            }
+        )
+
+    async def _report_speech_stopped(self, offset_ms: int) -> None:
+        """Announce the end of a detected turn.
+
+        Args:
+            offset_ms: Where the speech ends in the caller's audio.
+        """
+        await self._send_event(
+            {
+                "type": "input_audio_buffer.speech_stopped",
+                "audio_end_ms": offset_ms,
+                "item_id": self._pending_item or "",
+            }
+        )
+        if self._config.audio.input.transcription is None:
+            # Nothing else ends this turn, and the next one needs its own item.
+            self._pending_item = None
 
     async def _report_input_transcript(self, text: str) -> None:
         """Check a transcript of the caller's speech, and report it if asked for.
@@ -1434,6 +1466,8 @@ class RealtimeSession:
             await self._report_transcription_failed(exception)
             raise
         if self._config.audio.input.transcription is None:
+            # The turn is over even unreported, and the next one needs its own id.
+            self._pending_item = None
             return
         item_id = self._pending_item or f"item_{uuid4().hex}"
         self._pending_item = item_id

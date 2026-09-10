@@ -19,7 +19,7 @@ from botocore.exceptions import ParamValidationError
 import stdapi.aws
 from stdapi import aws_translate, usage
 from stdapi.api_errors import ApiError
-from stdapi.aws_translate import translate, translate_subtitle
+from stdapi.aws_translate import TranslationError, translate, translate_subtitle
 from stdapi.config import SETTINGS
 from stdapi.pricing import Dimension, Service
 from tests._helpers import make_client_error
@@ -330,6 +330,26 @@ _VTT = """WEBVTT
 Hola mundo
 """
 
+#: SRT sample whose second cue holds a line made only of digits.
+_SRT_DIGIT_LINE = """1
+00:00:01,000 --> 00:00:03,000
+Bonjour
+
+2
+00:00:04,000 --> 00:00:06,000
+Chapitre
+1998
+La suite
+"""
+
+#: SRT sample whose cue text holds an arrow a timing line also carries.
+_SRT_ARROW_IN_TEXT = """1
+00:00:01,000 --> 00:00:03,000
+Bonjour
+A --> B
+Au revoir
+"""
+
 
 class TestTranslateSubtitle:
     """translate_subtitle(): cue text is translated, everything else is preserved.
@@ -427,6 +447,57 @@ Tres bien]
 [Hola mundo]
 """
         )
+
+    async def test_a_digit_only_line_inside_a_cue_is_translated_as_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cue line holding only digits is text, not the number of a cue.
+
+        Only the line before a timing line numbers a cue. Reading every
+        digit-only line as one drops it from its segment, which then no longer
+        occurs in the file the translations are spliced back into.
+
+        Ref: stdapi/aws_translate.py:_subtitle_is_cue_number
+        """
+        client = self._patch(monkeypatch)
+
+        result = await translate_subtitle(_SRT_DIGIT_LINE, "fr-FR")
+
+        (request,) = client.requests
+        assert _SPAN_RE.findall(str(request["Text"])) == [
+            ("0", "Bonjour"),
+            ("1", "Chapitre\n1998\nLa suite"),
+        ]
+        assert (
+            result
+            == """1
+00:00:01,000 --> 00:00:03,000
+[Bonjour]
+
+2
+00:00:04,000 --> 00:00:06,000
+[Chapitre
+1998
+La suite]
+"""
+        )
+
+    async def test_a_segment_that_cannot_be_placed_back_is_an_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A segment missing from the original is refused, not spliced at -1.
+
+        A cue line carrying ``-->`` reads as a timing line, so the lines around
+        it are joined into a segment the file does not hold. ``str.find`` then
+        answers ``-1``, and writing at a negative index silently truncates the
+        subtitle instead of reporting anything.
+
+        Ref: stdapi/aws_translate.py:_subtitle_reconstruct_with_translation
+        """
+        self._patch(monkeypatch)
+
+        with pytest.raises(TranslationError, match="place a translated segment"):
+            await translate_subtitle(_SRT_ARROW_IN_TEXT, "fr-FR")
 
     async def test_content_without_cue_text_is_returned_without_any_call(
         self, monkeypatch: pytest.MonkeyPatch

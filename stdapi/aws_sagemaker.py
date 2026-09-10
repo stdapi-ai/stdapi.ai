@@ -21,6 +21,7 @@ their own.
 from asyncio import Task, create_task, shield, sleep
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
+from functools import partial
 from re import compile as compile_regex
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Final
@@ -130,8 +131,8 @@ _WARMUP_PROBE: Final[Mapping[str, Any]] = {
     "stream": False,
 }
 
-#: One warm-up probe per cold endpoint: (region, endpoint, component) -> the watcher.
-_WARMING: dict[tuple[str, str, str], Task[bool]] = {}
+#: Warm-up probe per cold endpoint: (region, endpoint, component) -> watcher, deadline.
+_WARMING: dict[tuple[str, str, str], tuple[Task[bool], float]] = {}
 
 
 class SageMakerError(ApiError):
@@ -264,7 +265,7 @@ async def sagemaker_http_session() -> AsyncGenerator[ClientSession]:
     finally:
         _SESSION = None
         _TOKENS.clear()
-        for probe in tuple(_WARMING.values()):
+        for probe, _ in tuple(_WARMING.values()):
             probe.cancel()
         _WARMING.clear()
         await session.close()
@@ -530,6 +531,17 @@ async def _watch_warm_up(
         return True
 
 
+def _forget_warm_up(key: tuple[str, str, str], done: Task[bool]) -> None:
+    """Drop a finished watcher, unless a later one already took its place.
+
+    Args:
+        key: The endpoint the watcher was probing.
+        done: The watcher that finished.
+    """
+    if (watcher := _WARMING.get(key)) is not None and watcher[0] is done:
+        del _WARMING[key]
+
+
 async def _wait_for_capacity(
     region: RegionName, endpoint: str, inference_component: str, deadline: float
 ) -> bool:
@@ -537,7 +549,9 @@ async def _wait_for_capacity(
 
     The watcher is detached from every request: a client that disconnects
     cancels its own wait and never the shared probe, so the first caller
-    hanging up does not strand the others.
+    hanging up does not strand the others. A shared watcher runs on the budget
+    of whoever started it, so a caller that joined later and outlives it starts
+    a fresh one rather than being refused on someone else's deadline.
 
     Args:
         region: Region the endpoint lives in.
@@ -549,16 +563,18 @@ async def _wait_for_capacity(
         ``True`` when the endpoint became able to answer, ``False`` on timeout.
     """
     key = (region, endpoint, inference_component)
-    task = _WARMING.get(key)
-    if task is None or task.done():
-        task = create_task(
-            _watch_warm_up(region, endpoint, inference_component, deadline)
-        )
-        _WARMING[key] = task
-        task.add_done_callback(
-            lambda done: _WARMING.pop(key, None) if _WARMING.get(key) is done else None
-        )
-    return await shield(task)
+    while True:
+        watcher = _WARMING.get(key)
+        if watcher is None or watcher[0].done():
+            task = create_task(
+                _watch_warm_up(region, endpoint, inference_component, deadline)
+            )
+            watcher = _WARMING[key] = (task, deadline)
+            task.add_done_callback(partial(_forget_warm_up, key))
+        if await shield(watcher[0]):
+            return True
+        if watcher[1] >= deadline or monotonic() >= deadline:
+            return False
 
 
 def _warm_up_timeout_error(

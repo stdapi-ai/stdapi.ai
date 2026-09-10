@@ -11,7 +11,7 @@ Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html
      stdapi/aws_s3.py
 """
 
-from asyncio import Event, wait_for
+from asyncio import CancelledError, Event, create_task, wait_for
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -429,6 +429,32 @@ class _FailingUploadClient(_PipelinedUploadClient):
         return await super().upload_part(PartNumber=PartNumber, Body=Body, **kwargs)
 
 
+class _HangingUploadClient(_PipelinedUploadClient):
+    """``_PipelinedUploadClient`` whose part uploads never complete."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancelled = 0
+
+    async def upload_part(
+        self,
+        *,
+        PartNumber: int,  # noqa: N803
+        Body: bytes,  # noqa: N803
+        **_kwargs: object,
+    ) -> dict[str, Any]:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        if self.in_flight >= 2:
+            self.window_full.set()
+        try:
+            await Event().wait()
+        except CancelledError:
+            self.cancelled += 1
+            raise
+        return {"ETag": f'"etag-{PartNumber}"'}  # pragma: no cover - never landed
+
+
 class TestMultipartUploadPipelining:
     """``_multipart_upload`` reads ahead while parts upload, window-bounded.
 
@@ -476,6 +502,33 @@ class TestMultipartUploadPipelining:
             )
         assert exc_info.value.response["Error"]["Code"] == "InternalError"
         assert stub.aborted is True
+        assert stub.completed_parts is None
+
+    async def test_cancelled_upload_aborts_and_cancels_its_parts(self) -> None:
+        """A cancelled upload aborts too: orphan parts are billed until expiry.
+
+        Cancellation is the ordinary end of an upload whose caller hung up, and
+        it reaches the same cleanup as a failure: every part still in flight is
+        cancelled and the multipart upload is aborted before the
+        ``CancelledError`` propagates.
+
+        Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpu-abort-incomplete-mpu-lifecycle-config.html
+        """
+        stub = _HangingUploadClient()
+        task = create_task(
+            aws_s3._multipart_upload(  # noqa: SLF001
+                cast("Any", stub), "bucket", "key", async_iter(b"aa", b"bb", b"cc")
+            )
+        )
+        await wait_for(stub.window_full.wait(), timeout=_OVERLAP_TIMEOUT)
+        task.cancel()
+
+        with pytest.raises(CancelledError):
+            await wait_for(task, timeout=_OVERLAP_TIMEOUT)
+        assert stub.aborted is True, "the orphaned upload must be aborted"
+        assert stub.cancelled == aws_s3._UPLOAD_PARTS_IN_FLIGHT, (  # noqa: SLF001
+            "every part still in flight must be cancelled"
+        )
         assert stub.completed_parts is None
 
 

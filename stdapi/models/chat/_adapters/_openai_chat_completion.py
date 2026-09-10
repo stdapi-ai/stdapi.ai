@@ -723,7 +723,7 @@ def _extract_assistant_blocks(
     return content_blocks
 
 
-async def _extract_tool_blocks(
+def _extract_tool_blocks(
     message_param: ChatCompletionToolMessageParam,
 ) -> list[ContentBlockTypeDef]:
     """Convert a tool message to a Bedrock toolResult block.
@@ -734,18 +734,13 @@ async def _extract_tool_blocks(
     Returns:
         Single-element list with a ``toolResult`` content block.
     """
-    parts: list[
-        ChatCompletionContentPartTextParam | ChatCompletionContentPartImageParam
-    ] = (
-        [ChatCompletionContentPartTextParam(text=message_param.content, type="text")]
+    texts = (
+        [message_param.content]
         if isinstance(message_param.content, str)
-        else list(message_param.content)
+        else [part.text for part in message_param.content]
     )
     content: list[ToolResultContentBlockUnionTypeDef] = [
-        await part.image_url.url.to_bedrock_content_block()  # type: ignore[misc]
-        if isinstance(part, ChatCompletionContentPartImageParam)
-        else _openai_common.parse_tool_content(part.text)
-        for part in parts
+        _openai_common.parse_tool_content(text) for text in texts
     ]
     return [
         {"toolResult": {"toolUseId": message_param.tool_call_id, "content": content}}
@@ -823,7 +818,7 @@ async def map_messages(
 
         if role_name == "tool":
             tool_msg: ChatCompletionToolMessageParam = message_param  # type: ignore[assignment]
-            content_blocks = await _extract_tool_blocks(tool_msg)
+            content_blocks = _extract_tool_blocks(tool_msg)
         elif role_name == "function":
             function_msg: ChatCompletionFunctionMessageParam = message_param  # type: ignore[assignment]
             content_blocks = _extract_function_blocks(function_msg)
@@ -1213,6 +1208,11 @@ def _stream_delta_chunk(
                 stop_block["stopReason"], legacy_function=legacy_function
             )
             end = True
+
+        case _:
+            # messageStart and contentBlockStop carry nothing OpenAI expresses:
+            # a chunk built from one is an empty delta the client has to skip.
+            return None, end
 
     return chunk, end
 

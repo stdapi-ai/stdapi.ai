@@ -40,6 +40,7 @@ from stdapi.cleanup import CLEANUPS
 from stdapi.config import AWS_SESSION, SETTINGS
 from stdapi.models.embedding import EmbeddingResponse
 from stdapi.models.embedding.cohere_embed import EmbeddingModel as CohereEmbeddingModel
+from stdapi.routes import openai_vector_stores as openai_vector_stores_routes
 from stdapi.types.openai_vector_stores import (
     ComparisonFilter,
     CompoundFilter,
@@ -2567,6 +2568,36 @@ class TestRoutesOffline:
             "/v1/vector_stores", json={"file_ids": [f"file-{'0' * 32}"]}
         )
         assert response.status_code == 404, response.text
+        after = app_client.get("/v1/vector_stores?limit=100").json()["data"]
+        assert [entry["id"] for entry in after] == [entry["id"] for entry in before]
+
+    def test_a_backend_failure_while_attaching_leaves_no_store_behind(
+        self,
+        app_client: TestClient,
+        vector_backend: _FakeBackend,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An AWS failure during the attach rolls the new store back as well.
+
+        The client is told the creation failed and never learns the id, so a
+        store kept because the failure was a botocore one rather than an
+        ``ApiError`` is unreachable, and -- being a store -- billable for as
+        long as it exists.
+
+        Ref: stdapi/routes/openai_vector_stores.py:create_vector_store
+        """
+        file_id = vector_backend.upload(_TEXT_FILE)
+        before = app_client.get("/v1/vector_stores?limit=100").json()["data"]
+
+        throttled = make_client_error("ThrottlingException", "PutItem")
+
+        async def _throttled(*_args: object, **_kwargs: object) -> None:
+            raise throttled
+
+        monkeypatch.setattr(openai_vector_stores_routes, "attach_files", _throttled)
+        response = app_client.post("/v1/vector_stores", json={"file_ids": [file_id]})
+
+        assert response.status_code >= 400, response.text
         after = app_client.get("/v1/vector_stores?limit=100").json()["data"]
         assert [entry["id"] for entry in after] == [entry["id"] for entry in before]
 

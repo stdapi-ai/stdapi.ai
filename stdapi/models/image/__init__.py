@@ -366,7 +366,7 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
         Raises:
             ApiError: If the model does not support inpainting.
         """
-        msg = "Image editing is not supported by {self._model.model.id}."
+        msg = f"Image editing is not supported by {self._model.model.id}."
         raise ApiError(msg)
 
     async def _create_image_variations(

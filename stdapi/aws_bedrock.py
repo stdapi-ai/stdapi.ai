@@ -680,10 +680,15 @@ def guardrail_region(identifier: str) -> RegionName:
         The region embedded in the ARN, or the primary Bedrock region.
 
     Raises:
-        ApiError: If the ARN's region is not a configured Bedrock region.
+        ApiError: If the ARN is malformed, or its region is not a configured
+            Bedrock region.
     """
     if identifier.startswith("arn:"):
-        region = identifier.split(":")[3]
+        parts = identifier.split(":")
+        if len(parts) < 6 or not parts[3]:
+            msg = f"Guardrail identifier '{identifier}' is not a valid guardrail ARN."
+            raise ApiError(msg)
+        region = parts[3]
         validate_bedrock_region(region, label="Guardrail ARN region")
         # Membership was just checked against SETTINGS.aws_bedrock_regions.
         return region  # type: ignore[return-value]

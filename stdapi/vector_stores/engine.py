@@ -573,6 +573,29 @@ async def delete_store(store_id: str) -> None:
     )
 
 
+def _refuse_expired(store: StoreRecord, refusal: str) -> None:
+    """Refuse what an expired store no longer has the storage to answer.
+
+    Its index is released as soon as a read sees the expiration, so anything
+    that would put the store back to work leaves it reporting ``completed``
+    over nothing.
+
+    Args:
+        store: The store record the request names.
+        refusal: What cannot be done to it, completing the message.
+
+    Raises:
+        ApiError: When the store has expired (400).
+    """
+    if not store.expired:
+        return
+    msg = (
+        f"The vector store '{store.id}' has expired: the storage behind it is "
+        f"released, so {refusal}. Create a new vector store instead."
+    )
+    raise ApiError(msg)
+
+
 async def update_store(
     store_id: str,
     *,
@@ -594,8 +617,9 @@ async def update_store(
         The updated store record.
 
     Raises:
-        ApiError: When the store does not exist (404), or is held elsewhere and
-            therefore describes itself (400).
+        ApiError: When the store does not exist (404), is held elsewhere and
+            therefore describes itself (400), or has expired and the update
+            would move its expiration (400).
     """
     external = external_store_for(store_id)
     if external is not None:
@@ -604,7 +628,9 @@ async def update_store(
             "its name, metadata and expiration are read from it and cannot be "
             "changed here."
         )
-    await read_store(store_id)
+    current = await read_store(store_id)
+    if clear_expiry or expires_after_days is not None:
+        _refuse_expired(current, "its expiration cannot be moved")
 
     def mutate(record: StoreRecord) -> None:
         """Apply the requested changes to *record*."""
@@ -664,7 +690,8 @@ async def attach_files(
         The created file records, in the order of *pending*.
 
     Raises:
-        ApiError: When one of the files does not exist (404).
+        ApiError: When one of the files does not exist (404), or the store has
+            expired and no longer has an index to write into (400).
     """
     external = external_store_for(store)
     if external is not None:
@@ -674,6 +701,7 @@ async def attach_files(
                 "a time instead."
             )
         return await external.attach_documents(store.id, pending)
+    _refuse_expired(store, "no file can be indexed into it")
     now = now_utc_timestamp()
     # One file is one record: a repeated id would inflate the totals for good.
     unique: dict[str, PendingFile] = {}
@@ -1144,6 +1172,11 @@ async def _store_chunks(
     if settled is None:
         await _discard_vectors(backend, store.id, file_id, owned)
         return "", 0
+    # An attribute update that landed while the vectors were going in reached
+    # the record only: nothing else re-writes them, so a filtered search would
+    # keep answering on the attributes the file was attached with.
+    if settled.attributes != counted.attributes:
+        schedule_cleanup(_rewrite_attributes(store.id, settled))
     # Chunks beyond the new count would stay searchable with stale text.
     stale = counted.previous_chunk_count
     if stale > len(chunks):

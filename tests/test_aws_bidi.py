@@ -351,6 +351,13 @@ async def _drain_close_tasks() -> None:
         await sleep(0)
 
 
+async def _drain_stream_tasks() -> None:
+    """Let a detached open, and the close it registers, finish."""
+    for _ in range(_DRAIN_ITERATIONS):
+        await sleep(0)
+    await _drain_close_tasks()
+
+
 def _per_region_opener(opened: list[FakeDuplexStream], **script: Any) -> Any:  # noqa: ANN401
     """Build an opener handing each region its own stream, collected in *opened*.
 
@@ -1227,6 +1234,36 @@ class TestOpenAndFailover:
                     pass  # pragma: no cover
 
         assert exc_info.value.status == 503
+
+    async def test_a_stream_landing_after_the_open_timed_out_is_released(self) -> None:
+        """A stream the SDK returns late is closed, not leaked.
+
+        The open is what the timeout cancels, and the SDK request it started
+        keeps running: the stream it answers with has no holder, so nothing
+        would ever close it and the connection stays open for the process's
+        lifetime.
+        """
+        stream = FakeDuplexStream(events=["audio"])
+        release = Event()
+
+        async def _open(_client: Any, _region: RegionName) -> FakeDuplexStream:  # noqa: ANN401
+            await release.wait()
+            return stream
+
+        opener: Any = _open
+        async with async_timeout(_TEST_TIMEOUT):
+            with pytest.raises(ApiError) as exc_info:
+                async with open_bidi_stream(
+                    "polly", ["us-east-1"], opener, open_timeout=_SHORT_TIMEOUT
+                ):
+                    pass  # pragma: no cover
+
+            assert exc_info.value.status == 503
+            release.set()
+            await _drain_stream_tasks()
+
+        assert stream.input_stream.closed == 1
+        assert stream.sdk_close_calls == 0
 
 
 class TestSessionLifecycle:

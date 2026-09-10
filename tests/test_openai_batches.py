@@ -19,6 +19,7 @@ Ref: https://developers.openai.com/api/docs/guides/batch.md
 """
 
 import contextlib
+from asyncio import CancelledError, Event, create_task
 from base64 import b32hexencode
 from binascii import crc32
 from collections.abc import AsyncIterator
@@ -34,6 +35,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from stdapi import aws_s3, batches
+from stdapi.cleanup import CLEANUPS
 from stdapi.files import payload_created_at
 from tests import _batches
 from tests._batches import chat_lines, converse_output
@@ -2394,6 +2396,94 @@ class TestOpenAIBatchLifecycle:
         assert created.status_code == 200
         payload = created.json()["id"].removeprefix("msgbatch_")
         assert app_client.get(f"/v1/batches/batch_{payload}").status_code == 404
+
+
+def _prepared(model: str, count: int = 100) -> list[batches.PreparedRequest]:
+    """Return *count* already-translated requests running on *model*.
+
+    Args:
+        model: Resolved model identifier every request runs under.
+        count: Number of requests, at least the per-model floor.
+
+    Returns:
+        The translated requests, in input order.
+    """
+    return [
+        batches.PreparedRequest(
+            custom_id=f"{model}-{index}",
+            model=model,
+            model_id=model,
+            model_input={"messages": [{"role": "user", "content": [{"text": "hi"}]}]},
+        )
+        for index in range(count)
+    ]
+
+
+@pytest.mark.local
+class TestBatchSubmissionCancelled:
+    """A creation the caller abandons mid-submission leaves no job running.
+
+    The jobs of a batch are submitted concurrently and the record naming them
+    is written only once all of them are in, so a client that disconnects in
+    that window cancels the wave with jobs already started. Nothing names them
+    afterwards: a batch inference job nobody stops runs for its whole window
+    and is billed for it.
+
+    Ref: https://developers.openai.com/api/docs/guides/batch
+         stdapi/batches.py:create_batch
+    """
+
+    async def test_a_cancelled_submission_stops_the_jobs_it_started(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The job that did start is stopped, not left running unreferenced.
+
+        Ref: stdapi/batches.py:_submitted
+             stdapi/batches.py:_abandon_jobs
+        """
+        _, bedrock = _batches.install(monkeypatch)
+        submitted = Event()
+        blocked = Event()
+        create = bedrock.create_model_invocation_job
+        calls = 0
+
+        async def _create_or_hang(**kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+            """Answer the first submission and hang on every one after it."""
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                await blocked.wait()
+            started = await create(**kwargs)
+            submitted.set()
+            return started
+
+        monkeypatch.setattr(bedrock, "create_model_invocation_job", _create_or_hang)
+        cleanups: list[Any] = []
+        token = CLEANUPS.set(cleanups)
+        try:
+            creation = create_task(
+                batches.create_batch(
+                    surface="openai",
+                    endpoint="/v1/chat/completions",
+                    completion_window="24h",
+                    prepared=[
+                        *_prepared("amazon.nova-micro-v1:0"),
+                        *_prepared("amazon.nova-lite-v1:0"),
+                    ],
+                )
+            )
+            await submitted.wait()
+            creation.cancel()
+            with pytest.raises(CancelledError):
+                await creation
+        finally:
+            blocked.set()
+            for pending in cleanups:
+                pending.close()
+            CLEANUPS.reset(token)
+
+        assert len(bedrock.jobs) == 1
+        assert bedrock.stopped == list(bedrock.jobs)
 
 
 @pytest.mark.local

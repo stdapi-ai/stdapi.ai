@@ -1125,11 +1125,15 @@ class TestKeySetRequest:
     """
 
     @staticmethod
-    def _session(body: bytes) -> MagicMock:
-        """Stand in for an ``aiohttp`` session answering *body* to a GET."""
+    def _session(*chunks: bytes) -> MagicMock:
+        """Stand in for an ``aiohttp`` session answering *chunks* to a GET.
+
+        One read returns one chunk, as a stream reader does: whatever has
+        arrived, never the size it was asked for, then nothing at EOF.
+        """
         response = AsyncMock()
         response.__aenter__ = AsyncMock(return_value=response)
-        response.content.read = AsyncMock(return_value=body)
+        response.content.read = AsyncMock(side_effect=[*chunks, b""])
         response.raise_for_status = MagicMock()
         session = AsyncMock()
         session.__aenter__ = AsyncMock(return_value=session)
@@ -1152,6 +1156,28 @@ class TestKeySetRequest:
         document = await stdapi.auth_cognito._fetch_key_set(url)  # noqa: SLF001
 
         assert session.get.call_args.args == (url,)
+        assert document == jwks_document
+
+    async def test_a_document_arriving_in_pieces_is_read_to_the_end(
+        self, monkeypatch: pytest.MonkeyPatch, jwks_document: dict[str, Any]
+    ) -> None:
+        """A key set split across two reads is parsed whole, not truncated.
+
+        One read answers with what has arrived rather than the size it was
+        asked for, so a document crossing that boundary reaches the parser cut
+        in half -- and the failed load burns the reload cooldown, leaving every
+        request unauthenticated until it lapses.
+
+        Ref: stdapi/auth_cognito.py:_fetch_key_set
+        """
+        body = dumps(jwks_document).encode()
+        session = self._session(body[: len(body) // 2], body[len(body) // 2 :])
+        monkeypatch.setattr(
+            stdapi.auth_cognito, "ClientSession", MagicMock(return_value=session)
+        )
+
+        document = await stdapi.auth_cognito._fetch_key_set(ISSUER)  # noqa: SLF001
+
         assert document == jwks_document
 
     async def test_oversized_document_is_refused(

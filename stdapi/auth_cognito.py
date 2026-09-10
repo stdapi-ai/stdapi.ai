@@ -83,7 +83,14 @@ async def _fetch_key_set(url: str) -> Any:  # noqa: ANN401
         session.get(url) as response,
     ):
         response.raise_for_status()
-        document = await response.content.read(_KEY_SET_MAX_SIZE + 1)
+        # Read to EOF: one read returns what has arrived, not the whole body,
+        # and a truncated document is an unparseable one.
+        document = bytearray()
+        while len(document) <= _KEY_SET_MAX_SIZE:
+            chunk = await response.content.read(_KEY_SET_MAX_SIZE + 1 - len(document))
+            if not chunk:
+                break
+            document += chunk
     if len(document) > _KEY_SET_MAX_SIZE:
         msg = "The user pool key set document is too large"
         raise ValueError(msg)

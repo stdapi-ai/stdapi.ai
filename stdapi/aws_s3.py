@@ -478,7 +478,9 @@ async def copy_s3_object(
                 UploadId=upload_id,
                 MultipartUpload={"Parts": parts},
             )
-        except Exception:
+        # BaseException: a cancelled copy leaves the same billable orphan parts
+        # behind as a failed one, so it has to abort the upload just the same.
+        except BaseException:
             if upload_id is not None:
                 with contextlib.suppress(ClientError):
                     await s3.abort_multipart_upload(
@@ -649,16 +651,22 @@ async def _multipart_upload(
             part_number += 1
             in_flight.append(create_task(_upload_part(part_number, chunk)))
             if len(in_flight) >= _UPLOAD_PARTS_IN_FLIGHT:
-                parts.append(await in_flight.popleft())
+                # Popped only once it has landed: a part dropped from the deque
+                # while still awaited is one the cleanup can no longer cancel.
+                parts.append(await in_flight[0])
+                in_flight.popleft()
         while in_flight:
-            parts.append(await in_flight.popleft())
+            parts.append(await in_flight[0])
+            in_flight.popleft()
         await s3.complete_multipart_upload(
             Bucket=bucket,
             Key=key,
             UploadId=upload_id,
             MultipartUpload={"Parts": parts},  # type: ignore[typeddict-item]
         )
-    except Exception:
+    # BaseException: a cancelled upload leaves the same billable orphan parts
+    # behind as a failed one, so it has to abort the upload just the same.
+    except BaseException:
         for task in in_flight:
             task.cancel()
         if in_flight:

@@ -144,6 +144,37 @@ def test_opus_5_requires_no_computer_use_beta_flag() -> None:
     )
 
 
+async def test_beta_flags_are_stripped_of_the_whitespace_around_the_separator() -> None:
+    """``anthropic-beta: a, b`` names two flags, neither of them padded.
+
+    A list-valued HTTP header allows whitespace around its separator, and no
+    beta flag contains any: an unstripped flag matches no allowlist entry and
+    is dropped as unsupported, so the feature the caller asked for is silently
+    not enabled.
+
+    Ref: https://www.rfc-editor.org/rfc/rfc9110#section-5.6.1
+         stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel
+    """
+    model = _claude_model("anthropic.claude-haiku-4-5-20251001-v1:0")
+    flags = ["token-efficient-tools-2025-02-19", "context-1m-2025-08-07"]
+    token = REQUEST.set(
+        cast("Request", _StubRequest({"anthropic-beta": ", ".join(flags)}))
+    )
+    try:
+        request = await model._prepare_converse_request(  # noqa: SLF001
+            bedrock_messages=[{"role": "user", "content": [{"text": "Hello"}]}],
+            inference_cfg={},
+            system_blocks=None,
+            tool_config=None,
+            additional_request_fields={},
+            service_tier=None,
+        )
+    finally:
+        REQUEST.reset(token)
+
+    assert request["additionalModelRequestFields"]["anthropic_beta"] == flags
+
+
 class TestReasoningSignatureRequirement:
     """Only Claude declares that a replayed reasoning block must stay signed.
 

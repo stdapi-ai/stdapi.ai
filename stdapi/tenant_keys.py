@@ -337,6 +337,12 @@ def _build_entry(key_id: str, tenant_item: Item, secret_item: Item) -> _Entry:
     salt = secret_item.get("salt")
     if not isinstance(secret_hash, bytes) or not isinstance(salt, bytes):
         raise _malformed_record(key_id, "'secret_hash' or 'salt' is not binary")
+    # An off-size salt is refused rather than hashed with: BLAKE2b rejects one
+    # longer than its salt parameter, which would fail the comparison itself.
+    if len(secret_hash) != _HASH_SIZE or len(salt) != _SALT_SIZE:
+        raise _malformed_record(
+            key_id, "'secret_hash' or 'salt' does not have the size this build writes"
+        )
     name = tenant_item.get("name")
     return _Entry(
         tenant=Tenant(

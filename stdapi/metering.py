@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING
 
 from botocore.exceptions import ClientError as _ClientError
+from botocore.exceptions import ParamValidationError
 
 from stdapi.aws import CONFIG
 from stdapi.config import AWS_REGION, AWS_SESSION
@@ -113,11 +114,13 @@ async def register(start_event: EventLog) -> None:
                             f"{PRODUCT_CODE} {product_public_key_version}"
                         ),
                     ),
-                    "ParamValidationError": (
-                        InvalidProductError,
-                        f"Invalid AWS Marketplace product: {error}",
-                    ),
                 }.get(error.response["Error"]["Code"], (None, ""))
                 if exc_type:
                     raise exc_type(exc_msg) from None
                 raise  # pragma: no cover
+            except ParamValidationError as error:
+                # A product code the build was stamped with that the API will
+                # not even accept as a parameter: the same operator mistake as
+                # InvalidProductCodeException, refused before the call.
+                msg = f"Invalid AWS Marketplace product: {error}"
+                raise InvalidProductError(msg) from None

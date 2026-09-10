@@ -18,7 +18,7 @@ from stdapi.usage import record_translate_usage
 from stdapi.utils import language_code_to_name
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import Awaitable, Sequence
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_translate import TranslateClient
@@ -219,6 +219,8 @@ async def translate_subtitle(
 
     Raises:
         ApiError: When AWS Translate service fails or returns an error
+        TranslationError: When a translated segment cannot be read back, or
+            put back where it came from
     """
     text_segments = _subtitle_extract_text_segments(subtitle_content)
     if not text_segments:
@@ -238,16 +240,42 @@ async def translate_subtitle(
     )
 
 
-def _subtitle_is_text_line(stripped: str) -> bool:
-    """Check if a line contains subtitle text content.
+def _subtitle_is_cue_number(lines: Sequence[str], index: int) -> bool:
+    """Check if the line at *index* numbers the cue that follows it.
 
     Args:
-        stripped: Current line being processed stripped of whitespace
+        lines: Every line of the subtitle content
+        index: Position of the line being classified
+
+    Returns:
+        True if the line holds only digits and the next non-empty line times a cue
+    """
+    if not lines[index].strip().isdigit():
+        return False
+    for following in lines[index + 1 :]:
+        if stripped := following.strip():
+            return "-->" in stripped
+    return False
+
+
+def _subtitle_is_text_line(lines: Sequence[str], index: int) -> bool:
+    """Check if the line at *index* carries subtitle text content.
+
+    A digit-only line is a cue number only where a cue number belongs; anywhere
+    else it is text, and dropping it would break the segment apart so the
+    reconstruction can no longer find it in the original.
+
+    Args:
+        lines: Every line of the subtitle content
+        index: Position of the line being classified
 
     Returns:
         True if the line contains text content for subtitles
     """
-    return bool(stripped and not stripped.isdigit() and "-->" not in stripped)
+    stripped = lines[index].strip()
+    return bool(
+        stripped and "-->" not in stripped and not _subtitle_is_cue_number(lines, index)
+    )
 
 
 def _subtitle_process_segment(segments: list[str], current_segment: list[str]) -> None:
@@ -278,15 +306,14 @@ def _subtitle_extract_text_segments(subtitle_content: str) -> list[str]:
     webvtt_header_done = False
     segment: list[str] = []
 
-    for line in lines:
-        stripped = line.strip()
+    for index, line in enumerate(lines):
         if not webvtt_header_done:
-            webvtt_header_done = stripped.isdigit()
+            webvtt_header_done = _subtitle_is_cue_number(lines, index)
             continue
 
-        if _subtitle_is_text_line(stripped):
+        if _subtitle_is_text_line(lines, index):
             segment.append(line)
-        elif not stripped:  # Empty line indicates segment boundary
+        elif not line.strip():  # Empty line indicates segment boundary
             _subtitle_process_segment(segments, segment)
 
     # Handle final segment if file doesn't end with empty line
@@ -306,11 +333,18 @@ def _subtitle_reconstruct_with_translation(
 
     Returns:
         Reconstructed subtitle content with translated text
+
+    Raises:
+        TranslationError: If a segment cannot be found back in the original,
+            which a negative index would splice the translation in at.
     """
     result = StringIO()
     current_pos = 0
     for text, translated in zip(text_segments, translated_segments, strict=False):
         segment_start = original_content.find(text, current_pos)
+        if segment_start < 0:
+            msg = "Unable to place a translated segment back in the subtitle"
+            raise TranslationError(msg)
         result.write(original_content[current_pos:segment_start])
         result.write(translated)
         current_pos = segment_start + len(text)

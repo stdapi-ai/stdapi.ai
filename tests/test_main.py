@@ -20,7 +20,7 @@ from sys import executable
 from typing import TYPE_CHECKING, Any, Self
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ParamValidationError
 from httpx import ASGITransport, AsyncClient
 from starlette.datastructures import UploadFile
 from starlette.middleware.gzip import GZipMiddleware
@@ -681,7 +681,7 @@ _FAKE_PRODUCT_CODE = "test-product-code"
 class _FakeMeteringClient:
     """Marketplace metering client returning a canned answer or raising *error*."""
 
-    def __init__(self, error: ClientError | None = None) -> None:
+    def __init__(self, error: Exception | None = None) -> None:
         self.error = error
         self.calls: list[dict[str, Any]] = []
 
@@ -805,6 +805,26 @@ class TestMarketplaceRegistration:
             await metering.register(make_event_log(type="start"))
 
         assert str(excinfo.value).strip(), "the startup failure carries no message"
+
+    async def test_a_product_code_the_api_refuses_outright_is_an_invalid_product(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A parameter botocore rejects before the call reads as the same mistake.
+
+        Nothing reaches AWS when the build was stamped with a product code
+        outside the API's own constraints, so there is no error code to map:
+        without its own handler the raw botocore failure ends the lifespan
+        with a traceback instead of the refusal naming the product.
+        """
+        client = _FakeMeteringClient(
+            ParamValidationError(report="Invalid length for parameter ProductCode")
+        )
+        self._install(monkeypatch, client)
+
+        with pytest.raises(InvalidProductError) as excinfo:
+            await metering.register(make_event_log(type="start"))
+
+        assert "Invalid AWS Marketplace product" in str(excinfo.value)
 
 
 class TestValidationErrorSelection:

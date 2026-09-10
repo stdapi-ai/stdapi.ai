@@ -1,8 +1,8 @@
 """Local OpenAI-compatible completions (``/v1/completions``) types."""
 
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from stdapi.input_file import InputFileUrl
 from stdapi.types import BaseModelRequestWithExtra, BaseModelResponse
@@ -195,33 +195,48 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         "UNSUPPORTED in this implementation.",
     )
 
-    @model_validator(mode="after")
-    def _validate_prompt_and_streaming(self) -> Self:
-        """Reject token-array prompts.
+    @field_validator("prompt", mode="before")
+    @classmethod
+    def _reject_token_arrays(cls, value: Any) -> Any:  # noqa: ANN401
+        """Reject a token-array prompt by name, before the union is tried.
+
+        A token, or an array of them, matches no branch of the declared type,
+        so union validation would answer with one type error per branch and
+        name the actual limitation in none of them.
+
+        Args:
+            value: Raw ``prompt`` value from the request body.
+
+        Returns:
+            *value* unchanged, for the declared type to validate.
 
         Raises:
-            ValueError: When ``prompt`` is a list of token arrays (unsupported
-                here — use strings or file references instead).
+            ValueError: When ``prompt`` is a list holding anything but strings
+                (unsupported here — use strings or file references instead).
         """
-        if (
-            isinstance(self.prompt, list)
-            and self.prompt
-            and not isinstance(self.prompt[0], (str, InputFileUrl))
-        ):
+        if isinstance(value, list) and any(not isinstance(item, str) for item in value):
             msg = (
                 "Token array prompts are not supported on this backend. "
                 "Provide strings instead."
             )
             raise ValueError(msg)
-        self._validate_stop_sequences()
-        return self
+        return value
 
-    def _validate_stop_sequences(self) -> None:
-        """Validate stop sequences are not whitespace-only."""
+    @model_validator(mode="after")
+    def _validate_stop_sequences(self) -> Self:
+        """Validate stop sequences are not whitespace-only.
+
+        Returns:
+            The validated request.
+
+        Raises:
+            ValueError: When a stop sequence holds no non-whitespace character.
+        """
         sequences = [self.stop] if isinstance(self.stop, str) else self.stop or []
         if any(not sequence.strip() for sequence in sequences):
             msg = "Stop sequences must contain at least one non-whitespace character."
             raise ValueError(msg)
+        return self
 
 
 # Ref: openai.types.completion.Completion

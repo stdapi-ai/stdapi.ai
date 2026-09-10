@@ -235,6 +235,44 @@ class TestMapMessagesRoleAlternation:
             }
         ]
 
+    async def test_a_tool_result_sent_as_parts_keeps_one_block_per_part(self) -> None:
+        """A list-form tool result maps part by part, each parsed on its own.
+
+        ``content`` is a string or a list of text parts -- OpenAI defines no
+        other part type on a ``tool`` message -- and a part that is a JSON
+        object reaches Bedrock as structured content rather than as text.
+
+        Ref: openai.types.chat.chat_completion_tool_message_param.ChatCompletionToolMessageParam
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:_extract_tool_blocks
+        """
+        messages, _ = await map_messages(
+            [
+                ChatCompletionToolMessageParam(
+                    role="tool",
+                    content=[
+                        ChatCompletionContentPartTextParam(type="text", text="plain"),
+                        ChatCompletionContentPartTextParam(
+                            type="text", text='{"celsius": 12}'
+                        ),
+                    ],
+                    tool_call_id="call_1",
+                )
+            ]
+        )
+        assert messages == [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": "call_1",
+                            "content": [{"text": "plain"}, {"json": {"celsius": 12}}],
+                        }
+                    }
+                ],
+            }
+        ]
+
     async def test_mid_conversation_system_message_does_not_split_user_turn(
         self,
     ) -> None:
@@ -1380,3 +1418,82 @@ class TestReasoningSuppression:
         chunks = await _collect_chunks(_REASONING_STREAM_EVENTS)
         deltas = [choice["delta"] for chunk in chunks for choice in chunk["choices"]]
         assert not any("reasoning" in delta for delta in deltas)
+
+
+class TestStreamEventsCarryingNothingForTheClient:
+    """A Bedrock event with no Chat Completions equivalent emits no chunk.
+
+    ``messageStart`` and ``contentBlockStop`` say nothing this API expresses:
+    the role is announced by the opening chunk the stream sends of its own,
+    and a block ending is implicit in the next delta. A chunk built from one
+    of them is an empty ``delta: {}`` that no OpenAI stream contains, which
+    every client accumulating deltas then has to recognise and skip.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStreamOutput.html
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:_stream_delta_chunk
+    """
+
+    @staticmethod
+    def _shape(chunks: list[dict[str, Any]]) -> list[tuple[dict[str, Any], Any]]:
+        """Return each chunk's delta and finish reason, in emission order.
+
+        Args:
+            chunks: Decoded ChatCompletionChunk payloads.
+
+        Returns:
+            One ``(delta, finish_reason)`` pair per chunk.
+        """
+        return [
+            (chunk["choices"][0]["delta"], chunk["choices"][0].get("finish_reason"))
+            for chunk in chunks
+        ]
+
+    async def test_only_the_finish_chunk_carries_an_empty_delta(self) -> None:
+        """The role chunk, the text delta and the finish chunk, and nothing else."""
+        chunks = await _collect_chunks(
+            [
+                {"messageStart": {"role": "assistant"}},
+                {
+                    "contentBlockDelta": {
+                        "delta": {"text": "hi"},
+                        "contentBlockIndex": 0,
+                    }
+                },
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                {"messageStop": {"stopReason": "end_turn"}},
+            ]
+        )
+
+        assert self._shape(chunks) == [
+            ({"role": "assistant"}, None),
+            ({"content": "hi"}, None),
+            ({}, "stop"),
+        ]
+
+    async def test_a_backend_sending_no_message_stop_still_ends_once(self) -> None:
+        """A stream closing on contentBlockStop ends on one synthesised chunk.
+
+        Amazon Bedrock Marketplace endpoints stop there, so the events that
+        emit nothing are exactly the ones such a stream is made of.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
+        """
+        chunks = await _collect_chunks(
+            [
+                {"messageStart": {"role": "assistant"}},
+                {
+                    "contentBlockDelta": {
+                        "delta": {"text": "hi"},
+                        "contentBlockIndex": 0,
+                    }
+                },
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+            ]
+        )
+
+        assert self._shape(chunks) == [
+            ({"role": "assistant"}, None),
+            ({"content": "hi"}, None),
+            ({}, "stop"),
+        ]

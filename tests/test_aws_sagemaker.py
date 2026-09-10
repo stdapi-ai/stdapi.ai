@@ -14,7 +14,7 @@ Ref: https://docs.aws.amazon.com/sagemaker/latest/dg/realtime-endpoints-openai-c
 
 from __future__ import annotations
 
-from asyncio import Event, gather, sleep
+from asyncio import Event, gather, sleep, wait_for
 from base64 import b64decode
 from gc import collect as gc_collect
 from json import dumps, loads
@@ -938,7 +938,7 @@ class TestColdStartCoalescing:
         waiter = aws_sagemaker._wait_for_capacity(REGION, ENDPOINT, COMPONENT, 1e18)  # noqa: SLF001
         task = _spawn(waiter)
         await started.wait()
-        probe = aws_sagemaker._WARMING[(REGION, ENDPOINT, COMPONENT)]  # noqa: SLF001
+        probe, _ = aws_sagemaker._WARMING[(REGION, ENDPOINT, COMPONENT)]  # noqa: SLF001
 
         task.cancel()
         await sleep(0)
@@ -946,6 +946,78 @@ class TestColdStartCoalescing:
         assert task.cancelled()
         assert not probe.cancelled()
         probe.cancel()
+
+    @staticmethod
+    def _join_a_watcher(
+        monkeypatch: pytest.MonkeyPatch, *, watched: float, deadline: float
+    ) -> tuple[Any, list[float], Event]:
+        """Join a watcher already running on the *watched* deadline.
+
+        Args:
+            monkeypatch: Patcher isolating the module's warm-up state.
+            watched: Deadline the watcher already in place gives up at.
+            deadline: The joining caller's own deadline.
+
+        Returns:
+            The joining task, the deadlines any further watcher is started
+            with, and the event releasing the watcher already in place.
+        """
+        release = Event()
+
+        async def gives_up() -> bool:
+            await release.wait()
+            return False
+
+        deadlines: list[float] = []
+
+        async def watch(*args: object) -> bool:
+            deadlines.append(args[-1])  # type: ignore[arg-type]
+            return True
+
+        monkeypatch.setattr(aws_sagemaker, "_WARMING", {})
+        monkeypatch.setattr(aws_sagemaker, "_watch_warm_up", watch)
+        aws_sagemaker._WARMING[REGION, ENDPOINT, COMPONENT] = (  # noqa: SLF001
+            _spawn(gives_up()),
+            watched,
+        )
+        joiner = _spawn(
+            aws_sagemaker._wait_for_capacity(REGION, ENDPOINT, COMPONENT, deadline)  # noqa: SLF001
+        )
+        return joiner, deadlines, release
+
+    async def test_a_late_joiner_keeps_its_own_budget(
+        self, clock: _Clock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A watcher giving up on an earlier budget does not refuse a later caller.
+
+        The shared watcher runs on the deadline of whoever started it. A caller
+        that arrived later still has budget of its own when that watcher gives
+        up, and starting a fresh watcher for the remainder is the only way it
+        gets the wait it asked for instead of the first caller's leftovers.
+        """
+        del clock
+        joiner, deadlines, release = self._join_a_watcher(
+            monkeypatch, watched=10.0, deadline=100.0
+        )
+        await sleep(0)
+        release.set()
+
+        assert await wait_for(joiner, timeout=5.0) is True
+        assert deadlines == [100.0], "the remaining budget must get its own watcher"
+
+    async def test_a_watcher_covering_the_caller_s_budget_is_final(
+        self, clock: _Clock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A watcher that already ran the caller's whole budget is not restarted."""
+        del clock
+        joiner, deadlines, release = self._join_a_watcher(
+            monkeypatch, watched=100.0, deadline=100.0
+        )
+        await sleep(0)
+        release.set()
+
+        assert await wait_for(joiner, timeout=5.0) is False
+        assert deadlines == [], "an exhausted budget must not start another watcher"
 
 
 def _spawn(coroutine: Any) -> Any:  # noqa: ANN401
@@ -1089,7 +1161,7 @@ class TestSessionLifespan:
                 aws_sagemaker._wait_for_capacity(REGION, ENDPOINT, COMPONENT, 1e18)  # noqa: SLF001
             )
             await started.wait()
-            probe = aws_sagemaker._WARMING[(REGION, ENDPOINT, COMPONENT)]  # noqa: SLF001
+            probe, _ = aws_sagemaker._WARMING[(REGION, ENDPOINT, COMPONENT)]  # noqa: SLF001
         for _ in range(3):
             await sleep(0)
 

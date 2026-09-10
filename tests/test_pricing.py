@@ -774,6 +774,43 @@ class TestPartialFetchFailureIsTolerated:
         assert not any("collision" in d.lower() for d in diagnostics)
         assert pricing._state.price_index[self._KEY].amount == Decimal("0.001") / 1000  # noqa: SLF001
 
+    async def test_a_reload_whose_fetch_fails_keeps_the_prices_it_published(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A complete catalog must never be regressed by a later partial reload.
+
+        The reload a newly released model triggers refetches every pair, so a
+        fetch throttled there drops every price it had returned -- leaving the
+        models it priced billed at nothing until some later reload succeeds.
+        """
+        error_response = {"Error": {"Code": "ThrottlingException", "Message": "x"}}
+        items = {
+            "AmazonBedrockService": [
+                self._bedrock_item("USE1-SomeModel-input-tokens", "0.001")
+            ]
+        }
+        _use_fake_catalog(monkeypatch, _FakePricingClient(items))
+
+        await pricing._load_price_catalog([])  # noqa: SLF001
+        assert pricing._state.catalog_complete is True  # noqa: SLF001
+
+        # The same fetch is throttled on the reload.
+        _use_fake_catalog(
+            monkeypatch,
+            _FakePricingClient(
+                items,
+                raise_by_service_code={
+                    "AmazonBedrockService": ClientError(error_response, "GetProducts")  # type: ignore[arg-type]
+                },
+            ),
+        )
+        await pricing._load_price_catalog([])  # noqa: SLF001
+
+        assert pricing._state.price_index[self._KEY].amount == Decimal("0.001") / 1000  # noqa: SLF001
+        assert pricing._state.pending_fetch_specs == [  # noqa: SLF001
+            ("us-east-1", "AmazonBedrockService")
+        ]
+
 
 class TestNativeCacheTtl:
     """Native (non-Marketplace) 1-hour prompt-cache-write pricing.
@@ -4830,6 +4867,49 @@ class TestStartPriceCatalogBackgroundLoad:
         pricing.start_price_catalog()
 
         assert pricing._state.load_task is first  # noqa: SLF001
+
+    async def test_an_incomplete_on_demand_reload_restarts_the_backoff_loop(
+        self, monkeypatch: pytest.MonkeyPatch, events: list[EventLog]
+    ) -> None:
+        """Fetches an on-demand reload leaves failing are handed back to the loop.
+
+        The loop has already returned by then -- it exits on the first complete
+        load -- so nothing else would ever retry them, and the reload's own
+        diagnostics would go unreported.
+
+        Ref: stdapi/pricing.py:refresh_price_catalog_for_new_models
+        """
+        monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+        monkeypatch.setattr(pricing, "_LOAD_RETRY_INITIAL_SECONDS", 0)
+        attempts = 0
+
+        async def _load(diagnostics: list[str]) -> None:
+            nonlocal attempts
+            attempts += 1
+            failed = attempts == 2  # Only the on-demand reload leaves a failure.
+            if failed:
+                diagnostics.append("Price catalog load: 1/2 fetch(es) failed")
+            pricing._state.pending_fetch_specs = (  # noqa: SLF001
+                [("us-east-1", "AmazonBedrock")] if failed else None
+            )
+
+        monkeypatch.setattr(pricing, "_load_price_catalog", _load)
+        pricing.start_price_catalog()
+        startup = pricing._state.load_task  # noqa: SLF001
+        assert startup is not None
+        await startup
+
+        await refresh_price_catalog_for_new_models(["amazon.unreleased-model-v1:0"])
+
+        assert attempts == 2
+        assert [event["level"] for event in events] == ["info", "warning"]
+        assert "1/2 fetch(es) failed" in str(events[1]["error_detail"])
+        retry = pricing._state.load_task  # noqa: SLF001
+        assert retry is not None
+        assert retry is not startup
+        await retry
+        assert attempts == 3
+        assert pricing._state.pending_fetch_specs is None  # noqa: SLF001
 
     async def test_backoff_delays_double_and_cap_at_the_maximum(
         self, monkeypatch: pytest.MonkeyPatch, events: list[EventLog]

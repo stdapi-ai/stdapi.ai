@@ -440,7 +440,9 @@ def flush_usage_log_event(elapsed_ms: int) -> None:
     if model_id := parent.get("model_id"):
         log["model_id"] = model_id
     _finalize_usage_safely(log)
-    if "usage" not in log:
+    # A finalize that failed drained the accumulator too: dropping the entry
+    # would take the only report of that failure with it.
+    if "usage" not in log and "error_detail" not in log:
         return
     _attach_aws_api_calls(log)
     write_log_event(log)
@@ -1005,12 +1007,19 @@ async def _rebuild_and_log_stream[T](
         finally:
             # Closed before the usage is drained: a disconnect lets the wrapped
             # stream record the trailing usage AWS already billed, and it can
-            # only reach this log entry if it is written first.
-            await stream.aclose()
-            log["execution_time_ms"] = (perf_counter_ns() - start) // 1000000
-            _finalize_usage_safely(log)
-            _attach_aws_api_calls(log)
-            write_log_event(log)
+            # only reach this log entry if it is written first. A close that
+            # fails still propagates, but never before the entry is written:
+            # the usage it carries is already billed and drained.
+            try:
+                await stream.aclose()
+            except Exception as exc:
+                _add_warnings(log, ["\n".join(format_exception(exc))], level="error")
+                raise
+            finally:
+                log["execution_time_ms"] = (perf_counter_ns() - start) // 1000000
+                _finalize_usage_safely(log)
+                _attach_aws_api_calls(log)
+                write_log_event(log)
     finally:
         # Closes a stream abandoned before the log entry above exists; already
         # closed once it does.

@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from asyncio import Event, gather, wait_for
 from hmac import compare_digest
+from secrets import token_bytes
 from sys import modules
 from types import CodeType, ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -764,6 +765,28 @@ class TestVerification:
 
         with pytest.raises(FeatureUnavailableError):
             await verify_tenant_key(key)
+
+    async def test_a_credential_record_with_an_off_size_salt_is_refused(
+        self, tenant_backend: SSMClient
+    ) -> None:
+        """A salt of the wrong size is refused as unavailable, not as a server failure.
+
+        BLAKE2b takes at most a 16-byte salt, so a record holding a longer one
+        raises where the presented secret was to be hashed for the comparison.
+        A record this build cannot use is an operator matter like every other:
+        it is reported as such rather than reaching the caller as a 500.
+        """
+        key_id = "z" + "0" * 15
+        key = await _declare_and_mint(tenant_backend, key_id=key_id)
+        secret_item = await get_item("TENANT", f"secret#{key_id}")
+        assert secret_item is not None
+        await put_item({**secret_item, "salt": token_bytes(32)})
+        tenant_keys._CACHE.clear()  # noqa: SLF001
+
+        with pytest.raises(FeatureUnavailableError) as refused:
+            await verify_tenant_key(key)
+
+        assert refused.value.status == 503
 
     async def test_a_resumed_grant_follows_the_tenant_lifecycle(
         self, tenant_backend: SSMClient
