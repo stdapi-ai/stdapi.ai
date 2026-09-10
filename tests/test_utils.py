@@ -449,6 +449,52 @@ class TestLanguageCodeFormatting:
         """
         assert format_language_code(language) == expected
 
+    @pytest.mark.parametrize(
+        ("language", "expected"),
+        [
+            ("tl", "tl-PH"),
+            ("tl-PH", "tl-PH"),
+            ("zh-CN", "zh-CN"),
+            ("zh-HK", "zh-HK"),
+            ("zh-Hant", "zh-TW"),
+            ("sr-RS", "sr-RS"),
+            ("uz-UZ", "uz-UZ"),
+            ("mn-MN", "mn-MN"),
+            ("ug-CN", "ug-CN"),
+            ("az-AZ", "az-AZ"),
+        ],
+    )
+    def test_a_language_is_completed_rather_than_respelled(
+        self, language: str, expected: str
+    ) -> None:
+        """Filling in what a tag omits never rewrites what it states.
+
+        The region a bare tag leaves out is worth inferring; the script and the
+        synonym that come with it are not. Amazon Transcribe names Tagalog
+        ``tl`` and Simplified Chinese ``zh-CN``, and refuses the ``fil-Latn-PH``
+        and ``zh-Hans-CN`` a fully-maximized tag spells them as -- so a language
+        that transcribed yesterday would stop being available at all.
+        """
+        assert format_language_code(language) == expected
+
+    def test_every_language_the_service_lists_comes_through_unchanged(self) -> None:
+        """Each code Amazon Transcribe publishes formats to itself.
+
+        The values the service accepts are what this has to produce, so they
+        are read from the wire model rather than restated here: any code
+        rewritten into another spelling is a language the deployment
+        advertises and can no longer transcribe.
+        """
+        from botocore.loaders import create_loader  # noqa: PLC0415
+
+        listed: list[str] = create_loader().load_service_model(
+            "transcribe", "service-2"
+        )["shapes"]["LanguageCode"]["enum"]
+        formatted = {code: format_language_code(code) for code in listed}
+
+        assert listed, "the wire model must publish the accepted language codes"
+        assert {code: value for code, value in formatted.items() if value != code} == {}
+
     @pytest.mark.parametrize("language", ["", "english", "12345"])
     def test_a_value_that_is_no_language_tag_is_refused(self, language: str) -> None:
         """A 400 names the parameter, without echoing what the caller sent."""
