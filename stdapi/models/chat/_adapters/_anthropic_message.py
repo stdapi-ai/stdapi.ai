@@ -408,6 +408,10 @@ async def _map_tool_result_to_bedrock(
 ) -> ContentBlockTypeDef:
     """Convert an Anthropic tool result block to a Bedrock tool result content block.
 
+    A tool that returns nothing is answered with an empty text part rather than
+    with no part at all: some models refuse a result holding no content, and
+    dropping the block would leave the call it answers unpaired.
+
     Args:
         block: Anthropic tool result block param.
 
@@ -418,6 +422,8 @@ async def _map_tool_result_to_bedrock(
     match block.content:
         case str(text):
             content_parts = [{"text": text}]
+        case None | []:
+            content_parts = [{"text": ""}]
         case _:
             content_parts = [
                 await _map_tool_result_part_to_bedrock(part) for part in block.content
