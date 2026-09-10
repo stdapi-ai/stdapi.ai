@@ -27,6 +27,7 @@ from anthropic import Anthropic
 from anthropic import NotFoundError as AnthropicNotFoundError
 
 from stdapi import input_file as input_file_mod
+from stdapi.api_errors import FileNotExistError
 from stdapi.aws_s3 import BUCKET_TO_REGION
 from stdapi.config import SETTINGS
 from stdapi.files import FileRecord, _core
@@ -262,6 +263,34 @@ class TestAnthropicFiles:
         ids_before_own = {f.id for f in before_own.data}
         assert files[0].id not in ids_before_own
         assert {f.id for f in files[1:]} <= ids_before_own
+
+    def test_anthropic_list_ids_returns_exactly_the_named_files(
+        self,
+        anthropic_client: Anthropic,
+        upload_file: Callable[[str, bytes, str], FileMetadata],
+    ) -> None:
+        """``ids`` narrows the listing to the named files and omits the ones that resolved to nothing.
+
+        Four files are uploaded and one of them is deleted; the request names two of the
+        survivors plus the deleted ID. The unnamed survivor proves the filter excludes
+        what was not asked for, and the deleted ID proves an ID that resolves to no
+        visible file is dropped from the page rather than answered with a 404. An
+        ``ids`` selection is always a single page, so there is no ``next_page`` to follow.
+
+        Ref: https://platform.claude.com/docs/en/api/beta/files/list
+             stdapi/routes/anthropic_files.py:list_files_endpoint
+        """
+        files = [upload_file(f"ids{i}.txt", _TEXT_FILE, "text/plain") for i in range(3)]
+        deleted = upload_file("idsgone.txt", _TEXT_FILE, "text/plain")
+        anthropic_client.beta.files.delete(deleted.id)
+
+        page = anthropic_client.beta.files.list(
+            ids=[files[0].id, deleted.id, files[2].id]
+        )
+
+        assert {f.id for f in page.data} == {files[0].id, files[2].id}
+        assert {f.filename for f in page.data} == {"ids0.txt", "ids2.txt"}
+        assert page.next_page is None
 
     # --- Delete ---
 
@@ -687,6 +716,207 @@ class TestAnthropicFileContentDownloadHardening:
         assert response.headers["x-content-type-options"] == "nosniff"
 
 
+class TestAnthropicListIdsSelection:
+    """``GET /anthropic/v1/files?ids=`` as a direct selection instead of a page of the store.
+
+    The named files are resolved one by one, so the request never scans the bucket:
+    the stub here fails the test if the listing scan is entered, and answers every
+    other well-formed ID with a record. ``_MISSING_ID`` is the one ID no file backs.
+
+    Ref: https://platform.claude.com/docs/en/api/beta/files/list
+         stdapi/routes/anthropic_files.py:list_files_endpoint
+    """
+
+    pytestmark = pytest.mark.local
+
+    #: Well-formed IDs, sorted here in the order the answer must carry them.
+    _ID_C: str = f"file_{'c' * 32}"
+    _ID_B: str = f"file_{'b' * 32}"
+    _ID_A: str = f"file_{'a' * 32}"
+
+    #: Well-formed ID the stub resolves to no visible file.
+    _MISSING_ID: str = f"file_{'0' * 32}"
+
+    @staticmethod
+    @pytest.fixture
+    def resolved_payloads(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        """Record every payload the route resolves, and refuse the listing scan."""
+        requested: list[str] = []
+
+        async def _fake_get_file(payload: str) -> FileRecord:
+            requested.append(payload)
+            if payload == "0" * 32:
+                msg = f"File '{payload}' not found."
+                raise FileNotExistError(msg)
+            return FileRecord(
+                file_id=payload,
+                filename=f"{payload[0]}.txt",
+                content_type="text/plain",
+                purpose="user_data",
+                size=len(_TEXT_FILE),
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                expires_at=None,
+            )
+
+        async def _no_scan(*_args: object) -> tuple[list[FileRecord], bool]:
+            msg = "an `ids` selection must not scan the file store"
+            raise AssertionError(msg)
+
+        monkeypatch.setattr(anthropic_files, "get_file", _fake_get_file)
+        monkeypatch.setattr(anthropic_files, "list_files", _no_scan)
+        return requested
+
+    def test_the_named_files_come_back_newest_first(
+        self, anthropic_app_client: TestClient, resolved_payloads: list[str]
+    ) -> None:
+        """The selection is ordered like the listing itself, whatever order it was asked in.
+
+        The IDs are sent in an order that is neither the answer's nor its reverse, so
+        echoing the request back would fail: the answer follows the route's own
+        most-recently-created-first order.
+        """
+        response = anthropic_app_client.get(
+            "/anthropic/v1/files", params={"ids": [self._ID_A, self._ID_C, self._ID_B]}
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [f["id"] for f in body["data"]] == [self._ID_C, self._ID_B, self._ID_A]
+        assert body["has_more"] is False
+        assert body["first_id"] == self._ID_C
+        assert body["last_id"] == self._ID_A
+        assert len(resolved_payloads) == 3
+
+    def test_an_id_that_names_no_visible_file_is_omitted(
+        self, anthropic_app_client: TestClient, resolved_payloads: list[str]
+    ) -> None:
+        """A deleted or expired ID drops out of the page instead of failing the request."""
+        response = anthropic_app_client.get(
+            "/anthropic/v1/files", params={"ids": [self._ID_A, self._MISSING_ID]}
+        )
+
+        assert response.status_code == 200, response.text
+        assert [f["id"] for f in response.json()["data"]] == [self._ID_A]
+
+    def test_a_repeated_id_is_resolved_once(
+        self, anthropic_app_client: TestClient, resolved_payloads: list[str]
+    ) -> None:
+        """De-duplication happens before the files are read, so the ID is neither read nor listed twice.
+
+        The two accepted prefixes are two spellings of one file, so the second
+        spelling must collapse into the first instead of listing the file twice.
+        """
+        response = anthropic_app_client.get(
+            "/anthropic/v1/files",
+            params={"ids": [self._ID_A, self._ID_A, f"file-{'a' * 32}"]},
+        )
+
+        assert response.status_code == 200, response.text
+        assert [f["id"] for f in response.json()["data"]] == [self._ID_A]
+        assert resolved_payloads == ["a" * 32]
+
+    def test_limit_does_not_truncate_the_selection(
+        self, anthropic_app_client: TestClient, resolved_payloads: list[str]
+    ) -> None:
+        """The whole selection is one page, so a page size sent alongside it is ignored.
+
+        Upstream documents ``ids`` as mutually exclusive with paging; serving the
+        selection whole is what keeps a client that sends both from silently losing
+        files it named.
+        """
+        response = anthropic_app_client.get(
+            "/anthropic/v1/files",
+            params={"ids": [self._ID_A, self._ID_B, self._ID_C], "limit": 1},
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert len(body["data"]) == 3
+        assert body["has_more"] is False
+
+    def test_more_than_a_hundred_unique_ids_is_refused(
+        self, anthropic_app_client: TestClient, resolved_payloads: list[str]
+    ) -> None:
+        """The documented 100-entry cap is enforced before any file is read.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+        """
+        response = anthropic_app_client.get(
+            "/anthropic/v1/files",
+            params={"ids": [f"file_{i:032d}" for i in range(101)]},
+        )
+
+        assert response.status_code == 400, response.text
+        body = response.json()
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "invalid_request_error"
+        assert "ids" in body["error"]["message"]
+        assert not resolved_payloads, "a refused selection must read nothing"
+
+    def test_a_malformed_id_is_refused(
+        self, anthropic_app_client: TestClient, resolved_payloads: list[str]
+    ) -> None:
+        """An entry that is not a file ID is a client mistake, not an ID that resolves to nothing.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+        """
+        response = anthropic_app_client.get(
+            "/anthropic/v1/files", params={"ids": [self._ID_A, "not-a-file-id"]}
+        )
+
+        assert response.status_code == 400, response.text
+        assert response.json()["error"]["type"] == "invalid_request_error"
+        assert not resolved_payloads, "a refused selection must read nothing"
+
+    def test_an_unconfigured_store_still_refuses_the_selection(
+        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without a bucket the selection is refused, like every other route here.
+
+        The selection resolves each ID instead of scanning, so it reaches a different
+        guard than the paged listing does — a deployment with no storage must not
+        answer it with an empty page. The Anthropic envelope reports an unavailable
+        feature as ``529 overloaded_error``, not as the ``503`` the other dialects use.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+             stdapi/files/_core.py:resolve_file_bucket
+        """
+
+        async def _no_scan(*_args: object) -> tuple[list[FileRecord], bool]:
+            msg = "an `ids` selection must not scan the file store"
+            raise AssertionError(msg)
+
+        monkeypatch.setattr(anthropic_files, "list_files", _no_scan)
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", "")
+        monkeypatch.setattr(_core, "_BUCKET_CRC32", {})
+
+        response = anthropic_app_client.get(
+            "/anthropic/v1/files", params={"ids": [self._ID_A]}
+        )
+
+        assert response.status_code == 529, response.text
+        assert response.json()["error"]["type"] == "overloaded_error"
+
+    def test_a_scope_id_filter_is_refused(
+        self, anthropic_app_client: TestClient, resolved_payloads: list[str]
+    ) -> None:
+        """Scope filtering is answered with a 400 naming it, never with the unfiltered store.
+
+        Files here carry no scope, so honouring the filter is impossible and ignoring
+        it would answer with every file the caller did not ask for.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+        """
+        response = anthropic_app_client.get(
+            "/anthropic/v1/files", params={"scope_id": "session_01"}
+        )
+
+        assert response.status_code == 400, response.text
+        body = response.json()
+        assert body["error"]["type"] == "invalid_request_error"
+        assert "scope_id" in body["error"]["message"]
+
+
 class _StubListS3Client:
     """Stub S3 client serving one live and one expired object to the listing scan."""
 
@@ -753,3 +983,59 @@ class TestAnthropicListExpiredFilesUnit:
         assert response.status_code == 200, response.text
         assert [f["id"] for f in response.json()["data"]] == [f"file_{payloads[1]}"]
         assert scheduled == [], "the listing leaves deletion to the retrieve path"
+
+
+@pytest.mark.local
+class TestListIdsQueryKeys:
+    """The ``ids`` filter is honoured under both keys a client may write it to.
+
+    The pinned Anthropic client serialises a list query parameter with brackets,
+    so a route declaring only the bare key sees nothing at all — FastAPI drops an
+    undeclared query parameter silently, which is exactly the failure ``ids`` was
+    added to fix. A test sending only the bare key cannot catch that.
+
+    Ref: https://platform.claude.com/docs/en/api/files-list.md
+         anthropic/_qs.py:Querystring
+         stdapi/routes/anthropic_files.py:list_files_endpoint
+    """
+
+    @staticmethod
+    @pytest.fixture
+    def selectable(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Resolve any well-formed payload to a file, so only selection is under test."""
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", "test-bucket")
+
+        async def _fake_get_file(payload: str) -> FileRecord:
+            return FileRecord(
+                file_id=payload,
+                filename=f"{payload[:4]}.pdf",
+                content_type="application/pdf",
+                purpose="",
+                size=1,
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                expires_at=None,
+            )
+
+        monkeypatch.setattr(anthropic_files, "get_file", _fake_get_file)
+
+    def test_the_client_serialises_ids_with_brackets(self) -> None:
+        """Pin why the bracketed key exists, so a change upstream explains itself."""
+        assert Anthropic(api_key="x").qs.array_format == "brackets"
+
+    @pytest.mark.parametrize("key", ["ids", "ids[]"])
+    def test_both_ids_query_keys_select_the_named_files(
+        self, anthropic_app_client: TestClient, selectable: None, key: str
+    ) -> None:
+        """Either spelling selects exactly the files named, newest first."""
+        first, second = "a" * 32, "b" * 32
+        response = anthropic_app_client.get(
+            f"/anthropic/v1/files?{key}=file_{first}&{key}=file_{second}"
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [item["id"] for item in body["data"]] == [
+            f"file_{second}",
+            f"file_{first}",
+        ]
+        assert body["has_more"] is False

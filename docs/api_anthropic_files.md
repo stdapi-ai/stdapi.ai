@@ -1,7 +1,7 @@
 ---
 title: Files API - Anthropic-Compatible File Storage
-description: Upload, manage, and reference files in Anthropic Messages requests using the Anthropic-compatible Files API backed by Amazon S3. Supports documents, images, and bidirectional cursor pagination.
-keywords: Files API, Anthropic files, file upload, S3 file storage, Anthropic messages file, document source, cursor pagination, AWS Bedrock files
+description: Upload, manage, and reference files in Anthropic Messages requests using the Anthropic-compatible Files API backed by Amazon S3. Supports documents, images, selection by ID, and bidirectional cursor pagination.
+keywords: Files API, Anthropic files, file upload, S3 file storage, Anthropic messages file, document source, cursor pagination, list files by id, ids filter, scope_id, AWS Bedrock files
 ---
 
 # Files API (Anthropic Compatible)
@@ -12,10 +12,11 @@ Upload and manage files via an Anthropic-compatible interface. Files are stored 
 
 - :material-upload: **Simple upload** — Upload any file with a single `multipart/form-data` request. Files are immediately available for use in inference.
 - :material-swap-vertical: **Bidirectional pagination** — Traverse your file list in both directions using `after_id` and `before_id` cursors — the gateway's own ID-cursor envelope, not the opaque `page` token the official Files API moved to (see below).
+- :material-format-list-checks: **Select by ID** — Pass `ids` to fetch a known set of files in one call, without paging through the list. Up to 100 IDs; the ones that name no readable file are simply left out.
 - :material-file-document-multiple: **Messages integration** — Reference uploaded files directly in Messages requests as document or image source blocks using `"type": "file"`.
 - :material-download: **Content download** — Download raw file bytes at any time via the `/content` endpoint.
 - :material-database: **One file store for both dialects** — a file uploaded here is readable and deletable through the [OpenAI Files API](api_openai_files.md), and vice versa; both are backed by the same S3 bucket.
-- :material-swap-horizontal: **Differs from the Anthropic API:** no file size cap beyond S3's ~5 TB object limit, `downloadable` is always `true`, and `expires_after` is not implemented — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
+- :material-swap-horizontal: **Differs from the Anthropic API:** no file size cap beyond S3's ~5 TB object limit, `downloadable` is always `true`, `expires_after` is not implemented, and `scope_id` filtering is refused — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
 - :material-swap-horizontal: **Differs from the official SDK:** `anthropic` ≥ 1.0 paginates on an opaque `page` cursor this API does not serve, so SDK auto-pagination stops after the first page.
 
 !!! info "Base URL and route prefix"
@@ -56,9 +57,11 @@ curl -X POST "$BASE/v1/files" \
 | `file` (JSON body)       | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents    |
 | **Listing**              |                                          |                                                                  |
 | Listing order            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Most recently created first, by `created_at`                     |
+| `ids` selection          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Up to 100 IDs after de-duplication, served as a single page      |
 | `after_id` cursor        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Forward cursor: returns files older than the given ID            |
 | `before_id` cursor       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Backward cursor: returns files newer than the given ID           |
-| `limit`                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 – 1 000; default 20                                            |
+| `limit`                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 – 1 000; default 20 — ignored alongside `ids`                  |
+| `scope_id` filter        | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Refused with a `400`: files here are not associated with a scope |
 | **File size cap**        | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | No artificial limit; S3 object limit (~5 TB)                     |
 | **Messages integration** |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `"source": {"type": "file", "file_id": "..."}` in document/image |
 | `downloadable` field     |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Always `true`; spec default is `false` for user-uploaded files   |
@@ -72,6 +75,7 @@ curl -X POST "$BASE/v1/files" \
 * :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with Anthropic API
 * :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Implemented with minor deviations from spec
 * :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond Anthropic API
+* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
 
 </div>
 
@@ -151,9 +155,16 @@ curl "$BASE/v1/files?after_id=file_0190c51c7de7455d9b8c2efe27dfbf67&limit=20" \
 curl "$BASE/v1/files?before_id=file_0190c51c7de7455d9b8c2efe27dfbf67" \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -H "anthropic-beta: files-api-2025-04-14"
+
+# Selection: only the files named, newest first, in one page
+curl "$BASE/v1/files?ids=file_0190c51c7de7455d9b8c2efe27dfbf67&ids=file_0190c51c7de7455d9b8c2efe27dfbf68" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-beta: files-api-2025-04-14"
 ```
 
 Pagination is by ID cursor, as above; the official SDK's own iterator uses a different cursor and stops after one page — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
+
+`ids` selects instead of paging: repeat the parameter once per file, up to 100 distinct IDs. The whole selection comes back in one response, so `after_id`, `before_id` and `limit` have no effect alongside it, and an ID that names a deleted, expired or unknown file is left out of `data` rather than failing the request. More than 100 distinct IDs is a `400`.
 
 ### Download Content
 
@@ -297,9 +308,11 @@ Files are stored in S3 under the prefix configured by [`AWS_S3_FILES_PREFIX`](op
 
 ## Limits and behaviour to know
 
-**The API needs an S3 bucket.** Every route stores and reads objects in [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket); without it configured, all five endpoints answer `503`.
+**The API needs an S3 bucket.** Every route stores and reads objects in [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket); without it configured, all five endpoints answer `529 overloaded_error` — the Anthropic envelope's form of an unavailable feature.
 
 **SDK auto-pagination stops after one page.** The gateway serves the ID-cursor envelope (`first_id`, `last_id`, `has_more`, and the `after_id`/`before_id` query parameters), not the opaque `page`/`next_page` cursor the official Files API and `anthropic` SDK ≥ 1.0 moved to. The SDK's own iteration (`client.beta.files.list()` as an async iterator) follows `next_page`, which this response never sets, so it stops after the first page instead of walking your whole file list. Paginate by hand with `after_id`/`before_id`, as the [List Files](#list-files) examples do. Adopting the newer cursor is tracked in [issue #206](https://github.com/stdapi-ai/stdapi.ai/issues/206).
+
+**Scope filtering is refused.** A file here is never associated with a scope — no `scope` appears on its metadata — so `GET /v1/files?scope_id=...` answers `400` instead of returning a set that would ignore the filter. Select the files you want with `ids`, or list them without a filter.
 
 **`downloadable` is always `true`.** Every file here is stored in S3 and readable through `/content`, so the field never carries the spec's `false` default for user-uploaded files.
 
@@ -314,8 +327,10 @@ Files are stored in S3 under the prefix configured by [`AWS_S3_FILES_PREFIX`](op
 | 400  | Invalid filename characters                                                         |
 | 400  | `file-id:` URI passed to the upload endpoint (`POST /v1/files`)                     |
 | 400  | Malformed ID after the `file-id:` prefix in a Messages content block                |
+| 400  | More than 100 distinct `ids` on a listing request, or an `ids` entry that is not a file ID |
+| 400  | `scope_id` on a listing request (`GET /v1/files`)                                   |
 | 404  | File not found or already deleted                                                   |
-| 503  | `AWS_S3_BUCKET` is not configured                                                   |
+| 529  | `AWS_S3_BUCKET` is not configured                                                   |
 
 ## Request headers
 

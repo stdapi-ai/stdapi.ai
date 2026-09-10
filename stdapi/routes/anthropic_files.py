@@ -1,10 +1,14 @@
 """Anthropic-compatible Files API routes."""
 
+from asyncio import gather
+from contextlib import suppress
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Path, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import AfterValidator, StringConstraints
 
+from stdapi.api_errors import ApiError, FileNotExistError
 from stdapi.api_providers.anthropic import TAG_ANTHROPIC
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
@@ -34,9 +38,45 @@ _CONTENT_DOWNLOAD_HEADERS = {
 }
 
 
+#: Most unique IDs one listing request may name, per the Anthropic Files API.
+_MAX_LIST_IDS: int = 100
+
+
 def _strip(fid: str) -> str:
     """Return the bare 32-char payload for *fid* by stripping the ``file-``/``file_`` prefix."""
     return fid[5:]
+
+
+def _unique_ids(ids: list[str]) -> list[str]:
+    """Return *ids* de-duplicated in the order given, refusing more than the cap.
+
+    Both accepted prefixes name the same file, so IDs are compared on the payload
+    they carry rather than as written.
+
+    Args:
+        ids: File IDs the listing request named.
+
+    Returns:
+        The unique IDs.
+
+    Raises:
+        ValueError: More unique IDs were named than one request may select.
+    """
+    unique = list({_strip(fid): fid for fid in ids}.values())
+    if len(unique) > _MAX_LIST_IDS:
+        msg = f"At most {_MAX_LIST_IDS} unique `ids` may be requested."
+        raise ValueError(msg)
+    return unique
+
+
+#: A listing's ``ids`` filter: each entry a file ID, de-duplicated and capped.
+_SelectedIds = Annotated[
+    list[Annotated[str, StringConstraints(pattern=FILE_ID_PATTERN)]],
+    AfterValidator(_unique_ids),
+]
+
+#: Query key the Anthropic client writes a list under: its serialiser uses brackets.
+_IDS_BRACKET_KEY = "ids[]"
 
 
 _router = APIRouter(
@@ -147,18 +187,63 @@ async def upload(
     return log_response_params(_to_file_metadata(await upload_file(InputFile(file))))
 
 
+async def _visible_file(payload: str) -> FileRecord | None:
+    """Return the record for *payload*, or ``None`` when it names no readable file.
+
+    Args:
+        payload: Bare 32-char file payload.
+
+    Returns:
+        The file's record, or ``None`` when it is unknown, deleted or expired.
+    """
+    with suppress(FileNotExistError):
+        return await get_file(payload)
+    return None
+
+
+def _list_response(files: list[FileMetadata], *, has_more: bool) -> FileListResponse:
+    """Wrap *files* in the listing envelope, reporting the page edges as cursors.
+
+    Args:
+        files: The page's file metadata, in the order it is served.
+        has_more: Whether further pages follow this one.
+
+    Returns:
+        Serialisable ``FileListResponse``.
+    """
+    return FileListResponse(
+        data=files,
+        has_more=has_more,
+        first_id=files[0].id if files else None,
+        last_id=files[-1].id if files else None,
+    )
+
+
 @_router.get(
     "/files",
     summary="List uploaded files (Anthropic format)",
     operation_id="anthropic_file_list",
     description=(
         "Returns a paginated list of uploaded files with metadata, most recently "
-        "created first (Anthropic Files API)."
+        "created first (Anthropic Files API).\n\n"
+        "Pass `ids` to fetch a known set of files in one call instead of paging "
+        "through the whole list."
     ),
     response_description="A list of file metadata objects.",
     response_model_exclude_none=True,
 )
 async def list_files_endpoint(
+    ids: Annotated[
+        _SelectedIds | None,
+        Query(
+            description=(
+                "Restrict the result to the files whose ID is in this list, at most "
+                "100 after de-duplication. The whole selection is returned as a single "
+                "page, so `after_id`, `before_id` and `limit` are ignored; IDs naming "
+                "no readable file are omitted instead of reported."
+            )
+        ),
+    ] = None,
     after_id: Annotated[
         str | None,
         Query(
@@ -187,16 +272,59 @@ async def list_files_endpoint(
             description="Number of items to return per page. Defaults to `20`. Ranges from `1` to `1000`.",
         ),
     ] = 20,
+    scope_id: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Not available: files are not associated with a scope, so a request "
+                "naming this parameter is refused."
+            )
+        ),
+    ] = None,
+    bracketed_ids: Annotated[
+        _SelectedIds | None,
+        Query(
+            alias=_IDS_BRACKET_KEY,
+            description=(
+                "The same filter as `ids`, under the key the Anthropic client writes "
+                "a list to. Sending both merges them."
+            ),
+        ),
+    ] = None,
     _: Annotated[None, Depends(authenticate)] = None,
 ) -> FileListResponse:
-    """List files with cursor-based pagination, most recently created first.
+    """List files, most recently created first, by ID selection or cursor pagination.
 
     Returns:
-        FileListResponse with paginated file metadata.
+        FileListResponse with the selected or paginated file metadata.
 
     Raises:
-        ApiError: If S3 is not configured.
+        ApiError: If a scope filter is requested, or if S3 is not configured.
     """
+    if bracketed_ids is not None:
+        try:
+            ids = _unique_ids((ids or []) + bracketed_ids)
+        except ValueError as error:
+            raise ApiError(str(error)) from error
+    if scope_id is not None:
+        msg = (
+            "Filtering by `scope_id` is not available: files are not associated with "
+            "a scope. Omit it to list files, or name the ones you want in `ids`."
+        )
+        raise ApiError(msg)
+    if ids is not None:
+        log_request_params({"ids": ids})
+        selected = await gather(*(_visible_file(_strip(fid)) for fid in ids))
+        return log_response_params(
+            _list_response(
+                sorted(
+                    (_to_file_metadata(r) for r in selected if r is not None),
+                    key=lambda metadata: metadata.id,
+                    reverse=True,
+                ),
+                has_more=False,
+            )
+        )
     log_request_params({"after_id": after_id, "before_id": before_id, "limit": limit})
     records, has_more = await list_files(
         _strip(after_id) if after_id else None,
@@ -205,14 +333,8 @@ async def list_files_endpoint(
         "desc",
         None,
     )
-    files = [_to_file_metadata(r) for r in records]
     return log_response_params(
-        FileListResponse(
-            data=files,
-            has_more=has_more,
-            first_id=files[0].id if files else None,
-            last_id=files[-1].id if files else None,
-        )
+        _list_response([_to_file_metadata(r) for r in records], has_more=has_more)
     )
 
 
