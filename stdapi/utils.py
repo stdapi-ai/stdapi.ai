@@ -35,7 +35,7 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from pydantic_core import from_json, to_json
 from sse_starlette import JSONServerSentEvent, ServerSentEvent
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import InvalidLanguageFormatError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Buffer, Generator
@@ -245,15 +245,27 @@ def format_language_code(language: str) -> str:
         language code in ISO-639-1 format
 
     Raises:
-        ApiError: When the value is not a language tag at all.
+        InvalidLanguageFormatError: When the value is not a language tag at
+            all. The same code the backend's own refusal is mapped to, so a
+            tag refused here and one refused there answer alike.
     """
     try:
         # Parsed, never constructed: the constructor takes the whole value as
         # the language subtag, so "en-US" would maximize to "en-US-Latn-US".
-        return Language.get(language).maximize().simplify_script().to_tag()
+        # Maximized for the region a bare language leaves out; the script it
+        # supplies with it is dropped, since no backend takes one.
+        maximized = Language.get(language).maximize()
+        subtag = maximized.language
+        # The value as written when parsing swapped in a longer synonym for it
+        # ("tl" for Tagalog is read as "fil"): the backends list the shorter,
+        # ISO-639-1 form, and reject the other.
+        written = Language.get(language, normalize=False).language
+        if written and subtag and len(written) < len(subtag):
+            subtag = written
+        return Language.make(language=subtag, territory=maximized.territory).to_tag()
     except LanguageTagError:
         msg = "Invalid language code: expected an IETF BCP 47 tag such as 'en-US'."
-        raise ApiError(msg) from None
+        raise InvalidLanguageFormatError(msg) from None
 
 
 #: ISO-639-1 base language codes mapped to lowercase English language names.
