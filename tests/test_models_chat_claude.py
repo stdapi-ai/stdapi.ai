@@ -74,6 +74,29 @@ _COMPUTER_TOOL_TYPES = {
 }
 
 
+#: ``anthropic_beta`` flags Claude 3.5 needs: computer use alone, at its own version.
+_BETA_FLAGS_3_5 = {
+    "bash": "computer-use-2024-10-22",
+    "str_replace_editor": "computer-use-2024-10-22",
+    "str_replace_based_edit_tool": "computer-use-2024-10-22",
+    "computer": "computer-use-2024-10-22",
+}
+
+#: ``anthropic_beta`` flags of every generation promoting the current tool versions.
+_BETA_FLAGS_CURRENT = {
+    "bash": "computer-use-2025-01-24",
+    "str_replace_editor": "computer-use-2025-01-24",
+    "str_replace_based_edit_tool": "computer-use-2025-01-24",
+    "computer": "computer-use-2025-01-24",
+    "memory": "context-management-2025-06-27",
+}
+
+#: The same flags without computer use, for the generations advertising no computer tool.
+_BETA_FLAGS_NO_COMPUTER = {
+    name: flag for name, flag in _BETA_FLAGS_CURRENT.items() if name != "computer"
+}
+
+
 #: Model IDs of unreleased versions, mapped to the behavior they must inherit.
 _FUTURE_MODELS = {
     "anthropic.claude-opus-5-1": None,
@@ -142,6 +165,62 @@ def test_opus_5_requires_no_computer_use_beta_flag() -> None:
     assert model.SERVER_TOOL_NAME_TO_TYPE["bash"] == "bash_20250124", (
         "only the computer tool is missing, not the whole server tool table"
     )
+
+
+def test_claude_3_5_keeps_the_tool_versions_of_its_own_generation() -> None:
+    """Claude 3.5 promotes the 2024 tools and knows no memory tool.
+
+    Its table is the one that diverges most from the current generations: the
+    computer and text editor versions released with it, and no memory tool at
+    all, which arrived with the context management beta on Claude 4.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+         https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool
+         stdapi/models/chat/anthropic_claude_35.py:ChatModel
+    """
+    tools = _claude_model(
+        "anthropic.claude-3-5-haiku-20241022-v1:0"
+    ).SERVER_TOOL_NAME_TO_TYPE
+
+    assert tools["computer"] == "computer_20241022"
+    assert tools["str_replace_editor"] == "text_editor_20241022"
+    assert "memory" not in tools
+
+
+@pytest.mark.parametrize(
+    ("model_id", "expected_flags"),
+    [
+        ("anthropic.claude-3-5-haiku-20241022-v1:0", _BETA_FLAGS_3_5),
+        ("anthropic.claude-3-7-sonnet-20250219-v1:0", _BETA_FLAGS_CURRENT),
+        ("anthropic.claude-haiku-4-5-20251001-v1:0", _BETA_FLAGS_CURRENT),
+        ("anthropic.claude-opus-4-6-v1", _BETA_FLAGS_CURRENT),
+        ("anthropic.claude-opus-4-7", _BETA_FLAGS_CURRENT),
+        ("anthropic.claude-opus-4-8", _BETA_FLAGS_CURRENT),
+        ("anthropic.claude-sonnet-5", _BETA_FLAGS_CURRENT),
+        ("anthropic.claude-fable-5", _BETA_FLAGS_CURRENT),
+        ("anthropic.claude-mythos-preview", _BETA_FLAGS_CURRENT),
+        ("anthropic.claude-opus-5", _BETA_FLAGS_NO_COMPUTER),
+        ("anthropic.claude-opus-6", _BETA_FLAGS_NO_COMPUTER),
+    ],
+)
+def test_beta_flags_gate_exactly_the_tools_the_generation_promotes(
+    model_id: str, expected_flags: dict[str, str]
+) -> None:
+    """The two tables of a generation move together, declared or inherited.
+
+    ``SERVER_TOOL_NAME_TO_TYPE`` decides which tools are promoted to Anthropic's
+    native format and ``TOOL_BETA_FLAGS`` gates each promoted tool, so a name in
+    one table and not the other is either a tool promoted ungated or a flag that
+    can never be sent.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool
+         https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+         stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel.TOOL_BETA_FLAGS
+    """
+    model = _claude_model(model_id)
+
+    assert dict(model.TOOL_BETA_FLAGS) == expected_flags
+    assert set(model.SERVER_TOOL_NAME_TO_TYPE) == set(expected_flags)
 
 
 async def test_beta_flags_are_stripped_of_the_whitespace_around_the_separator() -> None:

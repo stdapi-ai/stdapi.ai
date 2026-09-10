@@ -258,7 +258,11 @@ def _forward_tool_choice_to_additional_request_fields(
 
 
 class AnthropicClaudeChatModel(_BaseChatModel):
-    """Shared functionality for all Anthropic Claude model generations."""
+    """Shared functionality for all Anthropic Claude model generations.
+
+    The server tool tables below carry what the current generations accept; a
+    generation released with other tool versions overrides them.
+    """
 
     __slots__ = ()
 
@@ -271,11 +275,27 @@ class AnthropicClaudeChatModel(_BaseChatModel):
     )
     SIMPLIFIED_CACHE_MANAGEMENT = True
 
-    #: Required ``anthropic_beta`` flag per Anthropic server tool canonical name.
-    TOOL_BETA_FLAGS: ClassVar[MappingProxyType[ServerTools, str]]
+    #: Required ``anthropic_beta`` flag per server tool name, as the current generations need them.
+    TOOL_BETA_FLAGS: ClassVar[MappingProxyType[ServerTools, str]] = MappingProxyType(
+        {
+            "bash": _BETA_COMPUTER_USE_2025,
+            "str_replace_editor": _BETA_COMPUTER_USE_2025,
+            "str_replace_based_edit_tool": _BETA_COMPUTER_USE_2025,
+            "computer": _BETA_COMPUTER_USE_2025,
+            "memory": _BETA_CONTEXT_MANAGEMENT_2025,
+        }
+    )
 
-    #: Maps Claude server tool name to its versioned type (e.g. ``bash`` → ``bash_20250124``).
-    SERVER_TOOL_NAME_TO_TYPE: ClassVar[MappingProxyType[str, str]]
+    #: Server tool name to its versioned type (``bash`` → ``bash_20250124``), as the current generations accept them.
+    SERVER_TOOL_NAME_TO_TYPE: ClassVar[MappingProxyType[str, str]] = MappingProxyType(
+        {
+            "bash": "bash_20250124",
+            "str_replace_based_edit_tool": "text_editor_20250728",
+            "str_replace_editor": "text_editor_20250728",
+            "computer": "computer_20251124",
+            "memory": "memory_20250818",
+        }
+    )
 
     #: OpenAI to Anthropic reasoning effort override - subclass to customize
     REASONING_OVERRIDE: ClassVar[dict[Effort | None, ThinkingEffort]] = {
