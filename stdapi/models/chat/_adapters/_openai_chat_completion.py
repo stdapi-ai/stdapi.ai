@@ -283,9 +283,11 @@ def build_tool_config(
     layer by ``_req_promote_system_tools``.
 
     When ``tool_choice`` (or legacy ``function_call``) is ``'none'``, no tool
-    config is returned so the model behaves as if no tools were passed.  If the
-    message history still requires a ``toolConfig`` (it contains ``toolUse``/
-    ``toolResult`` blocks), the model layer synthesizes a permissive one.
+    config is returned, which drops every tool the request declared.  A history
+    carrying ``toolUse``/``toolResult`` blocks still gets a permissive config
+    synthesized by the model layer, and the tools it names stay callable: that
+    is the documented limit of ``'none'`` on a conversation that already called
+    a tool.
 
     Args:
         request: The request object containing the data to map and configure tools.
