@@ -596,7 +596,11 @@ async def _generate_image_b64(
         quality=tool.quality,
         style=None,
         output_format=args.get("output_format") or tool.output_format or "png",  # type: ignore[arg-type]
-        output_compression=tool.output_compression or 100,
+        # 0 is a compression the vendor documents, so an unset value cannot be
+        # told from it by truthiness.
+        output_compression=(
+            100 if tool.output_compression is None else tool.output_compression
+        ),
         extra_params={},
     )
     images = await job.generate_images()
