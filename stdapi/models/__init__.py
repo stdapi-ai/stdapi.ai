@@ -2212,6 +2212,34 @@ def _bind_arn_details(
     _ARN_DETAILS.set({**(_ARN_DETAILS.get() or {}), served.id: served})
 
 
+def resolved_arn_details() -> Mapping[str, ModelDetails] | None:
+    """Return the ARN details bound to the context this runs in.
+
+    Returns:
+        Details every ARN resolved here published, or ``None`` when this
+        context resolved none.
+    """
+    return _ARN_DETAILS.get()
+
+
+def adopt_arn_details(details: Mapping[str, ModelDetails] | None) -> None:
+    """Publish details another task resolved into this context.
+
+    A resolution binds its ARN to the context it runs in, and a task starts
+    from a *copy* of its parent's: a caller resolving models in tasks of its
+    own -- a batch resolves one per distinct name its input writes -- would
+    invoke the catalogue's own profile rather than the ARN the caller named,
+    billing and tagging the work against the wrong one. Handing the details
+    back is what carries them across that boundary.
+
+    Args:
+        details: Details a resolution published, as
+            :func:`resolved_arn_details` returned them.
+    """
+    if details:
+        _ARN_DETAILS.set({**(_ARN_DETAILS.get() or {}), **details})
+
+
 def _request_details(model_id: str) -> ModelDetails | None:
     """Return details this request resolved for *model_id* outside the catalogue.
 

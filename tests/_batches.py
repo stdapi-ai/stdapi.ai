@@ -328,14 +328,25 @@ class FakeBedrock:
             job["errorRecordCount"] = errored
 
 
-class _OfflineChatModel(ChatModel):
-    """Chat model with the two calls that would reach AWS replaced."""
+class CatalogChatModel(ChatModel):
+    """Chat model with the one call that would reach AWS replaced.
+
+    Its details come from the registry, so they are whatever the request
+    resolved: the ARN a caller named reaches the submission through them, and
+    nothing else can prove that it does.
+    """
 
     __slots__ = ()
 
     async def select_region(self, *, s3_required: bool = False) -> Any:  # noqa: ANN401
         """Return the single fake region."""
         return REGION
+
+
+class _OfflineChatModel(CatalogChatModel):
+    """Chat model with the two calls that would reach AWS replaced."""
+
+    __slots__ = ()
 
     @property
     def model(self) -> Any:  # noqa: ANN401
@@ -423,6 +434,7 @@ def install(
     *,
     models: dict[str, list[str]] | None = None,
     translate: bool = False,
+    catalog: bool = False,
 ) -> tuple[FakeS3, FakeBedrock]:
     """Point the Batch API at the in-memory store and job service.
 
@@ -432,6 +444,10 @@ def install(
             the batch must refuse; every other name resolves to a text model.
         translate: Run the real request translation instead of the stub one,
             for a test asserting on the body a batch submits.
+        catalog: Resolve model names for real, against a catalogue the test
+            seeds, for a test asserting on the identifier a job is started
+            under. The stub resolution answers details of its own, which no
+            ARN a caller names can reach.
 
     Returns:
         Tuple of (object store, job service).
@@ -459,8 +475,15 @@ def install(
             model_id, output_modalities=(models or {}).get(model_id, ["TEXT"])
         )
 
-    monkeypatch.setattr(batches, "validate_model", _validate_model)
-    chat_model = TranslatingChatModel if translate else StubChatModel
+    if not catalog:
+        monkeypatch.setattr(batches, "validate_model", _validate_model)
+    chat_model = (
+        CatalogChatModel
+        if catalog
+        else TranslatingChatModel
+        if translate
+        else StubChatModel
+    )
     # ``allow_mantle`` is swallowed: a batch always asks for the runtime class,
     # and the double is the runtime class.
     monkeypatch.setattr(
