@@ -29,12 +29,15 @@ from aws_sdk_bedrock_runtime.models import (
 import stdapi.aws_bidi
 from stdapi.models.realtime import (
     InputTranscript,
+    NamedTool,
     OutputAudio,
     OutputTranscript,
+    RealtimeTool,
     ResponseFinished,
     ResponseStarted,
     SpeechStarted,
     SpeechStopped,
+    ToolCall,
     UsageReport,
 )
 from stdapi.models.realtime import amazon_nova_sonic as sonic
@@ -600,3 +603,165 @@ class TestEventTranslation:
                 total_tokens=623,
             )
         ]
+
+
+class TestToolUse:
+    """Tools are declared once, called by name, and answered as JSON.
+
+    Every shape here was measured against the model in ``us-east-1`` on
+    2026-09-10: a schema sent as a JSON object rather than as a string is
+    refused with "Unable to parse input chunk", and a tool result that is not a
+    JSON document is refused with "Tool Response parsing error" -- both of which
+    end the session rather than the turn.
+
+    Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/sonic-tool-configuration.html
+         https://docs.aws.amazon.com/nova/latest/nova2-userguide/sonic-input-events.html
+         stdapi/models/realtime/amazon_nova_sonic.py:_NovaSonicSession.send_tool_result
+    """
+
+    async def test_declared_tools_open_the_conversation_as_stringified_schemas(
+        self, streams: _StreamPool
+    ) -> None:
+        """The schema rides ``inputSchema.json`` as a string, not as an object."""
+        async with _session(
+            tools=(
+                RealtimeTool(
+                    name="get_weather",
+                    description="Get the weather for a city.",
+                    parameters={
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                    },
+                ),
+            )
+        ):
+            pass
+
+        prompt_start = _sent(streams.opened[0])[1]["promptStart"]
+        assert prompt_start["toolUseOutputConfiguration"] == {
+            "mediaType": "application/json"
+        }
+        spec = prompt_start["toolConfiguration"]["tools"][0]["toolSpec"]
+        assert spec["name"] == "get_weather"
+        assert spec["description"] == "Get the weather for a city."
+        assert isinstance(spec["inputSchema"]["json"], str), spec
+        assert loads(spec["inputSchema"]["json"]) == {
+            "type": "object",
+            "properties": {"location": {"type": "string"}},
+        }
+
+    async def test_a_session_without_tools_declares_none(
+        self, streams: _StreamPool
+    ) -> None:
+        """Nothing about tools is sent when the client declared none."""
+        async with _session():
+            pass
+
+        prompt_start = _sent(streams.opened[0])[1]["promptStart"]
+        assert "toolConfiguration" not in prompt_start, prompt_start
+        assert "toolUseOutputConfiguration" not in prompt_start, prompt_start
+
+    @pytest.mark.parametrize(
+        ("choice", "expected"),
+        [
+            ("auto", {"auto": {}}),
+            ("required", {"any": {}}),
+            (NamedTool("get_weather"), {"tool": {"name": "get_weather"}}),
+        ],
+    )
+    async def test_the_tool_choice_is_carried_in_the_models_own_vocabulary(
+        self, streams: _StreamPool, choice: str | NamedTool, expected: dict[str, Any]
+    ) -> None:
+        """Each way of choosing a tool maps to the one the model accepts."""
+        async with _session(
+            tools=(RealtimeTool(name="get_weather", description="Weather."),),
+            tool_choice=choice,
+        ):
+            pass
+
+        configuration = _sent(streams.opened[0])[1]["promptStart"]["toolConfiguration"]
+        assert configuration["toolChoice"] == expected
+
+    async def test_a_tool_call_is_reported_with_its_identifier_and_arguments(
+        self, streams: _StreamPool
+    ) -> None:
+        """The model's call carries the arguments as the JSON string it sent."""
+        streams.script(
+            FakeDuplexStream(
+                events=[
+                    _output_chunk(
+                        {
+                            "contentStart": {
+                                "contentId": "c1",
+                                "role": "TOOL",
+                                "type": "TOOL",
+                            }
+                        }
+                    ),
+                    _output_chunk(
+                        {
+                            "toolUse": {
+                                "contentId": "c1",
+                                "toolUseId": "tu-1",
+                                "toolName": "get_weather",
+                                "content": '{"location":"Seattle"}',
+                            }
+                        }
+                    ),
+                    _output_chunk(
+                        {
+                            "contentEnd": {
+                                "contentId": "c1",
+                                "stopReason": "TOOL_USE",
+                                "type": "TOOL",
+                            }
+                        }
+                    ),
+                ]
+            )
+        )
+
+        assert await _translated() == [
+            ToolCall(
+                call_id="tu-1", name="get_weather", arguments='{"location":"Seattle"}'
+            )
+        ]
+
+    async def test_a_tool_result_is_sent_as_its_own_content_block(
+        self, streams: _StreamPool
+    ) -> None:
+        """The block names the call it answers, and carries a JSON document."""
+        async with _session() as session:
+            await session.send_tool_result("tu-1", '{"temperature_c": 14}')
+            sent = _sent(streams.opened[0])[5:]
+
+        assert _names(sent) == ["contentStart", "toolResult", "contentEnd"], _names(
+            sent
+        )
+        opened = sent[0]["contentStart"]
+        assert opened["type"] == "TOOL"
+        assert opened["role"] == "TOOL"
+        assert opened["interactive"] is False
+        assert opened["toolResultInputConfiguration"]["toolUseId"] == "tu-1"
+        assert sent[1]["toolResult"]["content"] == '{"temperature_c": 14}'
+        assert sent[1]["toolResult"]["contentName"] == opened["contentName"]
+        assert sent[2]["contentEnd"]["contentName"] == opened["contentName"]
+
+    @pytest.mark.parametrize(
+        ("output", "sent"),
+        [
+            ('{"temperature_c": 14}', '{"temperature_c": 14}'),
+            ("rainy, 14 degrees", '{"result":"rainy, 14 degrees"}'),
+            ("[1, 2]", '{"result":[1,2]}'),
+            ("", '{"result":""}'),
+        ],
+    )
+    async def test_a_result_that_is_not_a_json_object_is_wrapped_in_one(
+        self, streams: _StreamPool, output: str, sent: str
+    ) -> None:
+        """Free text is what the API takes and a JSON object is what the model takes."""
+        async with _session() as session:
+            await session.send_tool_result("tu-1", output)
+            events = _sent(streams.opened[0])[5:]
+
+        assert loads(events[1]["toolResult"]["content"]) == loads(sent)

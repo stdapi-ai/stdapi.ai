@@ -15,6 +15,7 @@ Hold a live, bidirectional speech-to-speech conversation over a single WebSocket
 - :material-server-off: **A signed token, not a server-side record** — any instance behind a load balancer verifies a secret minted by any other, with no shared session store — see [Ephemeral client secrets](#ephemeral-client-secrets).
 - :material-phone-in-talk: **24 kHz PCM by default, or G.711 at 8 kHz** — `audio/pcmu` and `audio/pcma` interoperate directly with telephony and SIP media — see [Feature compatibility](#feature-compatibility).
 - :material-lan-connect: **WebSocket always, WebRTC by operator opt-in, SIP never terminated here** — `POST /v1/realtime/calls` answers `404` until `REALTIME_WEBRTC_ENABLED` is set — see [Transports](#transports).
+- :material-function-variant: **The model calls your own functions** — declare them on the session, run the call, hand back the result, and the answer is spoken with it — see [Function calling](#function-calling).
 - :material-timer-alert: **One session lasts at most 8 minutes** — the connection then closes with reason `session_expired`, and reconnecting continues the conversation — see [Session lifecycle and limits](#session-lifecycle-and-limits).
 
 ```python
@@ -73,7 +74,7 @@ asyncio.run(main())
 | `input_audio_buffer.append`                   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Base64-encoded audio in the session's configured input format; at most 4 MiB per event, so send it in chunks as it is captured |
 | `input_audio_buffer.commit`                   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Required to end a turn when `turn_detection` is `null`; at most 5.7 MB of audio may wait for one |
 | `input_audio_buffer.clear`                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Discards buffered, not-yet-committed audio                          |
-| `conversation.item.create`                    |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Text items only — an audio item is refused with a clear `error`; send speech through `input_audio_buffer.append` |
+| `conversation.item.create`                    |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Text items and `function_call_output` items — an audio item is refused with a clear `error`; send speech through `input_audio_buffer.append` |
 | `conversation.item.truncate`                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Answered with `conversation.item.truncated` — see [below](#truncating-an-answer-the-caller-spoke-over) |
 | `conversation.item.retrieve`                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Answered with `conversation.item.retrieved`, carrying the item's role, status and transcript; audio is not retained, so the item carries no `audio` field |
 | `conversation.item.delete`                     |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Answered with `conversation.item.deleted`; the item stops being addressable, and the model keeps its own memory of the conversation |
@@ -96,6 +97,7 @@ asyncio.run(main())
 | `response.output_audio.delta` / `.done`        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Spoken answers only                                                  |
 | `response.output_audio_transcript.delta` / `.done` |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Spoken answers only                                                  |
 | `response.output_text.delta` / `.done`         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Text-only answers (`output_modalities: ["text"]`)                    |
+| `response.function_call_arguments.delta` / `.done` |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Sent for every [function call](#function-calling); the arguments arrive whole, in one delta |
 | `output_audio_buffer.cleared`                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    |                                                                     |
 | `error`                                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Non-fatal for a rejected event; terminal (closes the socket) for a fatal one |
 | `rate_limits.updated`                          | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Not emitted                                                          |
@@ -114,10 +116,14 @@ asyncio.run(main())
 | **Voices**                                    |                                          |                                                                     |
 | OpenAI voice names                             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, `verse` — each served by the model's own nearest voice, so the timbre is not the upstream one |
 | Any other voice name                           | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Passed through to the model as given, so a model voice can be named directly |
+| **Tools**                                     |                                          |                                                                     |
+| `tools` (`type: "function"`)                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Declared before the conversation opens and fixed for the rest of it — see [Function calling](#function-calling) |
+| `tools` (`type: "mcp"`)                         | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Refused with an `error` — a session calls the functions its client runs, never a remote MCP server |
+| `tool_choice`                                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `auto`, `none`, `required` and a named function; `required` and a named function make every answer start with a call |
+| `parallel_tool_calls`                          | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored — how many tools one answer calls is the model's own decision |
 | **Not Available**                             |                                          |                                                                     |
 | `POST /v1/realtime/calls` (WebRTC)             | :material-minus-circle:{ .partial role="img" aria-label="Partial" } | [Opt-in](#webrtc-calls): served when `REALTIME_WEBRTC_ENABLED` is set and the deployment has a UDP media path; answers `404` otherwise |
 | SIP (`accept`, `reject`, `refer` call verbs)   | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Inbound SIP is not terminated by the gateway, permanently — the verbs answer `400`; see [Transports](#transports) for the telephony route |
-| `tools`, `tool_choice`, `parallel_tool_calls`  | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored — the session calls no tools                    |
 | `prompt` (prompt templates)                    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored                                                 |
 | `reasoning`, `tracing`, `truncation`           | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored                                                 |
 | `include`                                      | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored — no extra output fields are available          |
@@ -141,9 +147,9 @@ asyncio.run(main())
 
 ### Voice, instructions and audio formats are fixed once the conversation opens
 
-The model's voice, its system `instructions`, and both audio formats are set when the conversation with the model opens, and cannot change for the rest of that session. The conversation opens on the **first thing sent into it** — the first `input_audio_buffer.append` under the default server voice activity detection, or the first `input_audio_buffer.commit`, `response.create` or `conversation.item.create` under manual turns — which is well before the model has answered anything.
+The model's voice, its system `instructions`, both audio formats and the session's [tools](#function-calling) are set when the conversation with the model opens, and cannot change for the rest of that session. The conversation opens on the **first thing sent into it** — the first `input_audio_buffer.append` under the default server voice activity detection, or the first `input_audio_buffer.commit`, `response.create` or `conversation.item.create` under manual turns — which is well before the model has answered anything.
 
-Send `session.update` with these settings **before sending anything else**, or open a new session to change them. Afterwards, a `session.update` touching only other fields (`turn_detection`, `max_output_tokens`, transcription settings, and so on) is still accepted; one that would change voice, instructions or an audio format is refused with an `error` event.
+Send `session.update` with these settings **before sending anything else**, or open a new session to change them. Afterwards, a `session.update` touching only other fields (`turn_detection`, `max_output_tokens`, transcription settings, and so on) is still accepted; one that would change voice, instructions, an audio format, `tools` or `tool_choice` is refused with an `error` event.
 
 ### Answering a written turn
 
@@ -171,11 +177,63 @@ The model generates speech faster than it is played, so a caller who interrupts 
 - `audio_end_ms` past the end of the item's audio, an item that is not an assistant message, and an item this session never sent are each refused with an `error`.
 - What the model itself remembers of the answer is the model's own; truncation aligns the record this session reports through `conversation.item.retrieved`.
 
+### Function calling { #function-calling }
+
+Declare functions on the session, and the model asks for one whenever it needs what only your application knows — an account balance, a booking, the state of a device. The call arrives as a finished answer, so the client can run it immediately; the result goes back as a conversation item, and the model speaks its reply with what the function returned.
+
+```python
+await connection.session.update(
+    session={
+        "type": "realtime",
+        "tools": [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get the current weather for a city.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            }
+        ],
+        "tool_choice": "auto",
+    }
+)
+```
+
+A call is reported as its own conversation item and its own response:
+
+1. `response.output_item.added` carries a `function_call` item with the function's `name` and the `call_id` to answer it by.
+2. `response.function_call_arguments.delta` then `.done` carry the arguments as a JSON string. They arrive whole, in one delta.
+3. `response.done` ends that answer with `status: "completed"`, the `function_call` item in its `output`.
+4. Send the result back with a `function_call_output` item naming the same `call_id`:
+
+```python
+await connection.conversation.item.create(
+    item={
+        "type": "function_call_output",
+        "call_id": call_id,
+        "output": '{"temperature_c": 14, "condition": "rain"}',
+    }
+)
+```
+
+Four things to know before wiring an agent to it:
+
+- **Answer every call.** A model waiting for a result says nothing else for the rest of the session, so return one even when the function failed — an `{"error": "..."}` payload is a usable answer, silence is not.
+- **`output` is free text, and a JSON object travels best.** Anything that is not one is carried as the `result` field of one, so a function returning structured data should return it as JSON.
+- **Declare the tools before the conversation opens** — with the voice, the instructions and the audio formats ([above](#voice-instructions-and-audio-formats-are-fixed-once-the-conversation-opens)). A `session.update` changing `tools` or `tool_choice` afterwards is refused with an `error`.
+- **One call per answer.** Each call ends the answer that produced it, and anything the model says afterwards is a new response; a client tracking responses sees more of them in a session that calls functions.
+
+!!! note "The functions run in your application"
+    A tool is a name, a description and a JSON Schema — the deployment never runs it, never reaches the network for it, and never sees more of it than the result you hand back. Remote MCP servers (`tools` entries of `type: "mcp"`) are refused for the same reason: nothing here calls out to a third party on the caller's behalf.
+
 ### Guardrail coverage
 
 When the deployment configures an [Amazon Bedrock guardrail](operations_configuration_bedrock.md#bedrock-guardrails), a realtime session is checked **per turn**: what the caller said (as the model transcribes it) as `INPUT`, and each completed answer as `OUTPUT`. A blocked turn ends the session with a terminal `error` event and close code `3000`.
 
-Unlike a request/response route, the check cannot come before the content reaches the client: the model's speech is streamed while it is being generated and its transcript is only complete once the answer is over, so a blocked answer may already have been partly heard when the session ends. Written items sent with `conversation.item.create` are checked as `INPUT` **before** they reach the model, as on every other route.
+Unlike a request/response route, the check cannot come before the content reaches the client: the model's speech is streamed while it is being generated and its transcript is only complete once the answer is over, so a blocked answer may already have been partly heard when the session ends. Written items sent with `conversation.item.create` are checked as `INPUT` **before** they reach the model, as on every other route. So is what a [function](#function-calling) returns; the arguments the model asks a function to run with are not checked, since they are a request for data rather than content spoken to the caller.
 
 ## Models { #model-support }
 

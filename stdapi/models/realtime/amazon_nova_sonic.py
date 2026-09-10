@@ -26,6 +26,7 @@ from stdapi.aws_bidi import open_bidi_stream
 from stdapi.models import compute_candidate_regions, set_effective_region
 from stdapi.models.realtime import (
     InputTranscript,
+    NamedTool,
     OutputAudio,
     OutputTranscript,
     RealtimeBackendSession,
@@ -34,9 +35,10 @@ from stdapi.models.realtime import (
     ResponseStarted,
     SpeechStarted,
     SpeechStopped,
+    ToolCall,
     UsageReport,
 )
-from stdapi.utils import b64decode, b64encode, to_json_bytes
+from stdapi.utils import b64decode, b64encode, to_json_bytes, to_json_str
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -45,12 +47,13 @@ if TYPE_CHECKING:
         Buffer,
         Callable,
         Coroutine,
+        Sequence,
     )
 
     from types_aiobotocore_bedrock.literals import RegionName
 
     from stdapi.aws_bidi import BidiSession
-    from stdapi.models.realtime import BackendEvent
+    from stdapi.models.realtime import BackendEvent, RealtimeTool, ToolChoice
 
 #: Sample rates the session's audio configurations accept, in hertz.
 _SAMPLE_RATES: Final = frozenset({8000, 16000, 24000})
@@ -78,6 +81,9 @@ _END_TURN: Final = "END_TURN"
 
 #: Generation stage of a text block restating speech already reported.
 _FINAL_STAGE: Final = "FINAL"
+
+#: Schema declared for a tool the client described no arguments for.
+_ANY_INPUT: Final[dict[str, Any]] = {"type": "object", "properties": {}}
 
 #: Voice each OpenAI voice name is served by; anything else is passed through.
 _VOICES: Final[dict[str, str]] = {
@@ -216,6 +222,44 @@ class _NovaSonicSession(RealtimeBackendSession):
         self._pending_text = True
         self._last_sent = get_running_loop().time()
 
+    async def send_tool_result(self, call_id: str, output: str) -> None:
+        """Answer one tool the model called, as its own content block.
+
+        Args:
+            call_id: Identifier of the call being answered.
+            output: What the tool returned, as the client wrote it.
+        """
+        content = uuid4().hex
+        await self._send(
+            {
+                "contentStart": {
+                    "promptName": self._names.prompt,
+                    "contentName": content,
+                    "interactive": False,
+                    "type": "TOOL",
+                    "role": "TOOL",
+                    "toolResultInputConfiguration": {
+                        "toolUseId": call_id,
+                        "type": "TEXT",
+                        "textInputConfiguration": {"mediaType": "text/plain"},
+                    },
+                }
+            }
+        )
+        await self._send(
+            {
+                "toolResult": {
+                    "promptName": self._names.prompt,
+                    "contentName": content,
+                    "content": _tool_result_content(output),
+                }
+            }
+        )
+        await self._send(
+            {"contentEnd": {"promptName": self._names.prompt, "contentName": content}}
+        )
+        self._last_sent = get_running_loop().time()
+
     async def end_turn(self) -> None:
         """End the caller's turn, which is what starts the model answering.
 
@@ -282,7 +326,7 @@ class _NovaSonicSession(RealtimeBackendSession):
                 continue
             await self.send_audio(self._silence)
 
-    async def _translate(  # noqa: PLR0911 - one branch per backend event name
+    async def _translate(  # noqa: C901, PLR0911 - one branch per backend event name
         self, name: str, body: dict[str, Any]
     ) -> list[BackendEvent]:
         """Turn one backend event into the neutral events it stands for.
@@ -310,6 +354,14 @@ class _NovaSonicSession(RealtimeBackendSession):
                     return [OutputAudio(await b64decode(content))]
             case "contentEnd":
                 return _read_content_end(body)
+            case "toolUse":
+                return [
+                    ToolCall(
+                        call_id=body.get("toolUseId", ""),
+                        name=body.get("toolName", ""),
+                        arguments=body.get("content") or "{}",
+                    )
+                ]
             case "usageEvent":
                 return [_read_usage(body)]
         return []
@@ -421,6 +473,62 @@ def _audio_input_configuration(sample_rate: int) -> dict[str, Any]:
     }
 
 
+def _tool_result_content(output: str) -> str:
+    """Return one tool's answer as the JSON document the service reads.
+
+    The API takes free text as a tool's answer, and the service refuses
+    anything that is not a JSON object, so text is carried as one field of one.
+
+    Args:
+        output: What the tool returned, as the client wrote it.
+
+    Returns:
+        The answer, as a JSON object.
+    """
+    try:
+        decoded = from_json(output.encode())
+    except ValueError:
+        return to_json_str({"result": output})
+    if isinstance(decoded, dict):
+        return output
+    return to_json_str({"result": decoded})
+
+
+def _tool_configuration(
+    tools: Sequence[RealtimeTool], tool_choice: ToolChoice
+) -> dict[str, Any]:
+    """Build the tool declaration one conversation opens with.
+
+    Args:
+        tools: Tools the model may call.
+        tool_choice: How it picks among them.
+
+    Returns:
+        The configuration block, whose schemas are JSON strings: an object
+        there is refused, as the service parses the string itself.
+    """
+    choice: dict[str, Any] = (
+        {"tool": {"name": tool_choice.name}}
+        if isinstance(tool_choice, NamedTool)
+        else {"any": {}}
+        if tool_choice == "required"
+        else {"auto": {}}
+    )
+    return {
+        "tools": [
+            {
+                "toolSpec": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "inputSchema": {"json": to_json_str(tool.parameters or _ANY_INPUT)},
+                }
+            }
+            for tool in tools
+        ],
+        "toolChoice": choice,
+    }
+
+
 def _read_content_end(body: dict[str, Any]) -> list[BackendEvent]:
     """Report the end of the model's answer, and nothing else.
 
@@ -478,6 +586,8 @@ class RealtimeModel(RealtimeModelBase[Any, Any]):
 
     MAX_SESSION_SECONDS: ClassVar[float] = _MAX_SESSION_SECONDS
 
+    TOOLS_SUPPORTED: ClassVar[bool] = True
+
     @asynccontextmanager
     async def open_session(
         self,
@@ -489,6 +599,8 @@ class RealtimeModel(RealtimeModelBase[Any, Any]):
         temperature: float | None = None,
         max_output_tokens: int | None = None,
         speech_output: bool = True,
+        tools: Sequence[RealtimeTool] = (),
+        tool_choice: ToolChoice = "auto",
     ) -> AsyncIterator[RealtimeBackendSession]:
         """Open one live conversation and close it when the caller is done.
 
@@ -500,6 +612,8 @@ class RealtimeModel(RealtimeModelBase[Any, Any]):
             temperature: Optional sampling temperature.
             max_output_tokens: Optional cap on the tokens one answer may use.
             speech_output: Whether the model should speak its answers.
+            tools: Tools the model may call, empty when it may call none.
+            tool_choice: How the model picks among them.
 
         Yields:
             The open session, whose serving region is on ``region``.
@@ -520,6 +634,8 @@ class RealtimeModel(RealtimeModelBase[Any, Any]):
                 _VOICES.get(voice or "", voice) or self.DEFAULT_VOICE,
                 temperature,
                 max_output_tokens,
+                tools,
+                tool_choice,
             ),
         ) as stream:
             set_effective_region(self._model_id, stream.region)
@@ -561,6 +677,8 @@ def _priming(
     voice: str,
     temperature: float | None,
     max_output_tokens: int | None,
+    tools: Sequence[RealtimeTool],
+    tool_choice: ToolChoice,
 ) -> Callable[[BidiSession[Any, Any]], Coroutine[Any, Any, None]]:
     """Build the handshake the service needs before it answers at all.
 
@@ -571,6 +689,8 @@ def _priming(
         voice: Voice the model answers with.
         temperature: Optional sampling temperature.
         max_output_tokens: Optional cap on the tokens one answer may use.
+        tools: Tools the model may call, empty when it may call none.
+        tool_choice: How the model picks among them.
 
     Returns:
         A coroutine function sending the handshake on a session.
@@ -595,6 +715,11 @@ def _priming(
             "channelCount": 1,
             "voiceId": voice,
         }
+        if tools:
+            prompt_start["toolUseOutputConfiguration"] = {
+                "mediaType": "application/json"
+            }
+            prompt_start["toolConfiguration"] = _tool_configuration(tools, tool_choice)
         events: list[dict[str, Any]] = [
             {"sessionStart": {"inferenceConfiguration": inference}},
             {"promptStart": prompt_start},

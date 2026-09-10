@@ -8,14 +8,14 @@ rendered into.
 """
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from stdapi.api_errors import ApiError
 from stdapi.models import ModelBase, get_model, load_model_plugins
 from stdapi.models.capabilities import Capability
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Buffer
+    from collections.abc import AsyncGenerator, Buffer, Mapping, Sequence
     from contextlib import AbstractAsyncContextManager
     from re import Pattern
 
@@ -79,6 +79,21 @@ class ResponseFinished:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolCall:
+    """The model asked for one of the session's tools to be run.
+
+    Attributes:
+        call_id: Identifier the result is returned under.
+        name: Tool the model called.
+        arguments: Arguments it called the tool with, as a JSON string.
+    """
+
+    call_id: str
+    name: str
+    arguments: str
+
+
+@dataclass(frozen=True, slots=True)
 class UsageReport:
     """Everything the session has billed so far, as running totals."""
 
@@ -98,8 +113,40 @@ BackendEvent = (
     | OutputAudio
     | ResponseStarted
     | ResponseFinished
+    | ToolCall
     | UsageReport
 )
+
+
+@dataclass(frozen=True, slots=True)
+class RealtimeTool:
+    """One tool the model may call during the conversation.
+
+    Attributes:
+        name: Name the model calls the tool by.
+        description: What the tool does, which is how the model decides to
+            call it.
+        parameters: JSON Schema of the arguments it takes, if it takes any.
+    """
+
+    name: str
+    description: str = ""
+    parameters: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class NamedTool:
+    """The one tool every answer must start by calling.
+
+    Attributes:
+        name: Name of that tool.
+    """
+
+    name: str
+
+
+#: How the model picks among the session's tools.
+ToolChoice = Literal["auto", "required"] | NamedTool
 
 
 class RealtimeBackendSession:
@@ -143,6 +190,18 @@ class RealtimeBackendSession:
         """
         raise NotImplementedError
 
+    async def send_tool_result(self, call_id: str, output: str) -> None:
+        """Answer one tool the model called.
+
+        Args:
+            call_id: Identifier of the call being answered.
+            output: What the tool returned.
+
+        Raises:
+            NotImplementedError: Always, on the base class.
+        """
+        raise NotImplementedError
+
     async def events(self) -> AsyncGenerator[BackendEvent]:
         """Yield what the backend reports until the session ends.
 
@@ -176,6 +235,9 @@ class RealtimeModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
     #: Longest a session may last, in seconds, under the backend's own limit.
     MAX_SESSION_SECONDS: ClassVar[float] = 0.0
 
+    #: Whether the model can call the tools a session declares.
+    TOOLS_SUPPORTED: ClassVar[bool] = False
+
     def open_session(
         self,
         *,
@@ -186,6 +248,8 @@ class RealtimeModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         temperature: float | None = None,  # noqa: ARG002
         max_output_tokens: int | None = None,  # noqa: ARG002
         speech_output: bool = True,  # noqa: ARG002
+        tools: Sequence[RealtimeTool] = (),  # noqa: ARG002
+        tool_choice: ToolChoice = "auto",  # noqa: ARG002
     ) -> AbstractAsyncContextManager[RealtimeBackendSession]:
         """Open one live conversation.
 
@@ -197,6 +261,8 @@ class RealtimeModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             temperature: Optional sampling temperature.
             max_output_tokens: Optional cap on the tokens one answer may use.
             speech_output: Whether the model should speak its answers.
+            tools: Tools the model may call, empty when it may call none.
+            tool_choice: How the model picks among them.
 
         Returns:
             An async context manager yielding the open session.

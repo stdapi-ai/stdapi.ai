@@ -179,6 +179,47 @@ class AudioConfig(BaseModel):
     )
 
 
+# Ref: openai.types.realtime.realtime_function_tool.RealtimeFunctionTool
+class FunctionTool(BaseModel):
+    """One function the model may call during the session."""
+
+    type: Literal["function"] = Field(
+        default="function", description="Kind of tool being declared."
+    )
+    name: str = Field(description="Name the model calls the function by.")
+    description: str | None = Field(
+        default=None,
+        description="What the function does, which is how the model decides to call it.",
+    )
+    parameters: dict[str, JsonValue] | None = Field(
+        default=None, description="JSON Schema of the arguments the function takes."
+    )
+
+
+# Ref: openai.types.realtime.realtime_tools_config_union.Mcp
+class McpServerTool(BaseModel):
+    """UNSUPPORTED: a remote MCP server the session would call tools on."""
+
+    type: Literal["mcp"] = Field(description="Kind of tool being declared.")
+    server_label: str | None = Field(
+        default=None, description="Name the remote server is referred to by."
+    )
+
+
+#: Either kind of tool a session may declare, told apart by its ``type``.
+SessionTool = Annotated[FunctionTool | McpServerTool, Field(discriminator="type")]
+
+
+# Ref: openai.responses.tool_choice_function.ToolChoiceFunction
+class FunctionToolChoice(BaseModel):
+    """The one function every answer must start by calling."""
+
+    type: Literal["function"] = Field(
+        default="function", description="Kind of tool being named."
+    )
+    name: str = Field(description="Name of that function.")
+
+
 class RealtimeSessionConfig(BaseModel):
     """Configuration of a speech-to-speech Realtime session."""
 
@@ -202,14 +243,27 @@ class RealtimeSessionConfig(BaseModel):
     include: list[str] | None = Field(
         default=None, description="UNSUPPORTED: no extra output fields are available."
     )
-    tools: JsonValue = Field(
-        default=None, description="UNSUPPORTED: the session calls no tools."
+    tools: list[SessionTool] | None = Field(
+        default=None,
+        description=(
+            "Functions the model may call, declared before the conversation "
+            "opens and fixed for the rest of it; remote MCP servers are refused."
+        ),
     )
-    tool_choice: JsonValue = Field(
-        default=None, description="UNSUPPORTED: the session calls no tools."
+    tool_choice: Literal["auto", "none", "required"] | FunctionToolChoice | None = (
+        Field(
+            default=None,
+            description=(
+                "How the model picks among the tools: 'none' declares none at all, "
+                "'required' and a named function make every answer start with a call."
+            ),
+        )
     )
     parallel_tool_calls: bool | None = Field(
-        default=None, description="UNSUPPORTED: the session calls no tools."
+        default=None,
+        description=(
+            "UNSUPPORTED: how many tools one answer calls is the model's own decision."
+        ),
     )
     prompt: JsonValue = Field(
         default=None, description="UNSUPPORTED: prompt templates are not available."

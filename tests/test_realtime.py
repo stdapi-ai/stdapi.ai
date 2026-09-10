@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import threading
+import time
 from contextlib import asynccontextmanager, suppress
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -26,6 +27,7 @@ from stdapi.aws_bedrock_mantle import MANTLE_PROJECT_VAR
 from stdapi.config import SETTINGS
 from stdapi.models.realtime import (
     InputTranscript,
+    NamedTool,
     OutputAudio,
     OutputTranscript,
     RealtimeBackendSession,
@@ -34,6 +36,7 @@ from stdapi.models.realtime import (
     ResponseStarted,
     SpeechStarted,
     SpeechStopped,
+    ToolCall,
     UsageReport,
 )
 from stdapi.realtime import (
@@ -104,6 +107,27 @@ _ITEM_LIFECYCLE_KINDS = frozenset({"conversation.item.added", "conversation.item
 _SERVER_EVENT: TypeAdapter[RealtimeServerEvent] = TypeAdapter(RealtimeServerEvent)
 
 
+def _assert_official_shape(events: list[dict[str, Any]]) -> None:
+    """Fail on the first event the official client's own models refuse.
+
+    Args:
+        events: Every event the session sent, in order.
+    """
+    from pydantic import ValidationError  # noqa: PLC0415
+
+    for event in events:
+        try:
+            _SERVER_EVENT.validate_python(event)
+        except ValidationError as error:
+            # One error per member of a 45-way union; only ours is readable.
+            refused = [
+                line
+                for line in str(error).splitlines()
+                if event["type"].replace(".", "-") in line.lower()
+            ]
+            pytest.fail(f"{event['type']} was refused: {event}\n" + "\n".join(refused))
+
+
 class _Gate:
     """A script marker holding the backend until the test releases it.
 
@@ -141,6 +165,7 @@ class _FakeSession(RealtimeBackendSession):
         "reader_cancelled",
         "region",
         "texts",
+        "tool_results",
     )
 
     def __init__(self, script: list[Any]) -> None:
@@ -153,10 +178,15 @@ class _FakeSession(RealtimeBackendSession):
         self._script = script
         self.audio = bytearray()
         self.texts: list[str] = []
+        self.tool_results: list[tuple[str, str]] = []
         self.ended = 0
         self.region = "us-east-1"
         self.closed = asyncio.Event()
         self.reader_cancelled = False
+
+    async def send_tool_result(self, call_id: str, output: str) -> None:
+        """Record one answer to a tool the model called."""
+        self.tool_results.append((call_id, output))
 
     async def send_audio(self, audio: Any) -> None:  # noqa: ANN401
         """Record one chunk of the caller's speech."""
@@ -201,14 +231,22 @@ class _FakeModel(RealtimeModelBase[Any, Any]):
 
     MAX_SESSION_SECONDS = 30.0
 
+    TOOLS_SUPPORTED = True
+
     #: The session every conversation of this model opened, for assertions.
     opened: list[_FakeSession] = []  # noqa: RUF012 - a test double's recorder
+
+    #: Arguments every conversation of this model was opened with.
+    opened_with: list[dict[str, Any]] = []  # noqa: RUF012 - a test double's recorder
 
     #: Script every conversation replays.
     script: list[Any] = []  # noqa: RUF012 - a test double's recorder
 
     @asynccontextmanager
-    async def open_session(self, **_: Any) -> AsyncIterator[RealtimeBackendSession]:  # noqa: ANN401
+    async def open_session(
+        self,
+        **arguments: Any,  # noqa: ANN401 - every argument of the real signature
+    ) -> AsyncIterator[RealtimeBackendSession]:
         """Open one fake conversation, whose stream ends when it is closed.
 
         Yields:
@@ -216,6 +254,7 @@ class _FakeModel(RealtimeModelBase[Any, Any]):
         """
         session = _FakeSession(list(_FakeModel.script))
         _FakeModel.opened.append(session)
+        _FakeModel.opened_with.append(arguments)
         try:
             yield session
         finally:
@@ -253,9 +292,11 @@ def fake_backend(monkeypatch: pytest.MonkeyPatch) -> Iterator[type[_FakeModel]]:
     monkeypatch.setattr(realtime, "validate_model", _validate_model)
     monkeypatch.setattr(realtime, "get_realtime_model", lambda _id: _FakeModel(_MODEL))
     _FakeModel.opened = []
+    _FakeModel.opened_with = []
     _FakeModel.script = []
     yield _FakeModel
     _FakeModel.opened = []
+    _FakeModel.opened_with = []
     _FakeModel.script = []
 
 
@@ -2633,28 +2674,7 @@ class TestOfficialEventTypes:
          stdapi/realtime.py:_item_body
     """
 
-    @staticmethod
-    def _validate(events: list[dict[str, Any]]) -> None:
-        """Fail on the first event the official models refuse.
-
-        Args:
-            events: Every event the session sent, in order.
-        """
-        from pydantic import ValidationError  # noqa: PLC0415
-
-        for event in events:
-            try:
-                _SERVER_EVENT.validate_python(event)
-            except ValidationError as error:
-                # One error per member of a 45-way union; only ours is readable.
-                refused = [
-                    line
-                    for line in str(error).splitlines()
-                    if event["type"].replace(".", "-") in line.lower()
-                ]
-                pytest.fail(
-                    f"{event['type']} was refused: {event}\n" + "\n".join(refused)
-                )
+    _validate = staticmethod(_assert_official_shape)
 
     def test_a_spoken_turn_parses_whole(
         self, app_client: TestClient, fake_backend: type[_FakeModel]
@@ -2823,3 +2843,426 @@ class TestBackendTeardown:
             await teardown
         await reader
         assert not cancelled, "the outer cancellation reached the backend reader"
+
+
+#: One tool a session declares, in the shape a client sends it.
+_WEATHER_TOOL: dict[str, Any] = {
+    "type": "function",
+    "name": "get_weather",
+    "description": "Get the current weather for a city.",
+    "parameters": {
+        "type": "object",
+        "properties": {"location": {"type": "string"}},
+        "required": ["location"],
+    },
+}
+
+#: A session declaring one tool, as a client configures it.
+_TOOL_SESSION: dict[str, Any] = {
+    "type": "realtime",
+    "tools": [_WEATHER_TOOL],
+    "tool_choice": "auto",
+}
+
+#: The call the fake backend reports, and the arguments it carries.
+_TOOL_CALL = ToolCall(
+    call_id="call-1", name="get_weather", arguments='{"location":"Seattle"}'
+)
+
+
+class TestFunctionTools:
+    """A tool the session declared, the call it produces, and its answer.
+
+    A voice agent's tools are the whole point of the session for most
+    applications: the model asks for one by name, the application runs it, and
+    the answer is what the model then speaks. The call has to reach the client
+    as its own finished response -- a client that has not been told the answer
+    is over never runs the tool, and the conversation stops there.
+
+    Ref: https://developers.openai.com/api/reference/resources/realtime/server-events
+         stdapi/realtime.py:RealtimeSession._report_tool_call
+    """
+
+    @staticmethod
+    def _declare(websocket: Any) -> dict[str, Any]:  # noqa: ANN401
+        """Declare the weather tool on an open session and return the answer."""
+        websocket.receive_json()
+        websocket.send_json({"type": "session.update", "session": _TOOL_SESSION})
+        updated: dict[str, Any] = websocket.receive_json()
+        return updated
+
+    @pytest.mark.usefixtures("fake_backend")
+    def test_the_declared_tools_are_echoed_by_the_updated_session(
+        self, app_client: TestClient
+    ) -> None:
+        """A client reads back what it declared, as it does upstream."""
+        with _connect(app_client) as websocket:
+            updated = self._declare(websocket)
+
+        assert updated["type"] == "session.updated", updated
+        assert updated["session"]["tools"] == [_WEATHER_TOOL], updated
+        assert updated["session"]["tool_choice"] == "auto", updated
+
+    def test_the_declared_tools_open_the_conversation(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """The model is told about the tools before it can answer anything."""
+        fake_backend.script = list(_ANSWER_SCRIPT)
+
+        with _connect(app_client) as websocket:
+            self._declare(websocket)
+            websocket.send_json({"type": "response.create"})
+            _drain(websocket, "response.done")
+
+        opened = fake_backend.opened_with[0]
+        assert [tool.name for tool in opened["tools"]] == ["get_weather"], opened
+        assert opened["tools"][0].parameters == _WEATHER_TOOL["parameters"], opened
+        assert opened["tool_choice"] == "auto", opened
+
+    @pytest.mark.parametrize(
+        ("requested", "expected"),
+        [
+            ("required", "required"),
+            ({"type": "function", "name": "get_weather"}, NamedTool("get_weather")),
+        ],
+    )
+    def test_the_tool_choice_reaches_the_model(
+        self,
+        app_client: TestClient,
+        fake_backend: type[_FakeModel],
+        requested: str | dict[str, str],
+        expected: str | NamedTool,
+    ) -> None:
+        """Each way of choosing a tool is carried, not dropped."""
+        fake_backend.script = list(_ANSWER_SCRIPT)
+
+        with _connect(app_client) as websocket:
+            websocket.receive_json()
+            websocket.send_json(
+                {
+                    "type": "session.update",
+                    "session": {**_TOOL_SESSION, "tool_choice": requested},
+                }
+            )
+            websocket.receive_json()
+            websocket.send_json({"type": "response.create"})
+            _drain(websocket, "response.done")
+
+        assert fake_backend.opened_with[0]["tool_choice"] == expected
+
+    def test_tool_choice_none_opens_the_conversation_with_no_tools(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """Asking for no tool call is asking for a session that has no tools."""
+        fake_backend.script = list(_ANSWER_SCRIPT)
+
+        with _connect(app_client) as websocket:
+            websocket.receive_json()
+            websocket.send_json(
+                {
+                    "type": "session.update",
+                    "session": {**_TOOL_SESSION, "tool_choice": "none"},
+                }
+            )
+            websocket.receive_json()
+            websocket.send_json({"type": "response.create"})
+            _drain(websocket, "response.done")
+
+        assert fake_backend.opened_with[0]["tools"] == (), fake_backend.opened_with[0]
+
+    def test_a_call_is_reported_as_a_finished_function_call_response(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """The call arrives whole: item, arguments, and the response it ends."""
+        fake_backend.script = [ResponseStarted(), _TOOL_CALL]
+
+        with _connect(app_client) as websocket:
+            self._declare(websocket)
+            websocket.send_json({"type": "response.create"})
+            events = _drain(websocket, "response.done")
+
+        kinds = [event["type"] for event in events]
+        assert kinds == [
+            "response.created",
+            "response.output_item.added",
+            "conversation.item.added",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+            "response.output_item.done",
+            "conversation.item.done",
+            "response.done",
+        ], kinds
+        by_kind = {event["type"]: event for event in events}
+        added = by_kind["response.output_item.added"]["item"]
+        assert added["type"] == "function_call"
+        assert added["name"] == "get_weather"
+        assert added["call_id"] == "call-1"
+        assert added["status"] == "in_progress"
+        arguments = by_kind["response.function_call_arguments.done"]
+        assert arguments["arguments"] == '{"location":"Seattle"}'
+        assert arguments["call_id"] == "call-1"
+        assert arguments["name"] == "get_weather"
+        assert arguments["item_id"] == added["id"]
+        assert by_kind["response.function_call_arguments.delta"]["delta"] == (
+            '{"location":"Seattle"}'
+        )
+        done = by_kind["response.done"]["response"]
+        assert done["status"] == "completed", done
+        assert done["output"] == [
+            {
+                "id": added["id"],
+                "object": "realtime.item",
+                "type": "function_call",
+                "status": "completed",
+                "name": "get_weather",
+                "call_id": "call-1",
+                "arguments": '{"location":"Seattle"}',
+            }
+        ], done
+
+    def test_a_call_after_speech_keeps_the_spoken_item_in_the_response(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """A model that speaks before calling reports both, in order."""
+        fake_backend.script = [
+            ResponseStarted(),
+            OutputTranscript("Let me check."),
+            _TOOL_CALL,
+        ]
+
+        with _connect(app_client) as websocket:
+            self._declare(websocket)
+            websocket.send_json({"type": "response.create"})
+            events = _drain(websocket, "response.done")
+
+        output = events[-1]["response"]["output"]
+        assert [item["type"] for item in output] == ["message", "function_call"], output
+        indexes = [
+            event["output_index"]
+            for event in events
+            if event["type"] == "response.output_item.done"
+        ]
+        assert indexes == [0, 1], indexes
+
+    def test_the_answer_to_a_call_reaches_the_model_and_settles_as_an_item(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """``function_call_output`` is what the model was waiting for."""
+        fake_backend.script = [ResponseStarted(), _TOOL_CALL]
+
+        with _connect(app_client) as websocket:
+            self._declare(websocket)
+            websocket.send_json({"type": "response.create"})
+            _drain(websocket, "response.done")
+            websocket.send_json(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "function_call_output",
+                        "call_id": "call-1",
+                        "output": '{"temperature_c": 14}',
+                    },
+                }
+            )
+            events = _drain(websocket, "conversation.item.done")
+
+        assert fake_backend.opened[0].tool_results == [
+            ("call-1", '{"temperature_c": 14}')
+        ]
+        kinds = [event["type"] for event in events]
+        assert kinds == [
+            "conversation.item.created",
+            "conversation.item.added",
+            "conversation.item.done",
+        ], kinds
+        item = events[-1]["item"]
+        assert item["type"] == "function_call_output"
+        assert item["call_id"] == "call-1"
+        assert item["output"] == '{"temperature_c": 14}'
+
+    def test_an_answer_to_a_call_nothing_made_is_refused(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """An output for an unknown call is a client mistake, not model input."""
+        fake_backend.script = list(_ANSWER_SCRIPT)
+
+        with _connect(app_client) as websocket:
+            self._declare(websocket)
+            websocket.send_json(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "function_call_output",
+                        "call_id": "call-unknown",
+                        "output": "{}",
+                    },
+                }
+            )
+            error = websocket.receive_json()
+
+        assert error["type"] == "error", error
+        assert "call-unknown" in error["error"]["message"], error
+        assert fake_backend.opened == [], "a stray output opened a conversation"
+
+    def test_the_same_call_cannot_be_answered_twice(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """The model expects one answer per call, and gets exactly one."""
+        fake_backend.script = [ResponseStarted(), _TOOL_CALL]
+        answer: dict[str, Any] = {
+            "type": "conversation.item.create",
+            "item": {
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": "{}",
+            },
+        }
+
+        with _connect(app_client) as websocket:
+            self._declare(websocket)
+            websocket.send_json({"type": "response.create"})
+            _drain(websocket, "response.done")
+            websocket.send_json(answer)
+            _drain(websocket, "conversation.item.done")
+            websocket.send_json(answer)
+            error = websocket.receive_json()
+
+        assert error["type"] == "error", error
+        assert len(fake_backend.opened[0].tool_results) == 1
+
+    def test_tools_cannot_be_changed_once_the_model_has_answered(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """The conversation is opened with its tools, as with its voice."""
+        fake_backend.script = list(_ANSWER_SCRIPT)
+
+        with _connect(app_client) as websocket:
+            self._declare(websocket)
+            websocket.send_json({"type": "response.create"})
+            _drain(websocket, "response.done")
+            websocket.send_json(
+                {"type": "session.update", "session": {"type": "realtime", "tools": []}}
+            )
+            error = websocket.receive_json()
+
+        assert error["type"] == "error", error
+        assert "tools" in error["error"]["message"], error
+
+    @pytest.mark.usefixtures("fake_backend")
+    def test_a_remote_mcp_server_tool_is_refused_by_name(
+        self, app_client: TestClient
+    ) -> None:
+        """Only functions this client runs itself are available."""
+        with _connect(app_client) as websocket:
+            websocket.receive_json()
+            websocket.send_json(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "type": "realtime",
+                        "tools": [
+                            {
+                                "type": "mcp",
+                                "server_label": "docs",
+                                "server_url": "https://example.invalid/mcp",
+                            }
+                        ],
+                    },
+                }
+            )
+            error = websocket.receive_json()
+
+        assert error["type"] == "error", error
+        assert "function" in error["error"]["message"], error
+
+    def test_a_call_the_client_cancelled_is_still_answered_to_the_model(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """A model left waiting for a result answers nothing else, ever again."""
+        gate = _Gate()
+        fake_backend.script = [ResponseStarted(), gate, _TOOL_CALL, ResponseFinished()]
+
+        with _connect(app_client) as websocket:
+            self._declare(websocket)
+            websocket.send_json({"type": "response.create"})
+            websocket.receive_json()
+            assert gate.reached.wait(_GATE_TIMEOUT), "the backend never started"
+            websocket.send_json({"type": "response.cancel"})
+            _drain(websocket, "response.done")
+            gate.release()
+            # The cancelled answer is not reported; the model is still answered.
+            deadline = time.monotonic() + _GATE_TIMEOUT
+            while not fake_backend.opened[0].tool_results:
+                assert time.monotonic() < deadline, "the model was left waiting"
+                time.sleep(0.01)
+
+        assert fake_backend.opened[0].tool_results[0][0] == "call-1"
+
+    def test_a_tool_turn_parses_against_the_official_event_models(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """Every event of a call and its answer parses in the official client.
+
+        Ref: openai.types.realtime.realtime_server_event.RealtimeServerEvent
+        """
+        fake_backend.script = [ResponseStarted(), _TOOL_CALL]
+
+        with _connect(app_client) as websocket:
+            events = [websocket.receive_json()]
+            websocket.send_json({"type": "session.update", "session": _TOOL_SESSION})
+            events.append(websocket.receive_json())
+            websocket.send_json({"type": "response.create"})
+            events += _drain(websocket, "response.done")
+            websocket.send_json(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "function_call_output",
+                        "call_id": "call-1",
+                        "output": '{"temperature_c": 14}',
+                    },
+                }
+            )
+            events += _drain(websocket, "conversation.item.done")
+
+        _assert_official_shape(events)
+
+    def test_two_calls_in_a_turn_are_each_their_own_answer(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """A model calling twice leaves neither call unanswerable."""
+        second = ToolCall(
+            call_id="call-2", name="get_weather", arguments='{"location":"Paris"}'
+        )
+        fake_backend.script = [ResponseStarted(), _TOOL_CALL, second]
+
+        with _connect(app_client) as websocket:
+            self._declare(websocket)
+            websocket.send_json({"type": "response.create"})
+            events = _drain(websocket, "response.done")
+            events += _drain(websocket, "response.done")
+            for call_id in ("call-1", "call-2"):
+                websocket.send_json(
+                    {
+                        "type": "conversation.item.create",
+                        "item": {
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": "{}",
+                        },
+                    }
+                )
+                events += _drain(websocket, "conversation.item.done")
+
+        finished = [event for event in events if event["type"] == "response.done"]
+        assert len(finished) == 2, [event["type"] for event in events]
+        assert [
+            item["call_id"]
+            for event in finished
+            for item in event["response"]["output"]
+        ] == ["call-1", "call-2"], finished
+        assert finished[0]["response"]["id"] != finished[1]["response"]["id"], finished
+        assert fake_backend.opened[0].tool_results == [
+            ("call-1", "{}"),
+            ("call-2", "{}"),
+        ]
