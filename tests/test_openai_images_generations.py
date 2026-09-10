@@ -38,6 +38,7 @@ from tests.conftest import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Iterable
+    from types import ModuleType
 
     from openai.types import ImageEditCompletedEvent, ImageEditPartialImageEvent
     from openai.types.image_gen_completed_event import ImageGenCompletedEvent
@@ -354,6 +355,108 @@ def validate_image_usage(usage: Usage | None) -> None:
     assert (
         usage.input_tokens_details.image_tokens + usage.input_tokens_details.text_tokens
         == usage.input_tokens
+    )
+
+
+def assert_sse_frames_name_their_event(body: str, expected_types: list[str]) -> None:
+    """Assert every SSE frame names its event before carrying its payload.
+
+    Args:
+        body: The raw streaming response body, as it went over the wire.
+        expected_types: The event names expected, in order.
+
+    Raises:
+        AssertionError: If a frame carries no ``event:`` line, carries it after
+            its ``data:`` line, or names something other than its own payload
+            type.
+    """
+    frames = [
+        frame.splitlines()
+        for frame in body.replace("\r\n", "\n").split("\n\n")
+        if frame.strip()
+    ]
+    assert frames, f"The stream carried no frame at all: {body!r}"
+
+    names = []
+    for frame in frames:
+        assert len(frame) == 2, f"Frame is not a name line and a data line: {frame}"
+        assert frame[0].startswith("event: "), f"Frame carries no event name: {frame}"
+        assert frame[1].startswith("data: "), (
+            f"Frame data must follow its name: {frame}"
+        )
+        name = frame[0].removeprefix("event: ")
+        assert json.loads(frame[1].removeprefix("data: "))["type"] == name, (
+            f"Event name and payload type disagree: {frame}"
+        )
+        names.append(name)
+
+    assert names == expected_types, body
+
+
+class _StubStreamingImageJob:
+    """Image job whose streams are two fixed frames, standing in for a backend.
+
+    Emits one preview frame and then the final image, so both event families a
+    streamed request can carry are exercised without generating an image.
+    """
+
+    output_format = "png"
+    width = 512
+    height = 512
+    quality = "medium"
+    count = 1
+    input_tokens = 3
+    output_tokens = 1
+
+    async def _frames(self) -> AsyncGenerator[ImageGenerationResponse]:
+        """Yield one preview frame, then the finished image."""
+        yield ImageGenerationResponse(image="cHJldmlldw==", index=0, partial=True)
+        yield ImageGenerationResponse(image="ZmluYWw=", index=0)
+
+    def generate_images_stream(
+        self, **_kwargs: object
+    ) -> AsyncGenerator[ImageGenerationResponse]:
+        """Stream the fixed frames for a generation request."""
+        return self._frames()
+
+    def edit_images_stream(
+        self, **_kwargs: object
+    ) -> AsyncGenerator[ImageGenerationResponse]:
+        """Stream the fixed frames for an edit request."""
+        return self._frames()
+
+
+class _StubStreamingImageModel:
+    """Image model handing out :class:`_StubStreamingImageJob` jobs."""
+
+    def get_image_generation_job(self, **_kwargs: object) -> _StubStreamingImageJob:
+        """Return the stub job for a generation request."""
+        return _StubStreamingImageJob()
+
+    def get_image_edit_job(self, **_kwargs: object) -> _StubStreamingImageJob:
+        """Return the stub job for an edit request."""
+        return _StubStreamingImageJob()
+
+
+def stub_streaming_image_model(
+    monkeypatch: pytest.MonkeyPatch, module: ModuleType
+) -> None:
+    """Serve *module*'s route from a stub that streams a preview and a final image.
+
+    Args:
+        monkeypatch: The active monkeypatch fixture.
+        module: The route module whose model resolution is replaced.
+    """
+
+    async def _validate_model(
+        model_id: str, *_args: object, **_kwargs: object
+    ) -> object:
+        """Accept any model ID without calling AWS."""
+        return SimpleNamespace(id=model_id)
+
+    monkeypatch.setattr(module, "validate_model", _validate_model)
+    monkeypatch.setattr(
+        module, "get_image_model", lambda _model_id: _StubStreamingImageModel()
     )
 
 
@@ -1914,3 +2017,41 @@ class TestImageUsageFallbacks:
         assert usage.input_tokens_details is not None
         assert usage.input_tokens_details.image_tokens == 2
         assert usage.input_tokens_details.text_tokens == 5
+
+
+@pytest.mark.local
+class TestStreamedFramesAreNamedOnTheWire:
+    """Every streamed frame names its event before its data, as OpenAI's does.
+
+    The vendor SDKs discriminate on the JSON ``type``, so only a client reading
+    the raw stream sees the difference -- and for one dispatching on the SSE
+    event name, an unnamed frame is silently dropped. The assertions therefore
+    read the response body itself rather than going through the SDK.
+
+    Ref: https://developers.openai.com/api/reference/resources/images.md
+         stdapi/routes/openai_images_generations.py:stream_generator
+    """
+
+    def test_generation_frames_carry_their_event_name(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A streamed generation names each frame ``image_generation.*``."""
+        stub_streaming_image_model(monkeypatch, openai_images_generations)
+
+        response = app_client.post(
+            "/v1/images/generations",
+            json={
+                "model": "stub-model",
+                "prompt": "a cat",
+                "response_format": "b64_json",
+                "stream": True,
+                "partial_images": 1,
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert_sse_frames_name_their_event(
+            response.text,
+            ["image_generation.partial_image", "image_generation.completed"],
+        )
