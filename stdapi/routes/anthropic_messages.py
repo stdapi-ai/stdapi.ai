@@ -296,7 +296,7 @@ async def count_tokens(
 
     Raises:
         ApiError: If model is invalid, does not support text output, or is
-            served by a Marketplace model endpoint (400).
+            served by a Marketplace or SageMaker AI model endpoint (400).
     """
     log_request_params(request)
     warn_mcp_connector_ignored(request)

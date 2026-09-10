@@ -483,6 +483,7 @@ def _extract_system_content_blocks(
     return blocks
 
 
+#: Content part types resolved synchronously, without an async to_bedrock_content_block() call.
 _SYNC_OPENAI_PARTS = (ChatCompletionContentPartTextParam,)
 
 

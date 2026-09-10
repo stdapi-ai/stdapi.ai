@@ -142,9 +142,13 @@ _BEDROCK_MODEL_ERROR_CODES: frozenset[str] = frozenset(
 GUARDRAIL_CONFIG_VAR: ContextVar[GuardrailStreamConfigurationTypeDef] = ContextVar(
     "guardrail_configuration"
 )
+#: Header naming the guardrail identifier to apply.
 _GUARDRAIL_IDENTIFIER_HEADER = "X-Amzn-Bedrock-GuardrailIdentifier"
+#: Header naming the guardrail version to apply.
 _GUARDRAIL_VERSION_HEADER = "X-Amzn-Bedrock-GuardrailVersion"
+#: Header selecting the guardrail trace mode.
 _GUARDRAIL_TRACE_HEADER = "X-Amzn-Bedrock-Trace"
+#: Valid values for the guardrail trace header/field.
 _GUARDRAIL_TRACE_VALUES: frozenset[str] = frozenset(
     ("disabled", "enabled", "enabled_full")
 )
@@ -164,7 +168,9 @@ GUARDRAIL_REQUEST_OVERRIDE_VAR: ContextVar[bool] = ContextVar(
 PERFORMANCE_CONFIG_VAR: ContextVar[
     tuple[PerformanceConfigLatencyType | None, ServiceTierTypeType | None]
 ] = ContextVar("performance_configuration")
+#: Header selecting the request's performance-config latency.
 _PERFORMANCE_CONFIG_LATENCY_HEADER = "X-Amzn-Bedrock-PerformanceConfig-Latency"
+#: Header selecting the request's service tier.
 _SERVICE_TIER_HEADER = "X-Amzn-Bedrock-Service-Tier"
 
 

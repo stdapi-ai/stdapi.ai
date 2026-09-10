@@ -210,6 +210,9 @@ def _engine_from_model(model: str) -> EngineType:
 
     Returns:
         Engine name.
+
+    Raises:
+        UnsupportedModelError: If `model` is not one of the supported Polly engines.
     """
     if model not in _SUPPORTED_SPEECH_MODELS:
         raise UnsupportedModelError(model)

@@ -31,8 +31,7 @@ from stdapi.types.openai_files import (
 )
 from stdapi.utils import missing_file_error, validation_error_handler
 
-#: Download hardening: the stored content type is client-controlled, so the
-#: response must never be rendered inline nor content-type-sniffed by a browser.
+#: Content type is client-controlled: force download and disable content-type sniffing.
 _CONTENT_DOWNLOAD_HEADERS = {
     "Content-Disposition": "attachment",
     "X-Content-Type-Options": "nosniff",

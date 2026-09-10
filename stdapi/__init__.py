@@ -1,5 +1,5 @@
-"""AWS-based OpenAI compatible API implementation.
+"""AWS-based OpenAI, Anthropic, Cohere and Ollama compatible API implementation.
 
-This package provides an OpenAI-compatible API using AWS services like Bedrock,
-Comprehend, Polly, and Transcribe as backends.
+This package provides OpenAI-, Anthropic-, Cohere- and Ollama-compatible APIs
+using AWS services like Bedrock, Comprehend, Polly, and Transcribe as backends.
 """

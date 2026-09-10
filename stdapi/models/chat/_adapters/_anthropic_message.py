@@ -194,8 +194,7 @@ _SERVICES_TIERS: dict[ServiceTiers | None, ServiceTierTypeType] = {
     "reserved": "reserved",
 }
 
-#: Bedrock service tiers to the tier an Anthropic response reports; the Bedrock-only
-#: "flex" and "reserved" have no Anthropic equivalent and are deliberately absent.
+#: Bedrock service tiers to the tier an Anthropic response reports; "flex"/"reserved" have no Anthropic equivalent and are deliberately absent.
 _RESPONSE_SERVICES_TIERS: dict[str, ResponseServiceTiers] = {
     "default": "standard",
     "priority": "priority",

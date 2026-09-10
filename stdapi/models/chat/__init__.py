@@ -86,7 +86,7 @@ class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
 
         Returns:
             - ChatCompletion when stream is False.
-            - AsyncGenerator streaming ChatCompletionChunk events when stream is True.
+            - EventSourceResponse streaming ChatCompletionChunk events when stream is True.
         """
 
     @abstractmethod

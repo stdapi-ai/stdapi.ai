@@ -418,6 +418,8 @@ async def copy_s3_object(
         BotoCoreError: If the AWS SDK fails.
         ClientError: If S3 returns an error.
         ValueError: If the source object has an invalid size.
+        FeatureUnavailableError: No S3 bucket is configured for 'dest_region' when
+            'dest_bucket' is not given.
     """
     s3 = get_client("s3", dest_region)
     head = await s3.head_object(Bucket=source_bucket, Key=source_key)
@@ -528,6 +530,10 @@ async def put_s3_object(
 
     Returns:
         An :class:`S3Object` referencing the uploaded object.
+
+    Raises:
+        ValueError: Neither 'bucket' nor 'region' was given.
+        FeatureUnavailableError: No S3 bucket is configured for 'region'.
     """
     bucket = bucket or (
         require_s3_bucket_for_region(region, feature=_INPUT_STORAGE_FEATURE)

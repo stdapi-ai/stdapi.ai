@@ -32,6 +32,7 @@ TaskType = Literal[
     "BACKGROUND_REMOVAL",
 ]
 
+#: Maps OpenAI's three image-quality levels to Amazon's two-tier quality value.
 AMZ_QUALITY_MAP: dict[ImageOutputQuality, AmzQuality] = {
     "low": "standard",
     "medium": "standard",

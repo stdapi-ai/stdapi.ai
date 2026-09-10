@@ -858,10 +858,6 @@ class ChatModel(ChatModelBase[Any, Any]):
             reasoning_effort: Reasoning effort level.
             budget_tokens: Explicit token budget for reasoning.
             max_tokens: Used by overrides to derive budget.
-
-        Raises:
-            ApiError: If *enabled* is ``True`` and *reasoning_effort* or *budget_tokens*
-                is not ``None``.
         """
 
     def _resp_map_tool_result(

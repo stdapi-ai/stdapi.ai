@@ -433,7 +433,7 @@ class SpeechCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=True):
 
     @model_validator(mode="after")
     def _unsupported(self) -> Self:
-        """Validate unsupported or incompatible transcription options."""
+        """Validate unsupported or incompatible speech generation options."""
         if self.input.startswith("<speak>") and "speed" in self.model_fields_set:
             msg = "speed is not supported for SSML input. In this case, set speed directly in SSML."
             raise ValueError(msg)

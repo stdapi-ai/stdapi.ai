@@ -881,7 +881,8 @@ class RealtimeSession:
                 async with async_timeout(self._model.MAX_SESSION_SECONDS):
                     await self._client_task
             except CancelledError:
-                # Only a cancellation from the backend half ends the session.
+                # A close already set by the backend, a hangup, or a shutdown is
+                # expected; anything else propagates.
                 if self._closing is None:
                     raise
             finally:

@@ -221,13 +221,13 @@ async def gather_records[RecordT: BaseModel](
 async def read_file(store_id: str, file_id: str) -> FileRecord:
     """Return the file record of *file_id* in *store_id*.
 
-    Args:
-        store_id: A validated vector store identifier.
-        file_id: A file identifier.
-
     A file whose vectors are being reclaimed is already detached as far as the
     caller is concerned: its record only outlives the delete so the reclaim can
     be finished, and is answered as an unknown file.
+
+    Args:
+        store_id: A validated vector store identifier.
+        file_id: A file identifier.
 
     Returns:
         The file record.

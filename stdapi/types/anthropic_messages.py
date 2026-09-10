@@ -56,7 +56,7 @@ RefusalCategories = Literal[
     "cyber", "bio", "frontier_llm", "reasoning_extraction", "general_harms"
 ]
 
-# Server tools
+#: Names of the server-side tools a request may declare.
 ServerTools = Literal[
     "web_search",
     "web_fetch",

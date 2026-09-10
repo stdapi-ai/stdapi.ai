@@ -130,7 +130,7 @@ async def create_embeddings(
         request: Embedding creation parameters following OpenAI API.
 
     Returns:
-        EmbeddingListResponse containing embedding vectors, one per input item.
+        CreateEmbeddingResponse containing embedding vectors, one per input item.
 
     Raises:
         ApiError: With 404 if the model does not exist; 400 on unsupported

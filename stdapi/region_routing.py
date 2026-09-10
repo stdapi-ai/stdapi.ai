@@ -53,9 +53,7 @@ _QUOTA_STALE_THRESHOLD: int = (
 _REGION_LATENCIES: dict[RegionName, float] = {}
 
 #: Bedrock regions in priority order
-ORDERED_BEDROCK_REGIONS: list[RegionName] = (
-    SETTINGS.aws_bedrock_regions.copy()  # typing: ignore[assignment]
-)
+ORDERED_BEDROCK_REGIONS: list[RegionName] = SETTINGS.aws_bedrock_regions.copy()
 
 #: Request-scope state key carrying the quota backoff to surface as ``retry-after``.
 _QUOTA_BACKOFF_STATE_KEY: str = "stdapi_quota_backoff_seconds"

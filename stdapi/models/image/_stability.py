@@ -209,7 +209,7 @@ class StabilityImageGenerationJobBase(
 
     __slots__ = ("_input_tokens", "_output_tokens", "_response_output_format")
 
-    # Supported formats
+    #: Supported output formats.
     _OUTPUT_FORMATS: ClassVar[frozenset[str]] = frozenset({"png", "jpeg", "webp"})
 
     @staticmethod

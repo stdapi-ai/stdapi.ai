@@ -968,7 +968,7 @@ async def count_input_tokens(
     Raises:
         ApiError: If the model is unknown (404, as upstream answers here), or
             the request is unsupported, or the model is served by Bedrock
-            Mantle or a Marketplace model endpoint (400).
+            Mantle, Marketplace, or SageMaker AI (400).
     """
     log_request_params(request)
     model = await validate_model(

@@ -245,9 +245,11 @@ class EmbeddingModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             raise
 
 
+#: Model ID (or pattern) to embedding model class registry.
 _MODEL_REGISTRY: list[
     tuple[str | Pattern[str], type[EmbeddingModelBase[Any, Any]]]
 ] = []
+#: Instantiated embedding models by model ID.
 _MODEL_CACHE: dict[str, EmbeddingModelBase[Any, Any]] = {}
 
 

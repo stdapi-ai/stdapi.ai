@@ -23,7 +23,8 @@ class TextToImageJob(StabilityImageGenerationJobBase):
 
     __slots__ = ("_prompt",)
 
-    _DEFAULT_STRENGTH = 0.35  # Use the same default value as Stable Image Ultra
+    #: Default image-to-image strength, matching Stable Image Ultra's own default.
+    _DEFAULT_STRENGTH = 0.35
 
     async def _generate_images_from_text(
         self,

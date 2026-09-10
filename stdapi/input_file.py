@@ -1133,9 +1133,6 @@ class _UploadSource(_FileSource):
 
         Returns:
             The complete file bytes.
-
-        Raises:
-            ApiError: When the upload reference is missing.
         """
         if not hasattr(self, "_content_type"):
             await self._resolve_metadata()
@@ -1553,6 +1550,9 @@ class InputFile:
 
         Returns:
             Bedrock content block dict ready to embed in a messages request.
+
+        Raises:
+            ApiError: When the content type resolves to an unsupported document format.
         """
         if content_type is None:
             content_type = await self.get_content_type()

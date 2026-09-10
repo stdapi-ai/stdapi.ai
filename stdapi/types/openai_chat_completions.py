@@ -477,7 +477,7 @@ class ChatCompletionAllowedToolsParam(BaseModelRequest):
 
 # Ref: openai.types.chat.chat_completion_allowed_tool_choice_param.ChatCompletionAllowedToolChoiceParam
 class ChatCompletionAllowedToolChoiceParam(BaseModelRequest):
-    """Allowed tools list choice. Used by OpenAI; mapped to auto in this project."""
+    """Allowed tools list choice. UNSUPPORTED on this implementation: rejected."""
 
     type: Literal["allowed_tools"] = Field(
         description="Allowed tools choice type. Always `allowed_tools`."
@@ -968,7 +968,6 @@ class ChatCompletionMessage(BaseModelResponse):
         return _rename_emitted_reasoning(handler(self))
 
 
-#: Emitted reasoning field, or nothing at all, as the operator configured it.
 def _rename_emitted_reasoning(data: dict[str, Any]) -> dict[str, Any]:
     """Move the serialized reasoning text under the configured field name.
 

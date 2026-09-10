@@ -4,7 +4,6 @@ Centralizes every environment variable the server reads, with type conversion
 and validation.
 
 Key Components:
-- _DefaultModelParameters: Defines reusable model inference parameters
 - _Settings: Main configuration class loaded from environment variables
 - SETTINGS: Global configuration instance used throughout the application
 """

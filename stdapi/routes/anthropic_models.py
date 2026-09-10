@@ -61,6 +61,7 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
     _ALL_MODELS: list[ModelInfo] = []
     #: Cached response for the common unpaginated call, rebuilt alongside `_ALL_MODELS`.
     _MODELS_RESPONSE = ModelListResponse(data=[])
+    #: Guards concurrent rebuilds of the model caches above.
     _ALL_MODELS_LOCK = Lock()
     #: Catalog generation the caches above were built from; -1 until they are.
     _CATALOG_GENERATION = -1

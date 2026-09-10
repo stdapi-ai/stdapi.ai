@@ -71,12 +71,10 @@ else:
 
 otel_manager = OpenTelemetryManager()
 
-#: Snapshot of SETTINGS.otel_enabled, fixed at process startup like the import above;
-#: skips building span names/attributes when tracing is off.
+#: Snapshot of SETTINGS.otel_enabled; fixed at process startup, skips building span attributes when tracing is off.
 _OTEL_ENABLED = SETTINGS.otel_enabled
 
-#: Shared no-op context manager for the disabled-tracing path, avoiding a
-#: per-request generator-based contextmanager allocation.
+#: Shared no-op context manager for the disabled-tracing path, avoiding a per-request allocation.
 _NULL_SPAN_CONTEXT = nullcontext()
 
 #: Per-region latency stat keys reported in the "start" event's region_latencies.

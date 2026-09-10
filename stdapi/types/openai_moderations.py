@@ -30,11 +30,11 @@ class ModerationTextInput(BaseModelRequest):
     text: str = Field(description="The text to classify.")
 
 
-# Ref: openai.types.moderation_create_params.ModerationCreateParams
 #: Maximum inputs per request; each yields a separate billable AWS moderation call.
 _MAX_INPUT_ITEMS = 2048
 
 
+# Ref: openai.types.moderation_create_params.ModerationCreateParams
 class ModerationCreateParams(BaseModelRequest):
     """Request body for POST /v1/moderations."""
 

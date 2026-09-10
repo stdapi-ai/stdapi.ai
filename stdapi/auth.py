@@ -22,10 +22,10 @@ from stdapi.tenant_keys import is_tenant_key, verify_tenant_key
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-#: HTTPBearer security scheme for API key authentication
+#: HTTPBearer scheme extracting the Authorization header's credential, whatever kind it is.
 _authorization_bearer = HTTPBearer(auto_error=False)
 
-#: APIKeyHeader security scheme for x-api-key authentication
+#: APIKeyHeader scheme extracting the x-api-key header's credential, whatever kind it is.
 _x_api_key = APIKeyHeader(name="x-api-key", auto_error=False)
 
 

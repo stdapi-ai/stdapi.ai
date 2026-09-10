@@ -276,7 +276,11 @@ async def mcp_server_card() -> JSONResponse:
 
 @router.get("/robots.txt")
 async def robots_txt() -> PlainTextResponse:
-    """Robots.txt optimized for API discovery by AI agents."""
+    """Robots.txt optimized for API discovery by AI agents.
+
+    Returns:
+        PlainTextResponse with the pre-rendered robots policy.
+    """
     return PlainTextResponse(_ROBOTS_TXT)
 
 
