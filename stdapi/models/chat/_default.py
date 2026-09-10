@@ -124,6 +124,9 @@ class ChatModel(ChatModelBase[Any, Any]):
     #: When False (default), they are extracted and merged into the system prompt field.
     SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED: ClassVar[bool] = False
 
+    #: ``toolAddition``/``toolRemoval`` blocks announce a mid-conversation tool-set change; no model accepts them yet, so this stays off until one does.
+    TOOL_SET_CHANGE_BLOCKS_SUPPORTED: ClassVar[bool] = False
+
     #: Maximum cache control blocks (Bedrock limit).
     MAX_CACHE_BLOCKS: ClassVar[int] = 4
 
@@ -805,6 +808,10 @@ class ChatModel(ChatModelBase[Any, Any]):
             bedrock_messages, exclude=_native_tool_names(additional_request_fields)
         ):
             request["toolConfig"] = synthesized
+        if self.TOOL_SET_CHANGE_BLOCKS_SUPPORTED:
+            self._req_announce_tool_set_change(
+                bedrock_messages, request.get("toolConfig")
+            )
         if additional_request_fields := self._prepare_additional_request_fields(
             additional_request_fields
         ):
@@ -1189,6 +1196,70 @@ class ChatModel(ChatModelBase[Any, Any]):
                 ``toolResult`` blocks that require multi-turn stub mode on both
                 the OpenAI and Anthropic routes.  ``None`` disables native-format routing.
         """
+
+    def _req_announce_tool_set_change(
+        self,
+        bedrock_messages: list[MessageTypeDef],
+        tool_config: ToolConfigurationTypeDef | None,
+    ) -> None:
+        """Announce a mid-conversation tool-set change in a ``system``-role message.
+
+        Emits one ``toolAddition`` block per tool this turn declares and the
+        history never names, and one ``toolRemoval`` block per tool the history
+        names and this turn no longer declares.  The whole tool list is sent on
+        every turn, so the blocks add nothing a model cannot already read off
+        ``toolConfig``: they exist so a conversation whose tool set moves keeps
+        a stable cached prefix, never to change what may be called.
+
+        The history is the only evidence of the earlier tool set, and it records
+        the tools that were *called* rather than the tools that were offered: a
+        removal is therefore certain, while an addition may name a tool that was
+        available all along and never called.  A conversation with no tool call
+        at all has no earlier tool set to differ from and gets nothing.
+
+        A ``system``-role message is accepted only where it precedes an
+        ``assistant`` message or ends the message list, and a request must still
+        end on a ``user`` message, which leaves the slot before the last
+        assistant turn as the only legal position.
+
+        Args:
+            bedrock_messages: Bedrock message list, mutated in place.
+            tool_config: Tool configuration this turn declares, if any.
+        """
+        history = {
+            block["toolUse"]["name"]
+            for message in bedrock_messages
+            for block in message.get("content", ())
+            if "toolUse" in block
+        }
+        if not history:
+            return
+        declared = {
+            name
+            for entry in (tool_config["tools"] if tool_config else ())
+            if (tool := entry.get("toolSpec") or entry.get("systemTool"))
+            and (name := tool.get("name"))
+        }
+        blocks: list[ContentBlockTypeDef] = [
+            {"toolAddition": {"tool": {"name": name}}}
+            for name in sorted(declared - history)
+        ]
+        blocks += [
+            {"toolRemoval": {"tool": {"name": name}}}
+            for name in sorted(history - declared)
+        ]
+        if not blocks:
+            return
+        position = next(
+            (
+                index
+                for index in reversed(range(len(bedrock_messages)))
+                if bedrock_messages[index]["role"] == "assistant"
+            ),
+            None,
+        )
+        if position is not None:
+            bedrock_messages.insert(position, {"role": "system", "content": blocks})
 
     def _req_extract_server_tools(
         self,
