@@ -1256,6 +1256,58 @@ class TestUploadHashingOffTheEventLoop:
         assert s3.assembled == first + second
         assert s3.reads == 0, "the running digest still answers for these parts"
 
+    async def test_a_cancelled_part_leaves_the_digest_naming_what_it_covers(
+        self, s3: _StubMultipartS3Client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Bytes folded in after their request went away are named by the signature.
+
+        Folding is shielded, so bytes already on their way into the digest go
+        in whether or not the request that sent them is still there. What says
+        which parts the digest covers has to move with them: a digest left one
+        part ahead of its signature still declares itself trustworthy, and
+        refuses the completion of an upload whose contents are exactly what the
+        client declared. Here the client retries the part it never got an
+        answer for, so the digest covers those bytes twice -- which only the
+        signature, and then the read-back, can tell.
+
+        Ref: stdapi/files/_multipart.py:add_part
+             stdapi/files/_multipart.py:_fold_part_into_digest
+        """
+        monkeypatch.setattr(_multipart, "_MD5_INLINE_MAX_BYTES", 0)
+        first, second = b"the first part, ", b"and the second part."
+        folding, release = asyncio.Event(), asyncio.Event()
+
+        async def gated_to_thread(func: Any, /, *args: Any) -> Any:  # noqa: ANN401
+            """Hold the second part's first fold open until its caller is cancelled."""
+            if args[0] is second and not folding.is_set():
+                folding.set()
+                await release.wait()
+            return func(*args)
+
+        monkeypatch.setattr(_multipart, "to_thread", gated_to_thread)
+        session = await _multipart.create_multipart_session(
+            "f.bin", "text/plain", "assistants", len(first) + len(second)
+        )
+        first_id, _ = await _multipart.add_part(session.upload_id, first)
+
+        handler = asyncio.create_task(_multipart.add_part(session.upload_id, second))
+        await folding.wait()
+        handler.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await handler
+        release.set()
+        # The client never read an answer for that part, so it sends it again.
+        retried_id, _ = await _multipart.add_part(session.upload_id, second)
+
+        await _multipart.complete_multipart_session(
+            session.upload_id,
+            [first_id, retried_id],
+            md5(first + second, usedforsecurity=False).hexdigest(),
+        )
+
+        assert s3.assembled == first + second
+        assert s3.reads == 1, "the digest covers a part the completion leaves out"
+
 
 #: Minimum size S3 enforces on every part of a multipart upload except the last.
 _S3_MIN_PART_SIZE: int = 5 * 1024 * 1024
