@@ -4,7 +4,7 @@ Do not import ImageModel from here - each model type has its own file with a
 specific ImageModel and MATCHER.
 """
 
-from typing import ClassVar, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, ClassVar, Literal, NotRequired, TypedDict
 
 from pydantic_core import to_json
 
@@ -14,6 +14,9 @@ from stdapi.models.image import (
     ImageGenerationResponse,
     ImageModelBase,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable
 
 # ============================================================================
 # Common Constants
@@ -207,7 +210,7 @@ class StabilityImageGenerationJobBase(
 ):
     """Base class for Stability AI image generation jobs."""
 
-    __slots__ = ("_input_tokens", "_output_tokens", "_response_output_format")
+    __slots__ = ()
 
     #: Supported output formats.
     _OUTPUT_FORMATS: ClassVar[frozenset[str]] = frozenset({"png", "jpeg", "webp"})
@@ -230,18 +233,24 @@ class StabilityImageGenerationJobBase(
             return new
         return current + new
 
-    @staticmethod
-    def _encode_request(request: Request) -> bytes:
-        """Serialize a finalized request body once for reuse across its fan-out.
+    def _fan_out(
+        self, request: Request
+    ) -> tuple[Awaitable[ImageGenerationResponse], ...]:
+        """Turn a finalized request into one invocation per requested image.
+
+        The body is identical for every image, so it is serialized once and
+        shared across the fan-out instead of being re-encoded per call.
 
         Args:
-            request: Finalized model request, identical for every image in
-                the fan-out.
+            request: Finalized model request.
 
         Returns:
-            JSON-encoded request body.
+            One awaitable image per requested image, in request order.
         """
-        return to_json(request)
+        body = to_json(request)
+        return tuple(
+            self._get_image_from_response(body, index) for index in range(self._count)
+        )
 
     async def _get_image_from_response(
         self, body: bytes, index: int
@@ -251,7 +260,7 @@ class StabilityImageGenerationJobBase(
         Stability jobs invoke the model once per image (fan-out), unlike
         single-invoke models, so token counts are accumulated across calls
         instead of overwritten. The request body is pre-encoded once (see
-        :meth:`_encode_request`) and reused for every call in the fan-out.
+        :meth:`_fan_out`) and reused for every call in the fan-out.
 
         Args:
             body: Pre-encoded JSON request body.

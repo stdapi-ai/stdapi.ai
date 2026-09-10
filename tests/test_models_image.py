@@ -7,7 +7,10 @@ Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase
 
 from asyncio import CancelledError, Event, sleep, wait_for
 from decimal import Decimal
+from importlib import import_module
 from io import BytesIO
+from pathlib import Path
+from pkgutil import iter_modules
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
@@ -15,18 +18,21 @@ import pytest
 from PIL import Image
 from pybase64 import b64decode as pybase64_b64decode
 from pybase64 import b64encode
+from pydantic_core import to_json
 
 import stdapi.models
 import stdapi.models.image
 from stdapi import usage
 from stdapi.api_errors import ApiError
 from stdapi.models import InvokeResult
+from stdapi.models.capabilities import Capability
 from stdapi.models.image import (
     ImageGenerationJobBase,
     ImageGenerationResponse,
     ImageModelBase,
 )
 from stdapi.models.image import amazon_nova_canvas as nova_canvas
+from stdapi.models.image import stability_stable_image as stable_image
 from stdapi.models.image._stability import (
     StabilityImageGenerationJobBase,
     StabilityImageModelBase,
@@ -1091,3 +1097,145 @@ class TestOutputCompressionReEncoding:
 
         assert result.image == source
         assert (job.width, job.height) == (64, 64)
+
+
+class TestStabilityFanOut:
+    """A Stability request is serialized once and reused by every image it fans out to.
+
+    Stability backends produce one image per invocation, so an ``n``-image
+    request becomes ``n`` calls carrying an identical body. Encoding that body
+    once is what stops the same payload being re-serialized per call, and every
+    Stability operation has to go through the same tail or one of them silently
+    stops sharing it.
+
+    Ref: stdapi/models/image/_stability.py:StabilityImageGenerationJobBase._fan_out
+    """
+
+    @staticmethod
+    def _job(model: object, count: int) -> StabilityImageGenerationJobBase:
+        """Build a *count*-image Stability job invoking *model*."""
+        return StabilityImageGenerationJobBase(
+            model=cast("StabilityImageModelBase", model),
+            prompt="a cat",
+            count=count,
+            width=1024,
+            height=1024,
+            quality=None,
+            style=None,
+            output_format=None,
+            output_compression=0,
+            extra_params={},
+        )
+
+    async def test_one_awaitable_per_image_shares_a_single_encoded_body(self) -> None:
+        """Three requested images produce three calls carrying the same body object."""
+        bodies: list[bytes] = []
+
+        class _FakeModel:
+            """Fake Stability model recording the body of each per-image call."""
+
+            async def invoke(self, request: bytes) -> InvokeResult[dict[str, Any]]:
+                """Record *request* and answer with a one-image response."""
+                bodies.append(request)
+                return InvokeResult(
+                    response={"images": ["img"]}, input_tokens=1, output_tokens=1
+                )
+
+        job = self._job(_FakeModel(), count=3)
+        request = job._build_text_to_image_base_request()  # noqa: SLF001
+
+        awaitables = job._fan_out(request)  # noqa: SLF001
+
+        assert len(awaitables) == 3
+        images = [await awaitable for awaitable in awaitables]
+        assert [image.index for image in images] == [0, 1, 2]
+        # Serialized once: every call received the very same bytes object.
+        assert len(bodies) == 3
+        assert bodies[0] is bodies[1] is bodies[2]
+        assert bodies[0] == to_json(request)
+
+    def test_every_stability_operation_uses_the_shared_tail(self) -> None:
+        """No Stability module keeps its own copy of the encode-and-fan-out tail.
+
+        The tail was duplicated in twelve places; a re-introduced copy would not
+        fail any behavioural test, so the absence of the duplicate is asserted
+        directly.
+        """
+        package = Path(stdapi.models.image.__file__).parent
+        offenders = [
+            path.name
+            for path in sorted(package.glob("stability*.py"))
+            if "_get_image_from_response(body, index)" in path.read_text()
+        ]
+
+        assert not offenders
+
+
+class TestImageJobSlots:
+    """No image class redeclares a slot one of its base classes already owns.
+
+    A redeclared slot allocates a second descriptor and a second per-instance
+    storage cell for the same attribute, and the subclass descriptor shadows the
+    base one. Both are silent, so only a structural check catches a re-introduced
+    duplicate.
+
+    Ref: https://docs.python.org/3/reference/datamodel.html#slots
+    """
+
+    @staticmethod
+    def _image_classes() -> list[type]:
+        """Import every image module and collect the classes it defines."""
+        for module in iter_modules(stdapi.models.image.__path__):
+            import_module(f"stdapi.models.image.{module.name}")
+        classes: list[type] = []
+        for base in (ImageGenerationJobBase, ImageModelBase):
+            pending = [base]
+            while pending:
+                current = pending.pop()
+                pending.extend(current.__subclasses__())
+                if current.__module__.startswith("stdapi.models.image"):
+                    classes.append(current)
+        return classes
+
+    def test_no_image_class_redeclares_an_inherited_slot(self) -> None:
+        """Every image job and model class declares only slots new to it."""
+        offenders = {
+            f"{cls.__module__}.{cls.__qualname__}": sorted(duplicated)
+            for cls in self._image_classes()
+            if (
+                duplicated := set(cls.__dict__.get("__slots__", ()))
+                & {
+                    name
+                    for parent in cls.__mro__[1:]
+                    for name in parent.__dict__.get("__slots__", ())
+                }
+            )
+        }
+
+        assert not offenders
+
+
+class TestStabilityStableImageCapabilities:
+    """The "Stable Image" models still advertise generation, edition and variation.
+
+    Their job class inherits every operation from the shared text-to-image job
+    and overrides only the output formats, so the capability set has to survive
+    that class holding no operation of its own.
+
+    Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase.get_supported_operations
+    """
+
+    def test_inherited_operations_are_all_advertised(self) -> None:
+        """Generation, edition and variation are detected through inheritance."""
+        operations = stable_image.ImageModel.get_supported_operations()
+
+        assert operations & Capability.IMAGE_GENERATION
+        assert operations & Capability.IMAGE_EDITION
+        assert operations & Capability.IMAGE_VARIATION
+
+    def test_output_formats_stay_narrower_than_the_shared_default(self) -> None:
+        """The override that remains is the one that carries real information."""
+        formats = stable_image.StabilityCoreTextToImageJob._OUTPUT_FORMATS  # noqa: SLF001
+
+        assert formats == frozenset({"png", "jpeg"})
+        assert formats < StabilityImageGenerationJobBase._OUTPUT_FORMATS  # noqa: SLF001

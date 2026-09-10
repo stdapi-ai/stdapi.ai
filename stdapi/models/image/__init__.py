@@ -751,9 +751,11 @@ class ImageModelBase[
         )
 
 
+#: Model ID (or pattern) to image model class registry.
 _MODEL_REGISTRY: list[
     tuple[str | Pattern[str], type[ImageModelBase[Any, Any, Any]]]
 ] = []
+#: Instantiated image models by model ID.
 _MODEL_CACHE: dict[str, ImageModelBase[Any, Any, Any]] = {}
 
 

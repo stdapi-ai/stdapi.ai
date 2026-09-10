@@ -449,6 +449,5 @@ async def edit_images(
         job=job,
         results=await job.edit_images(images=images_b64, mask=mask_b64),
         response_format=request.response_format,
-        output_image_count=request.n,
         input_image_count=input_image_count,
     )

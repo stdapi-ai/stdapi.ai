@@ -754,6 +754,7 @@ class _StubImageJob:
 
     input_tokens: int | None = None
     output_tokens: int | None = None
+    count = 1
     output_format = "png"
     width = 1024
     height = 1024

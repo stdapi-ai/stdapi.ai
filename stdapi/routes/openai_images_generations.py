@@ -22,7 +22,7 @@ from stdapi.monitoring import (
     log_request_stream_event,
     log_response_params,
 )
-from stdapi.routes._images_common import build_images_response
+from stdapi.routes._images_common import build_images_response, image_usage
 from stdapi.types.openai_images import (
     ImageEditCompletedEvent,
     ImageEditPartialImageEvent,
@@ -32,7 +32,6 @@ from stdapi.types.openai_images import (
     ImageOutputQuality,
     ImagesResponse,
     Usage,
-    UsageInputTokensDetails,
 )
 
 if TYPE_CHECKING:
@@ -59,39 +58,6 @@ _OPENAI_QUALITY_LEVELS: dict[str, ImageOutputQuality | None] = {
     "high": "high",
     "auto": None,  # if not specified, use model default
 }
-
-
-def _stream_event_usage(
-    job: ImageGenerationJobBase[Any], input_image_count: int
-) -> Usage:
-    """Build a usage report from the job's tokens billed so far.
-
-    Mirrors :func:`stdapi.routes._images_common.build_images_response`: a
-    reported ``None`` falls back to the input/output image counts, a
-    reported ``0`` is kept as-is. Called after each completed image, so the
-    last completed event of the stream reports the job's final total,
-    matching the non-streaming path.
-
-    Args:
-        job: The image generation/edit job, holding live token counts.
-        input_image_count: Number of input images (0 for text-to-image).
-
-    Returns:
-        Usage report reflecting tokens billed by the job so far.
-    """
-    input_tokens = (
-        job.input_tokens if job.input_tokens is not None else input_image_count
-    )
-    output_tokens = job.output_tokens if job.output_tokens is not None else job.count
-    image_tokens = min(input_image_count, input_tokens)
-    return Usage(
-        input_tokens=input_tokens,
-        input_tokens_details=UsageInputTokensDetails(
-            image_tokens=image_tokens, text_tokens=input_tokens - image_tokens
-        ),
-        output_tokens=output_tokens,
-        total_tokens=input_tokens + output_tokens,
-    )
 
 
 async def stream_generator(
@@ -140,7 +106,7 @@ async def stream_generator(
         else:
             # Built after this image completes: the job's token counts are
             # only final once every image has been generated.
-            usage = _stream_event_usage(job, input_image_count)
+            usage = image_usage(job, input_image_count)
             yield JSONServerSentEvent(
                 data=completed_event(
                     b64_json=result.image,
@@ -281,5 +247,4 @@ async def create_images(
         job=job,
         results=await job.generate_images(),
         response_format=request.response_format,
-        output_image_count=request.n,
     )

@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 class TextToImageJob(StabilityImageGenerationJobBase):
     """Job for text-to-image and image-to-image generation."""
 
-    __slots__ = ("_prompt",)
+    __slots__ = ()
 
     #: Default image-to-image strength, matching Stable Image Ultra's own default.
     _DEFAULT_STRENGTH = 0.35
@@ -32,10 +32,7 @@ class TextToImageJob(StabilityImageGenerationJobBase):
         """Generate images from text prompt."""
         request = self._build_text_to_image_base_request()
         request["aspect_ratio"] = self._get_aspect_ratio(self._width, self._height)
-        body = self._encode_request(request)
-        return tuple(
-            self._get_image_from_response(body, index) for index in range(self._count)
-        )
+        return self._fan_out(request)
 
     async def _edit_image(
         self, images: list[str], mask: str | None
@@ -56,10 +53,7 @@ class TextToImageJob(StabilityImageGenerationJobBase):
         request["mode"] = "image-to-image"
         request["image"] = self._get_one_image_from_list(images)
         request.setdefault("strength", self._DEFAULT_STRENGTH)
-        body = self._encode_request(request)
-        return tuple(
-            self._get_image_from_response(body, index) for index in range(self._count)
-        )
+        return self._fan_out(request)
 
     async def _create_image_variations(
         self, images: list[str]
@@ -77,10 +71,7 @@ class TextToImageJob(StabilityImageGenerationJobBase):
         request["mode"] = "image-to-image"
         request["image"] = self._get_one_image_from_list(images)
         request.setdefault("strength", self._DEFAULT_STRENGTH)
-        body = self._encode_request(request)
-        return tuple(
-            self._get_image_from_response(body, index) for index in range(self._count)
-        )
+        return self._fan_out(request)
 
 
 class ImageModel(StabilityImageModelBase):

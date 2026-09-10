@@ -241,13 +241,7 @@ class _Response(TypedDict):
 class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
     """Image generation job supporting both text-to-image and inpainting."""
 
-    __slots__ = (
-        "_input_tokens",
-        "_output_tokens",
-        "_response_height",
-        "_response_output_format",
-        "_response_width",
-    )
+    __slots__ = ()
 
     @staticmethod
     async def _create_response(image: str, index: int) -> ImageGenerationResponse:
