@@ -1779,6 +1779,31 @@ class TestImageGenerationExecution:
             "the generated base64 payload is returned on the item"
         )
 
+    @pytest.mark.parametrize("compression", [0, 40])
+    async def test_output_compression_reaches_the_job_verbatim(
+        self, monkeypatch: pytest.MonkeyPatch, compression: int
+    ) -> None:
+        """``output_compression`` reaches the job as sent, zero included.
+
+        The vendor documents the parameter over 0-100 and the tool model
+        declares ``ge=0``, so zero is a value a caller can ask for. Reading it
+        by truthiness accepts the request and silently serves the 100 default,
+        which is why the zero case is the one that matters here.
+
+        Ref: openai-openapi ``ImageGenTool.output_compression`` (``minimum: 0``)
+             stdapi/types/openai_responses.py:ImageGeneration
+        """
+        stub_model = _StubImageModel()
+        monkeypatch.setattr(responses_adapter, "validate_model", _stub_validate_model)
+        monkeypatch.setattr(responses_adapter, "get_image_model", lambda _: stub_model)
+        await execute_image_generation_calls(
+            [_image_tool_call({"prompt": "a cat"})],
+            ImageGeneration(type="image_generation", output_compression=compression),
+            "resp-1",
+            "fallback-model",
+        )
+        assert stub_model.calls[0]["output_compression"] == compression
+
     async def test_model_guessed_quality_is_not_forwarded(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
