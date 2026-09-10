@@ -361,6 +361,29 @@ def test_chat_returns_structured_output(
     assert "capital" in from_json(answer.message.content)
 
 
+def test_chat_serves_an_empty_format(
+    ollama_client: ollama.Client, ollama_chat_model: str
+) -> None:
+    """An empty `format` asks for no structured output and is answered normally.
+
+    The official client types `format` as the empty string, `"json"` or a
+    schema, and clients built on it send the empty string as their "no
+    structured output" value on every call, so it has to be served rather than
+    refused.
+
+    Ref: https://docs.ollama.com/openapi.yaml (GenerateRequest.format)
+         ollama/_types.py:154 (BaseGenerateRequest.format)
+    """
+    answer = ollama_client.chat(
+        model=ollama_chat_model,
+        messages=[{"role": "user", "content": "The capital of France."}],
+        format="",
+        stream=False,
+    )
+    assert answer.done is True
+    assert answer.message.content
+
+
 def test_chat_returns_thinking(
     ollama_client: ollama.Client, ollama_reasoning_model: str
 ) -> None:

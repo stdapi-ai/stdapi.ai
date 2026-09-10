@@ -282,6 +282,32 @@ def test_format_json_and_schema_map_onto_response_format() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("request_model", "body"),
+    [
+        (ChatRequest, {"model": "m", "messages": [{"role": "user", "content": "hi"}]}),
+        (GenerateRequest, {"model": "m", "prompt": "hi"}),
+    ],
+)
+def test_an_empty_format_asks_for_no_structured_output(
+    request_model: type[ChatRequest | GenerateRequest], body: dict[str, Any]
+) -> None:
+    """The empty string is upstream's "no format", not a format to refuse.
+
+    The official client types the field as `Literal['', 'json']` or a schema and
+    puts the empty string on the wire verbatim, so a client using it as its "no
+    structured output" sentinel -- langchain-ollama 0.1.x and 0.2.x send it on
+    every call -- must be answered rather than rejected.
+
+    Ref: https://docs.ollama.com/openapi.yaml (GenerateRequest.format)
+         ollama/_types.py:154 (BaseGenerateRequest.format)
+    """
+    request = request_model.model_validate({**body, "format": ""})
+    assert request.format is None
+    params = adapter.to_chat_completion_params(request, "m")
+    assert params.response_format is None
+
+
 def test_a_bare_schema_is_closed_to_extra_properties() -> None:
     """Every object node gains `additionalProperties: false` unless it set one.
 
@@ -604,7 +630,12 @@ class TestTheOfficialClientRequestBodies:
         assert request.options.temperature == 0.5
 
     def test_a_generate_request_parses(self) -> None:
-        """The client's ``generate`` body, minus the fields this server refuses."""
+        """The client's ``generate`` body, minus the fields this server refuses.
+
+        ``format=""`` is the client's own "no structured output" value and goes
+        on the wire as the empty string, so the capture is also what proves this
+        server accepts it.
+        """
         body = _sent_body(
             lambda client: client.generate(
                 model="m",
@@ -612,6 +643,7 @@ class TestTheOfficialClientRequestBodies:
                 system="be brief",
                 images=[ollama.Image(value=b"\x89PNG")],
                 think=True,
+                format="",
                 keep_alive=300,
                 options={"seed": 7},
                 stream=False,
@@ -623,10 +655,12 @@ class TestTheOfficialClientRequestBodies:
                 "done": True,
             },
         )
+        assert body["format"] == ""
         request = GenerateRequest.model_validate(body)
         assert request.prompt == "hi"
         assert request.system == "be brief"
         assert request.images
+        assert request.format is None
 
     def test_an_embed_request_parses(self) -> None:
         """The client's ``embed`` body validates, dimensions and all."""

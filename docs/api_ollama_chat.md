@@ -61,7 +61,7 @@ Send the model names [`GET /api/tags`](api_ollama_models.md#get-apitags) publish
 | `messages[].thinking`            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Replayed as the assistant turn's reasoning text                    |
 | `messages[].tool_calls`          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Replayed tool calls; correlated to results as described [below](#tool-calling) |
 | `tools`                          |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Function tools; support depends on the model                       |
-| `format`                         |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | `"json"` or a JSON Schema object; see [Structured Output](#structured-output) |
+| `format`                         |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | `"json"` or a JSON Schema object; `""` asks for none; see [Structured Output](#structured-output) |
 | `options`                        |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `temperature`, `top_p`, `top_k`, `seed`, `stop`, `num_predict` (max output tokens), `presence_penalty` and `frequency_penalty` are forwarded (`temperature` above `1.0` is served at `1.0`, an Amazon Bedrock limitation); runner options (`num_ctx`, `num_gpu`, `num_thread`, `num_batch`, `main_gpu`, `use_mmap`, `min_p`, and any other unknown key) are accepted and ignored |
 | `stream`                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Newline-delimited JSON; defaults to `true` — see [Streaming](#streaming) |
 | `think`                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Boolean, or `low`/`medium`/`high`/`max`; see [Thinking](#thinking) |
@@ -147,6 +147,8 @@ curl -X POST "$BASE/api/chat" \
 An object schema that does not set `additionalProperties` is closed automatically (`additionalProperties: false`), so a schema written for a local Ollama server works unchanged here.
 
 A schema constrains the answer only on models whose backend accepts one; a model that does not answers `400` naming the parameter. `"json"` mode is more widely available. Filter with [`/search_models`](api_search_models.md) or try the request — the model is the authority.
+
+Omitting `format`, sending it as `null`, or sending it as the empty string `""` all ask for no structured output. The empty string is the value the official Ollama client types for that case, and some libraries built on it send it on every request.
 
 ## Thinking
 
