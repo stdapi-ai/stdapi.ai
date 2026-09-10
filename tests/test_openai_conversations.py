@@ -27,6 +27,7 @@ from uuid import uuid4
 import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
 from openai import NotFoundError
+from openai.types.conversations import ConversationItemList
 from sse_starlette import EventSourceResponse
 
 from stdapi import conversations
@@ -628,6 +629,66 @@ class TestConversationItems:
         )
         assert response.status_code == 404, response.text
 
+    def test_add_of_only_known_references_answers_a_complete_page(
+        self, app_client: TestClient
+    ) -> None:
+        """A batch of only known references answers with the items they name.
+
+        ``first_id`` and ``last_id`` are required and non-nullable on the item
+        list envelope, so a page carrying neither cannot be parsed by a client
+        at all -- the envelope is validated here through the official model
+        rather than field by field.
+
+        Ref: openai/types/conversations/conversation_item_list.py
+             stdapi/routes/openai_conversations.py:_new_items
+        """
+        conversation = _create(app_client, items=[{"role": "user", "content": "first"}])
+        url = f"/v1/conversations/{conversation['id']}/items"
+        item_id = app_client.get(url).json()["data"][0]["id"]
+
+        response = app_client.post(
+            url, json={"items": [{"type": "item_reference", "id": item_id}]}
+        )
+
+        assert response.status_code == 200, response.text
+        page = ConversationItemList.model_validate(response.json())
+        assert page.object == "list"
+        assert page.has_more is False
+        assert [item.id for item in page.data] == [item_id]
+        assert page.first_id == item_id
+        assert page.last_id == item_id
+        assert len(app_client.get(url).json()["data"]) == 1
+
+    def test_add_mixing_a_reference_and_a_new_item_answers_both(
+        self, app_client: TestClient
+    ) -> None:
+        """The page echoes every requested item, in the order it was sent.
+
+        Ref: stdapi/routes/openai_conversations.py:add_items
+        """
+        conversation = _create(app_client, items=[{"role": "user", "content": "first"}])
+        url = f"/v1/conversations/{conversation['id']}/items"
+        item_id = app_client.get(url).json()["data"][0]["id"]
+
+        response = app_client.post(
+            url,
+            json={
+                "items": [
+                    {"type": "item_reference", "id": item_id},
+                    {"role": "user", "content": "second"},
+                ]
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        page = ConversationItemList.model_validate(response.json())
+        assert len(page.data) == 2
+        assert page.data[0].id == item_id
+        assert page.first_id == item_id
+        assert page.last_id == page.data[-1].id
+        listed = app_client.get(url, params={"order": "asc"}).json()["data"]
+        assert [item["content"][0]["text"] for item in listed] == ["first", "second"]
+
     def test_pagination_across_a_page_boundary(self, app_client: TestClient) -> None:
         """``order=asc`` with ``after`` walks the conversation in order.
 
@@ -1132,6 +1193,39 @@ class TestConversationsLive:
             with pytest.raises(NotFoundError) as gone:
                 openai_client.conversations.retrieve(conversation.id)
             assert gone.value.status_code == 404
+        finally:
+            with contextlib.suppress(Exception):
+                openai_client.conversations.delete(conversation.id)
+
+    def test_adding_a_known_item_reference_answers_a_complete_page(
+        self, openai_client: OpenAI
+    ) -> None:
+        """Adding only an ``item_reference`` answers a page a client can read.
+
+        ``items.create`` parses its answer through ``ConversationItemList``,
+        whose ``first_id`` and ``last_id`` are required and non-nullable, so an
+        answer that carries no item raises in the client instead of returning:
+        the call completing at all is the assertion, and the cursors are then
+        checked against the page they describe.
+
+        Ref: https://developers.openai.com/api/reference/resources/conversations.md
+             openai/types/conversations/conversation_item_list.py
+        """
+        conversation = openai_client.conversations.create(
+            items=[{"role": "user", "content": "line 0"}]
+        )
+        try:
+            listed = openai_client.conversations.items.list(conversation.id, limit=1)
+            item_id = _item_id(listed.data[0])
+
+            added = openai_client.conversations.items.create(
+                conversation.id, items=[{"type": "item_reference", "id": item_id}]
+            )
+
+            assert added.data, "a reference-only add must answer with an item"
+            assert added.first_id == _item_id(added.data[0])
+            assert added.last_id == _item_id(added.data[-1])
+            assert added.has_more is False
         finally:
             with contextlib.suppress(Exception):
                 openai_client.conversations.delete(conversation.id)
