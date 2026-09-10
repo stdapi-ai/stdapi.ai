@@ -724,24 +724,22 @@ class TestChatCompletions:
             or "access" in error_body["message"].lower()
         )
 
-    @pytest.mark.parametrize("temperature", [-0.1, 3.0])
     def test_invalid_temperature_error(
-        self, openai_client: OpenAI, chat_model: str, temperature: float
+        self, openai_client: OpenAI, chat_model: str
     ) -> None:
-        """Out-of-range ``temperature`` values are rejected with a 400.
+        """A negative ``temperature`` is rejected with a 400 naming the field.
 
-        The gateway only enforces ``temperature >= 0`` itself; the upper bound is
-        model-specific, so a too-high value is rejected downstream by Bedrock and
-        still comes back as a 400 naming the field.
+        ``temperature`` is documented as "between 0 and 2", and the request schema
+        declares the lower bound, so the refusal happens before any model runs.
 
-        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
-             stdapi/aws_bedrock.py:AWS_ERROR_MAP
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
+             stdapi/types/openai_chat_completions.py:CompletionCreateParams
         """
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(
                 model=chat_model,
                 messages=[{"role": "user", "content": "Hello"}],
-                temperature=temperature,
+                temperature=-0.1,
             )
 
         error = exc_info.value
@@ -750,6 +748,64 @@ class TestChatCompletions:
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
         assert "temperature" in error_body["message"].lower()
+
+    @pytest.mark.parametrize("temperature", [1.5, 2.0])
+    def test_high_temperature_is_served(
+        self, openai_client: OpenAI, chat_legacy_model: str, temperature: float
+    ) -> None:
+        """A ``temperature`` in the upper half of the documented range answers normally.
+
+        OpenAI documents ``temperature`` as "between 0 and 2", so every value up to
+        ``2`` must produce a completion rather than an error. The legacy chat model
+        is used because the official API maps ``chat`` to a reasoning model, which
+        accepts its default temperature and nothing else.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
+             stdapi/aws_bedrock.py:set_inference_configuration
+        """
+        response = openai_client.chat.completions.create(
+            model=chat_legacy_model,
+            messages=[{"role": "user", "content": "Say OK."}],
+            temperature=temperature,
+            max_completion_tokens=16,
+        )
+
+        assert response.choices[0].message.role == "assistant"
+        assert response.choices[0].message.content
+
+    def test_temperature_above_the_documented_range(
+        self, openai_client: OpenAI, chat_legacy_model: str, use_official_api: bool
+    ) -> None:
+        """A ``temperature`` above 2 is refused by OpenAI and accepted here.
+
+        The request schema declares no maximum, because the same model also serves
+        the Ollama dialect, whose ``options.temperature`` has none: a value above
+        the documented range is accepted and served at the highest temperature the
+        backend takes. That is a superset of the upstream contract, so every value
+        OpenAI accepts still behaves identically.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
+             https://docs.ollama.com/openapi.yaml (Options.temperature)
+             stdapi/aws_bedrock.py:set_inference_configuration
+        """
+        kwargs: dict[str, Any] = {
+            "model": chat_legacy_model,
+            "messages": [{"role": "user", "content": "Say OK."}],
+            "temperature": 3.0,
+            "max_completion_tokens": 16,
+        }
+
+        if use_official_api:
+            with pytest.raises(BadRequestError) as exc_info:
+                openai_client.chat.completions.create(**kwargs)
+            error = exc_info.value
+            assert error.status_code == 400
+            error_body = error.body
+            assert isinstance(error_body, dict)
+            assert "temperature" in error_body["message"].lower()
+        else:
+            response = openai_client.chat.completions.create(**kwargs)
+            assert response.choices[0].message.content
 
     @pytest.mark.parametrize(
         ("kwargs", "message_token"),
@@ -775,7 +831,8 @@ class TestChatCompletions:
         """An out-of-range sampling parameter comes back as a 400 naming the field.
 
         Only ``max_completion_tokens`` is bounded by the gateway itself (declared
-        ``ge=1``).  ``top_p`` is clamped by Bedrock's ``inferenceConfig``, while the
+        ``ge=1``).  ``top_p`` is refused by Bedrock's ``inferenceConfig``, whose
+        documented range is the same one every mirrored API publishes, while the
         penalties and ``logit_bias`` travel in ``additionalModelRequestFields`` and
         are rejected by the model provider — all three paths must surface as the
         same OpenAI 400 envelope.
@@ -3859,6 +3916,60 @@ class TestBedrockRequestFieldAliases:
         )
         assert request.stop == ["Y"]
         assert request.model_extra == {}
+
+
+class TestTemperatureCeiling:
+    """A temperature above what the backend takes is clamped, never refused.
+
+    OpenAI documents ``temperature`` as "between 0 and 2" while the Bedrock
+    inference configuration accepts at most ``1``, so a value in ``(1, 2]``
+    forwarded verbatim turned a valid request into a 400.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat.md
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InferenceConfiguration.html
+         stdapi/aws_bedrock.py:set_inference_configuration
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    def _served_temperature(requested: float) -> float | None:
+        """Return the inference-config temperature a request for *requested* produces."""
+        request = CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "temperature": requested,
+            }
+        )
+        inference_cfg, *_ = translate_request(request, "test-model")
+        return inference_cfg.get("temperature")
+
+    @pytest.mark.parametrize(
+        ("requested", "served"),
+        [(0.0, 0.0), (0.7, 0.7), (1.0, 1.0), (1.5, 1.0), (2.0, 1.0), (3.0, 1.0)],
+    )
+    def test_temperature_is_capped_not_rejected(
+        self, requested: float, served: float
+    ) -> None:
+        """Values up to the cap are forwarded untouched; higher ones arrive at the cap.
+
+        Ref: stdapi/aws_bedrock.py:set_inference_configuration
+        """
+        assert self._served_temperature(requested) == served
+
+    def test_unset_temperature_stays_unset(self) -> None:
+        """No ``temperature`` in the request leaves the inference config without one.
+
+        The cap must not turn "the model's own default" into an explicit value.
+
+        Ref: stdapi/aws_bedrock.py:set_inference_configuration
+        """
+        request = CompletionCreateParams.model_validate(
+            {"model": "test-model", "messages": [{"role": "user", "content": "hi"}]}
+        )
+        inference_cfg, *_ = translate_request(request, "test-model")
+        assert "temperature" not in inference_cfg
 
 
 class TestReservedModelExtras:
