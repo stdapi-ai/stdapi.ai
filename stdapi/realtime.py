@@ -2198,7 +2198,22 @@ class RealtimeSession:
         view: JsonMapping = self._config.model_dump(mode="json", exclude_none=True)
         view["id"] = self._session_id
         view["object"] = "realtime.session"
-        view["model"] = self._model_id
+        if not isinstance(self._config, TranscriptionSessionConfig):
+            view["model"] = self._model_id
+            return view
+
+        # A transcription session declares no model of its own upstream: the one
+        # doing the work is named where the transcription itself is configured.
+        def _branch(parent: JsonMapping, key: str) -> JsonMapping:
+            """Return *key*'s mapping under *parent*, creating it when absent."""
+            child = parent.get(key)
+            branch: JsonMapping = dict(child) if isinstance(child, dict) else {}
+            parent[key] = branch
+            return branch
+
+        _branch(_branch(_branch(view, "audio"), "input"), "transcription")["model"] = (
+            self._model_id
+        )
         return view
 
     async def _send_event(self, event: JsonMapping) -> None:
