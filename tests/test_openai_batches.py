@@ -22,7 +22,7 @@ import contextlib
 from asyncio import CancelledError, Event, create_task
 from base64 import b32hexencode
 from binascii import crc32
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
 from itertools import count
 from json import dumps, loads
@@ -2905,6 +2905,121 @@ class TestBatchModelRouting:
         file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
         body = _create(app_client, file_id)
         assert body["http_status"] == 503
+
+
+#: Catalogue model the application inference profile below points at.
+_PROFILE_MODEL_ID = "amazon.nova-micro-v1:0"
+
+#: Cross-region profile the catalogue routes that model through for everybody.
+_SYSTEM_PROFILE = "us.amazon.nova-micro-v1:0"
+
+#: Application inference profile a caller names as its model.
+_CALLER_PROFILE = (
+    f"arn:aws:bedrock:{_batches.REGION}:123456789012:"
+    "application-inference-profile/abc123xyz"
+)
+
+
+@pytest.mark.local
+class TestBatchOnAnApplicationInferenceProfile:
+    """A batch naming a profile ARN starts its job on that profile.
+
+    An application inference profile is how a caller's own spend is attributed,
+    tagged and capped. A job started on the catalogue's system-defined profile
+    instead runs on the deployment's attribution rather than theirs: their cost
+    allocation tags carry none of it, and their quota governs none of it. The
+    resolution runs in a task of its own -- one per distinct name the input
+    file writes -- so what it binds has to reach the submission that reads it.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html
+         stdapi/batches.py:_resolve_distinct
+         stdapi/models/__init__.py:adopt_arn_details
+    """
+
+    @pytest.fixture
+    def seeded_catalog(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> Iterator[_batches.FakeBedrock]:
+        """Hold one model, reachable by its ID and through the caller's profile.
+
+        Yields:
+            The job service the batch submits to.
+        """
+        from stdapi import models as models_module  # noqa: PLC0415
+        from stdapi.config import SETTINGS  # noqa: PLC0415
+        from tests._helpers import make_model_details  # noqa: PLC0415
+
+        _, bedrock = _batches.install(monkeypatch, catalog=True)
+        saved = dict(models_module._MODELS)  # noqa: SLF001
+        saved_profiles = dict(models_module._USER_PROFILES)  # noqa: SLF001
+        models_module._MODELS.clear()  # noqa: SLF001
+        models_module._MODELS[_PROFILE_MODEL_ID] = make_model_details(  # noqa: SLF001
+            _PROFILE_MODEL_ID,
+            regions=[_batches.REGION],
+            inference_profiles={_batches.REGION: _SYSTEM_PROFILE},
+        )
+        models_module._USER_PROFILES.clear()  # noqa: SLF001
+
+        async def _profile_models(_arn: str) -> tuple[list[dict[str, str]], str]:
+            """Report the seeded model as the caller's only profile member."""
+            member = f"arn:aws:bedrock:{_batches.REGION}::foundation-model/{_PROFILE_MODEL_ID}"
+            return [{"modelArn": member}], _batches.REGION
+
+        async def _no_refresh(*_args: object, **_kwargs: object) -> None:
+            """Answer from the seeded catalogue instead of sweeping AWS."""
+
+        monkeypatch.setattr(
+            models_module, "_get_application_inference_profile_models", _profile_models
+        )
+        monkeypatch.setattr(models_module, "refresh_stale_catalog", _no_refresh)
+        monkeypatch.setattr(models_module, "_refresh_due", lambda: False)
+        monkeypatch.setattr(
+            SETTINGS, "aws_bedrock_allow_application_inference_profile_arn", True
+        )
+
+        yield bedrock
+
+        models_module._MODELS.clear()  # noqa: SLF001
+        models_module._MODELS.update(saved)  # noqa: SLF001
+        models_module._USER_PROFILES.clear()  # noqa: SLF001
+        models_module._USER_PROFILES.update(saved_profiles)  # noqa: SLF001
+
+    def test_the_caller_s_own_profile_runs_the_job(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        seeded_catalog: _batches.FakeBedrock,
+    ) -> None:
+        """The job is started on the ARN, not on the catalogue's own profile."""
+        file_id = _batches.install_input_file(
+            monkeypatch, chat_lines(100, model=_CALLER_PROFILE)
+        )
+
+        body = _create(app_client, file_id)
+
+        assert body["http_status"] == 200
+        assert [job["modelId"] for job in seeded_catalog.created] == [_CALLER_PROFILE]
+
+    def test_a_plain_model_name_still_runs_on_the_catalogue_profile(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        seeded_catalog: _batches.FakeBedrock,
+    ) -> None:
+        """A caller naming no ARN is unaffected by the one another caller named.
+
+        The details an ARN resolves to are the resolving request's alone: a
+        batch that named the model itself keeps the profile the catalogue
+        publishes for everybody.
+        """
+        file_id = _batches.install_input_file(
+            monkeypatch, chat_lines(100, model=_PROFILE_MODEL_ID)
+        )
+
+        body = _create(app_client, file_id)
+
+        assert body["http_status"] == 200
+        assert [job["modelId"] for job in seeded_catalog.created] == [_SYSTEM_PROFILE]
 
 
 @pytest.mark.slow
