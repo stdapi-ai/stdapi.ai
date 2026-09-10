@@ -440,6 +440,14 @@ curl -N -X POST "$BASE/v1/images/generations" \
   }'
 ```
 
+Each frame names its event before carrying it, so a client reading the raw stream can dispatch
+on the `event:` line as well as on the payload's `type`:
+
+```text
+event: image_generation.completed
+data: {"type":"image_generation.completed","b64_json":"...","output_format":"png","size":"1024x1024","usage":{...}}
+```
+
 ## Next steps
 
 Next: [Models API](api_openai_models.md) · [Images Edits API](api_openai_images_edits.md) · [Images Variations API](api_openai_images_variations.md) · [IAM permissions](operations_iam_permissions.md)
