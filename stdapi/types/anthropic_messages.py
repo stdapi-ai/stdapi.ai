@@ -1316,7 +1316,12 @@ class ToolResultBlockParam(BaseModelRequest):
                 Field(discriminator="type"),
             ]
         ]
-    ) = Field(description="Tool result content.")
+        | None
+    ) = Field(
+        default=None,
+        description="What the tool returned. Omit it, or leave it empty, for a "
+        "tool that returns nothing.",
+    )
     is_error: bool | None = Field(
         default=None, description="Whether this is an error result."
     )
