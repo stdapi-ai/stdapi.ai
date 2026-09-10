@@ -402,13 +402,19 @@ class TestAudioTranscriptions:
     ) -> None:
         """An unsupported ``language`` yields 400 ``invalid_language_format``.
 
-        The gateway expands the OpenAI ISO-639-1 code into a Transcribe locale, so an
-        unknown code only fails at ``StartTranscriptionJob``; a ``BadRequestException``
-        mentioning ``languageCode`` is remapped to this dedicated error code, which
-        echoes the code exactly as the caller sent it.
+        The gateway expands the OpenAI ISO-639-1 code into a Transcribe locale.
+        A value that is no language tag at all is refused before the job is
+        submitted, and one that is a tag but not one the service runs is
+        refused by ``StartTranscriptionJob`` with a ``BadRequestException``
+        mentioning ``languageCode``; both answer with this dedicated code, so a
+        client reads one answer either way.
+
+        The message names the parameter and not the value, which is the rule
+        the whole API follows for a rejected request.
 
         Ref: https://docs.aws.amazon.com/transcribe/latest/dg/supported-languages.html
              stdapi/api_errors.py:InvalidLanguageFormatError
+             stdapi/utils.py:format_language_code
         """
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.transcriptions.create(
@@ -423,8 +429,9 @@ class TestAudioTranscriptions:
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
         assert error_body["code"] == "invalid_language_format"
-        assert "invalid-lang" in error_body["message"], (
-            f"Error does not echo the rejected language: {error_body['message']!r}"
+        assert "invalid-lang" not in error_body["message"], (
+            f"a rejected request is described by field, never by value: "
+            f"{error_body['message']!r}"
         )
         error_message = str(error).lower()
         assert any(
