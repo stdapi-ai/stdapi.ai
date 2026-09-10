@@ -568,8 +568,8 @@ class WebRTCCallTransport:
             and isinstance(response := event.get("response"), dict)
             and response.get("status") != "completed"
         ):
-            # An answer that did not run to its end must also stop sounding: a
-            # barge-in reports "incomplete", an explicit cancel "cancelled".
+            # An answer that did not run to its end must also stop sounding,
+            # whether a barge-in or an explicit cancel is what stopped it.
             self._track.clear()
         await self._write(to_json_str(event))
         if barged_in:

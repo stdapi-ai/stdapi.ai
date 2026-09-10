@@ -74,7 +74,7 @@ asyncio.run(main())
 | `input_audio_buffer.append`                   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Base64-encoded audio in the session's configured input format; at most 4 MiB per event, so send it in chunks as it is captured |
 | `input_audio_buffer.commit`                   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Required to end a turn when `turn_detection` is `null`; at most 5.7 MB of audio may wait for one |
 | `input_audio_buffer.clear`                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Discards buffered, not-yet-committed audio                          |
-| `conversation.item.create`                    |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Text items and `function_call_output` items — an audio item is refused with a clear `error`; send speech through `input_audio_buffer.append` |
+| `conversation.item.create`                    |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Text items and `function_call_output` items, whether they add to the conversation or replay its history. An audio item is refused with a clear `error` — send speech through `input_audio_buffer.append` — and so is a `function_call` item; see [Function calling](#function-calling) |
 | `conversation.item.truncate`                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Answered with `conversation.item.truncated` — see [below](#truncating-an-answer-the-caller-spoke-over) |
 | `conversation.item.retrieve`                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Answered with `conversation.item.retrieved`, carrying the item's role, status and transcript; audio is not retained, so the item carries no `audio` field |
 | `conversation.item.delete`                     |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Answered with `conversation.item.deleted`; the item stops being addressable, and the model keeps its own memory of the conversation |
@@ -86,7 +86,7 @@ asyncio.run(main())
 | `input_audio_buffer.speech_started` / `.speech_stopped` |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Server-side voice activity detection only                           |
 | `input_audio_buffer.committed` / `.cleared`    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    |                                                                     |
 | `conversation.item.added` / `.done`            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Sent for every item: a written one, the caller's committed audio, and each answer — the answer's `.done` precedes its `response.done` |
-| `conversation.item.created`                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Sent beside `conversation.item.added` for a written item, for clients predating the added/done pair |
+| `conversation.item.created`                    |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Sent beside `conversation.item.added` for a written item and for each [function call](#function-calling) the model makes, for clients predating the added/done pair. Not sent for the caller's own committed turn or for the answer's own item, which are announced with the added/done pair alone |
 | `conversation.item.truncated` / `.retrieved` / `.deleted` |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Answers to the matching client event                                 |
 | `conversation.item.input_audio_transcription.delta` / `.completed` |       :material-cog:{ .model-dep role="img" aria-label="Conditional" }       | Only when `audio.input.transcription` is set on the session          |
 | `conversation.item.input_audio_transcription.failed` |       :material-cog:{ .model-dep role="img" aria-label="Conditional" }       | Sent instead of a transcript when a caller turn could not be read, so it is not mistaken for a caller who said nothing; only when `audio.input.transcription` is set |
@@ -118,8 +118,10 @@ asyncio.run(main())
 | Any other voice name                           | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Passed through to the model as given, so a model voice can be named directly |
 | **Tools**                                     |                                          |                                                                     |
 | `tools` (`type: "function"`)                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Declared before the conversation opens and fixed for the rest of it — see [Function calling](#function-calling) |
-| `tools` (`type: "mcp"`)                         | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Refused with an `error` — a session calls the functions its client runs, never a remote MCP server |
+| `tools` (`type: "function"`) without a `name`   | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored — nothing can be called by no name, so the entry is dropped and the rest of the session stands |
+| `tools` (`type: "mcp"`)                         | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Refused — a session calls the functions its client runs, never a remote MCP server. `POST /v1/realtime/client_secrets` refuses it with `400`, and a `session.update` with an `error` |
 | `tool_choice`                                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `auto`, `none`, `required` and a named function; `required` and a named function make every answer start with a call |
+| `tool_choice` (`type: "mcp"`)                   | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored — no remote MCP server is ever attached, so the session behaves as `auto` |
 | `parallel_tool_calls`                          | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored — how many tools one answer calls is the model's own decision |
 | **Not Available**                             |                                          |                                                                     |
 | `POST /v1/realtime/calls` (WebRTC)             | :material-minus-circle:{ .partial role="img" aria-label="Partial" } | [Opt-in](#webrtc-calls): served when `REALTIME_WEBRTC_ENABLED` is set and the deployment has a UDP media path; answers `404` otherwise |
@@ -161,7 +163,7 @@ Send `session.update` with these settings **before sending anything else**, or o
 
 | Field | What it carries |
 |---|---|
-| `status_details` | `null` while the answer is in progress and once it has completed. An answer the caller spoke over reports `{"type": "incomplete", "reason": "turn_detected"}`, and one ended by `response.cancel` reports `{"type": "cancelled", "reason": "client_cancelled"}` |
+| `status_details` | `null` while the answer is in progress and once it has completed. An answer that was stopped reports `status: "cancelled"` with the reason it stopped: `{"type": "cancelled", "reason": "turn_detected"}` when the caller spoke over it, `{"type": "cancelled", "reason": "client_cancelled"}` when `response.cancel` ended it. The conversation item of a stopped answer settles as `incomplete`, since what was said before the stop still stands |
 | `conversation_id` | The conversation the answer was added to — one per session, so every answer of a session names the same one |
 | `output_modalities` | `["audio"]`, or `["text"]` when the session asked for text-only answers |
 | `max_output_tokens` | The session's `max_output_tokens`, or `"inf"` when it sets none |
@@ -204,7 +206,7 @@ await connection.session.update(
 
 A call is reported as its own conversation item and its own response:
 
-1. `response.output_item.added` carries a `function_call` item with the function's `name` and the `call_id` to answer it by.
+1. `response.output_item.added` carries a `function_call` item with the function's `name` and the `call_id` to answer it by. `conversation.item.created` and `conversation.item.added` announce the same item.
 2. `response.function_call_arguments.delta` then `.done` carry the arguments as a JSON string. They arrive whole, in one delta.
 3. `response.done` ends that answer with `status: "completed"`, the `function_call` item in its `output`.
 4. Send the result back with a `function_call_output` item naming the same `call_id`:
@@ -219,15 +221,24 @@ await connection.conversation.item.create(
 )
 ```
 
-Four things to know before wiring an agent to it:
+The model starts answering as soon as the `function_call_output` arrives — step 5 upstream, an explicit `response.create`, is not needed here. Sending one anyway is safe: it ends the open turn exactly as it would have, and the answer is still a single response.
+
+Things to know before wiring an agent to it:
 
 - **Answer every call.** A model waiting for a result says nothing else for the rest of the session, so return one even when the function failed — an `{"error": "..."}` payload is a usable answer, silence is not.
 - **`output` is free text, and a JSON object travels best.** Anything that is not one is carried as the `result` field of one, so a function returning structured data should return it as JSON.
 - **Declare the tools before the conversation opens** — with the voice, the instructions and the audio formats ([above](#voice-instructions-and-audio-formats-are-fixed-once-the-conversation-opens)). A `session.update` changing `tools` or `tool_choice` afterwards is refused with an `error`.
 - **One call per answer.** Each call ends the answer that produced it, and anything the model says afterwards is a new response; a client tracking responses sees more of them in a session that calls functions.
+- **Any `call_id` is accepted.** A `function_call_output` is carried to the model whatever it names, so a client may replay a conversation's history into a fresh session, or resend an answer after reconnecting past the [session cap](#session-lifecycle-and-limits), and the model itself decides what to do with it. Nothing is refused for naming a call this particular connection did not produce.
+
+!!! warning "A cancelled answer's calls are answered for you"
+    A model left waiting for a result never speaks again, so a call that arrives while its answer is being suppressed — after `response.cancel`, before the model has stopped — is answered on your behalf with `{"error": "The answer was cancelled."}`, and neither the call nor that answer is reported to you. Without it the session would sit silent until its own cap; with it, the model has seen one turn your application never authorised, which can surface in what it says next. Cancel between turns rather than mid-call where the flow allows it.
+
+!!! note "A `function_call` item cannot be written by the client"
+    Upstream's creatable item union includes `function_call`, and this API refuses it with an `error` naming that reason: the conversation holds the calls the model itself made, and one written in from outside cannot be presented to the model as its own. Replay the results with `function_call_output` items, which are accepted whatever `call_id` they name, and put anything else the model needs to know into a text item or the session `instructions`.
 
 !!! note "The functions run in your application"
-    A tool is a name, a description and a JSON Schema — the deployment never runs it, never reaches the network for it, and never sees more of it than the result you hand back. Remote MCP servers (`tools` entries of `type: "mcp"`) are refused for the same reason: nothing here calls out to a third party on the caller's behalf.
+    A tool is a name, a description and a JSON Schema — the deployment never runs it, never reaches the network for it, and never sees more of it than the result you hand back. Remote MCP servers (`tools` entries of `type: "mcp"`) are refused for the same reason: nothing here calls out to a third party on the caller's behalf. `POST /v1/realtime/client_secrets` refuses them too, rather than minting a secret carrying a session no connection could open.
 
 ### Guardrail coverage
 

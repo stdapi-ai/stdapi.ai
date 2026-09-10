@@ -154,14 +154,11 @@ _MAX_EVENT_BYTES: Final = 4 * 1024 * 1024
 #: Conversation items a session keeps addressable, oldest dropped past it.
 _MAX_TRACKED_ITEMS: Final = 200
 
-#: Statuses of an answer nothing cut short, which carry no status details.
-_CLEAN_RESPONSE_STATUSES: Final = frozenset({"in_progress", "completed"})
+#: Why an answer ended early when the client asked for it to stop.
+_CLIENT_CANCELLED: Final = "client_cancelled"
 
-#: Why an answer ended early, in the upstream vocabulary, keyed by its status.
-_RESPONSE_END_REASONS: Final = {
-    "cancelled": "client_cancelled",
-    "incomplete": "turn_detected",
-}
+#: Why an answer ended early when the caller started speaking over it.
+_TURN_DETECTED: Final = "turn_detected"
 
 
 def _ulaw_decode_table() -> array[int]:
@@ -441,8 +438,43 @@ def read_client_secret(  # noqa: PLR0911 - every branch is one way to be invalid
     return ClientSecret(session, tenant_key_id)
 
 
-def _parse_session(value: Any) -> SessionConfig | None:  # noqa: ANN401
+def _config_error(message: str, param: str | None = None) -> ApiError:
+    """Build a refusal naming the field the caller has to correct.
+
+    Args:
+        message: What the caller can act on.
+        param: The offending field, in the shape a client reads it back.
+
+    Returns:
+        The error to raise.
+    """
+    error = ApiError(message)
+    error.param = param
+    return error
+
+
+def _validate_session(value: Any) -> SessionConfig:  # noqa: ANN401
     """Validate a session configuration mapping.
+
+    Args:
+        value: The mapping to validate.
+
+    Returns:
+        The parsed configuration.
+
+    Raises:
+        ValidationError: *value* is not a valid session configuration.
+        TypeError: *value* is not a mapping at all.
+    """
+    if not isinstance(value, dict):
+        raise TypeError(type(value).__name__)
+    if value.get("type") == "transcription":
+        return TranscriptionSessionConfig.model_validate(value)
+    return RealtimeSessionConfig.model_validate(value)
+
+
+def _parse_session(value: Any) -> SessionConfig | None:  # noqa: ANN401
+    """Validate a session configuration mapping, tolerating an invalid one.
 
     Args:
         value: The mapping to validate.
@@ -450,14 +482,34 @@ def _parse_session(value: Any) -> SessionConfig | None:  # noqa: ANN401
     Returns:
         The parsed configuration, or None when it is not one.
     """
-    if not isinstance(value, dict):
-        return None
     try:
-        if value.get("type") == "transcription":
-            return TranscriptionSessionConfig.model_validate(value)
-        return RealtimeSessionConfig.model_validate(value)
-    except ValidationError:
+        return _validate_session(value)
+    except TypeError, ValidationError:
         return None
+
+
+def _refused_field(error: ValidationError) -> str | None:
+    """Name the session field a validation failure is about.
+
+    Named down to the field the client sent and no further: everything below it
+    is a position inside a union the schema chose, which is not what the client
+    wrote.
+
+    Args:
+        error: What the configuration was refused with.
+
+    Returns:
+        The field, as ``session.<name>``, or None when nothing localises it.
+    """
+    field = next(
+        (
+            entry["loc"][0]
+            for entry in error.errors()
+            if entry["loc"] and isinstance(entry["loc"][0], str)
+        ),
+        None,
+    )
+    return f"session.{field}" if field else None
 
 
 def _urlsafe(value: bytes) -> str:
@@ -814,6 +866,7 @@ class RealtimeSession:
         "_backend",
         "_backend_task",
         "_buffered",
+        "_client_event_id",
         "_client_task",
         "_closing",
         "_config",
@@ -825,7 +878,6 @@ class RealtimeSession:
         "_metering",
         "_model",
         "_model_id",
-        "_pending_calls",
         "_pending_item",
         "_response",
         "_session_id",
@@ -869,6 +921,7 @@ class RealtimeSession:
         self._backend: RealtimeBackendSession | None = None
         self._backend_task: Task[None] | None = None
         self._client_task: Task[None] | None = None
+        self._client_event_id: str | None = None
         self._stack = AsyncExitStack()
         self._response: _Response | None = None
         self._metering = _Metering()
@@ -876,7 +929,6 @@ class RealtimeSession:
         self._items: dict[str, _Item] = {}
         self._last_item_id: str | None = None
         self._pending_item: str | None = None
-        self._pending_calls: dict[str, str] = {}
         self._suppressed = False
         self._stopping = False
         self._closing: tuple[int, str] | None = None
@@ -967,6 +1019,8 @@ class RealtimeSession:
             message = await self._transport.receive()
             if message["type"] == "websocket.disconnect":
                 return
+            # Every error raised from here on is about this event, and no other.
+            self._client_event_id = None
             payload = message.get("text") or message.get("bytes") or ""
             if len(payload) > _MAX_EVENT_BYTES:
                 await self._error("invalid_request_error", "Event payload too large.")
@@ -979,6 +1033,8 @@ class RealtimeSession:
             if not isinstance(event, dict):
                 await self._error("invalid_request_error", "Event is not an object.")
                 continue
+            if isinstance(event_id := event.get("event_id"), str):
+                self._client_event_id = event_id
             await self._apply(event)
 
     async def _apply(self, event: JsonMapping) -> None:  # noqa: C901 - one arm per client event
@@ -1024,13 +1080,21 @@ class RealtimeSession:
             session: The configuration the client sent.
         """
         if session is not None and not isinstance(session, dict):
-            await self._error("invalid_request_error", "'session' must be an object.")
+            await self._error(
+                "invalid_request_error", "'session' must be an object.", param="session"
+            )
             return
         merged = _deep_merge(self._config.model_dump(mode="json"), session or {})
         merged["type"] = self._config.type
-        if (parsed := _parse_session(merged)) is None:
+        try:
+            parsed = _validate_session(merged)
+        except ValidationError as error:
+            param = _refused_field(error)
+            named = f" The field {param} is not." if param else ""
             await self._error(
-                "invalid_request_error", "The session configuration is not valid."
+                "invalid_request_error",
+                f"The session configuration is not valid.{named}",
+                param=param,
             )
             return
         # The encoding is what the media negotiation pinned; the rate the
@@ -1043,6 +1107,7 @@ class RealtimeSession:
                 "invalid_request_error",
                 "The audio formats are fixed by the call's media negotiation "
                 "and cannot be changed.",
+                param="session.audio",
             )
             return
         if self._locked and not self._same_pinned_settings(parsed):
@@ -1055,13 +1120,16 @@ class RealtimeSession:
         try:
             _check_tools(parsed, self._model)
         except ApiError as exception:
-            await self._error("invalid_request_error", exception.args[0])
+            await self._error(
+                "invalid_request_error", exception.args[0], param=exception.param
+            )
             return
         if self._backend is not None and not self._same_backend_settings(parsed):
             await self._error(
                 "invalid_request_error",
                 "The instructions, voice, audio formats and tools cannot be changed "
                 "once the model has answered. Open a new session to change them.",
+                param="session",
             )
             return
         self._config = parsed
@@ -1149,14 +1217,29 @@ class RealtimeSession:
             item: The item the client sent.
         """
         if not isinstance(item, dict):
-            await self._error("invalid_request_error", "'item' must be an object.")
+            await self._error(
+                "invalid_request_error", "'item' must be an object.", param="item"
+            )
             return
         if item.get("type") == "function_call_output":
             await self._answer_tool_call(item)
             return
+        if item.get("type") == "function_call":
+            await self._error(
+                "invalid_request_error",
+                "A 'function_call' item cannot be written into a session: the "
+                "conversation holds the calls the model itself made. Send what "
+                "one returned as a 'function_call_output' item.",
+                param="item.type",
+            )
+            return
         content = item.get("content") or []
         if not isinstance(content, list):
-            await self._error("invalid_request_error", "'content' must be an array.")
+            await self._error(
+                "invalid_request_error",
+                "'content' must be an array.",
+                param="item.content",
+            )
             return
         texts = [
             part["text"]
@@ -1171,6 +1254,7 @@ class RealtimeSession:
                 "invalid_request_error",
                 "Only text conversation items can be added to a session; send "
                 "speech with input_audio_buffer.append.",
+                param="item.content",
             )
             return
         text = await apply_guardrail_to_text("\n".join(texts), source="INPUT")
@@ -1187,6 +1271,11 @@ class RealtimeSession:
     async def _answer_tool_call(self, item: JsonMapping) -> None:
         """Give the model what one of its tool calls returned.
 
+        The call the answer names is not checked against the ones this session
+        produced: a client may write a conversation's history into a new
+        session, or resend an answer after reconnecting past the session cap,
+        and the model itself is what decides whether the call is one of its own.
+
         Args:
             item: The ``function_call_output`` item the client sent.
         """
@@ -1196,13 +1285,7 @@ class RealtimeSession:
             await self._error(
                 "invalid_request_error",
                 "'call_id' and 'output' are required to answer a function call.",
-            )
-            return
-        if self._pending_calls.pop(call_id, None) is None:
-            await self._error(
-                "invalid_request_error",
-                f"No function call '{call_id}' is waiting for an answer in this "
-                "session.",
+                param="item.call_id",
             )
             return
         checked = await apply_guardrail_to_text(output, source="INPUT")
@@ -1455,12 +1538,15 @@ class RealtimeSession:
         except ApiError as exception:
             # A stream closed by the teardown fails by design; nothing owes for it.
             if not self._stopping:
+                # Nothing the client sent caused this, whatever it sent last.
+                self._client_event_id = None
                 await self._fail(exception)
         except Exception as exception:  # noqa: BLE001
             # Nothing else reads this task: an escape would end the session
             # silently, on a timeout, with the failure reported nowhere.
             log_error_details("\n".join(format_exception(exception)), level="critical")
             if not self._stopping:
+                self._client_event_id = None
                 await self._fail(ApiError(_UNEXPECTED_ERROR, status=500))
         else:
             # The backend ended the conversation, so the client cannot send into it.
@@ -1686,7 +1772,7 @@ class RealtimeSession:
                 "item": _item_body(item),
             }
         )
-        await self._add_item(item)
+        await self._add_item(item, created=True)
         for kind, fields in (
             ("delta", {"delta": call.arguments}),
             ("done", {"arguments": call.arguments, "name": call.name}),
@@ -1705,9 +1791,6 @@ class RealtimeSession:
         item.tool = called
         body = _item_body(item)
         response.calls.append(body)
-        self._pending_calls[call.call_id] = item.id
-        while len(self._pending_calls) > _MAX_TRACKED_ITEMS:
-            del self._pending_calls[next(iter(self._pending_calls))]
         await self._send_event(
             {
                 "type": "response.output_item.done",
@@ -1860,21 +1943,31 @@ class RealtimeSession:
     ) -> None:
         """Report the end of one answer.
 
+        An answer the caller spoke over is reported the way upstream reports
+        one: ``cancelled``, because something stopped it, with the turn that
+        did so as its reason. ``incomplete`` belongs to the answers a token cap
+        or a content filter cut off, which is not what happened here.
+
         Args:
             response: The answer that ended.
             transcript: Everything it said, checked.
             interrupted: Whether the caller spoke over it.
         """
-        status = (
-            "cancelled"
-            if response.cancelled
-            else ("incomplete" if interrupted else "completed")
-        )
-        await self._finish_output_item(response, status, transcript)
+        if response.cancelled:
+            status, reason = "cancelled", _CLIENT_CANCELLED
+        elif interrupted:
+            status, reason = "cancelled", _TURN_DETECTED
+        else:
+            status, reason = "completed", None
+        # An item is never "cancelled": what was said before the stop stands.
+        item_status = "completed" if reason is None else "incomplete"
+        await self._finish_output_item(response, item_status, transcript)
         await self._send_event(
             {
                 "type": "response.done",
-                "response": self._response_view(response, status, transcript),
+                "response": self._response_view(
+                    response, status, transcript, reason=reason
+                ),
             }
         )
 
@@ -2034,7 +2127,12 @@ class RealtimeSession:
         )
 
     def _response_view(
-        self, response: _Response, status: str, transcript: str = ""
+        self,
+        response: _Response,
+        status: str,
+        transcript: str = "",
+        *,
+        reason: str | None = None,
     ) -> JsonMapping:
         """Render one answer.
 
@@ -2046,6 +2144,7 @@ class RealtimeSession:
             response: The answer.
             status: Status to report.
             transcript: What was said, once it is known.
+            reason: Why the answer ended early, when something ended it.
 
         Returns:
             The response object, in the shape the client expects.
@@ -2061,7 +2160,7 @@ class RealtimeSession:
             "id": response.id,
             "object": "realtime.response",
             "status": status,
-            "status_details": _status_details(status),
+            "status_details": _status_details(status, reason),
             "conversation_id": self._conversation_id,
             "output_modalities": ["audio"] if self._speech_output() else ["text"],
             "max_output_tokens": _reported_token_cap(self._config),
@@ -2112,13 +2211,21 @@ class RealtimeSession:
             return
         await self._transport.send_event({"event_id": f"event_{webuuid()}", **event})
 
-    async def _error(self, kind: str, message: str, code: str | None = None) -> None:
+    async def _error(
+        self,
+        kind: str,
+        message: str,
+        code: str | None = None,
+        *,
+        param: str | None = None,
+    ) -> None:
         """Report a non-fatal error to the client.
 
         Args:
             kind: Error type, in the upstream vocabulary.
             message: What the caller can act on.
             code: Machine-readable code, when one applies.
+            param: The offending field, when one field is what is wrong.
         """
         log_error_details(message, level="warning")
         await self._send_event(
@@ -2128,8 +2235,9 @@ class RealtimeSession:
                     "type": kind,
                     "code": code,
                     "message": message,
-                    "param": None,
-                    "event_id": None,
+                    "param": param,
+                    # The client event being applied, so a client can correlate.
+                    "event_id": self._client_event_id,
                 },
             }
         )
@@ -2142,7 +2250,7 @@ class RealtimeSession:
         """
         kind = "invalid_request_error" if exception.status < 500 else "server_error"
         code = exception.code
-        await self._error(kind, exception.args[0], code)
+        await self._error(kind, exception.args[0], code, param=exception.param)
         self._closing = (ERROR_CLOSE_CODE, f"{kind}.{code}" if code else kind)
 
     async def _close(self, code: int, reason: str) -> None:
@@ -2195,7 +2303,8 @@ def _session_tools(config: SessionConfig) -> tuple[RealtimeTool, ...]:
             parameters=tool.parameters,
         )
         for tool in config.tools or ()
-        if isinstance(tool, FunctionTool)
+        # A function with no name cannot be called, so it is declared to nobody.
+        if isinstance(tool, FunctionTool) and tool.name
     )
 
 
@@ -2216,6 +2325,25 @@ def _session_tool_choice(config: SessionConfig) -> ToolChoice:
     return "required" if choice == "required" else "auto"
 
 
+def check_session_tools(config: SessionConfig) -> None:
+    """Refuse tools no session can serve, whichever model would serve it.
+
+    Args:
+        config: The session configuration.
+
+    Raises:
+        ApiError: A remote MCP server was attached.
+    """
+    if isinstance(config, TranscriptionSessionConfig) or not config.tools:
+        return
+    if any(not isinstance(tool, FunctionTool) for tool in config.tools):
+        msg = (
+            "Only function tools are available in a session; a remote MCP server "
+            "cannot be attached to one."
+        )
+        raise _config_error(msg, "session.tools")
+
+
 def _check_tools(config: SessionConfig, model: RealtimeModelBase[Any, Any]) -> None:
     """Refuse tools the session cannot serve, before anything is opened.
 
@@ -2226,20 +2354,15 @@ def _check_tools(config: SessionConfig, model: RealtimeModelBase[Any, Any]) -> N
     Raises:
         ApiError: A remote MCP server was attached, or this model calls no tools.
     """
+    check_session_tools(config)
     if isinstance(config, TranscriptionSessionConfig) or not config.tools:
         return
-    if any(not isinstance(tool, FunctionTool) for tool in config.tools):
-        msg = (
-            "Only function tools are available in a session; a remote MCP server "
-            "cannot be attached to one."
-        )
-        raise ApiError(msg)
     if not model.TOOLS_SUPPORTED:
         msg = (
             "This model does not call tools. Open the session without 'tools', or "
             "choose a model that supports them."
         )
-        raise ApiError(msg)
+        raise _config_error(msg, "session.tools")
 
 
 def _deep_merge(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
@@ -2508,19 +2631,20 @@ async def _refuse_events(
     )
 
 
-def _status_details(status: str) -> JsonMapping | None:
+def _status_details(status: str, reason: str | None) -> JsonMapping | None:
     """Return why an answer did not run to its end.
 
     Args:
         status: Status the answer is reported with.
+        reason: Why it ended early, when something ended it.
 
     Returns:
         None for an answer still running or completed, as upstream sends it,
         and what ended it otherwise.
     """
-    if status in _CLEAN_RESPONSE_STATUSES:
+    if reason is None:
         return None
-    return {"type": status, "reason": _RESPONSE_END_REASONS.get(status)}
+    return {"type": status, "reason": reason}
 
 
 def _reported_token_cap(config: SessionConfig) -> int | str:
