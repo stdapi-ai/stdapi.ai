@@ -160,8 +160,12 @@ def _item_list(
 
 async def _new_items(
     items: Sequence[ResponseInputItem], conversation_id: str | None
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Turn request items into stored items, resolving any item reference.
+
+    An ``item_reference`` names an item the conversation already holds, so it
+    is not stored a second time and the item it names takes its place in the
+    answer.
 
     Args:
         items: The request's ``items``.
@@ -169,7 +173,8 @@ async def _new_items(
             when the conversation does not exist yet and holds no item.
 
     Returns:
-        The items to store, each carrying its minted ID.
+        The items to store, each carrying its minted ID, and every requested
+        item in the order it was sent.
 
     Raises:
         ApiError: 404 when an ``item_reference`` names no item of the
@@ -178,22 +183,26 @@ async def _new_items(
     payloads = [
         item.model_dump(mode="json", by_alias=True, exclude_none=True) for item in items
     ]
-    if references := [
+    referenced: dict[str, dict[str, Any]] = {}
+    if references := {
         str(payload.get("id") or "")
         for payload in payloads
         if is_item_reference(payload)
-    ]:
-        known = (
-            {item["id"] for item in await load_items(conversation_id)}
-            if conversation_id is not None
-            else set()
-        )
-        for reference in references:
-            if reference not in known:
+    }:
+        known = await load_items(conversation_id) if conversation_id is not None else ()
+        referenced = {item["id"]: item for item in known if item["id"] in references}
+    new: list[dict[str, Any]] = []
+    requested: list[dict[str, Any]] = []
+    for payload in payloads:
+        if is_item_reference(payload):
+            reference = str(payload.get("id") or "")
+            if (item := referenced.get(reference)) is None:
                 item_not_found(reference)
-    return [
-        stored_item(payload) for payload in payloads if not is_item_reference(payload)
-    ]
+        else:
+            item = stored_item(payload)
+            new.append(item)
+        requested.append(item)
+    return new, requested
 
 
 @router.post(
@@ -231,7 +240,7 @@ async def create(
         if isinstance(value, str)
     }
     # Prepared first, so a rejected item leaves no empty conversation behind.
-    items = await _new_items(body.items or (), None)
+    items, _requested = await _new_items(body.items or (), None)
     conversation_id, created_at = await create_conversation(metadata)
     if items:
         await append_items(conversation_id, items)
@@ -364,10 +373,13 @@ async def delete(
     summary="Add items to a conversation (OpenAI format)",
     operation_id="openai_conversation_items",
     description=(
-        "Appends items to a conversation and returns the items that were added "
-        "(OpenAI Conversations API). Item IDs are assigned by the server."
+        "Appends items to a conversation and returns them as a `list` page, in "
+        "the order they were sent (OpenAI Conversations API). Item IDs are "
+        "assigned by the server. An `item_reference` names an item the "
+        "conversation already holds and is answered with that item rather than "
+        "a copy of it."
     ),
-    response_description="The items that were added.",
+    response_description="The requested items, in the order they were sent.",
     responses={404: {"description": "Conversation not found."}},
     response_model_exclude_none=True,
 )
@@ -385,7 +397,8 @@ async def add_items(
         include: Additional item fields to return.
 
     Returns:
-        The items that were added, in the order they were sent.
+        The requested items, in the order they were sent, each
+        ``item_reference`` standing for the item it names.
 
     Raises:
         ApiError: 404 when the conversation does not exist, or an
@@ -399,10 +412,11 @@ async def add_items(
         }
     )
     validate_conversation_id(conversation_id, "conversation_id")
-    items = await _new_items(request.items or (), conversation_id)
-    await append_items(conversation_id, items)
+    items, requested = await _new_items(request.items or (), conversation_id)
+    if items:
+        await append_items(conversation_id, items)
     return log_response_params(
-        _item_list(items, limit=len(items), order="asc", include=include)
+        _item_list(requested, limit=len(requested), order="asc", include=include)
     )
 
 
