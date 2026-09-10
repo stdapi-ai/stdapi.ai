@@ -67,7 +67,7 @@ Two outcomes are possible for a parameter no model behind this API can honor, an
 | `custom` tools (free-form)               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with `400`, in `tools`, in a named `tool_choice`, and inside `allowed_tools`; declare the tool as a `function` tool instead — accepted and dropped on the [Responses API](api_openai_responses.md) |
 | **Generation Control**                   |                                          |                                                                 |
 | `max_tokens` / `max_completion_tokens`   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output length limits                                            |
-| `temperature`                            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Mapped to Bedrock inference params                              |
+| `temperature`                            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Mapped to Bedrock inference params. The full `0`–`2` range is accepted; a value above `1.0` is served at `1.0` (an Amazon Bedrock limitation) |
 | `top_p`                                  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Nucleus sampling control                                        |
 | `stop` sequences                         |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Custom stop strings. Whitespace-only sequences are rejected with `400` (Amazon Bedrock limitation) |
 | `frequency_penalty` / `presence_penalty` |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Repetition control                                              |
@@ -826,6 +826,8 @@ curl -X POST "$BASE/v1/chat/completions" \
 **What is rejected with a `400`.** `logprobs` when enabled, `web_search_options`, `translation_options`, `custom` (free-form) tools, `tool_choice: {"type": "allowed_tools"}`, a whitespace-only `stop` sequence (an Amazon Bedrock limitation), audio output combined with `stream: true`, and `n > 1` combined with `stream: true`. Each error names the parameter it refuses.
 
 **What is accepted and ignored.** `prediction` and `verbosity` are latency and length hints the Converse API has no equivalent for, and `stream_options.include_obfuscation` never pads the stream. All three are forwarded verbatim on [Mantle passthrough models](#bedrock-mantle), where the upstream API decides what to do with them.
+
+**`temperature` above `1.0` is served at `1.0`.** The documented `0`–`2` range is accepted in full: a higher value is applied at the maximum Amazon Bedrock accepts rather than refused, so `1.5` and `2.0` sample as `1.0` does. [Mantle passthrough models](#bedrock-mantle) receive the value as sent.
 
 **What changes on a Mantle-served model.** An Amazon Bedrock guardrail is not applied to a Mantle-served request, the `moderation` parameter is rejected with `400`, and audio synthesis from text output is not performed. Where the model is not chat-native, the request is converted to the Responses or Messages API and a documented set of parameters is dropped or clamped — the three serving paths and their exact parameter fidelity are tabled under [Bedrock Mantle](#bedrock-mantle).
 

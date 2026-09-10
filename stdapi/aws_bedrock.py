@@ -132,6 +132,9 @@ MIME_TYPES_TO_AUDIO_TYPE: dict[str, AudioFormatType] = {
 #: Bedrock limit for sync body size (25MB), here with a little margin
 BEDROCK_BODY_SIZE_LIMIT = 24_990_000
 
+#: Highest temperature the Bedrock inference configuration accepts.
+_MAX_TEMPERATURE = 1.0
+
 #: Bedrock error codes on model error
 _BEDROCK_MODEL_ERROR_CODES: frozenset[str] = frozenset(
     ("ModelErrorException", "ModelStreamErrorException", "ModelTimeoutException")
@@ -943,7 +946,7 @@ def set_inference_configuration(
     Args:
         model_id: Bedrock model identifier; used to look up defaults.
         additional_request_fields: Mutable dict updated with provider-specific extras.
-        temperature: Sampling temperature (0-1).
+        temperature: Sampling temperature; capped at the highest value Bedrock takes.
         top_p: Nucleus sampling threshold (0-1).
         max_tokens: Maximum tokens to generate.
         stop_sequences: Sequences that halt generation.
@@ -957,7 +960,9 @@ def set_inference_configuration(
 
     temperature = temperature if temperature is not None else default.temperature
     if temperature is not None:
-        config["temperature"] = temperature
+        # Mirrored APIs document temperature up to 2: cap it instead of letting
+        # Bedrock refuse a request they call valid.
+        config["temperature"] = min(temperature, _MAX_TEMPERATURE)
 
     top_p = top_p if top_p is not None else default.top_p
     if top_p is not None:

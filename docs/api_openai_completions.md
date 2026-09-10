@@ -51,7 +51,7 @@ curl -X POST "$BASE/v1/completions" \
 | Token array prompts                | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Not supported — use string prompts; rejected with `400` |
 | **Generation Control**             |                                          |                                                                  |
 | `max_tokens`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output length limits                                             |
-| `temperature`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Mapped to Bedrock inference params                               |
+| `temperature`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Mapped to Bedrock inference params. A value above `1.0` is served at `1.0` (an Amazon Bedrock limitation); Bedrock Mantle-served models receive the value as sent |
 | `top_p`                            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Nucleus sampling control                                         |
 | `stop` sequences                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Custom stop strings; dropped when a Mantle request is converted to the Responses API |
 | `n` (multiple choices)             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Supported with and without streaming; `n > 1` rejected with `400` when a Mantle request is converted to the Responses or Messages API |
