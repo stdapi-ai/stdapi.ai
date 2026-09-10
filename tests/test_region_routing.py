@@ -87,7 +87,7 @@ class RoutingFixture:
     def get_state(self, model: str, region: str) -> RegionState:
         """Return the live RegionState for the given model/region pair."""
         assert self.router is not None
-        return self.router._index.get(model, region)  # noqa: SLF001
+        return self.router._state(model, region)  # noqa: SLF001
 
     def mark_success(self, model: str, region: str) -> None:
         """Reset a blocked region back to usable."""
@@ -892,7 +892,7 @@ class TestRegionRouterUnit:
             # First error — region starts unblocked so counter goes to 1.
             before_1 = monotonic()
             router.mark_error(MODEL, ROUTING_PRIMARY, "ThrottlingException")
-            state = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+            state = router._state(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
             assert state.consecutive_quota_errors == 1
             blocked_until_1 = state.quota_blocked_until
             assert before_1 + _QUOTA_BACKOFF_BASE <= blocked_until_1
@@ -902,7 +902,7 @@ class TestRegionRouterUnit:
             # Second error — region is still blocked (quota_blocked_until > now).
             before_2 = monotonic()
             router.mark_error(MODEL, ROUTING_PRIMARY, "ThrottlingException")
-            state2 = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+            state2 = router._state(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
             assert state2.consecutive_quota_errors == 2
             assert state2.quota_blocked_until > blocked_until_1
             assert before_2 + 2 * _QUOTA_BACKOFF_BASE <= state2.quota_blocked_until
@@ -917,7 +917,7 @@ class TestRegionRouterUnit:
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
         router = self._make_router()
-        state = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+        state = router._state(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
 
         # A recent prior error with an expired backoff: the region is usable again
         # while its last error is still within the stale threshold.
@@ -936,7 +936,7 @@ class TestRegionRouterUnit:
             before = monotonic()
             router.mark_error(MODEL, ROUTING_PRIMARY, "ThrottlingException")
 
-        state_after = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+        state_after = router._state(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
         assert state_after.consecutive_quota_errors == 2
         # Counter 2 => backoff base * 2**1, applied from the moment of the error.
         assert before + 2 * _QUOTA_BACKOFF_BASE <= state_after.quota_blocked_until
@@ -950,7 +950,7 @@ class TestRegionRouterUnit:
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
         router = self._make_router()
-        state = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+        state = router._state(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
 
         # Simulate a prior error that happened more than _QUOTA_STALE_THRESHOLD seconds ago.
         state.consecutive_quota_errors = 5
@@ -970,7 +970,7 @@ class TestRegionRouterUnit:
             before = monotonic()
             router.mark_error(MODEL, ROUTING_PRIMARY, "ThrottlingException")
 
-        state_after = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+        state_after = router._state(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
         # Counter must be reset to 1, not incremented from 5.
         assert state_after.consecutive_quota_errors == 1
         # ...and the backoff must therefore be the un-escalated base, not base * 2**5.
@@ -1000,7 +1000,7 @@ class TestRegionRouterUnit:
         ):
             router.mark_error(MODEL, ROUTING_PRIMARY, "ServiceUnavailableException")
 
-        state = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+        state = router._state(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
         assert state.unavailable_until >= before + backoff
         assert state.unavailable_until <= monotonic() + backoff
         assert not state.is_usable
@@ -1034,7 +1034,7 @@ class TestRegionRouterUnit:
             # Mimic what route_and_execute passes for a BotocoreConnectionError.
             router.mark_error(MODEL, ROUTING_PRIMARY, "ConnectTimeoutError")
 
-        state = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+        state = router._state(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
         assert state.unavailable_until >= before + backoff
         assert state.unavailable_until <= monotonic() + backoff
         assert not state.is_usable
@@ -1064,8 +1064,8 @@ class TestRegionRouterUnit:
             router.mark_error(MODEL, ROUTING_PRIMARY, "ThrottlingException")
             router.mark_error(MODEL, ROUTING_SECONDARY, "ThrottlingException")
 
-        assert not router._index.get(MODEL, ROUTING_PRIMARY).is_usable  # noqa: SLF001
-        assert not router._index.get(MODEL, ROUTING_SECONDARY).is_usable  # noqa: SLF001
+        assert not router._state(MODEL, ROUTING_PRIMARY).is_usable  # noqa: SLF001
+        assert not router._state(MODEL, ROUTING_SECONDARY).is_usable  # noqa: SLF001
         result = router.ordered_regions(MODEL, _ROUTING_REGIONS)
         # All regions must appear in the fallback, keeping the "ordered" order.
         assert result == [ROUTING_PRIMARY, ROUTING_SECONDARY]
@@ -1082,7 +1082,7 @@ class TestRegionRouterUnit:
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
         router = self._make_router()
-        state = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+        state = router._state(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
         # Force a very high consecutive error count so the raw backoff would overflow the cap.
         state.consecutive_quota_errors = 100
         state.quota_blocked_until = monotonic() + 1  # still blocked
@@ -1102,7 +1102,7 @@ class TestRegionRouterUnit:
             router.mark_error(MODEL, ROUTING_PRIMARY, "ThrottlingException")
 
         cap = _rr_mod._MAX_QUOTA_BACKOFF  # noqa: SLF001
-        state_after = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+        state_after = router._state(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
         assert state_after.consecutive_quota_errors == 101
         # Backoff window is exactly the cap, neither shorter nor longer.
         assert before + cap <= state_after.quota_blocked_until <= monotonic() + cap
@@ -1124,11 +1124,11 @@ class TestRegionRouterUnit:
         ):
             router.mark_error(MODEL, ROUTING_PRIMARY, "ServiceUnavailableException")
 
-        state = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+        state = router._state(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
         assert state.unavailable_until > monotonic()
 
         router.mark_success(MODEL, ROUTING_PRIMARY)
-        state_after = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+        state_after = router._state(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
         assert state_after.unavailable_until == 0.0
         assert state_after.quota_blocked_until == 0.0
         assert state_after.consecutive_quota_errors == 0
@@ -1441,7 +1441,7 @@ class TestRouteAndExecute:
         assert "Connection timed out" in str(excinfo.value)
         # Both regions were penalised on the unavailability branch.
         for region in _ROUTING_REGIONS:
-            assert router._index.get(MODEL, region).unavailable_until > monotonic()  # noqa: SLF001
+            assert router._state(MODEL, region).unavailable_until > monotonic()  # noqa: SLF001
 
     async def test_botocore_connection_error_calls_mark_error(self) -> None:
         """BotocoreConnectionError is recorded under its exception class name, once per attempt.
@@ -1524,11 +1524,11 @@ class TestRouteAndExecute:
             MODEL, _ROUTING_REGIONS[0], "ThrottlingException"
         )
         # 429 must land on the quota branch, and the retry must clear the survivor.
-        primary = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+        primary = router._state(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
         assert primary.consecutive_quota_errors == 1
         assert primary.quota_blocked_until > monotonic()
         assert primary.unavailable_until == 0.0
-        assert router._index.get(MODEL, ROUTING_SECONDARY).is_usable  # noqa: SLF001
+        assert router._state(MODEL, ROUTING_SECONDARY).is_usable  # noqa: SLF001
 
     async def test_mantle_error_failover_unavailable_retries_next_region(self) -> None:
         """A failover MantleError with a non-429 status takes the unavailability branch and is retried."""
@@ -1570,7 +1570,7 @@ class TestRouteAndExecute:
             MODEL, _ROUTING_REGIONS[0], "ServiceUnavailableException"
         )
         # 503 must not escalate the quota counter.
-        primary = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+        primary = router._state(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
         assert primary.unavailable_until > monotonic()
         assert primary.quota_blocked_until == 0.0
         assert primary.consecutive_quota_errors == 0
@@ -1609,7 +1609,7 @@ class TestRouteAndExecute:
         assert str(exc_info.value) == "bad request"
         assert calls == [ROUTING_PRIMARY]
         # No backoff bookkeeping for a non-retryable error.
-        assert router._index.get(MODEL, ROUTING_PRIMARY).is_usable  # noqa: SLF001
+        assert router._state(MODEL, ROUTING_PRIMARY).is_usable  # noqa: SLF001
 
 
 # ---------------------------------------------------------------------------

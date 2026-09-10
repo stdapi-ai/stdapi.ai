@@ -16,7 +16,7 @@ from stdapi.auth_cognito import CognitoAuthenticator
 from stdapi.aws import CONFIG
 from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
 from stdapi.exceptions import ServerError
-from stdapi.monitoring import PRINCIPAL, TENANT, EventLog, Tenant, add_server_warning
+from stdapi.monitoring import PRINCIPAL, TENANT, EventLog, add_server_warning
 from stdapi.tenant_keys import is_tenant_key, verify_tenant_key
 
 if TYPE_CHECKING:
@@ -232,7 +232,7 @@ class AuthenticationHandler:
             self._api_key_hash.get_secret_value(),
         )
 
-    def verify_credentials(self, token: SecretStr | None) -> None:
+    def verify_credentials(self, token: str | None) -> None:
         """Verify authentication for API endpoints.
 
         Compares *token* against the cached salted hash in constant time. No-op
@@ -244,19 +244,11 @@ class AuthenticationHandler:
         Raises:
             ApiError: 401 if authentication is required but missing/invalid.
         """
-        if self._api_key_hash is None or self._api_key_salt is None:
+        if not self.enabled:
             return
-
         if token is None:
             unauthorized("Missing API key")
-
-        if not compare_digest(
-            blake2b(
-                token.get_secret_value().encode("utf-8"),
-                salt=self._api_key_salt.get_secret_value(),
-            ).digest(),
-            self._api_key_hash.get_secret_value(),
-        ):
+        if not self.matches(token):
             unauthorized("Invalid API key")
 
 
@@ -368,49 +360,27 @@ async def authenticate(
     enforce_tenant_endpoint_scope(request.scope)
 
 
-def scope_route_path(scope: Mapping[str, Any]) -> str | None:
-    """Return the matched route's path template from an ASGI scope.
-
-    Args:
-        scope: The connection's ASGI scope, after routing.
-
-    Returns:
-        The path template, e.g. ``/v1/chat/completions``, or None when no
-        route matched.
-    """
-    route = scope.get("route")
-    return getattr(route, "path_format", None) or getattr(route, "path", None)
-
-
-def enforce_tenant_endpoint_scope(scope: Mapping[str, Any]) -> None:
+def enforce_tenant_endpoint_scope(scope: Mapping[str, Any] | None) -> None:
     """Refuse the connection when its route is outside the tenant's scope.
 
-    No-op when the current request carries no verified tenant.
+    No-op when the current request carries no verified tenant. A missing
+    scope -- a WebSocket handshake with no matched route to test -- fails
+    closed for a restricted tenant instead of skipping its restrictions.
 
     Args:
-        scope: The connection's ASGI scope, after routing.
+        scope: The connection's ASGI scope, after routing, or None when the
+            caller has none to test.
 
     Raises:
         ApiError: 401 when the tenant restricts endpoints and the matched
-            route is not allowed.
+            route is not allowed -- or not known, which fails closed.
     """
-    if (tenant := TENANT.get()) is not None:
-        _enforce_endpoint_scope(tenant, scope_route_path(scope))
-
-
-def _enforce_endpoint_scope(tenant: Tenant, path: str | None) -> None:
-    """Refuse the request when its route is outside the tenant's scope.
-
-    Args:
-        tenant: The verified tenant.
-        path: The matched route's path template, if known.
-
-    Raises:
-        ApiError: 401 when the tenant restricts endpoints and this one is not
-            allowed -- or not known, which fails closed.
-    """
+    if (tenant := TENANT.get()) is None:
+        return
     if tenant.endpoints_allow is None and not tenant.endpoints_deny:
         return
+    route = scope.get("route") if scope is not None else None
+    path = getattr(route, "path_format", None) or getattr(route, "path", None)
     if path is None or not tenant.allows_endpoint(path):
         unauthorized(
             f"Tenant API key '{tenant.key_id}' is not allowed on this endpoint"
@@ -455,7 +425,7 @@ async def verify_credential(credential: str | None) -> None:
         # Same trap with tenant keys as the only method: never fall through to
         # the disabled comparison, which accepts anything.
         unauthorized("Credentials rejected: not a tenant API key")
-    _auth_handler.verify_credentials(SecretStr(credential) if credential else None)
+    _auth_handler.verify_credentials(credential)
 
 
 async def verify_websocket_credentials(
@@ -481,12 +451,7 @@ async def verify_websocket_credentials(
     PRINCIPAL.set(None)
     TENANT.set(None)
     await verify_credential(credential)
-    if scope is not None:
-        enforce_tenant_endpoint_scope(scope)
-    elif (tenant := TENANT.get()) is not None:
-        # No scope means no matched route to test: fail closed for a
-        # restricted tenant rather than skipping its restrictions.
-        _enforce_endpoint_scope(tenant, None)
+    enforce_tenant_endpoint_scope(scope)
 
 
 def realtime_signing_key(person: bytes, size: int) -> bytes | None:

@@ -563,8 +563,8 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
                 "that labels speakers."
             )
             raise ValueError(msg)
-        if isinstance(self.chunking_strategy, dict) or self.chunking_strategy != "auto":
-            # Any explicit server_vad config or non-auto is unsupported
+        if self.chunking_strategy != "auto":
+            # An explicit server_vad config or any other non-auto value is unsupported
             param = "chunking_strategy"
             raise UnsupportedParameterError(param)
         return self

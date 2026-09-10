@@ -172,9 +172,8 @@ class TestMapMessagesThinkingBlocks:
     async def test_redacted_thinking_param_is_decoded_to_raw_bytes(self) -> None:
         """A ``redacted_thinking`` block becomes ``reasoningContent.redactedContent`` bytes.
 
-        ``_map_content_block_to_bedrock`` returns ``None`` for this block type, so
-        the decode happens in ``_map_messages`` itself: a regression there drops the
-        block entirely and every turn after a redacted one is rejected by Bedrock.
+        A regression in the decode drops the block entirely and every turn after
+        a redacted one is rejected by Bedrock.
         """
         payload = b"\x00\x01redacted-bytes\xff"
         result = await _map_messages(

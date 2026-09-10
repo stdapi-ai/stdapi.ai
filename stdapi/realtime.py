@@ -1087,11 +1087,7 @@ class RealtimeSession:
 
     async def _commit_audio(self) -> None:
         """End the caller's turn, which is what starts the model answering."""
-        backend = await self._ensure_backend()
-        if self._buffered:
-            await backend.send_audio(self._buffered)
-            self._buffered.clear()
-        await backend.end_turn()
+        await self._create_response()
         self._pending_item = item_id = f"item_{uuid4().hex}"
         await self._send_event(
             {"type": "input_audio_buffer.committed", "item_id": item_id}
@@ -1366,8 +1362,6 @@ class RealtimeSession:
                 await self._report(event)
                 if self._closing is not None:
                     break
-        except CancelledError:
-            raise
         except ApiError as exception:
             # A stream closed by the teardown fails by design; nothing owes for it.
             if not self._stopping:

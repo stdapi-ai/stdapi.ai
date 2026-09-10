@@ -565,24 +565,21 @@ async def put_s3_object(
             await _multipart_upload(
                 s3, bucket, key, _bytes_chunks(data, UPLOAD_CHUNK_SIZE), **kwargs
             )
-        if temporary:
-            track_temporary_s3_objects(bucket, key)
-        return S3Object(bucket=bucket, key=key)
-
-    sized = buffered_chunks(data, UPLOAD_CHUNK_SIZE)
-    first = await anext(sized, b"")
-    second = await anext(sized, b"")
-
-    if not second:
-        await s3.put_object(Bucket=bucket, Key=key, Body=first, **kwargs)  # type: ignore[arg-type]
     else:
-        await _multipart_upload(
-            s3,
-            bucket,
-            key,
-            chain_async_iterators(async_iter(first, second), sized),
-            **kwargs,
-        )
+        sized = buffered_chunks(data, UPLOAD_CHUNK_SIZE)
+        first = await anext(sized, b"")
+        second = await anext(sized, b"")
+
+        if not second:
+            await s3.put_object(Bucket=bucket, Key=key, Body=first, **kwargs)  # type: ignore[arg-type]
+        else:
+            await _multipart_upload(
+                s3,
+                bucket,
+                key,
+                chain_async_iterators(async_iter(first, second), sized),
+                **kwargs,
+            )
     if temporary:
         track_temporary_s3_objects(bucket, key)
     return S3Object(bucket=bucket, key=key)

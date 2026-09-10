@@ -1839,10 +1839,6 @@ ResponseInputItem = (
     | ItemReference
 )
 
-#: The `input` parameter for a response creation request.
-# ResponseInputItem is extended below with the echoed output-item types.
-type ResponseInputParam = str | list[ResponseInputItem]
-
 
 # Response output content  (model-generated text/refusal with annotations)
 
@@ -2413,7 +2409,8 @@ _ResponseInputItemBase = ResponseInputItem
 ResponseInputItem = (  # type: ignore[misc]
     _ResponseInputItemBase | ResponseOutputMessageInput | ResponseReasoningItemInput
 )
-ResponseInputParam = str | list[ResponseInputItem]  # type: ignore[misc,assignment]
+#: The `input` parameter for a response creation request.
+ResponseInputParam = str | list[ResponseInputItem]
 
 
 # Ref: openai.types.responses.response_apply_patch_tool_call.OperationCreateFile
@@ -4168,7 +4165,7 @@ class ResponseCreateParams(BaseModelRequestWithExtra):
         description="Model ID used to generate the response. Wildcard patterns "
         "are accepted and select the most recent matching model.",
     )
-    input: str | ResponseInputParam | None = Field(
+    input: ResponseInputParam | None = Field(
         default=None,
         description="Text, image, or file inputs to the model, used to generate a response.",
     )
@@ -4385,7 +4382,7 @@ class InputTokenCountParams(BaseModelRequest):
         description="Model ID. Wildcard patterns are accepted and select the "
         "most recent matching model."
     )
-    input: str | ResponseInputParam | None = Field(
+    input: ResponseInputParam | None = Field(
         default=None, description="Text, image, or file inputs."
     )
     instructions: str | None = Field(

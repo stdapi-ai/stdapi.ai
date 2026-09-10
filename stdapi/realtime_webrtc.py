@@ -688,7 +688,6 @@ class WebRTCCallTransport:
             reason: Close reason, forwarded to the sidebands.
         """
         self._disconnect()
-        self._closed = True
         for task in tuple(self._tasks):
             task.cancel()
         self._track.stop()

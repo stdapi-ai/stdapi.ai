@@ -1053,14 +1053,9 @@ async def compact_response(
     ).id
     response_id = f"resp-{REQUEST_ID.get()}"
     created_at = REQUEST_TIME.get().timestamp()
-    items: list[ResponseInputItem] = (
-        [EasyInputMessage(role="user", content=request.input)]
-        if isinstance(request.input, str)
-        else list(request.input or ())
-    )
     generation = ResponseCreateParams(
         model=request.model,
-        input=items,
+        input=request.input,
         instructions=request.instructions,
         prompt_cache_key=request.prompt_cache_key,
         prompt_cache_options=request.prompt_cache_options,
@@ -1070,7 +1065,7 @@ async def compact_response(
     )
     # Compaction never chains natively, so a Mantle-stored ID is a 404.
     generation = await _apply_previous_response(generation, native_supported=False)
-    items = (
+    items: list[ResponseInputItem] = (
         [EasyInputMessage(role="user", content=generation.input)]
         if isinstance(generation.input, str)
         else list(generation.input or ())

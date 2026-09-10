@@ -1874,22 +1874,21 @@ async def _load_price_catalog(diagnostics: list[str]) -> None:
         _state.pending_claims = {}
 
 
-def _all_models_priced(
-    model_ids: Iterable[str], service: Service = Service.BEDROCK
-) -> bool:
-    """Check whether every model in *model_ids* has a price-catalog entry.
+def _all_models_priced(model_ids: Iterable[str]) -> bool:
+    """Check whether every model in *model_ids* has a Bedrock price-catalog entry.
 
     Builds the priced-key set once per batch instead of scanning the whole
     index per model.
 
     Args:
         model_ids: Model IDs, resolved via :func:`resolve_model_key`.
-        service: The service to check against. Defaults to Bedrock.
 
     Returns:
-        True if every model has at least one :class:`PriceKey` for *service*.
+        True if every model has at least one Bedrock :class:`PriceKey`.
     """
-    priced_keys = {key.model for key in _state.price_index if key.service == service}
+    priced_keys = {
+        key.model for key in _state.price_index if key.service == Service.BEDROCK
+    }
     return all(resolve_model_key(model_id) in priced_keys for model_id in model_ids)
 
 
@@ -2143,20 +2142,6 @@ def select_effective_rows(
     if routing is not None:
         rows = _select_axis(rows, "routing", routing, "")
     return sorted(rows, key=_row_sort_key)
-
-
-def is_model_priced(model_id: str, service: Service = Service.BEDROCK) -> bool:
-    """Check whether the price index has at least one entry for *model_id*.
-
-    Args:
-        model_id: The model ID, resolved via :func:`resolve_model_key`.
-        service: The service to check against. Defaults to Bedrock.
-
-    Returns:
-        True if at least one :class:`PriceKey` in the current price index
-        matches this model's normalized key for *service*.
-    """
-    return _all_models_priced((model_id,), service)
 
 
 #: How long a model a completed reload still couldn't price is exempted from retriggering one.

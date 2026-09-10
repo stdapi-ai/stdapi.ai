@@ -667,42 +667,20 @@ class _StreamState:
         )
 
 
-def _delta_of(chunk: JsonMapping) -> JsonMapping | None:
-    """Return the first choice's delta of a serialized chunk.
+def _first_choice(chunk: JsonMapping) -> JsonMapping | None:
+    """Return the first choice of a serialized chunk.
 
     Args:
         chunk: A serialized ``ChatCompletionChunk``.
 
     Returns:
-        The delta object, or None for a chunk carrying no choice.
+        The first choice object, or None for a chunk carrying none.
     """
     choices = chunk.get("choices")
     if not isinstance(choices, list) or not choices:
         return None
     choice = choices[0]
-    if not isinstance(choice, dict):
-        return None
-    delta = choice.get("delta")
-    return delta if isinstance(delta, dict) else None
-
-
-def _finish_reason_of(chunk: JsonMapping) -> str | None:
-    """Return the first choice's finish reason of a serialized chunk.
-
-    Args:
-        chunk: A serialized ``ChatCompletionChunk``.
-
-    Returns:
-        The finish reason, or None when the chunk carries none.
-    """
-    choices = chunk.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return None
-    choice = choices[0]
-    if not isinstance(choice, dict):
-        return None
-    reason = choice.get("finish_reason")
-    return reason if isinstance(reason, str) else None
+    return choice if isinstance(choice, dict) else None
 
 
 async def _upstream_chunks(
@@ -759,8 +737,11 @@ async def chat_stream(
         if "error" in chunk:
             error = chunk
             continue
-        finish_reason = _finish_reason_of(chunk) or finish_reason
-        if (delta := _delta_of(chunk)) is None:
+        choice = _first_choice(chunk)
+        reason = choice.get("finish_reason") if choice else None
+        finish_reason = reason if isinstance(reason, str) else finish_reason
+        delta = choice.get("delta") if choice else None
+        if not isinstance(delta, dict):
             continue
         state.add_tool_call_delta(delta)
         content = delta.get("content")
@@ -828,8 +809,11 @@ async def generate_stream(
         if "error" in chunk:
             error = chunk
             continue
-        finish_reason = _finish_reason_of(chunk) or finish_reason
-        if (delta := _delta_of(chunk)) is None:
+        choice = _first_choice(chunk)
+        reason = choice.get("finish_reason") if choice else None
+        finish_reason = reason if isinstance(reason, str) else finish_reason
+        delta = choice.get("delta") if choice else None
+        if not isinstance(delta, dict):
             continue
         content = delta.get("content")
         thinking = _reasoning_of(delta)

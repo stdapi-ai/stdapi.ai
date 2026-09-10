@@ -18,7 +18,6 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from hashlib import blake2b
-from itertools import chain
 from typing import TYPE_CHECKING, Any, Literal
 
 from botocore.exceptions import ClientError
@@ -1731,11 +1730,8 @@ async def list_batches(
     Returns:
         Tuple of (page of batches, whether more batches remain).
     """
-    require_batches_enabled()
-    payloads = sorted(
-        chain.from_iterable(await gather(*(_scan_bucket(b) for b in BUCKET_TO_REGION))),
-        reverse=True,
-    )
+    _, bucket = require_batches_enabled()
+    payloads = sorted(await _scan_bucket(bucket), reverse=True)
     if after:
         payloads = payloads[payloads.index(after) + 1 :] if after in payloads else []
     # A `before` cursor pages adjacent to it, so newer batches walk outwards.
@@ -1743,7 +1739,7 @@ async def list_batches(
     if before is not None and before in payloads:
         backwards = True
         payloads = payloads[: payloads.index(before)][::-1]
-    states: list[BatchState] = []
+    found: list[BatchRecord] = []
     has_more = False
     for start in range(0, len(payloads), limit + 1):
         wave = payloads[start : start + limit + 1]
@@ -1755,15 +1751,11 @@ async def list_batches(
                 record, BatchNotFoundError
             ):
                 raise record
-        states.extend(
-            await gather(
-                *(_load_state(r) for r in records if isinstance(r, BatchRecord))
-            )
-        )
-        if len(states) > limit:
+        found.extend(r for r in records if isinstance(r, BatchRecord))
+        if len(found) > limit:
             has_more = True
             break
-    page = states[:limit]
+    page = await gather(*(_load_state(r) for r in found[:limit]))
     return (page[::-1] if backwards else page), has_more
 
 

@@ -462,22 +462,26 @@ def _resolve_range(
     return start_time - start_time % period, end + (-end % period)
 
 
-def _page_window(
-    page: str | None, limit: int, buckets: int
-) -> tuple[int, bool, str | None]:
-    """Resolve the cursor into the slice of buckets this page carries.
+def _page_buckets(
+    page: str | None, limit: int, start: int, end: int, period: int
+) -> tuple[list[int], bool, str | None]:
+    """Resolve the cursor into the bucket-start times this page carries.
 
     Args:
         page: The cursor from a previous response, if any.
         limit: Number of buckets in a page.
-        buckets: Total number of buckets in the requested range.
+        start: Start of the requested range, in Unix seconds.
+        end: End of the requested range, in Unix seconds.
+        period: The bucket width in seconds.
 
     Returns:
-        The ``(offset, has_more, next_page)`` triple.
+        The bucket-start times this page carries, whether a next page
+        exists, and its cursor.
 
     Raises:
         ApiError: 400 when the cursor is not one this server issued.
     """
+    total = (end - start) // period
     offset = 0
     if page:
         try:
@@ -490,11 +494,14 @@ def _page_window(
             api_error = ApiError("Invalid 'page' cursor.")
             api_error.param = "page"
             raise api_error
-    has_more = offset + limit < buckets
+    has_more = offset + limit < total
     cursor = (
         urlsafe_b64encode(str(offset + limit).encode()).decode() if has_more else None
     )
-    return offset, has_more, cursor
+    buckets = [
+        start + index * period for index in range(offset, min(offset + limit, total))
+    ]
+    return buckets, has_more, cursor
 
 
 def _resolve_limit(limit: int | None, bucket_width: str, *, costs: bool) -> int:
@@ -753,12 +760,7 @@ async def _serve(
     cache_key = repr((name, names, filters, start, end, period, size, page, keys))
     if (cached := _cached(cache_key)) is not None:
         return cached
-    total_buckets = (end - start) // period
-    offset, has_more, cursor = _page_window(page, size, total_buckets)
-    buckets = [
-        start + index * period
-        for index in range(offset, min(offset + size, total_buckets))
-    ]
+    buckets, has_more, cursor = _page_buckets(page, size, start, end, period)
     metrics = tuple(endpoint.quantities)
     series_list: list[Series] = []
     if buckets:
@@ -843,14 +845,11 @@ def _empty_page(
     period = BUCKET_SECONDS[bucket_width]
     size = _resolve_limit(limit, bucket_width, costs=False)
     start, end = _resolve_range(start_time, end_time, bucket_width)
-    total = (end - start) // period
-    offset, has_more, cursor = _page_window(page, size, total)
+    buckets, has_more, cursor = _page_buckets(page, size, start, end, period)
     return UsagePage(
         data=[
-            UsageTimeBucket(
-                start_time=start + index * period, end_time=start + (index + 1) * period
-            )
-            for index in range(offset, min(offset + size, total))
+            UsageTimeBucket(start_time=bucket, end_time=bucket + period)
+            for bucket in buckets
         ],
         has_more=has_more,
         next_page=cursor,
@@ -1580,12 +1579,7 @@ async def organization_costs(
     cache_key = repr(("costs", names, filters, start, end, size, page, keys))
     if (cached := _cached(cache_key)) is not None:
         return log_response_params(cached)
-    total_buckets = (end - start) // period
-    offset, has_more, cursor = _page_window(page, size, total_buckets)
-    buckets = [
-        start + index * period
-        for index in range(offset, min(offset + size, total_buckets))
-    ]
+    buckets, has_more, cursor = _page_buckets(page, size, start, end, period)
     series_list: list[Series] = []
     if buckets:
         await _check_budget(("Cost",), names, filters)

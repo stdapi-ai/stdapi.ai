@@ -80,19 +80,13 @@ match_bedrock_prompt_arn = compile_regex(
 def to_json_str(value: object) -> str:
     """Encode a value as a compact JSON string via pydantic_core.
 
-    Falls back to the stdlib encoder (with its ASCII escaping) for input
-    pydantic_core rejects, such as strings carrying lone surrogates.
-
     Args:
         value: Value to encode.
 
     Returns:
         Compact JSON string (no spaces after separators).
     """
-    try:
-        return to_json(value).decode()
-    except ValueError:
-        return _std_dumps(value, separators=(",", ":"))
+    return to_json_bytes(value).decode()
 
 
 def to_json_bytes(value: object) -> bytes:
@@ -163,15 +157,7 @@ class JSONResponse(_JSONResponseBase):
         Returns:
             UTF-8 encoded JSON body.
         """
-        try:
-            return to_json(content)
-        except ValueError:
-            # A lone surrogate has no UTF-8 encoding, so the fallback has to
-            # escape it: FastAPI's own renderer would fail on the very input
-            # this branch exists for.
-            return _std_dumps(content, ensure_ascii=True, separators=(",", ":")).encode(
-                "ascii"
-            )
+        return to_json_bytes(content)
 
 
 def now_utc_timestamp() -> int:

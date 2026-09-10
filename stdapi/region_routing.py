@@ -120,16 +120,25 @@ class RegionState:
         return self.quota_blocked_until <= now and self.unavailable_until <= now
 
 
-class _ModelRegionIndex:
-    """Nested index of RegionState objects keyed by (model_id, region).
+class RegionRouter:
+    """Selects the optimal region for Bedrock invocations.
 
-    A fresh RegionState is created transparently on first access.
+    Maintains per-model, per-region health state and delegates region ordering
+    to a pluggable RoutingOrder callable.
     """
 
-    def __init__(self) -> None:
-        self._data: dict[str, dict[str, RegionState]] = {}
+    __slots__ = ("_order", "_round_robin_counters", "_states")
 
-    def get(self, model_id: str, region: str) -> RegionState:
+    def __init__(self) -> None:
+        """Initialises the router with a region ordering callable."""
+        self._states: dict[tuple[str, str], RegionState] = {}
+        if SETTINGS.aws_bedrock_region_routing == "round_robin":
+            self._round_robin_counters: dict[str, int] = {}
+            self._order = self._round_robin_order
+        else:
+            self._order = self._identity_order
+
+    def _state(self, model_id: str, region: str) -> RegionState:
         """Returns the existing RegionState for (model_id, region), creating one if absent.
 
         Args:
@@ -139,29 +148,10 @@ class _ModelRegionIndex:
         Returns:
             The RegionState for the given model and region.
         """
-        inner = self._data.setdefault(model_id, {})
-        if region not in inner:
-            inner[region] = RegionState(region=region)
-        return inner[region]
-
-
-class RegionRouter:
-    """Selects the optimal region for Bedrock invocations.
-
-    Maintains per-model, per-region health state and delegates region ordering
-    to a pluggable RoutingOrder callable.
-    """
-
-    __slots__ = ("_index", "_order", "_round_robin_counters")
-
-    def __init__(self) -> None:
-        """Initialises the router with a region ordering callable."""
-        self._index = _ModelRegionIndex()
-        if SETTINGS.aws_bedrock_region_routing == "round_robin":
-            self._round_robin_counters: dict[str, int] = {}
-            self._order = self._round_robin_order
-        else:
-            self._order = self._identity_order
+        key = (model_id, region)
+        if (state := self._states.get(key)) is None:
+            state = self._states[key] = RegionState(region=region)
+        return state
 
     def ordered_regions(
         self, model_id: str, available_regions: list[RegionName]
@@ -184,7 +174,7 @@ class RegionRouter:
         usable: list[RegionName] = []
         blocked: list[RegionName] = []
         for region in available_regions:
-            (usable if self._index.get(model_id, region).is_usable else blocked).append(
+            (usable if self._state(model_id, region).is_usable else blocked).append(
                 region
             )
 
@@ -206,7 +196,7 @@ class RegionRouter:
             region: AWS region that produced the error.
             error_code: AWS ClientError code string.
         """
-        state = self._index.get(model_id, region)
+        state = self._state(model_id, region)
         now = monotonic()
 
         if error_code in _QUOTA_ERROR_CODES:
@@ -243,7 +233,7 @@ class RegionRouter:
             model_id: Bedrock model identifier.
             region: AWS region that succeeded.
         """
-        state = self._index.get(model_id, region)
+        state = self._state(model_id, region)
         state.consecutive_quota_errors = 0
         state.last_quota_error_time = 0.0
         state.quota_blocked_until = 0.0

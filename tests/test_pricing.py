@@ -42,7 +42,6 @@ from stdapi.pricing import (
     _resolve_tier,
     guardrail_policy_model,
     inference_type_to_dimension,
-    is_model_priced,
     normalize_model_key,
     normalize_usagetype_model,
     parse_unit_scale,
@@ -4466,14 +4465,22 @@ class TestRefreshPriceCatalogForNewModels:
     """On-demand price-catalog refresh triggered by newly discovered Bedrock models.
 
     Ref: stdapi/pricing.py:refresh_price_catalog_for_new_models
-         stdapi/pricing.py:is_model_priced
+         stdapi/pricing.py:_all_models_priced
     """
 
-    def test_is_model_priced_reflects_current_index(
+    def test_resolve_price_reflects_current_index(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """is_model_priced() must check the model's normalized key against the live index."""
-        assert is_model_priced("amazon.brand-new-model-v1:0") is False
+        """resolve_price() must check the model's normalized key against the live index."""
+        assert (
+            resolve_price(
+                Service.BEDROCK,
+                "amazon.brand-new-model-v1:0",
+                "us-east-1",
+                Dimension.INPUT_TOKENS,
+            )
+            is None
+        )
         key = PriceKey(
             Service.BEDROCK,
             "brandnewmodel",
@@ -4486,9 +4493,17 @@ class TestRefreshPriceCatalogForNewModels:
             key,
             Price(Decimal("0.001"), "USD"),
         )
-        assert is_model_priced("amazon.brand-new-model-v1:0") is True
+        assert (
+            resolve_price(
+                Service.BEDROCK,
+                "amazon.brand-new-model-v1:0",
+                "us-east-1",
+                Dimension.INPUT_TOKENS,
+            )
+            is not None
+        )
 
-    def test_is_model_priced_uses_model_key_overrides(
+    def test_resolve_price_uses_model_key_overrides(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A model listed in _MODEL_KEY_OVERRIDES must be checked under its override key."""
@@ -4506,7 +4521,12 @@ class TestRefreshPriceCatalogForNewModels:
             key,
             Price(Decimal("0.001"), "USD"),
         )
-        assert is_model_priced(override_model_id) is True
+        assert (
+            resolve_price(
+                Service.BEDROCK, override_model_id, "us-east-1", Dimension.INPUT_TOKENS
+            )
+            is not None
+        )
 
     async def test_no_reload_when_cost_tracking_disabled(
         self, monkeypatch: pytest.MonkeyPatch
@@ -4524,7 +4544,7 @@ class TestRefreshPriceCatalogForNewModels:
             calls += 1
 
         monkeypatch.setattr(pricing, "_load_price_catalog", _counting_load)
-        assert is_model_priced("amazon.some-model-v1:0") is False
+        assert pricing._all_models_priced(("amazon.some-model-v1:0",)) is False  # noqa: SLF001
         await refresh_price_catalog_for_new_models(["amazon.some-model-v1:0"])
         assert calls == 0, "_load_price_catalog ran with cost tracking disabled"
 
@@ -4552,7 +4572,10 @@ class TestRefreshPriceCatalogForNewModels:
             calls += 1
 
         monkeypatch.setattr(pricing, "_load_price_catalog", _counting_load)
-        assert is_model_priced("amazon.already-priced-model-v1:0") is True
+        assert (
+            pricing._all_models_priced(("amazon.already-priced-model-v1:0",))  # noqa: SLF001
+            is True
+        )
         await refresh_price_catalog_for_new_models(["amazon.already-priced-model-v1:0"])
         assert calls == 0, "_load_price_catalog ran for an already-priced model"
 

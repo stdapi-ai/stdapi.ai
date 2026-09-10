@@ -31,8 +31,8 @@ from sse_starlette import JSONServerSentEvent
 
 from stdapi.aws import CONFIG, PydanticRestJSONSerializer, parse_aws_timestamp
 from stdapi.config import AWS_SESSION
-from stdapi.models.chat._mantle._convert import _json_object
-from stdapi.models.chat._mantle._default import _scrub_error_event, _try_loads
+from stdapi.models.chat._mantle._convert import _json_object, _parsed_chunk
+from stdapi.models.chat._mantle._default import _scrub_error_event
 from stdapi.routes.cohere_rerank_v1 import _echo_document_text
 from stdapi.utils import JSONResponse, json_sse, to_json_bytes, to_json_str
 
@@ -133,7 +133,7 @@ def test_from_json_matches_stdlib_parse() -> None:
     Pins duplicate-key handling, unicode escapes, and number parsing for every
     ``from_json`` call site (Mantle frames, pricing, request bodies).
 
-    Ref: stdapi/models/chat/_mantle/_default.py:_try_loads
+    Ref: stdapi/models/chat/_mantle/_convert.py:_parsed_chunk
     """
     for text in _PARSE_CORPUS:
         assert from_json(text) == json.loads(text), text
@@ -436,15 +436,16 @@ def test_mantle_json_object_tolerates_invalid_arguments() -> None:
 def test_mantle_frame_parsing_tolerates_malformed_frames() -> None:
     """Malformed relayed SSE frames are still passed through, not fatal.
 
-    ``_try_loads`` returns ``None`` (frame relayed unmodified) and
+    ``_parsed_chunk`` returns ``None`` (frame relayed unmodified) and
     ``_scrub_error_event`` returns the payload unchanged when the upstream
     frame is not valid JSON — the exact stdlib-era behavior.
 
-    Ref: stdapi/models/chat/_mantle/_default.py:_try_loads
+    Ref: stdapi/models/chat/_mantle/_convert.py:_parsed_chunk
+         stdapi/models/chat/_mantle/_default.py:_scrub_error_event
     """
-    assert _try_loads("not json") is None
-    assert _try_loads("[1, 2]") is None
-    assert _try_loads('{"ok": 1}') == {"ok": 1}
+    assert _parsed_chunk("not json") is None
+    assert _parsed_chunk("[1, 2]") is None
+    assert _parsed_chunk('{"ok": 1}') == {"ok": 1}
     assert _scrub_error_event("not json") == "not json"
     scrubbed = _scrub_error_event(
         '{"error": {"message": "boom arn:aws:bedrock:eu-west-1:123456789012:x"}}'

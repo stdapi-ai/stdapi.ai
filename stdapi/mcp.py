@@ -269,8 +269,8 @@ class _McpLogHandler(Handler):
             pass
 
 
-def _lift_body_limit(mcp: FastApiMCP) -> None:
-    """Stop the MCP transport rejecting media the API itself accepts.
+def _configure_session_manager(mcp: FastApiMCP, *, stateless: bool) -> None:
+    """Raise the request body cap and, when asked, force the session manager stateless.
 
     The MCP SDK caps a Streamable HTTP request body at 4 MiB and answers 413
     before parsing, while the same tool called over HTTP is bounded only by
@@ -280,42 +280,28 @@ def _lift_body_limit(mcp: FastApiMCP) -> None:
     otherwise rises to a ceiling wide enough that the transport is never the
     binding constraint while a hostile body is still bounded.
 
-    Args:
-        mcp: The FastApiMCP instance whose HTTP transport was just mounted.
-    """
-    transport = mcp._http_transport  # noqa: SLF001
-    start = transport._ensure_session_manager_started  # noqa: SLF001
-
-    async def start_with_limit() -> None:
-        await start()
-        if (manager := transport._session_manager) is not None:  # noqa: SLF001
-            manager.asgi_app.max_body_size = (
-                SETTINGS.max_input_file_size or _MCP_MAX_BODY_SIZE
-            )
-
-    transport._ensure_session_manager_started = start_with_limit  # noqa: SLF001
-
-
-def _make_stateless(mcp: FastApiMCP) -> None:
-    """Switch the mounted Streamable HTTP transport to stateless mode.
-
-    ``fastapi_mcp`` hard-codes ``stateless=False`` on the session manager it
-    builds, and exposes no way to configure it. The flag is only read when a
+    ``fastapi_mcp`` also hard-codes ``stateless=False`` on the session manager
+    it builds, and exposes no way to configure it. The flag is only read when a
     request is dispatched, so flipping it on the manager the transport creates
     is equivalent to having constructed it stateless.
 
     Args:
         mcp: The FastApiMCP instance whose HTTP transport was just mounted.
+        stateless: Whether to also switch the session manager to stateless mode.
     """
     transport = mcp._http_transport  # noqa: SLF001
     start = transport._ensure_session_manager_started  # noqa: SLF001
 
-    async def start_stateless() -> None:
+    async def start_configured() -> None:
         await start()
         if (manager := transport._session_manager) is not None:  # noqa: SLF001
-            manager.stateless = True
+            manager.asgi_app.max_body_size = (
+                SETTINGS.max_input_file_size or _MCP_MAX_BODY_SIZE
+            )
+            if stateless:
+                manager.stateless = True
 
-    transport._ensure_session_manager_started = start_stateless  # noqa: SLF001
+    transport._ensure_session_manager_started = start_configured  # noqa: SLF001
 
 
 def _is_text_body(content_type: str) -> bool:
@@ -462,15 +448,16 @@ def _operation_filters() -> tuple[list[str] | None, list[str] | None]:
     tool schema on a surface whose only answer is a 503.
 
     ``FastApiMCP`` takes one filter or the other and refuses both, so an
-    explicit include list is resolved here, which is also how
-    ``mcp_exclude_tools`` narrows ``mcp_include_tools``.
+    explicit include list is resolved here instead; ``_Settings._validate``
+    already narrows ``mcp_include_tools`` by ``mcp_exclude_tools`` before
+    either setting reaches this function.
 
     Returns:
         The ``(include, exclude)`` operation ID lists, each None when unused.
     """
-    excluded = set(SETTINGS.mcp_exclude_tools or ())
     if (included := SETTINGS.mcp_include_tools) is not None:
-        return [op for op in included if op not in excluded], None
+        return list(included), None
+    excluded = set(SETTINGS.mcp_exclude_tools or ())
     usage = (
         frozenset()
         if SETTINGS.usage_api and SETTINGS.cloudwatch_metrics
@@ -523,9 +510,7 @@ def mount_mcp(app: FastAPI) -> None:
 
     if SETTINGS.enable_mcp_streamable_http:
         mcp.mount_http()
-        _lift_body_limit(mcp)
-        if SETTINGS.mcp_stateless_http:
-            _make_stateless(mcp)
+        _configure_session_manager(mcp, stateless=SETTINGS.mcp_stateless_http)
     if SETTINGS.enable_mcp_sse:
         mcp.mount_sse()
 

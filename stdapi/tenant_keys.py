@@ -92,11 +92,13 @@ _SECRET_LENGTH: Final = 43
 #: Alphabet the key ID and secret are drawn from.
 _ALPHABET: Final = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
-#: Matcher refusing anything but the key alphabet, at either field's length.
-_KEY_ID_RE: Final = re_compile(f"^[0-9A-Za-z]{{{_KEY_ID_LENGTH}}}$").match
+#: Matcher refusing anything but the key alphabet, at the key ID's length.
+_KEY_ID_RE: Final = re_compile(f"[0-9A-Za-z]{{{_KEY_ID_LENGTH}}}").fullmatch
 
-#: Matcher refusing a secret that is not exactly the minted shape.
-_SECRET_RE: Final = re_compile(f"^[0-9A-Za-z]{{{_SECRET_LENGTH}}}$").match
+#: Matcher splitting a full credential into its key ID and secret.
+_KEY_RE: Final = re_compile(
+    rf"{KEY_PREFIX}([0-9A-Za-z]{{{_KEY_ID_LENGTH}}})-([0-9A-Za-z]{{{_SECRET_LENGTH}}})"
+).fullmatch
 
 #: Partition every tenant-key record lives in, so one query lists them all.
 _PARTITION: Final = "TENANT"
@@ -204,26 +206,16 @@ def is_tenant_key(credential: str) -> bool:
 
 
 def _parse(credential: str) -> tuple[str, str] | None:
-    """Split a tenant-shaped credential into its key ID and secret.
+    """Split a credential into its key ID and secret.
 
     Args:
-        credential: A credential carrying :data:`KEY_PREFIX`.
+        credential: The credential the caller presented.
 
     Returns:
         The key ID and the secret, or None when the shape is not a minted
-        key's -- wrong lengths, wrong alphabet or a missing separator.
+        key's -- missing prefix, wrong lengths or wrong alphabet.
     """
-    body = credential[len(KEY_PREFIX) :]
-    if len(body) != _KEY_ID_LENGTH + 1 + _SECRET_LENGTH:
-        return None
-    key_id, separator, secret = (
-        body[:_KEY_ID_LENGTH],
-        body[_KEY_ID_LENGTH],
-        body[_KEY_ID_LENGTH + 1 :],
-    )
-    if separator != "-" or not _KEY_ID_RE(key_id) or not _SECRET_RE(secret):
-        return None
-    return key_id, secret
+    return (m[1], m[2]) if (m := _KEY_RE(credential)) else None
 
 
 def _hash_secret(secret: str, salt: bytes) -> bytes:
@@ -544,7 +536,7 @@ async def _mint(key_id: str, name: str) -> None:
             value = (
                 await ssm_client.get_parameter(Name=parameter, WithDecryption=True)
             )["Parameter"]["Value"]
-            recovered = _parse(value) if is_tenant_key(value) else None
+            recovered = _parse(value)
             if recovered is None or recovered[0] != key_id:
                 log_error_details(
                     f"SSM parameter '{parameter}' does not hold tenant key "

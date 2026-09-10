@@ -80,6 +80,16 @@ _DIMENSION_INFO: Final[dict[Dimension, _DimensionInfo]] = {
     Dimension.TEXT_UNITS: _DimensionInfo("text_units", "Count"),
 }
 
+#: Dimension to its ``UsageRecord`` per-spec breakdown attribute name.
+_SPEC_BREAKDOWN_ATTRS: Final[dict[Dimension, str]] = {
+    Dimension.OUTPUT_IMAGES: "output_images_by_spec",
+    Dimension.OUTPUT_SECONDS: "output_seconds_by_spec",
+    Dimension.INPUT_IMAGES: "input_images_by_spec",
+    Dimension.INPUT_SECONDS: "input_seconds_by_spec",
+    Dimension.INPUT_TOKENS: "input_tokens_by_spec",
+    Dimension.OUTPUT_TOKENS: "output_tokens_by_spec",
+}
+
 #: Dimensions AWS has no guaranteed Price List coverage for: a miss is a catalog gap.
 _BEST_EFFORT_PRICED_DIMENSIONS: Final[frozenset[Dimension]] = frozenset(
     {Dimension.TEXT_UNITS}
@@ -349,17 +359,10 @@ def _record_usage(
     if total_tokens > 0:
         record.total_tokens += total_tokens
     _add_cache_ttl_breakdown(record, cache_ttl_to_add, quantities_to_add)
-    record_breakdowns = (
-        record.output_images_by_spec,
-        record.output_seconds_by_spec,
-        record.input_images_by_spec,
-        record.input_seconds_by_spec,
-        record.input_tokens_by_spec,
-        record.output_tokens_by_spec,
-    )
-    for target, breakdown in zip(
-        record_breakdowns, spec_breakdowns_to_add, strict=True
+    for attr, breakdown in zip(
+        _SPEC_BREAKDOWN_ATTRS.values(), spec_breakdowns_to_add, strict=True
     ):
+        target = getattr(record, attr)
         for spec, count in breakdown.items():
             target[spec] = target.get(spec, 0) + count
 
@@ -489,15 +492,9 @@ def _dimension_price_buckets(
             (qty, ttl, "") for ttl, qty in record.cache_write_tokens_by_ttl.items()
         ]
         return _reconcile_buckets(buckets, quantity)
-    spec_breakdown = {
-        Dimension.OUTPUT_IMAGES: record.output_images_by_spec,
-        Dimension.OUTPUT_SECONDS: record.output_seconds_by_spec,
-        Dimension.INPUT_IMAGES: record.input_images_by_spec,
-        Dimension.INPUT_SECONDS: record.input_seconds_by_spec,
-        Dimension.INPUT_TOKENS: record.input_tokens_by_spec,
-        Dimension.OUTPUT_TOKENS: record.output_tokens_by_spec,
-    }.get(dimension)
-    if spec_breakdown:
+    if (attr := _SPEC_BREAKDOWN_ATTRS.get(dimension)) and (
+        spec_breakdown := getattr(record, attr)
+    ):
         buckets = [(qty, "", spec) for spec, qty in spec_breakdown.items()]
         return _reconcile_buckets(buckets, quantity)
     return [(quantity, "", "")]
@@ -1024,12 +1021,7 @@ def _base_log_entry(record: UsageRecord) -> UsageLogEntry:
 #: Per-record breakdown fields, whose log key is the attribute name.
 _BREAKDOWN_FIELDS: Final[tuple[str, ...]] = (
     "cache_write_tokens_by_ttl",
-    "output_images_by_spec",
-    "output_seconds_by_spec",
-    "input_images_by_spec",
-    "input_seconds_by_spec",
-    "input_tokens_by_spec",
-    "output_tokens_by_spec",
+    *_SPEC_BREAKDOWN_ATTRS.values(),
 )
 
 

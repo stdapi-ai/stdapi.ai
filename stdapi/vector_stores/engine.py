@@ -799,13 +799,7 @@ async def drain_indexing(timeout: float) -> int:  # noqa: ASYNC109 -- shared dra
     unfinished = await drain_tasks(set(waves), timeout)
     for task, wave in waves.items():
         if task.cancelled() or not task.done():
-            await gather_bounded(
-                [
-                    _settle_abandoned(wave.store_id, file_id)
-                    for file_id in wave.file_ids
-                ],
-                RECORD_WAVE,
-            )
+            await settle_interrupted(wave.store_id, wave.file_ids)
     return unfinished
 
 
@@ -1008,7 +1002,9 @@ async def _settle_abandoned(store_id: str, file_id: str) -> FileRecord | None:
     return settled
 
 
-async def settle_interrupted(store_id: str, file_ids: Sequence[str]) -> None:
+async def settle_interrupted(
+    store_id: str, file_ids: Sequence[str]
+) -> list[FileRecord | None]:
     """Fail the files of an indexing job that will not be attempted again.
 
     What a queued job's last delivery owes the caller: a file left
@@ -1018,8 +1014,12 @@ async def settle_interrupted(store_id: str, file_ids: Sequence[str]) -> None:
     Args:
         store_id: A validated vector store identifier.
         file_ids: The files the job named.
+
+    Returns:
+        The settled record per file, or ``None`` where it was not this
+        reader's to settle.
     """
-    await gather_bounded(
+    return await gather_bounded(
         [_settle_abandoned(store_id, file_id) for file_id in file_ids], RECORD_WAVE
     )
 
@@ -1054,9 +1054,7 @@ async def _settle_abandoned_files(store_id: str) -> bool:
     ]
     if not stale:
         return False
-    settled = await gather_bounded(
-        [_settle_abandoned(store_id, record.id) for record in stale], RECORD_WAVE
-    )
+    settled = await settle_interrupted(store_id, [record.id for record in stale])
     return any(record is not None for record in settled)
 
 

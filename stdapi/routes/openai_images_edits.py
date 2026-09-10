@@ -10,7 +10,7 @@ from asyncio import gather
 from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from pydantic import AliasChoices, ValidationError
+from pydantic import ValidationError
 from sse_starlette import EventSourceResponse
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -200,8 +200,7 @@ async def edit_images(
         list[UploadFile] | None,
         File(
             description="The image(s) to edit. Accepts binary file uploads. "
-            "For Files API identifiers or URLs, use ``application/json`` body instead.",
-            validation_alias=AliasChoices("image", "image[]"),
+            "For Files API identifiers or URLs, use ``application/json`` body instead."
         ),
     ] = None,
     prompt: Annotated[

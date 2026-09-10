@@ -93,10 +93,10 @@ async def test_nonempty_api_key_enables_authentication(
     handler = AuthenticationHandler()
     assert await handler.initialize() is True
     assert SETTINGS.api_key is None, "the plaintext key must not stay in SETTINGS"
-    handler.verify_credentials(SecretStr("a-real-secret"))
+    handler.verify_credentials("a-real-secret")
 
     with pytest.raises(ApiError) as wrong_key:
-        handler.verify_credentials(SecretStr("wrong-secret"))
+        handler.verify_credentials("wrong-secret")
     assert wrong_key.value.status == 401
     assert str(wrong_key.value) == "Unauthorized"
 
@@ -203,7 +203,7 @@ class TestSecretsManagerApiKeySource:
 
         assert client.secret_ids == ["stdapi/api-key"]
         assert SETTINGS.api_key_secretsmanager_secret is None
-        handler.verify_credentials(SecretStr("s3cr3t"))
+        handler.verify_credentials("s3cr3t")
 
     @pytest.mark.usefixtures("request_log")
     async def test_secret_json_key_rejects_other_credentials(
@@ -215,7 +215,7 @@ class TestSecretsManagerApiKeySource:
         assert await handler.initialize() is True
 
         with pytest.raises(ApiError) as exc_info:
-            handler.verify_credentials(SecretStr("wrong-secret"))
+            handler.verify_credentials("wrong-secret")
         assert exc_info.value.status == 401
 
     async def test_empty_secret_value_disables_authentication(
@@ -293,7 +293,7 @@ class TestSecretsManagerApiKeySource:
 
         assert await handler.initialize() is True
 
-        handler.verify_credentials(SecretStr(secret_string))
+        handler.verify_credentials(secret_string)
 
     async def test_a_binary_secret_fails_startup_naming_the_secret(
         self, monkeypatch: pytest.MonkeyPatch
@@ -351,7 +351,7 @@ class TestRefusalSeverity:
         assert await handler.initialize() is True
 
         with pytest.raises(ApiError):
-            handler.verify_credentials(SecretStr("wrong-key"))
+            handler.verify_credentials("wrong-key")
 
         assert request_log["level"] == "warning"
         assert request_log["error_detail"] == ["Invalid API key"]
@@ -592,9 +592,9 @@ class TestSsmApiKeySource:
 
         assert client.calls == [{"Name": "/stdapi/api-key", "WithDecryption": True}]
         assert SETTINGS.api_key_ssm_parameter is None
-        handler.verify_credentials(SecretStr("s3cr3t"))
+        handler.verify_credentials("s3cr3t")
         with pytest.raises(ApiError) as exc_info:
-            handler.verify_credentials(SecretStr("wrong-secret"))
+            handler.verify_credentials("wrong-secret")
         assert exc_info.value.status == 401
 
     async def test_missing_parameter_raises_value_error_naming_it(

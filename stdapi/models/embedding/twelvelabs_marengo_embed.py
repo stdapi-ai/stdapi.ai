@@ -415,9 +415,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             else (await value.get_content_type_tuple())[0]  # type: ignore[assignment]
         )
         region = await self._select_fixed_region(value, force_s3_data=force_s3_data)
-        data = await self._process_media_value(
-            value, region, force_s3_data=force_s3_data
-        )
+        data = await self._process_media_value(value, region)
         request = (self._build_v2_request if self._is_v2() else self._build_request)(
             media_type, data, extra_params
         )
@@ -454,9 +452,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         result = await self.invoke(
             self._build_request(
                 media_type="text_image",
-                value=await self._process_media_value(
-                    value, region, force_s3_data=force_s3_data
-                ),
+                value=await self._process_media_value(value, region),
                 extra_params=extra_params,
                 image_text=image_text,
             ),
@@ -574,26 +570,19 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
     @staticmethod
     async def _process_media_value(
-        value: InputFileUrl | str,
-        region: RegionName | None,
-        *,
-        force_s3_data: bool = False,
+        value: InputFileUrl | str, region: RegionName | None
     ) -> str | S3Object:
         """Process media value and handle S3 upload if needed.
 
         Args:
             value: Media value (base64, data URI, or S3 URI).
-            region: S3 region to use for uploads. ``None`` means no S3 is
-                required and the value is returned as base64.
-            force_s3_data: Force S3 upload regardless of size.
+            region: S3 region to use for uploads, already decided by
+                :meth:`_select_fixed_region`. ``None`` means no S3 is required
+                and the value is returned as base64.
 
         Returns:
             Processed_value.
         """
         if not isinstance(value, InputFileUrl):
             return value
-        return await (
-            value.to_s3(region=region)
-            if region and await _needs_s3(value, force_s3_data=force_s3_data)
-            else value.to_base64()
-        )
+        return await (value.to_s3(region=region) if region else value.to_base64())

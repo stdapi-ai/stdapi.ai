@@ -526,7 +526,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         try:
             async for event, data in events:
                 parsed = (
-                    _try_loads(data)
+                    convert._parsed_chunk(data)  # noqa: SLF001
                     if _needs_parse(api, data, seen_id=seen_id)
                     else None
                 )
@@ -869,7 +869,7 @@ async def _rename_stream_reasoning(
     async for event, data in events:
         if (
             not any(marker in data for marker in markers)
-            or (parsed := _try_loads(data)) is None
+            or (parsed := convert._parsed_chunk(data)) is None  # noqa: SLF001
         ):
             yield event, data
             continue
@@ -949,23 +949,6 @@ def _event_web_search_queries(event: str | None, parsed: dict[str, Any]) -> int:
     return web_search_queries(parsed.get("item") or {})
 
 
-def _try_loads(data: str) -> dict[str, Any] | None:
-    """Parse a raw SSE data payload, tolerating malformed relayed frames.
-
-    Args:
-        data: Raw SSE data payload.
-
-    Returns:
-        The parsed JSON object, or ``None`` when parsing fails or the payload
-        is not a JSON object.
-    """
-    try:
-        parsed = from_json(data)
-    except ValueError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
 def _is_usage_chunk(data: str) -> bool:
     """Whether an inbound-shaped chunk is the final Chat Completions usage chunk.
 
@@ -981,7 +964,7 @@ def _is_usage_chunk(data: str) -> bool:
     """
     if not _may_carry_usage(data):
         return False
-    chunk = _try_loads(data)
+    chunk = convert._parsed_chunk(data)  # noqa: SLF001
     return chunk is not None and bool(chunk.get("usage")) and not chunk.get("choices")
 
 

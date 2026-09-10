@@ -219,10 +219,10 @@ class TestRouteAndExecuteFailover:
 
         assert result == "ok:eu-west-1"
         assert seen == ["us-east-1", "eu-west-1"]
-        assert not routed._index.get(  # noqa: SLF001
+        assert not routed._state(  # noqa: SLF001
             "vendor.model-v1", "us-east-1"
         ).is_usable
-        assert routed._index.get("vendor.model-v1", "eu-west-1").is_usable  # noqa: SLF001
+        assert routed._state("vendor.model-v1", "eu-west-1").is_usable  # noqa: SLF001
 
     async def test_skips_region_on_model_region_unavailable(
         self, routed: RegionRouter
@@ -245,7 +245,7 @@ class TestRouteAndExecuteFailover:
 
         assert result == "ok:eu-west-1"
         assert seen == ["us-east-1", "eu-west-1"]
-        assert not routed._index.get(  # noqa: SLF001
+        assert not routed._state(  # noqa: SLF001
             "vendor.model-v1", "us-east-1"
         ).is_usable
 
@@ -277,7 +277,7 @@ class TestRouteAndExecuteFailover:
         assert excinfo.value.response["Error"]["Code"] == "ValidationException"
         assert "Malformed input request." in str(excinfo.value)
         assert len(seen) == 1, "a fatal caller error must not be retried elsewhere"
-        assert routed._index.get("vendor.model-v1", seen[0]).is_usable  # noqa: SLF001
+        assert routed._state("vendor.model-v1", seen[0]).is_usable  # noqa: SLF001
 
     async def test_skips_region_on_model_not_ready(self, routed: RegionRouter) -> None:
         """``ModelNotReadyException`` survives its ``ApiError`` wrapping and still fails over.
@@ -307,7 +307,7 @@ class TestRouteAndExecuteFailover:
         result = await route_and_execute("vendor.model-v1", _CANDIDATES, fn)
 
         assert result == "ok:eu-west-1"
-        assert not routed._index.get(  # noqa: SLF001
+        assert not routed._state(  # noqa: SLF001
             "vendor.model-v1", "us-east-1"
         ).is_usable
 
@@ -340,7 +340,7 @@ class TestRouteAndExecuteFailover:
         assert seen == list(_CANDIDATES)
         base = SETTINGS.aws_bedrock_region_routing_quota_backoff_seconds
         for region in _CANDIDATES:
-            state = routed._index.get("vendor.model-v1", region)  # noqa: SLF001
+            state = routed._state("vendor.model-v1", region)  # noqa: SLF001
             assert state.consecutive_quota_errors == 1
             assert state.quota_blocked_until <= monotonic() + base
 
@@ -395,7 +395,7 @@ class TestRouteAndExecuteFailover:
         with pytest.raises(ReadTimeoutError):
             await route_and_execute("vendor.model-v1", _CANDIDATES, fn)
         assert seen == ["us-east-1"]
-        assert routed._index.get("vendor.model-v1", "us-east-1").is_usable  # noqa: SLF001
+        assert routed._state("vendor.model-v1", "us-east-1").is_usable  # noqa: SLF001
 
     async def test_single_region_unavailable_becomes_api_error(self) -> None:
         """With a single candidate, an unavailable region becomes a 400 ``ApiError``.

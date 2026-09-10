@@ -220,7 +220,7 @@ class TestOpenAIVideoRoutes:
         reference image.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-             stdapi/routes/openai_videos.py:_decode_form_extras
+             stdapi/types/__init__.py:BaseModelRequestWithFormExtra._deserialize_forms
         """
         response = app_client.post(
             "/v1/videos",

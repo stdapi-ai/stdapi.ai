@@ -763,7 +763,7 @@ class TestRegionRouterIsolation:
         )
 
         assert result == "served-in-us-west-2"
-        state = router._index.get("model-under-test", "us-east-1")  # noqa: SLF001
+        state = router._state("model-under-test", "us-east-1")  # noqa: SLF001
         assert state.consecutive_quota_errors == 0
         assert state.quota_blocked_until == 0.0
 
@@ -781,7 +781,7 @@ class TestRegionRouterIsolation:
         )
 
         assert result == "served-in-us-west-2"
-        state = router._index.get("model-under-test", "us-east-1")  # noqa: SLF001
+        state = router._state("model-under-test", "us-east-1")  # noqa: SLF001
         assert state.consecutive_quota_errors == 1
         assert state.quota_blocked_until > 0.0
 

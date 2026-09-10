@@ -126,20 +126,13 @@ def _to_vector_store(record: StoreRecord) -> VectorStore:
     Returns:
         The API object.
     """
-    counts = record.file_counts
     return VectorStore(
         id=record.id,
         created_at=record.created_at,
         name=record.name,
         description=record.description or None,
         usage_bytes=record.usage_bytes,
-        file_counts=FileCounts(
-            in_progress=counts.in_progress,
-            completed=counts.completed,
-            failed=counts.failed,
-            cancelled=counts.cancelled,
-            total=counts.total,
-        ),
+        file_counts=FileCounts.model_validate(record.file_counts, from_attributes=True),
         status=record.status,
         expires_after=(
             ExpiresAfter(days=record.expires_after_days)
@@ -197,19 +190,12 @@ def _to_batch(store_id: str, record: BatchRecord) -> VectorStoreFileBatch:
     Returns:
         The API object.
     """
-    counts = record.file_counts
     return VectorStoreFileBatch(
         id=record.id,
         created_at=record.created_at,
         vector_store_id=store_id,
         status=record.status,
-        file_counts=FileCounts(
-            in_progress=counts.in_progress,
-            completed=counts.completed,
-            failed=counts.failed,
-            cancelled=counts.cancelled,
-            total=counts.total,
-        ),
+        file_counts=FileCounts.model_validate(record.file_counts, from_attributes=True),
     )
 
 

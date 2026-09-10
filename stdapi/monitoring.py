@@ -684,9 +684,8 @@ def log_request_event(request: HTTPConnection) -> Generator[EventLog]:
         ):
             yield log
     except Exception as exc:
-        log["level"] = "critical"
+        _add_warnings(log, ["\n".join(format_exception(exc))], level="critical")
         log["status_code"] = 500
-        log.setdefault("error_detail", []).append("\n".join(format_exception(exc)))
         if span_context:
             span_context.set_status(Status(StatusCode.ERROR, str(exc)))
             span_context.set_attribute("error", value=True)
@@ -887,8 +886,7 @@ def log_background_event(
         ):
             yield log
     except Exception as exc:
-        log["level"] = "critical"
-        log.setdefault("error_detail", []).append("\n".join(format_exception(exc)))
+        _add_warnings(log, ["\n".join(format_exception(exc))], level="critical")
         raise
     finally:
         log["execution_time_ms"] = (perf_counter_ns() - start) // 1000000
@@ -1002,8 +1000,7 @@ async def _rebuild_and_log_stream[T](
             _add_warnings(log, [message], level=level)
             raise
         except Exception as exc:
-            log["level"] = "critical"
-            log.setdefault("error_detail", []).append("\n".join(format_exception(exc)))
+            _add_warnings(log, ["\n".join(format_exception(exc))], level="critical")
             raise
         finally:
             # Closed before the usage is drained: a disconnect lets the wrapped

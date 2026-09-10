@@ -2094,28 +2094,6 @@ def _build_reasoning_item(
     )
 
 
-def _accumulate_reasoning_block(
-    reasoning_content: ReasoningContentBlockOutputTypeDef,
-    texts: list[str],
-    signatures: list[str],
-    redacted: list[bytes],
-) -> None:
-    """Accumulate one Bedrock ``reasoningContent`` block into run buffers.
-
-    Args:
-        reasoning_content: The ``reasoningContent`` payload of a block.
-        texts: Mutable list receiving ``reasoningText`` texts.
-        signatures: Mutable list receiving ``reasoningText`` signatures.
-        redacted: Mutable list receiving ``redactedContent`` payloads.
-    """
-    if reasoning_text := reasoning_content.get("reasoningText"):
-        texts.append(reasoning_text["text"])
-        if signature := reasoning_text.get("signature"):
-            signatures.append(signature)
-    if (data := reasoning_content.get("redactedContent")) is not None:
-        redacted.append(data)
-
-
 def _citation_annotations(
     citations: Iterable[CitationOutputTypeDef], offset: int
 ) -> Generator[AnnotationURLCitation]:
@@ -2201,17 +2179,17 @@ def _reasoning_block_item(
     Returns:
         Completed reasoning item, or ``None`` when the block is empty.
     """
-    texts: list[str] = []
-    signatures: list[str] = []
-    redacted: list[bytes] = []
-    _accumulate_reasoning_block(reasoning_content, texts, signatures, redacted)
-    if not (texts or signatures or redacted):
+    reasoning_text = reasoning_content.get("reasoningText")
+    data = reasoning_content.get("redactedContent")
+    if not reasoning_text and data is None:
         return None
+    text = reasoning_text["text"] if reasoning_text else ""
+    signature = reasoning_text.get("signature") if reasoning_text else None
     return _build_reasoning_item(
         item_id,
-        "\n".join(texts),
-        signatures,
-        redacted,
+        text,
+        [signature] if signature else [],
+        [data] if data is not None else [],
         include_encrypted_reasoning=include_encrypted_reasoning,
     )
 
@@ -2677,7 +2655,7 @@ class _StreamState:
     #: Completed suppressed tool calls as ``(tool_id, tool_name, args_json)``.
     suppressed_tool_calls: list[tuple[str, str, str]] = field(default_factory=list)
     #: Web-search sources keyed by ``item_id`` (see class docstring).
-    pending_web_search_sources: dict[str, list[WebSearchActionSource]] = field(
+    pending_web_search_sources: dict[str | None, list[WebSearchActionSource]] = field(
         default_factory=dict
     )
     #: ``url_citation`` annotations accumulated for the open text block.
@@ -3257,14 +3235,7 @@ def _handle_block_stop(state: _StreamState) -> Generator[JSONServerSentEvent]:
         and state.current_tool_id
     ):
         if state.block_kind is _BlockKind.WEB_SEARCH:
-            args = "".join(state.current_args_parts)
-            parsed = try_parse_json(args) if args else None
-            query = (
-                q
-                if isinstance(parsed, dict)
-                and isinstance(q := parsed.get("query"), str)
-                else ""
-            )
+            query = _str_args("".join(state.current_args_parts)).get("query", "")
             ws_item = ResponseFunctionWebSearch(
                 id=state.current_item_id,
                 type="web_search_call",
@@ -3797,15 +3768,7 @@ def _finalize_output_items(state: _StreamState) -> None:
         state: Mutable stream state.
     """
     if state.pending_web_search_sources:
-        for idx, item in enumerate(state.output_items):
-            if isinstance(item, ResponseFunctionWebSearch) and (
-                sources := state.pending_web_search_sources.get(item.id)
-            ):
-                state.output_items[idx] = item.model_copy(
-                    update={
-                        "action": item.action.model_copy(update={"sources": sources})
-                    }
-                )
+        _attach_web_search_sources(state.output_items, state.pending_web_search_sources)
     _patch_message_annotations(state.output_items, state.pending_annotations)
 
 

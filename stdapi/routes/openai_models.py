@@ -31,9 +31,7 @@ class ModelsResponse(BaseModel):
     data: list[Model]
 
 
-#: /v1/models route response cache
-_ALL_MODELS: list[Model] = []
-#: Cached ModelsResponse, rebuilt alongside `_ALL_MODELS`.
+#: Cached /v1/models response, rebuilt when the catalog generation changes.
 _MODELS_RESPONSE = ModelsResponse(data=[])
 #: Guards concurrent rebuilds of the model caches above.
 _ALL_MODELS_LOCK = Lock()
@@ -120,14 +118,14 @@ async def list_models(_: Annotated[None, Depends(authenticate)]) -> ModelsRespon
     # without this call ever seeing it.
     generation = catalog_generation()
     async with _ALL_MODELS_LOCK:
-        if generation != _CATALOG_GENERATION or not _ALL_MODELS:
+        if generation != _CATALOG_GENERATION or not _MODELS_RESPONSE.data:
             models = await get_all_models_details()
-            _ALL_MODELS.clear()
-            _ALL_MODELS.extend(
-                format_bedrock_model_to_openai(models[model_id])
-                for model_id in sorted(models)
+            _MODELS_RESPONSE = ModelsResponse(
+                data=[
+                    format_bedrock_model_to_openai(models[model_id])
+                    for model_id in sorted(models)
+                ]
             )
-            _MODELS_RESPONSE = ModelsResponse(data=list(_ALL_MODELS))
             _CATALOG_GENERATION = generation
     return log_response_params(_MODELS_RESPONSE)
 

@@ -384,7 +384,6 @@ class TestListModelsCacheUnit:
         async def _details() -> dict[str, ModelDetails]:
             return control["models"]  # type: ignore[return-value]
 
-        monkeypatch.setattr(openai_models_routes, "_ALL_MODELS", [])
         monkeypatch.setattr(openai_models_routes, "_CATALOG_GENERATION", -1)
         monkeypatch.setattr(
             openai_models_routes, "_MODELS_RESPONSE", ModelsResponse(data=[])

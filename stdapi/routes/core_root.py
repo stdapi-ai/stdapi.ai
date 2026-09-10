@@ -193,16 +193,6 @@ _ROBOTS_TXT = "\n".join(
 )
 
 
-#: Pre-rendered response for the root endpoint, identical on every request.
-_ROOT_RESPONSE = JSONResponse(_WELCOME)
-if _LINK_HEADER:
-    _ROOT_RESPONSE.headers["Link"] = _LINK_HEADER
-
-#: Pre-rendered response for the API catalog endpoint, identical on every request.
-_API_CATALOG_RESPONSE = JSONResponse(
-    _API_CATALOG, media_type="application/linkset+json"
-)
-
 #: Seconds a client may reuse the protected resource metadata (RFC 9728 section 7.10).
 _OAUTH_METADATA_MAX_AGE = 3600
 
@@ -219,7 +209,9 @@ async def root() -> JSONResponse:
     Returns:
         JSONResponse containing a welcome message with Link headers for agent discovery.
     """
-    return _ROOT_RESPONSE
+    return JSONResponse(
+        _WELCOME, headers={"Link": _LINK_HEADER} if _LINK_HEADER else None
+    )
 
 
 @router.get("/.well-known/api-catalog")
@@ -232,7 +224,7 @@ async def api_catalog() -> JSONResponse:
     Returns:
         Linkset document with Content-Type application/linkset+json.
     """
-    return _API_CATALOG_RESPONSE
+    return JSONResponse(_API_CATALOG, media_type="application/linkset+json")
 
 
 @router.get(OAUTH_METADATA_PATH)
@@ -284,13 +276,6 @@ async def robots_txt() -> PlainTextResponse:
     return PlainTextResponse(_ROBOTS_TXT)
 
 
-#: Pre-rendered response for the health check endpoint, identical on every request.
-_HEALTH_RESPONSE = JSONResponse(asdict(HealthResponse()))
-
-#: Pre-rendered response for the readiness probe endpoint, identical on every request.
-_PING_RESPONSE = JSONResponse(asdict(PingResponse()))
-
-
 @router.get("/health")
 async def health_check() -> JSONResponse:
     """Check if the service is healthy and operational.
@@ -298,7 +283,7 @@ async def health_check() -> JSONResponse:
     Returns:
         JSONResponse with status "ok" when the service is operational
     """
-    return _HEALTH_RESPONSE
+    return JSONResponse(asdict(HealthResponse()))
 
 
 @router.get("/ping")
@@ -308,4 +293,4 @@ async def ping() -> JSONResponse:
     Returns:
         JSONResponse with status "Healthy" when the service is operational.
     """
-    return _PING_RESPONSE
+    return JSONResponse(asdict(PingResponse()))

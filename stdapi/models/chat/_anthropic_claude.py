@@ -409,23 +409,13 @@ class AnthropicClaudeChatModel(_BaseChatModel):
 
         # Remove corresponding stubs from toolConfig.
         if tool_config:
-            tool_config["tools"] = [
-                entry
-                for entry in tool_config["tools"]
-                if not (
-                    isinstance(entry, dict)
-                    and isinstance(spec := entry.get("toolSpec"), dict)
-                    and spec.get("name") in native_tool_names
-                )
-            ]
+            tool_config["tools"] = surviving_stubs
             if not tool_config["tools"]:
                 # Only synthesize stubs for tool names history still needs that
                 # were not just promoted above — otherwise the caller's own
                 # history-based fallback would resynthesize a stub for the
                 # promoted names too, sending each one twice.
-                other_names = (
-                    _history_tool_use_names(bedrock_messages) - native_tool_names
-                )
+                other_names = history_names - native_tool_names
                 tool_choice = tool_config.get("toolChoice")
                 # A toolChoice naming a just-promoted tool has no matching
                 # toolSpec left anywhere in toolConfig; it must be forwarded

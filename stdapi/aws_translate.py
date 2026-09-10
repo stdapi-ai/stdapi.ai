@@ -262,18 +262,6 @@ def _subtitle_process_segment(segments: list[str], current_segment: list[str]) -
         current_segment.clear()
 
 
-def _subtitle_should_skip_webvtt_header(stripped: str) -> bool:
-    """Determine if line should be skipped for WebVTT header processing.
-
-    Args:
-        stripped: Current line being processed stripped of whitespace
-
-    Returns:
-        True if the line is the first subtitle number (header done)
-    """
-    return stripped.isdigit()
-
-
 def _subtitle_extract_text_segments(subtitle_content: str) -> list[str]:
     """Extract text segments from subtitle content while preserving structure.
 
@@ -293,12 +281,12 @@ def _subtitle_extract_text_segments(subtitle_content: str) -> list[str]:
     for line in lines:
         stripped = line.strip()
         if not webvtt_header_done:
-            webvtt_header_done = _subtitle_should_skip_webvtt_header(stripped)
+            webvtt_header_done = stripped.isdigit()
             continue
 
         if _subtitle_is_text_line(stripped):
             segment.append(line)
-        elif not line.strip():  # Empty line indicates segment boundary
+        elif not stripped:  # Empty line indicates segment boundary
             _subtitle_process_segment(segments, segment)
 
     # Handle final segment if file doesn't end with empty line

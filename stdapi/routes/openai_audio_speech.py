@@ -48,24 +48,6 @@ router = APIRouter(
 _FORMAT_CONTENT_TYPE = {"mp3": "mpeg"}
 
 
-async def _speech_audio_bytestream(
-    stream: AsyncGenerator[bytes],
-) -> AsyncGenerator[bytes]:
-    """Generate real-time audio streaming, with logging.
-
-    Args:
-        stream: Audio stream yielding audio bytes chunks
-
-    Yields:
-        Audio stream yielding audio bytes chunks
-    """
-    try:
-        async for chunk in stream:
-            yield chunk
-    finally:
-        await stream.aclose()
-
-
 async def _speech_audio_sse(
     stream: AsyncGenerator[bytes], input_tokens: int, output_tokens: int
 ) -> AsyncGenerator[JSONServerSentEvent]:
@@ -212,9 +194,7 @@ async def create_speech(
             msg = "'stream_format' 'sse' is not supported with a non-audio output such as speech marks."
             raise ApiError(msg)
         return StreamingResponse(
-            content=_speech_audio_bytestream(
-                await log_request_stream_event(tts_response["audio_stream"])
-            ),
+            content=await log_request_stream_event(tts_response["audio_stream"]),
             media_type=content_type,
         )
 
@@ -234,9 +214,7 @@ async def create_speech(
         )
 
     return StreamingResponse(
-        content=_speech_audio_bytestream(
-            await log_request_stream_event(tts_response["audio_stream"])
-        ),
+        content=await log_request_stream_event(tts_response["audio_stream"]),
         media_type=f"audio/{_FORMAT_CONTENT_TYPE.get(fmt := request.response_format, fmt)}",
         headers={"Content-Disposition": f"attachment; filename=speech.{fmt}"},
     )

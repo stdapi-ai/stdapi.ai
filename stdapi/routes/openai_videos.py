@@ -12,8 +12,7 @@ Two request formats are supported for creation:
 """
 
 from base64 import urlsafe_b64decode, urlsafe_b64encode
-from contextlib import suppress
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Path, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -48,9 +47,6 @@ from stdapi.types.openai_videos import (
 )
 from stdapi.utils import validation_error_handler
 
-if TYPE_CHECKING:
-    from starlette.datastructures import FormData
-
 register_route_capability(
     "openai_video_generation",
     f"{SETTINGS.openai_routes_prefix}/v1/videos",
@@ -82,28 +78,6 @@ _KNOWN_PARAMS = set(VideoCreateParams.model_fields) | {
     "input_reference",
     *_REFERENCE_FORM_KEYS,
 }
-
-
-def _decode_form_extras(form_data: FormData) -> dict[str, Any]:
-    """Collect extra model parameters from a multipart form, JSON-decoding values.
-
-    Decoding restores typed values (e.g. ``"true"`` → ``True``) that model
-    payloads expect; non-JSON strings are kept as-is.
-
-    Args:
-        form_data: Parsed multipart form data.
-
-    Returns:
-        Extra parameters keyed by form field name.
-    """
-    extras: dict[str, Any] = {}
-    for key, value in form_data.items():
-        if key in _KNOWN_PARAMS or not isinstance(value, str):
-            continue
-        extras[key] = value
-        with suppress(ValueError):
-            extras[key] = from_json(value)
-    return extras
 
 
 def _encode_video_id(invocation_arn: str, seconds: int, size: str) -> str:
@@ -298,7 +272,11 @@ async def create_video(
                 prompt=prompt,
                 seconds=seconds,
                 size=size,
-                **_decode_form_extras(form_data),
+                **{  # type: ignore[arg-type]
+                    k: v
+                    for k, v in form_data.items()
+                    if k not in _KNOWN_PARAMS and isinstance(v, str)
+                },
             )
         reference = InputFile(input_reference) if input_reference else None
         if reference is None:

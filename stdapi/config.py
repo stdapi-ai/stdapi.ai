@@ -2571,7 +2571,7 @@ class _Settings(BaseSettings):
             A list of unique tool name strings, or None if the input is empty.
         """
         items = cls._parse_comma_list(value or [])
-        return list(set(items)) if items else None
+        return items or None
 
     @field_validator("anthropic_beta_allowlist", mode="before")
     @classmethod

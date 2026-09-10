@@ -958,14 +958,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         Returns:
             Anthropic content block for the stream start, or ``None`` for unmapped tools.
         """
-        if canonical_name := self._canonical_name_for(bedrock_tool_name):
-            return ServerToolUseBlock(
-                type="server_tool_use",
-                id=f"srvtoolu_{tool_use_id.removeprefix('tooluse_')}",
-                name=canonical_name,
-                input={},
-            )
-        return None
+        return self._resp_map_tool_use(tool_use_id, bedrock_tool_name, {})
 
     def _resp_stream_map_tool_result(
         self, tool_use_id: str, result_type: str, content_items: list[Any]

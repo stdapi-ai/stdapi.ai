@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from stdapi.api_errors import ApiError, FeatureUnavailableError
 from stdapi.monitoring import log_error_details
+from stdapi.utils import read_chunks
 
 if TYPE_CHECKING:
     from asyncio import Task
@@ -38,7 +39,7 @@ async def _drain(stderr: StreamReader | None, seen: bytearray) -> None:
     """
     if stderr is None:  # pragma: no cover
         return
-    while chunk := await stderr.read(_CHUNK_SIZE):
+    async for chunk in read_chunks(stderr, _CHUNK_SIZE):
         if len(seen) < _STDERR_KEPT:
             seen.extend(chunk[: _STDERR_KEPT - len(seen)])
 
@@ -324,8 +325,5 @@ async def stream_body(stream: StreamReader) -> AsyncGenerator[bytes]:
     Yields:
         Raw bytes chunks read from the stream.
     """
-    while True:
-        chunk = await stream.read(_CHUNK_SIZE)
-        if not chunk:
-            break
+    async for chunk in read_chunks(stream, _CHUNK_SIZE):
         yield chunk

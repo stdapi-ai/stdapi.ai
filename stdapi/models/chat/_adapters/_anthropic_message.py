@@ -552,9 +552,6 @@ async def _map_content_block_to_bedrock(  # noqa: C901, PLR0911 - one arm per bl
 ) -> ContentBlockTypeDef | None:
     """Convert a single Anthropic content block to a Bedrock content block.
 
-    Returns ``None`` for unrecognized blocks (``RedactedThinkingBlockParam``
-    is handled separately by the caller).
-
     Args:
         block: Any Anthropic content block param variant.
 
@@ -609,8 +606,8 @@ async def _map_content_block_to_bedrock(  # noqa: C901, PLR0911 - one arm per bl
             return _map_server_tool_result_to_bedrock(block.tool_use_id, block.content)
         case ThinkingBlockParam(thinking=thinking, signature=signature):
             return _map_thinking_to_bedrock(thinking, signature)
-        case RedactedThinkingBlockParam():
-            return None
+        case RedactedThinkingBlockParam(data=data):
+            return {"reasoningContent": {"redactedContent": await b64decode(data)}}
         case _:
             msg = (
                 f"Unsupported content block type: {getattr(block, 'type', type(block))}"
@@ -771,14 +768,6 @@ async def _map_messages(
                         converted := await _map_content_block_to_bedrock(block)
                     ) is not None:
                         content.append(converted)
-                    elif isinstance(block, RedactedThinkingBlockParam):
-                        content.append(
-                            {
-                                "reasoningContent": {
-                                    "redactedContent": await b64decode(block.data)
-                                }
-                            }
-                        )
                     if (
                         allow_explicit_caching
                         and (

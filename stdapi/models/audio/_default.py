@@ -380,6 +380,7 @@ class AudioModel(AudioModelBase[Any, Any]):
             async with aclosing(
                 encode_audio_stream(_single_chunk_stream(source), "flac")
             ) as encoded:
+                del source
                 async for chunk in encoded:
                     buf.extend(chunk)
                     if b64_encoded_len(len(buf)) > BEDROCK_BODY_SIZE_LIMIT:
@@ -399,7 +400,7 @@ class AudioModel(AudioModelBase[Any, Any]):
         self._check_inline_size(b64_encoded_len(len(buf)), file_format, transcoded=True)
         transcoded_block: AudioBlockTypeDef = {
             "format": "flac",
-            "source": {"bytes": bytes(buf)},
+            "source": {"bytes": buf},  # type: ignore[typeddict-item,misc]
         }
         return {"audio": transcoded_block}
 

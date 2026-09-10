@@ -350,16 +350,8 @@ class VectorStoreFileUpdateParams(BaseModelRequest):
     attributes: Attributes | None = Field(description=_ATTRIBUTES_DESCRIPTION)
 
 
-class FileBatchFile(BaseModelRequest):
+class FileBatchFile(VectorStoreFileCreateParams):
     """One entry of a file batch, with its own attributes and chunking."""
-
-    file_id: str = Field(pattern=FILE_ID_PATTERN, description=_FILE_ID_DESCRIPTION)
-    attributes: Attributes | None = Field(
-        default=None, description=_ATTRIBUTES_DESCRIPTION
-    )
-    chunking_strategy: ChunkingStrategyParam | None = Field(
-        default=None, description="How this file is split before indexing."
-    )
 
 
 class FileBatchCreateParams(BaseModelRequest):

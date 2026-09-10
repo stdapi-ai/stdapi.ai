@@ -28,8 +28,7 @@ from stdapi.config import SETTINGS
 from stdapi.mcp import (
     _MCP_MAX_INLINE_BYTES,
     _bind_media_results,
-    _lift_body_limit,
-    _make_stateless,
+    _configure_session_manager,
 )
 from stdapi.monitoring import REQUEST_ID, log_error_details, log_request_event
 from stdapi.types.openai_audio import (
@@ -603,7 +602,7 @@ def _mcp_only_app(*, stateless: bool) -> FastAPI:
     itself, which is all the mode changes.
 
     Args:
-        stateless: Whether to apply :func:`~stdapi.mcp._make_stateless`.
+        stateless: Whether to apply :func:`~stdapi.mcp._configure_session_manager`.
 
     Returns:
         The app, ready to serve ``/mcp``.
@@ -618,7 +617,7 @@ def _mcp_only_app(*, stateless: bool) -> FastAPI:
     mcp = FastApiMCP(app, name="test", description="test")
     mcp.mount_http()
     if stateless:
-        _make_stateless(mcp)
+        _configure_session_manager(mcp, stateless=True)
     return app
 
 
@@ -630,7 +629,7 @@ class TestStreamableHttpBodyLimit:
     which is below what the image tools carry once base64 has inflated it. The
     mount raises that ceiling to the API's own limit.
 
-    Ref: stdapi/mcp.py:_lift_body_limit
+    Ref: stdapi/mcp.py:_configure_session_manager
          https://github.com/stdapi-ai/stdapi.ai/issues/140
     """
 
@@ -639,7 +638,7 @@ class TestStreamableHttpBodyLimit:
         """Mount the transport, start it, and read the body limit it enforces.
 
         Args:
-            lift: Whether to apply :func:`~stdapi.mcp._lift_body_limit`.
+            lift: Whether to apply :func:`~stdapi.mcp._configure_session_manager`.
 
         Returns:
             The ceiling in bytes the transport rejects a body above.
@@ -656,7 +655,7 @@ class TestStreamableHttpBodyLimit:
         mcp = FastApiMCP(app, name="test", description="test")
         mcp.mount_http()
         if lift:
-            _lift_body_limit(mcp)
+            _configure_session_manager(mcp, stateless=False)
         with TestClient(app) as client:
             client.post(
                 "/mcp",
@@ -726,7 +725,7 @@ class TestStatelessStreamableHttp:
     turns on.
 
     Ref: https://docs.aws.amazon.com/marketplace/latest/userguide/bedrock-agentcore-runtime.html
-         stdapi/mcp.py:_make_stateless
+         stdapi/mcp.py:_configure_session_manager
          stdapi/config.py:_Settings.mcp_stateless_http
     """
 
@@ -1180,7 +1179,7 @@ def _media_app(*, bind: bool = True) -> FastAPI:
 
     mcp = FastApiMCP(app, name="test", description="test")
     mcp.mount_http()
-    _make_stateless(mcp)
+    _configure_session_manager(mcp, stateless=True)
     if bind:
         _bind_media_results(mcp)
     return app

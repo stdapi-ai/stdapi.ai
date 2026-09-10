@@ -40,14 +40,7 @@ _USE_ID = "id"
 _DECODE_OPTIONS: Options = {"require": _REQUIRED_CLAIMS, "verify_aud": False}
 
 #: Failures of a key set load that leave the cached keys usable.
-_KEY_SET_ERRORS = (
-    HttpClientError,
-    OSError,
-    TimeoutError,
-    TypeError,
-    ValueError,
-    PyJWTError,
-)
+_KEY_SET_ERRORS = (HttpClientError, OSError, TypeError, ValueError, PyJWTError)
 
 #: Attempts to load the key set at startup before the server refuses to start.
 _KEY_SET_ATTEMPTS = 3

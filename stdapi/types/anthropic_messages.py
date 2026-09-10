@@ -245,13 +245,14 @@ class CitationSearchResultLocationParam(BaseModelRequest):
 
 
 # Ref: anthropic.types.text_citation_param.TextCitationParam
-TextCitationParam = (
+TextCitationParam = Annotated[
     CitationCharLocationParam
     | CitationPageLocationParam
     | CitationContentBlockLocationParam
     | CitationWebSearchResultLocationParam
-    | CitationSearchResultLocationParam
-)
+    | CitationSearchResultLocationParam,
+    Field(discriminator="type"),
+]
 
 
 # Ref: anthropic.types.text_block_param.TextBlockParam
@@ -550,6 +551,19 @@ WebSearchToolResultErrorCode = Literal[
 ]
 
 
+# Ref: anthropic.types.web_fetch_tool_result_error_code.WebFetchToolResultErrorCode
+WebFetchToolResultErrorCode = Literal[
+    "invalid_tool_input",
+    "url_too_long",
+    "url_not_allowed",
+    "url_not_accessible",
+    "unsupported_content_type",
+    "too_many_requests",
+    "max_uses_exceeded",
+    "unavailable",
+]
+
+
 # Ref: anthropic.types.web_search_tool_result_error.WebSearchToolResultError
 class WebSearchToolResultError(BaseModelResponse):
     """Web search tool result error."""
@@ -604,16 +618,7 @@ class SearchResultBlockParam(BaseModelRequest):
 class WebFetchToolResultErrorBlock(BaseModelResponse):
     """Web fetch tool result error block."""
 
-    error_code: Literal[
-        "invalid_tool_input",
-        "url_too_long",
-        "url_not_allowed",
-        "url_not_accessible",
-        "unsupported_content_type",
-        "too_many_requests",
-        "max_uses_exceeded",
-        "unavailable",
-    ] = Field(description="Error code.")
+    error_code: WebFetchToolResultErrorCode = Field(description="Error code.")
     type: Literal["web_fetch_tool_result_error"] = Field(
         description="Type discriminator."
     )
@@ -1003,19 +1008,6 @@ class WebSearchToolResultBlockParam(BaseModelRequest):
     caller: Caller | None = Field(default=None, description="Caller.")
 
 
-# Ref: anthropic.types.web_fetch_tool_result_error_code.WebFetchToolResultErrorCode
-WebFetchToolResultErrorCode = Literal[
-    "invalid_tool_input",
-    "url_too_long",
-    "url_not_allowed",
-    "url_not_accessible",
-    "unsupported_content_type",
-    "too_many_requests",
-    "max_uses_exceeded",
-    "unavailable",
-]
-
-
 # Ref: anthropic.types.web_fetch_tool_result_error_block_param.WebFetchToolResultErrorBlockParam"
 class WebFetchToolResultErrorBlockParam(BaseModelRequest):
     """Web fetch tool result error block parameter."""
@@ -1315,11 +1307,14 @@ class ToolResultBlockParam(BaseModelRequest):
     content: (
         str
         | list[
-            TextBlockParam
-            | ImageBlockParam
-            | DocumentBlockParam
-            | SearchResultBlockParam
-            | ToolReferenceBlockParam
+            Annotated[
+                TextBlockParam
+                | ImageBlockParam
+                | DocumentBlockParam
+                | SearchResultBlockParam
+                | ToolReferenceBlockParam,
+                Field(discriminator="type"),
+            ]
         ]
     ) = Field(description="Tool result content.")
     is_error: bool | None = Field(
@@ -1349,7 +1344,7 @@ class ContainerUploadBlockParam(BaseModelRequest):
 # Note: ContentBlock (response types) is included because assistant messages may
 # contain response blocks that are passed back in multi-turn conversations.
 # The discriminator is omitted because param and response types share type values.
-ContentBlockParam = (
+ContentBlockParam = Annotated[
     TextBlockParam
     | ImageBlockParam
     | DocumentBlockParam
@@ -1366,8 +1361,9 @@ ContentBlockParam = (
     | TextEditorCodeExecutionToolResultBlockParam
     | ToolSearchToolResultBlockParam
     | ContainerUploadBlockParam
-    | ContentBlock
-)
+    | ContentBlock,
+    Field(union_mode="left_to_right"),
+]
 
 
 #: Content block type an MCP-connector turn answers its own tool call with.

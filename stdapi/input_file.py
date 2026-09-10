@@ -513,15 +513,9 @@ class _S3Source(_FileSource):
                 raise self._gone_error(file_id)
         self._size = head["ContentLength"]
         self._content_type = head["ContentType"]
-        self._filename = (
-            filename
-            if (
-                filename := parse_content_disposition_filename(
-                    head.get("ContentDisposition", "")
-                )
-            )
-            else self._key.rsplit("/", 1)[-1] or None
-        )
+        self._filename = parse_content_disposition_filename(
+            head.get("ContentDisposition", "")
+        ) or (self._key.rsplit("/", 1)[-1] or None)
 
     @staticmethod
     def _gone_error(file_id: str) -> FileNotExistError:
@@ -738,15 +732,9 @@ class _HttpSource(_FileSource):
         if content_type := resp.headers.get("Content-Type"):
             self._content_type = content_type.split(";", 1)[0].strip()
         self._size = _size_from_headers(resp)
-        self._filename = (
-            filename
-            if (
-                filename := parse_content_disposition_filename(
-                    resp.headers.get("Content-Disposition", "")
-                )
-            )
-            else (urlparse(self._url).path.rsplit("/", 1)[-1] or None)
-        )
+        self._filename = parse_content_disposition_filename(
+            resp.headers.get("Content-Disposition", "")
+        ) or (urlparse(self._url).path.rsplit("/", 1)[-1] or None)
 
     async def _content_type_from_partial(self, *, probe_refused: bool = False) -> None:
         """Read the start of the resource to describe what the origin did not.
@@ -992,7 +980,7 @@ class _DataUriSource(_FileSource):
         """
         await self.enforce_size_limit()
         try:
-            return self._value[self._value.index(",") + 1 :]
+            return self._value[self._data_start :]
         finally:
             del self._value
 
@@ -1359,10 +1347,8 @@ class InputFile:
             json_schema_input_schema=str_schema(
                 min_length=1, pattern=_URL_ONLY_SCHEMA_PATTERN
             )
-            if (
-                bool(cls.ALLOWED_ORIGINS & _URL_ONLY_ORIGINS)
-                and _FileOrigin.BASE64 not in cls.ALLOWED_ORIGINS
-            )
+            if cls.ALLOWED_ORIGINS & _URL_ONLY_ORIGINS
+            and _FileOrigin.BASE64 not in cls.ALLOWED_ORIGINS
             else str_schema(min_length=1),
             serialization=plain_serializer_function_ser_schema(repr, info_arg=False),
         )
@@ -1382,15 +1368,7 @@ class InputFile:
         """
         schema: JsonSchemaValue = {"type": "string", "minLength": 1}
         if (
-            bool(
-                cls.ALLOWED_ORIGINS
-                & {
-                    _FileOrigin.DATA_URI,
-                    _FileOrigin.FILE_ID,
-                    _FileOrigin.HTTP_URL,
-                    _FileOrigin.S3_URI,
-                }
-            )
+            cls.ALLOWED_ORIGINS & _URL_ONLY_ORIGINS
             and _FileOrigin.BASE64 not in cls.ALLOWED_ORIGINS
         ):
             schema["pattern"] = _URL_ONLY_SCHEMA_PATTERN
@@ -1714,16 +1692,7 @@ class FileIdInputFile(InputFile):
             ApiError: If *value* is not a valid Files API identifier (400) or
                 no S3 bucket is configured (503).
         """
-        file_id = parse_file_id(value)
-        bucket = resolve_file_bucket(file_id)
-        key = file_id_s3_key(file_id)
-        instance: Self = object.__new__(cls)
-        instance._origin = _FileOrigin.S3_URI
-        instance._source = _S3Source(
-            f"s3://{bucket}/{key}", bucket, key, file_id=file_id
-        )
-        _track_current_input_files(instance)
-        return instance
+        return super().__new__(cls, _FILE_ID_URI_PREFIX + value)
 
     @classmethod
     def __get_pydantic_core_schema__(

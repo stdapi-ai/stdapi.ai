@@ -315,20 +315,6 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             raise UnsupportedParameterError(param)
 
     @staticmethod
-    def _validate_no_language(value: str | None) -> None:
-        """Validate that language parameter is not provided.
-
-        Args:
-            value: The value to validate
-
-        Raises:
-            ApiError: If a parameter is provided.
-        """
-        if value is not None:
-            param = "language"
-            raise UnsupportedParameterError(param)
-
-    @staticmethod
     def _validate_no_logprobs(value: bool) -> None:  # noqa: FBT001
         """Validate that logprobs parameter is not provided.
 

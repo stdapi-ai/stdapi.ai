@@ -474,42 +474,58 @@ class TestMiddlewareCleanupDrain:
         await wait_for(ran.wait(), timeout=5)
 
 
-class TestSharedResponsesStayBelowTheGzipThreshold:
-    """Pre-rendered singleton responses must never reach the gzip minimum size.
+class TestDiscoveryResponsesAreRenderedPerRequest:
+    """No discovery endpoint may answer from a response object it shares.
 
-    Every payload listed here is fixed at import and bounded by its own shape.
-    The protected resource metadata is deliberately absent: it is the one
-    discovery payload whose size follows the deployment's configuration, so it
-    is rendered per request instead of being bounded.
+    Starlette hands ``raw_headers`` to the ASGI message by reference and
+    GZipMiddleware mutates that list in place, so a shared response whose body
+    reaches the compression threshold keeps the ``content-encoding: gzip`` the
+    middleware stamped on it and every later client that did not ask for gzip
+    reads compressed bytes labelled as plain JSON -- for the process's
+    lifetime. Bounding the bodies instead only holds while every payload stays
+    small, which is not a property the deployment's configuration preserves.
 
     Ref: https://www.starlette.io/middleware/#gzipmiddleware
          stdapi/routes/core_root.py
     """
 
-    def test_cached_response_bodies_stay_uncompressible(self) -> None:
-        """Each shared response body stays under the configured gzip threshold.
+    def test_no_response_object_outlives_the_request_that_built_it(self) -> None:
+        """The module holds no ready-made response for a handler to hand out twice."""
+        from starlette.responses import Response  # noqa: PLC0415
 
-        Starlette hands ``raw_headers`` to the ASGI message by reference and
-        GZipMiddleware mutates that list in place, so the first gzip-accepting
-        request against a shared response whose body reaches the threshold
-        stamps ``content-encoding: gzip`` and a compressed ``content-length``
-        onto the singleton for the process's lifetime, breaking every later
-        client that did not ask for gzip.
+        shared = [
+            name
+            for name, value in vars(core_root).items()
+            if isinstance(value, Response)
+        ]
+        assert not shared, (
+            f"{shared} are response objects shared by every caller: "
+            "GZipMiddleware rewrites the headers of what it compresses in "
+            "place, so one gzip client corrupts the response for every later "
+            "client that did not ask for gzip. Build it inside the handler."
+        )
+
+    @pytest.mark.parametrize(
+        "path", ["/", "/health", "/ping", "/.well-known/api-catalog"]
+    )
+    async def test_a_compressed_request_leaves_the_next_client_intact(
+        self, path: str
+    ) -> None:
+        """A client asking for gzip does not change what the next one is served.
+
+        Driven over the ASGI transport rather than ``TestClient``, whose context
+        exit runs the app's lifespan shutdown and would leave the realtime
+        module refusing every later session in the run.
         """
-        minimum_size = _gzip_minimum_size()
+        transport = ASGITransport(app=stdapi_main.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            compressed = await client.get(path, headers={"Accept-Encoding": "gzip"})
+            plain = await client.get(path, headers={"Accept-Encoding": "identity"})
 
-        for path, response in (
-            ("/", core_root._ROOT_RESPONSE),  # noqa: SLF001
-            ("/health", core_root._HEALTH_RESPONSE),  # noqa: SLF001
-            ("/ping", core_root._PING_RESPONSE),  # noqa: SLF001
-            ("/.well-known/api-catalog", core_root._API_CATALOG_RESPONSE),  # noqa: SLF001
-        ):
-            assert len(response.body) < minimum_size, (
-                f"The cached {path} response body reached {minimum_size} bytes: "
-                "GZipMiddleware would rewrite the shared response headers in "
-                "place, permanently serving gzip to clients that did not ask "
-                "for it. Render this response per request instead of caching it."
-            )
+        assert compressed.status_code == 200
+        assert plain.status_code == 200
+        assert "gzip" not in plain.headers.get("content-encoding", "")
+        assert plain.json() == compressed.json()
 
 
 class TestOAuthMetadataIsRenderedPerRequest:
