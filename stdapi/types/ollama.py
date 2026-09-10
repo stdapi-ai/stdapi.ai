@@ -17,8 +17,8 @@ _NS_PER_SECOND: int = 1_000_000_000
 #: Thinking levels accepted by ``think`` in addition to a boolean.
 ThinkLevel = Literal["low", "medium", "high", "max"]
 
-#: Structured-output request: the string ``json``, or a JSON schema object.
-ResponseFormat = Literal["json"] | dict[str, JsonValue]
+#: Structured-output request: ``json``, a JSON schema object, or ``""`` for none.
+ResponseFormat = Literal["", "json"] | dict[str, JsonValue]
 
 #: Model residency hint: a duration string (``5m``) or a number of seconds.
 KeepAlive = str | float
@@ -181,7 +181,10 @@ class _InferenceRequest(BaseModelRequest):
     model: str = Field(description="Model name.")
     format: ResponseFormat | None = Field(
         default=None,
-        description="Structured output: `json`, or a JSON schema the answer must match.",
+        description=(
+            "Structured output: `json`, or a JSON schema the answer must match. "
+            "An empty string asks for no structured output."
+        ),
     )
     options: ModelOptions | None = Field(
         default=None, description="Runtime generation options."
