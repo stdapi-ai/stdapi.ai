@@ -210,7 +210,7 @@ agent = Agent(
 
 #### :material-microphone: Voice Agents
 
-`RealtimeRunner` opens a spoken session against [`WS /v1/realtime`](api_openai_realtime.md): give its `model_config` the `wss://YOUR_STDAPI_URL/v1/realtime?model=<id>` URL and either the API key or a [minted client secret](api_openai_realtime.md#ephemeral-client-secrets). Sessions last up to 8 minutes and call no tools — see the [Realtime API](api_openai_realtime.md#feature-compatibility) for what a session does and does not emit.
+`RealtimeRunner` opens a spoken session against [`WS /v1/realtime`](api_openai_realtime.md): give its `model_config` the `wss://YOUR_STDAPI_URL/v1/realtime?model=<id>` URL and either the API key or a [minted client secret](api_openai_realtime.md#ephemeral-client-secrets). Sessions last up to 8 minutes, and the agent's own function tools are called through the session — see the [Realtime API](api_openai_realtime.md#feature-compatibility) for what a session does and does not emit.
 
 ### :material-cube-outline: Ollama Python Client
 
