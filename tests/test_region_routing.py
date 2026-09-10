@@ -2380,7 +2380,7 @@ class TestHttpSourceWithPresignedUrl:
 
         # Clear any cached DNS resolver that may be bound to a different event loop;
         # the SSRF connector's resolver lazily recreates one on the current loop.
-        _security_mod._RESOLVER_CACHE.clear()  # noqa: SLF001
+        _security_mod._RESOLVER = None  # noqa: SLF001
 
         result = None
         async with AWS_SESSION.create_client("s3", region_name=s3_file.region) as s3:

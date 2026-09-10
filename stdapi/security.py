@@ -1,9 +1,8 @@
 """Security related utilities."""
 
-from asyncio import Lock
 from ipaddress import IPv4Address, IPv6Address, IPv6Network, ip_address
 from socket import AF_INET, AF_INET6, AF_UNSPEC, AI_NUMERICHOST, SOCK_STREAM
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from aiodns import DNSResolver
 from aiodns.error import DNSError
@@ -23,8 +22,8 @@ class SsrfBlockedError(OSError):
     """Connection target rejected by SSRF validation."""
 
 
-_RESOLVER_CACHE: dict[Literal["DNS"], DNSResolver] = {}
-_RESOLVER_LOCK = Lock()
+#: DNS resolver shared by every lookup, built on the first one and bound to its loop.
+_RESOLVER: DNSResolver | None = None
 
 #: AWS IPv6 instance-services prefix, holding the IMDS, DNS and NTP endpoints.
 _AWS_METADATA_V6: IPv6Network = IPv6Network("fd00:ec2::/32")
@@ -122,11 +121,10 @@ async def _resolve_hostname(hostname: str) -> list[str]:
         All resolved addresses across both families; empty when the host does
         not resolve.
     """
-    async with _RESOLVER_LOCK:
-        try:
-            resolver = _RESOLVER_CACHE["DNS"]
-        except KeyError:
-            resolver = _RESOLVER_CACHE["DNS"] = DNSResolver()
+    global _RESOLVER  # noqa: PLW0603
+    if (resolver := _RESOLVER) is None:
+        # Nothing is awaited between the read and the write, so only one is built.
+        resolver = _RESOLVER = DNSResolver()
     try:
         result = await resolver.getaddrinfo(
             hostname, family=AF_UNSPEC, type=SOCK_STREAM
