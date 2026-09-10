@@ -36,8 +36,10 @@ ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "
 #: Verbosity levels used across multiple parameters.
 VerbosityLevel = Literal["low", "medium", "high"]
 
-#: Service tier options.
-ServiceTiers = Literal["auto", "default", "flex", "scale", "priority"]
+#: Service tier options ("fast" is the upstream alias of "priority").
+ServiceTiers = Literal[
+    "auto", "default", "flex", "scale", "priority", "fast", "ultrafast"
+]
 
 #: Prompt cache retention options.
 PromptCacheRetention = Literal[
@@ -3219,7 +3221,9 @@ class Response(BaseModelResponse):
         default=None, description="User policy violation identifier."
     )
     service_tier: ServiceTiers | None = Field(
-        default=None, description="Service tier for request."
+        default=None,
+        description="Processing tier the request asked for, after alias mapping: "
+        "`fast` is reported as `priority`, and a tier with no equivalent as `default`.",
     )
     status: ResponseStatus | None = Field(default=None, description="Response status.")
     text: ResponseTextConfig | None = Field(
@@ -4254,7 +4258,11 @@ class ResponseCreateParams(BaseModelRequestWithExtra):
         "compatibility and ignored by generation; recorded in request logs.",
     )
     service_tier: ServiceTiers | None = Field(
-        default=None, description="Service tier for request."
+        default=None,
+        description="Processing tier: `priority` (lowest, most consistent latency; "
+        "`fast` is an alias), `flex` (cost-efficient); any other value is served "
+        "on the standard tier. The response reports the requested tier after alias "
+        "mapping.",
     )
     store: bool | None = Field(
         default=None,
@@ -4511,7 +4519,10 @@ class CompactParams(BaseModelRequest):
         default=None, description="Cache retention policy."
     )
     service_tier: ServiceTiers | None = Field(
-        default=None, description="Service tier for request."
+        default=None,
+        description="Processing tier: `priority` (lowest, most consistent latency; "
+        "`fast` is an alias), `flex` (cost-efficient); any other value is served "
+        "on the standard tier.",
     )
 
 

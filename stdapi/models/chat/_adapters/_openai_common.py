@@ -29,14 +29,19 @@ if TYPE_CHECKING:
     from stdapi.types.openai_responses import (
         PromptCacheOptions as ResponsesPromptCacheOptions,
     )
+    from stdapi.types.openai_responses import ServiceTiers as ResponsesServiceTiers
 
 
-#: OpenAI service tiers to Bedrock mapping
-_SERVICES_TIERS: dict[ServiceTiers, ServiceTierTypeType] = {
-    "priority": "priority",
-    "flex": "flex",
+#: OpenAI service tiers to their (Bedrock tier, echoed OpenAI tier) pair
+_SERVICES_TIERS: dict[
+    ServiceTiers | ResponsesServiceTiers, tuple[ServiceTierTypeType, ServiceTiers]
+] = {
+    "priority": ("priority", "priority"),
+    # "fast" is upstream's alias of "priority" and is echoed as "priority"
+    "fast": ("priority", "priority"),
+    "flex": ("flex", "flex"),
     # Extra bedrock specific values
-    "reserved": "reserved",
+    "reserved": ("reserved", "reserved"),
 }
 
 #: `prompt_cache_options.mode` value disabling the `prompt_cache_key` heuristic
@@ -74,14 +79,17 @@ def parse_tool_content(text: str) -> ToolResultContentBlockUnionTypeDef:
 
 
 def map_service_tier(
-    value: ServiceTiers | None,
+    value: ServiceTiers | ResponsesServiceTiers | None,
 ) -> tuple[ServiceTierTypeType | None, ServiceTiers | None]:
     """Map OpenAI service tier to Bedrock service tier.
 
     Only the request's own value is translated here: the alias and
     server-configured tiers resolve where the Bedrock request is built
     (:func:`stdapi.aws_bedrock.resolve_service_tier`), alongside the tier
-    header, and the response echoes the requested value.
+    header, and the response echoes the requested tier after alias mapping:
+    ``fast`` is reported as ``priority``, and a tier with no Bedrock equivalent as
+    ``default``. A tier the deployment configures in the request's place is not
+    reflected here.
 
     Args:
         value: OpenAI service tier.
@@ -91,8 +99,8 @@ def map_service_tier(
     """
     if value is None:
         return None, None
-    if value in _SERVICES_TIERS:
-        return _SERVICES_TIERS[value], value
+    if (tiers := _SERVICES_TIERS.get(value)) is not None:
+        return tiers
     return None, "default"
 
 

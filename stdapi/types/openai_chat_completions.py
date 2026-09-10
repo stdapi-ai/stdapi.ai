@@ -44,13 +44,14 @@ FinishReason = Literal[
     "stop", "length", "tool_calls", "content_filter", "function_call"
 ]
 
-#: Service tiers
+#: Service tiers ("fast" is the upstream alias of "priority")
 ServiceTiers = Literal[
     "auto",
     "default",
     "flex",
     "scale",
     "priority",
+    "fast",
     # Extra bedrock specific values
     "reserved",
 ]
@@ -1122,7 +1123,8 @@ class _Completion(BaseModelResponse):
     )
     service_tier: ServiceTiers | None = Field(
         default=None,
-        description="Processing type: 'auto', 'priority', 'flex', 'default', 'scale', or 'reserved'.",
+        description="Processing tier the request asked for, after alias mapping: "
+        "`fast` is reported as `priority`, and a tier with no equivalent as `default`.",
     )
     system_fingerprint: str | None = Field(
         default=None,
@@ -1301,8 +1303,10 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     service_tier: ServiceTiers | None = Field(
         default=None,
-        description="Processing tier: `auto` (default), `priority` (mission-critical), "
-        "`flex` (cost-efficient), `default`/`scale` (standard), `reserved`.",
+        description="Processing tier: `priority` (lowest, most consistent latency; "
+        "`fast` is an alias), `flex` (cost-efficient), `reserved` (reserved "
+        "capacity); any other value is served on the standard tier. The response "
+        "reports the requested tier after alias mapping.",
     )
     stop: str | list[str] | None = Field(
         default=None,

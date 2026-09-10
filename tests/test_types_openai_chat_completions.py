@@ -68,6 +68,45 @@ class TestReasoningEffort:
         )
 
 
+class TestServiceTier:
+    """``service_tier`` accepts every tier the upstream Chat Completions API takes.
+
+    ``fast`` is upstream's alias for ``priority`` (Fast mode is the renamed
+    Priority processing), so a client sending it must not be refused. The field
+    is declared, so ``extra="allow"`` does not rescue an unlisted value: a
+    missing literal is a ``400`` before any model is called.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat.md
+         https://developers.openai.com/api/docs/guides/fast-mode
+    """
+
+    @pytest.mark.parametrize(
+        "tier", ["auto", "default", "flex", "scale", "priority", "fast"]
+    )
+    def test_upstream_tier_is_accepted(self, tier: str) -> None:
+        """Each tier the upstream API publishes validates onto the declared field."""
+        request = CompletionCreateParams.model_validate(
+            _BASE_REQUEST | {"service_tier": tier}
+        )
+        assert request.service_tier == tier
+        assert request.model_extra == {}, (
+            "service_tier must be consumed by the declared Literal, "
+            "not stored as an extra field"
+        )
+
+    @pytest.mark.parametrize("tier", ["ultrafast", "turbo"])
+    def test_a_tier_upstream_does_not_publish_is_refused(self, tier: str) -> None:
+        """The field stays a closed set, so a typo is still a validation error.
+
+        ``ultrafast`` is deliberate: upstream publishes it on the Responses API
+        only, and Chat Completions rejects it there too.
+        """
+        with pytest.raises(ValidationError, match="service_tier"):
+            CompletionCreateParams.model_validate(
+                _BASE_REQUEST | {"service_tier": tier}
+            )
+
+
 class TestReasoningObjectNormalizationInputs:
     """``reasoning`` is folded onto the flat fields whatever shape it arrives in.
 

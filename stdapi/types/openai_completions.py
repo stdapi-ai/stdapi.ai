@@ -127,7 +127,9 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     service_tier: ServiceTiers | None = Field(
         default=None,
-        description="Processing tier used for serving the request (`auto`, `priority`, `flex`).",
+        description="Processing tier: `priority` (lowest, most consistent latency; "
+        "`fast` is an alias), `flex` (cost-efficient), `reserved` (reserved "
+        "capacity); any other value is served on the standard tier.",
     )
     safety_identifier: str | None = Field(
         default=None,
