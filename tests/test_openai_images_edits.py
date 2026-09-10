@@ -1130,10 +1130,69 @@ class TestImagesEditsOutputEncodingParameters:
         assert job_kwargs["output_format"] == "jpeg"
         assert job_kwargs["output_compression"] == 42
 
-    def test_output_compression_below_the_minimum_is_rejected(
-        self, app_client: TestClient
+    def test_output_compression_zero_reaches_the_job(
+        self, app_client: TestClient, job_kwargs: dict[str, object]
     ) -> None:
-        """``output_compression=0`` is outside the documented 1-100 range."""
+        """``output_compression=0`` is accepted and forwarded as 0, not raised to 1.
+
+        The documented range is 0-100%, and the lowest setting is a real one:
+        it is the smallest ``webp`` and ``jpeg`` a client can ask for.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_images.py:_ImageEditCommonParams
+        """
+        response = app_client.post(
+            "/v1/images/edits",
+            json={
+                "model": "stub-model",
+                "prompt": "Make it darker",
+                "images": [{"image_url": "data:image/png;base64,aW1hZ2U="}],
+                "output_format": "webp",
+                "output_compression": 0,
+                "response_format": "b64_json",
+            },
+        )
+
+        assert response.status_code == 400
+        assert job_kwargs["output_format"] == "webp"
+        assert job_kwargs["output_compression"] == 0
+
+    def test_multipart_output_compression_zero_reaches_the_job(
+        self, app_client: TestClient, job_kwargs: dict[str, object]
+    ) -> None:
+        """The multipart form accepts 0 too, and carries it to the job unchanged.
+
+        The form field is bounded independently of the JSON body, so relaxing
+        one of the two leaves the other refusing the same request.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/routes/openai_images_edits.py:edit_images
+        """
+        response = app_client.post(
+            "/v1/images/edits",
+            data={
+                "model": "stub-model",
+                "prompt": "Make it darker",
+                "output_format": "webp",
+                "output_compression": "0",
+                "response_format": "b64_json",
+            },
+            files={"image": ("image.png", b"fake-bytes", "image/png")},
+        )
+
+        assert response.status_code == 400
+        assert job_kwargs["output_format"] == "webp"
+        assert job_kwargs["output_compression"] == 0
+
+    @pytest.mark.parametrize("requested", [-1, 101])
+    def test_output_compression_outside_the_range_is_rejected(
+        self, app_client: TestClient, requested: int
+    ) -> None:
+        """A percentage below 0 or above 100 is refused before any editing.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_images.py:_ImageEditCommonParams
+        """
         response = app_client.post(
             "/v1/images/edits",
             json={
@@ -1141,8 +1200,33 @@ class TestImagesEditsOutputEncodingParameters:
                 "prompt": "Make it darker",
                 "images": [{"image_url": "data:image/png;base64,aW1hZ2U="}],
                 "output_format": "jpeg",
-                "output_compression": 0,
+                "output_compression": requested,
             },
+        )
+
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "output_compression" in error["message"]
+
+    @pytest.mark.parametrize("requested", [-1, 101])
+    def test_multipart_output_compression_outside_the_range_is_rejected(
+        self, app_client: TestClient, requested: int
+    ) -> None:
+        """The multipart form refuses the same out-of-range percentages.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/routes/openai_images_edits.py:edit_images
+        """
+        response = app_client.post(
+            "/v1/images/edits",
+            data={
+                "model": "stub-model",
+                "prompt": "Make it darker",
+                "output_format": "jpeg",
+                "output_compression": str(requested),
+            },
+            files={"image": ("image.png", b"fake-bytes", "image/png")},
         )
 
         assert response.status_code == 400

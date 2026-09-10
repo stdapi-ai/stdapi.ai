@@ -1876,17 +1876,48 @@ class TestImageGenerationJobParameters:
         assert job_kwargs["output_compression"] == 42
         assert job_kwargs["output_format"] == "jpeg"
 
-    def test_output_compression_below_the_minimum_is_rejected(
-        self, app_client: TestClientType
+    def test_output_compression_zero_reaches_the_job(
+        self, app_client: TestClientType, job_kwargs: dict[str, Any]
     ) -> None:
-        """``output_compression=0`` is outside the documented 1-100 range."""
+        """``output_compression=0`` is accepted and forwarded as 0, not raised to 1.
+
+        The documented range is 0-100%, and the lowest setting is a real one:
+        it is the smallest ``webp`` and ``jpeg`` a client can ask for.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_images.py:ImageGenerateParams
+        """
+        response = app_client.post(
+            "/v1/images/generations",
+            json={
+                "model": "stub-model",
+                "prompt": "a cat",
+                "output_format": "webp",
+                "output_compression": 0,
+                "response_format": "b64_json",
+            },
+        )
+
+        assert response.status_code == 400
+        assert job_kwargs["output_compression"] == 0
+        assert job_kwargs["output_format"] == "webp"
+
+    @pytest.mark.parametrize("requested", [-1, 101])
+    def test_output_compression_outside_the_range_is_rejected(
+        self, app_client: TestClientType, requested: int
+    ) -> None:
+        """A percentage below 0 or above 100 is refused before any generation.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_images.py:ImageGenerateParams
+        """
         response = app_client.post(
             "/v1/images/generations",
             json={
                 "model": "stub-model",
                 "prompt": "a cat",
                 "output_format": "jpeg",
-                "output_compression": 0,
+                "output_compression": requested,
             },
         )
 
