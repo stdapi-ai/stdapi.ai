@@ -46,7 +46,9 @@ from stdapi.files import (
 from stdapi.models import (
     ModelBase,
     ModelRegionUnavailableError,
+    adopt_arn_details,
     bind_runtime_home,
+    resolved_arn_details,
     runtime_twin,
     validate_model,
 )
@@ -88,6 +90,7 @@ if TYPE_CHECKING:
 
     from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
     from stdapi.input_file import InputFileUrl
+    from stdapi.models import ModelDetails
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_batches import MessageBatchRequest
 
@@ -891,8 +894,10 @@ async def _resolve_distinct(
     for start in range(0, len(ordered), _BUILD_CONCURRENCY):
         try:
             async with TaskGroup() as wave:
-                tasks: list[Task[ModelBase[Any, Any]]] = [
-                    wave.create_task(resolve(name))
+                tasks: list[
+                    Task[tuple[ModelBase[Any, Any], Mapping[str, ModelDetails] | None]]
+                ] = [
+                    wave.create_task(_carrying_arn_details(resolve(name)))
                     for name in ordered[start : start + _BUILD_CONCURRENCY]
                 ]
         except BaseExceptionGroup as failures:
@@ -902,8 +907,30 @@ async def _resolve_distinct(
             while isinstance(first, BaseExceptionGroup):
                 first = first.exceptions[0]
             raise first from None
-        resolved.extend(task.result() for task in tasks)
+        for task in tasks:
+            model, arn_details = task.result()
+            adopt_arn_details(arn_details)
+            resolved.append(model)
     return resolved
+
+
+async def _carrying_arn_details[T](
+    work: Awaitable[T],
+) -> tuple[T, Mapping[str, ModelDetails] | None]:
+    """Run *work* in this task, and hand back the ARN details it bound.
+
+    A resolution publishes the ARN a request named to the context it runs in,
+    and this one runs in a task of its own, whose context the caller never
+    sees: the details have to come back with the result for the submission to
+    invoke the caller's own profile rather than the catalogue's.
+
+    Args:
+        work: The resolution to run.
+
+    Returns:
+        What *work* returned, and the ARN details it published.
+    """
+    return await work, resolved_arn_details()
 
 
 async def _prepare_all[T](
@@ -921,11 +948,15 @@ async def _prepare_all[T](
     prepared: list[PreparedRequest] = []
     for start in range(0, len(items), _BUILD_CONCURRENCY):
         wave = items[start : start + _BUILD_CONCURRENCY]
-        prepared.extend(
-            await gather(
-                *(prepare(item, start + offset) for offset, item in enumerate(wave))
+        translated = await gather(
+            *(
+                _carrying_arn_details(prepare(item, start + offset))
+                for offset, item in enumerate(wave)
             )
         )
+        for request, arn_details in translated:
+            adopt_arn_details(arn_details)
+            prepared.append(request)
     return prepared
 
 
