@@ -282,6 +282,27 @@ def test_format_json_and_schema_map_onto_response_format() -> None:
     }
 
 
+def test_empty_format_asks_for_no_structured_output() -> None:
+    """`format: ""` means unstructured output, as it does upstream.
+
+    langchain-ollama sends `format: ""` on every call, so refusing it is a hard
+    failure on a request Ollama itself serves normally.
+
+    Ref: https://docs.ollama.com/openapi.yaml (ChatRequest.format)
+    """
+    params = adapter.to_chat_completion_params(
+        ChatRequest.model_validate(
+            {
+                "model": "m",
+                "messages": [{"role": "user", "content": "hi"}],
+                "format": "",
+            }
+        ),
+        "m",
+    )
+    assert params.response_format is None
+
+
 def test_a_bare_schema_is_closed_to_extra_properties() -> None:
     """Every object node gains `additionalProperties: false` unless it set one.
 
@@ -523,6 +544,18 @@ def test_generate_folds_the_system_prompt_into_a_message_list() -> None:
         "m",
     )
     assert [message.role for message in params.messages] == ["system", "user"]
+
+
+def test_generate_accepts_an_empty_format() -> None:
+    """The generate request accepts `format: ""` and asks for no schema.
+
+    Ref: https://docs.ollama.com/openapi.yaml (GenerateRequest.format)
+    """
+    params = adapter.to_chat_completion_params(
+        GenerateRequest.model_validate({"model": "m", "prompt": "hi", "format": ""}),
+        "m",
+    )
+    assert params.response_format is None
 
 
 def _sent_body(
