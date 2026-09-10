@@ -21,8 +21,11 @@ from pybase64 import b64decode as pybase64_b64decode
 from pybase64 import b64encode
 
 from stdapi import utils
+from stdapi.api_errors import ApiError
 from stdapi.utils import (
     alpha_mask_to_bw,
+    b64_decoded_len,
+    format_language_code,
     get_base64_image_size,
     hide_security_details,
     match_bedrock_app_profile_arn,
@@ -405,3 +408,82 @@ class TestMissingFileError:
             missing_file_error("data")
 
         assert exc_info.value.errors()[0]["loc"] == ("body", "data")
+
+
+class TestLanguageCodeFormatting:
+    """A caller's language code reaches AWS as the locale the service expects.
+
+    Amazon Transcribe and Amazon Polly are named a full locale, so a bare
+    ``en`` is completed to ``en-US``. A code the caller already qualified must
+    come through as itself: the value is a tag to be parsed, not a bare
+    language subtag, and anything that is no tag at all is the caller's
+    mistake rather than a request AWS is made to refuse.
+
+    Ref: https://www.rfc-editor.org/rfc/bcp/bcp47.txt
+         https://docs.aws.amazon.com/transcribe/latest/dg/supported-languages.html
+         stdapi/utils.py:format_language_code
+    """
+
+    @pytest.mark.parametrize(
+        ("language", "expected"),
+        [
+            ("en", "en-US"),
+            ("fr", "fr-FR"),
+            ("ja", "ja-JP"),
+            ("en-US", "en-US"),
+            ("en-GB", "en-GB"),
+            ("pt-BR", "pt-BR"),
+            ("es-MX", "es-MX"),
+            ("en_US", "en-US"),
+            ("EN-us", "en-US"),
+        ],
+    )
+    def test_a_region_qualified_code_keeps_its_own_region(
+        self, language: str, expected: str
+    ) -> None:
+        """A qualified tag is preserved, and a bare one gains its default region.
+
+        ``en-GB`` audio transcribed as ``en-US`` -- or, worse, sent as the
+        nonsense ``en-GB-Latn-US`` a whole-value language subtag maximizes to --
+        is a job Amazon Transcribe refuses outright.
+        """
+        assert format_language_code(language) == expected
+
+    @pytest.mark.parametrize("language", ["", "english", "12345"])
+    def test_a_value_that_is_no_language_tag_is_refused(self, language: str) -> None:
+        """A 400 names the parameter, without echoing what the caller sent."""
+        with pytest.raises(ApiError) as exc_info:
+            format_language_code(language)
+
+        assert exc_info.value.status == 400
+        assert str(exc_info.value) == (
+            "Invalid language code: expected an IETF BCP 47 tag such as 'en-US'."
+        )
+
+
+class TestBase64DecodedLength:
+    """The decoded size of a base64 payload, measured without decoding it.
+
+    It is what an inline payload is size-limited on, so it runs before
+    anything has validated the string: an empty one has to measure zero rather
+    than fail, or a caller sending no content at all gets a 500.
+
+    Ref: https://www.rfc-editor.org/rfc/rfc4648#section-4
+         stdapi/utils.py:b64_decoded_len
+    """
+
+    @pytest.mark.parametrize("size", range(1, 10))
+    def test_the_length_matches_what_decoding_would_return(self, size: int) -> None:
+        """Every padding case agrees with the decoder, for the value and a prefix."""
+        payload = b64encode(b"x" * size).decode()
+        prefix = "data:application/octet-stream;base64,"
+
+        assert b64_decoded_len(payload) == size
+        assert b64_decoded_len(prefix + payload, len(prefix)) == size
+
+    def test_an_empty_payload_measures_zero(self) -> None:
+        """An empty string, and a data URI carrying nothing, are both size zero."""
+        prefix = "data:image/png;base64,"
+
+        assert b64_decoded_len("") == 0
+        assert b64_decoded_len(prefix, len(prefix)) == 0

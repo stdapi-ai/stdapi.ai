@@ -164,6 +164,22 @@ _REASONING_CONFIG: dict[str, str] = {"type": "adaptive"}
 _DATE_SUFFIX = re_compile(r"^(.+)-(\d{8})$")
 
 
+def _split_beta_flags(header: str) -> list[str]:
+    """Split an ``anthropic-beta`` header into its flags.
+
+    HTTP list-valued headers allow whitespace around the separator, which the
+    flags themselves never contain: an unstripped flag matches no allowlist
+    entry and is dropped as unsupported.
+
+    Args:
+        header: Raw ``anthropic-beta`` header value.
+
+    Returns:
+        The beta flags it names, without the empty ones.
+    """
+    return [flag for raw in header.split(",") if (flag := raw.strip())]
+
+
 def _history_tool_use_names(messages: list[MessageTypeDef] | None) -> set[str]:
     """Collect distinct tool names referenced by ``toolUse`` blocks in message history.
 
@@ -251,7 +267,7 @@ class AnthropicClaudeChatModel(_BaseChatModel):
     PROMPT_CACHING_TOOL_SUPPORTED = True
     PROMPT_CACHING_TTL_SUPPORTED = True
     PASSTHROUGH_HEADERS = MappingProxyType(
-        {"anthropic-beta": ("anthropic_beta", lambda v: v.split(","))}
+        {"anthropic-beta": ("anthropic_beta", _split_beta_flags)}
     )
     SIMPLIFIED_CACHE_MANAGEMENT = True
 

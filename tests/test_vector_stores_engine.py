@@ -1,21 +1,24 @@
-"""What the vector store indexer owes when it does not finish the way it began.
+"""What the vector store engine owes when a store changes under the work in flight.
 
-Indexing runs after the response that asked for it, so two things it takes for
-granted are not true of it: the file it is writing chunks for may be deleted
-under it, and the request whose cleanup list it would use may be finished, or
-never have existed at all. Both leave a trace the caller can see -- content the
-API reports as deleted still answering searches, or a whole wave of files
-stranded -- so both are pinned here.
+Indexing runs after the response that asked for it, so three things it takes
+for granted are not true of it: the file it is writing chunks for may be
+deleted under it, its attributes may be replaced while they are being embedded,
+and the request whose cleanup list it would use may be finished, or never have
+existed at all. A store's own lifecycle races the same way -- an expiration
+releases the storage every later operation assumes is there. All of it leaves a
+trace the caller can see, so all of it is pinned here.
 
 Ref: https://platform.openai.com/docs/api-reference/vector-stores-files/deleteFile
      stdapi/vector_stores/engine.py:index_files
      stdapi/vector_stores/engine.py:_store_chunks
+     stdapi/vector_stores/engine.py:_refuse_expired
 """
 
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from stdapi.api_errors import ApiError
 from stdapi.cleanup import CLEANUPS
 from stdapi.vector_stores import (
     StoreRecord,
@@ -24,10 +27,12 @@ from stdapi.vector_stores import (
     read_file,
     read_store,
     search,
+    update_file_attributes,
     update_record,
+    update_store,
 )
 from stdapi.vector_stores.records import file_key, read_record, store_key
-from stdapi.vector_stores.s3_vectors import index_name
+from stdapi.vector_stores.s3_vectors import attribute_key, index_name
 from tests._helpers import make_client_error
 from tests.test_openai_vector_stores import (
     _PLANTED,
@@ -212,6 +217,163 @@ class TestChunksNoRecordAnswersForAreTakenBack:
 
         assert (await read_file(store.id, file_id)).status == "completed"
         assert vector_backend.vectors.indexes[index_name(store.id)]
+
+
+class TestAttributesSetWhileAFileIndexes:
+    """An attribute update landing during a write still reaches the vectors.
+
+    Attributes are embedded into the chunk metadata as they are written, and a
+    file still ``in_progress`` has no vectors to re-write yet -- so an update
+    that lands between the two leaves the record and the index disagreeing, and
+    a filtered search answers on attributes the caller replaced.
+
+    Ref: https://platform.openai.com/docs/api-reference/vector-stores-files/updateAttributes
+         stdapi/vector_stores/engine.py:_store_chunks
+         stdapi/vector_stores/engine.py:update_file_attributes
+    """
+
+    async def test_an_update_landing_mid_write_re_writes_the_vectors(
+        self,
+        vector_backend: _FakeBackend,  # noqa: F811
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The attributes the record ends with are the ones every chunk carries.
+
+        Ref: stdapi/vector_stores/engine.py:_rewrite_attributes
+        """
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        write = vector_backend.vectors.put_vectors
+        updated = False
+
+        async def update_then_write(**params: Any) -> dict[str, Any]:  # noqa: ANN401
+            """Replace the attributes before the chunks reach the index."""
+            nonlocal updated
+            if not updated:
+                updated = True
+                await update_file_attributes(store.id, file_id, {"topic": "menu"})
+            return await write(**params)
+
+        monkeypatch.setattr(vector_backend.vectors, "put_vectors", update_then_write)
+        await index_files(store.id, [file_id], "", _REQUEST_ID)
+
+        assert (await read_file(store.id, file_id)).attributes == {"topic": "menu"}
+        stored = vector_backend.vectors.indexes[index_name(store.id)].values()
+        assert stored
+        assert all(
+            vector["metadata"][attribute_key("topic")] == "menu" for vector in stored
+        )
+
+
+class TestAnExpiredStoreIsNeverPutBackToWork:
+    """Nothing revives a store whose storage a read already released.
+
+    The index behind an expired store is deleted once and never recreated, so
+    an operation that leaves the store reporting ``completed`` again -- moving
+    its expiration, or attaching a file to it -- points the API at storage that
+    is gone: searches answer with a backend error rather than with nothing.
+
+    Ref: https://platform.openai.com/docs/api-reference/vector-stores/modify
+         stdapi/vector_stores/engine.py:_refuse_expired
+         stdapi/vector_stores/engine.py:_release_expired
+    """
+
+    async def test_clearing_the_expiration_of_an_expired_store_is_refused(
+        self,
+        vector_backend: _FakeBackend,  # noqa: F811
+        scheduled_cleanups: list[Awaitable[None]],  # noqa: F811
+    ) -> None:
+        """Removing the expiration would report a store over a deleted index.
+
+        Ref: stdapi/vector_stores/engine.py:update_store
+        """
+        store = await _create_store(expires_after_days=1)
+        await _expire(store)
+        await read_store(store.id)
+        await _run_cleanups(scheduled_cleanups)
+        assert await _index_deleted(store)
+
+        with pytest.raises(ApiError, match="has expired") as raised:
+            await update_store(
+                store.id,
+                name=None,
+                metadata=None,
+                expires_after_days=None,
+                clear_expiry=True,
+            )
+
+        assert raised.value.status == 400
+        assert (await read_store(store.id)).status == "expired"
+
+    async def test_extending_the_expiration_of_an_expired_store_is_refused(
+        self,
+        vector_backend: _FakeBackend,  # noqa: F811
+        scheduled_cleanups: list[Awaitable[None]],  # noqa: F811
+    ) -> None:
+        """A longer window would revive the store just as clearing it does.
+
+        Ref: stdapi/vector_stores/engine.py:update_store
+        """
+        store = await _create_store(expires_after_days=1)
+        await _expire(store)
+        await read_store(store.id)
+        await _run_cleanups(scheduled_cleanups)
+
+        with pytest.raises(ApiError, match="has expired"):
+            await update_store(
+                store.id,
+                name=None,
+                metadata=None,
+                expires_after_days=365,
+                clear_expiry=False,
+            )
+
+    async def test_renaming_an_expired_store_is_still_allowed(
+        self,
+        vector_backend: _FakeBackend,  # noqa: F811
+        scheduled_cleanups: list[Awaitable[None]],  # noqa: F811
+    ) -> None:
+        """Only what moves the expiration is refused: the store stays editable.
+
+        Ref: stdapi/vector_stores/engine.py:update_store
+        """
+        store = await _create_store(expires_after_days=1)
+        await _expire(store)
+        await read_store(store.id)
+        await _run_cleanups(scheduled_cleanups)
+
+        renamed = await update_store(
+            store.id,
+            name="archived",
+            metadata=None,
+            expires_after_days=None,
+            clear_expiry=False,
+        )
+
+        assert renamed.name == "archived"
+        assert renamed.status == "expired"
+
+    async def test_attaching_a_file_to_an_expired_store_is_refused(
+        self,
+        vector_backend: _FakeBackend,  # noqa: F811
+        scheduled_cleanups: list[Awaitable[None]],  # noqa: F811
+    ) -> None:
+        """A file cannot be indexed into an index that no longer exists.
+
+        Ref: stdapi/vector_stores/engine.py:attach_files
+        """
+        store = await _create_store(expires_after_days=1)
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _expire(store)
+        expired = await read_store(store.id)
+        await _run_cleanups(scheduled_cleanups)
+
+        with pytest.raises(ApiError, match="has expired") as raised:
+            await _attach(expired, [file_id])
+
+        assert raised.value.status == 400
+        assert (await read_store(store.id)).file_counts.total == 0
 
 
 class TestAWaveOwnsTheCleanupsItSchedules:

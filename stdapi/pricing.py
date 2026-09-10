@@ -446,8 +446,9 @@ class _PriceCatalogState:
     pending_fetch_specs: list[tuple[str, str]] | None = None
     #: True once a _load_price_catalog call published a catalog with no failed fetch.
     catalog_complete: bool = False
-    # Raw fetch results/claims accumulated across retry attempts for
-    # pending_fetch_specs (pre default-price/fallback/override backfill).
+    # Raw fetch results/claims of every load so far (pre default-price/
+    # fallback/override backfill), carried into the next one so a fetch that
+    # fails keeps the prices it last returned.
     pending_index: dict[PriceKey, Price] = field(default_factory=dict)
     pending_claims: dict[PriceKey, str] = field(default_factory=dict)
     # Model ID to perf_counter_ns() expiry: models a completed reload still
@@ -1780,9 +1781,11 @@ async def _load_price_catalog(diagnostics: list[str]) -> None:
     failing (e.g. throttling) doesn't cancel or discard its siblings: every
     successfully fetched (region, service_code) pair is merged and published
     immediately, so a partial catalog is usable right away. Failed pairs are
-    recorded on ``_state.pending_fetch_specs`` and retried -- carrying the
-    accumulated successes forward -- the next time this function is called,
-    typically by :func:`_load_price_catalog_with_retry`'s backoff loop.
+    recorded on ``_state.pending_fetch_specs`` and retried the next time this
+    function is called, typically by :func:`_load_price_catalog_with_retry`'s
+    backoff loop. Every load starts from the previous one's raw results, so a
+    reload whose fetches partly fail keeps the prices they returned before
+    rather than regressing an already complete catalog.
 
     Args:
         diagnostics: Collision and invalid-override descriptions for this
@@ -1805,19 +1808,19 @@ async def _load_price_catalog(diagnostics: list[str]) -> None:
         return
 
     if _state.pending_fetch_specs is not None:
-        # Resume a previous partial failure: only the fetches that failed,
-        # carrying forward what already succeeded.
+        # Resume a previous partial failure: only the fetches that failed.
         fetch_specs = _state.pending_fetch_specs
-        new_index = dict(_state.pending_index)
-        claims = dict(_state.pending_claims)
     else:
         fetch_specs = [
             (region, service_code)
             for region in sorted(regions)
             for service_code in _SERVICE_CODE_TO_SERVICE
         ]
-        new_index = {}
-        claims = {}
+    # Carry every earlier fetch forward, so a reload whose fetches partly fail
+    # republishes the prices they returned last time instead of dropping them:
+    # an on-demand reload must never regress a complete catalog.
+    new_index = dict(_state.pending_index)
+    claims = dict(_state.pending_claims)
 
     # type-ignore: the RegionName stub Literal lags EUSC/China (works live).
     client = get_client("pricing", endpoint)  # type: ignore[arg-type]
@@ -1859,6 +1862,8 @@ async def _load_price_catalog(diagnostics: list[str]) -> None:
     _apply_price_overrides(published_index, regions, diagnostics)
     _state.price_index = published_index
 
+    _state.pending_index = new_index
+    _state.pending_claims = claims
     _state.catalog_complete = not failed_specs
     if failed_specs:
         diagnostics.append(
@@ -1866,12 +1871,8 @@ async def _load_price_catalog(diagnostics: list[str]) -> None:
             "failed; a partial catalog was published and only those will be retried"
         )
         _state.pending_fetch_specs = failed_specs
-        _state.pending_index = new_index
-        _state.pending_claims = claims
     else:
         _state.pending_fetch_specs = None
-        _state.pending_index = {}
-        _state.pending_claims = {}
 
 
 def _all_models_priced(model_ids: Iterable[str]) -> bool:
@@ -2154,9 +2155,10 @@ async def refresh_price_catalog_for_new_models(model_ids: Iterable[str]) -> None
     Blocking and awaited: called by ``initialize_bedrock_models()`` when its
     lazy on-demand refresh discovers unregistered Bedrock models, so the
     catalog self-heals for newly released models without a polling loop.
-    Diagnostics from the reload are discarded. A model a completed reload
-    still couldn't price is exempted from retriggering one for
-    :data:`_UNPRICED_MODEL_COOLDOWN_NS`, so it doesn't force a reload on
+    The reload's diagnostics are written as a ``price_catalog_load`` event,
+    and fetches it leaves failing are handed back to the backoff loop. A model
+    a completed reload still couldn't price is exempted from retriggering one
+    for :data:`_UNPRICED_MODEL_COOLDOWN_NS`, so it doesn't force a reload on
     every request.
 
     Args:
@@ -2179,7 +2181,18 @@ async def refresh_price_catalog_for_new_models(model_ids: Iterable[str]) -> None
         # refreshed the catalog while this one was waiting for it.
         if _all_models_priced(due_ids):
             return
-        await _load_price_catalog([])
+        diagnostics: list[str] = []
+        start = perf_counter_ns()
+        try:
+            await _load_price_catalog(diagnostics)
+        finally:
+            _log_price_catalog_event(
+                "warning" if diagnostics else "info", diagnostics, start
+            )
+            if _state.pending_fetch_specs:
+                # Left incomplete: the backoff loop owns the retries, and has
+                # already returned if it completed the catalog before this.
+                start_price_catalog()
         for model_id in due_ids:
             if _all_models_priced((model_id,)):
                 _state.unpriced_cooldown.pop(model_id, None)
@@ -2199,10 +2212,14 @@ def start_price_catalog() -> None:
     There is no periodic refresh afterward: the catalog is kept current on
     demand by :func:`refresh_price_catalog_for_new_models`.
 
-    Idempotent: a call while a load task already exists is a no-op, so a
-    duplicate startup never orphans a running task.
+    Idempotent: a call while the load task is still running is a no-op, so a
+    duplicate startup never orphans a running task. A finished one is replaced,
+    which is how an on-demand reload hands its failed fetches back to the
+    backoff loop.
     """
-    if not SETTINGS.cost_tracking or _state.load_task is not None:
+    if not SETTINGS.cost_tracking or (
+        (task := _state.load_task) is not None and not task.done()
+    ):
         return
     # The task outlives the caller's span/request context: run it in a fresh one.
     _state.load_task = asyncio.create_task(

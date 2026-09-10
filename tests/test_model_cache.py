@@ -343,6 +343,37 @@ class TestServingAnExpiredCatalog:
         assert await initialize_bedrock_models() is False
         assert sweep.calls == 1
 
+    async def test_an_unexpected_refresh_failure_is_backed_off_too(
+        self, catalog: Callable[..., _Sweep], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A failure that is not a backend error holds the next attempt off as well.
+
+        Nothing rules out a sweep failing on something other than Boto: a bug
+        in the catalog build reaches here the same way. Held off only for the
+        errors that were anticipated, every subsequent request would start a
+        full multi-region sweep of its own for as long as the fault lasts. The
+        failure is still reported -- as the defect it is, not as a warning
+        about AWS.
+
+        Ref: stdapi/models/__init__.py:_refresh_in_background
+        """
+        catalog("vendor.one")
+        await initialize_bedrock_models()
+        _age_catalog(1, since_success=SETTINGS.model_cache_seconds + 1)
+        sweep = catalog(error=RuntimeError("the catalog build is broken"))
+
+        assert await initialize_bedrock_models() is False
+        await drain_model_refresh(5.0)
+
+        assert sweep.calls == 1
+        reported = capsys.readouterr().out
+        assert "the catalog build is broken" in reported
+        assert '"level":"critical"' in reported
+        # Backed off: the next request serves the same catalog without sweeping.
+        assert await initialize_bedrock_models() is False
+        await drain_model_refresh(5.0)
+        assert sweep.calls == 1
+
     async def test_a_deeply_stale_failure_is_reported_as_an_error(
         self, catalog: Callable[..., _Sweep], capsys: pytest.CaptureFixture[str]
     ) -> None:

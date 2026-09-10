@@ -9,7 +9,7 @@ from operator import itemgetter
 from re import IGNORECASE
 from re import compile as compile_regex
 from tempfile import NamedTemporaryFile
-from typing import TYPE_CHECKING, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 from urllib.parse import unquote, urlparse
 
 from aiohttp import ClientError as AIOHTTPClientError
@@ -63,7 +63,7 @@ from stdapi.utils import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Iterable
+    from collections.abc import AsyncIterator, Coroutine, Iterable
 
     from aiohttp import ClientResponse
     from pydantic import GetCoreSchemaHandler, GetJsonSchemaHandler
@@ -92,6 +92,11 @@ _MAGIC_PREFIX_SIZE: int = 8192
 
 #: Statuses with which an origin refuses a method rather than answering about the resource.
 _METHOD_REFUSAL_STATUSES: frozenset[int] = frozenset({403, 405})
+
+#: Content types naming no format, so the bytes describe the resource better than its header.
+_GENERIC_CONTENT_TYPES: frozenset[str] = frozenset(
+    {"application/octet-stream", "binary/octet-stream"}
+)
 
 
 def _magic_detect(data: bytes) -> str:
@@ -193,6 +198,38 @@ _BEDROCK_DOCUMENT_FORMATS: frozenset[str] = frozenset(
 
 #: Regex to sanitize document names for Bedrock (only [a-zA-Z0-9_\- ] allowed).
 _BEDROCK_DOC_NAME_RE = compile_regex(r"[^a-zA-Z0-9_\- ]+")
+
+#: Regex collapsing the repeated whitespace Bedrock refuses in a document name.
+_BEDROCK_DOC_NAME_SPACES_RE = compile_regex(r"  +")
+
+#: Longest document name Bedrock accepts.
+_BEDROCK_DOC_NAME_MAX_LENGTH: int = 200
+
+#: Document name used when the file's own name sanitizes to nothing.
+_BEDROCK_DOC_NAME_FALLBACK: str = "file"
+
+
+def _bedrock_document_name(name: str) -> str:
+    """Return *name* as a name Bedrock accepts for a document block.
+
+    Bedrock refuses a name that is empty, that repeats a whitespace character,
+    or that holds a character outside its allowed set -- and a name made only
+    of refused characters sanitizes to nothing, so it is replaced rather than
+    sent empty.
+
+    Args:
+        name: The file name to sanitize.
+
+    Returns:
+        The sanitized name, truncated to what Bedrock accepts.
+    """
+    sanitized = _BEDROCK_DOC_NAME_SPACES_RE.sub(
+        " ", _BEDROCK_DOC_NAME_RE.sub("", name)
+    ).strip()
+    return (
+        sanitized[:_BEDROCK_DOC_NAME_MAX_LENGTH].strip() or _BEDROCK_DOC_NAME_FALLBACK
+    )
+
 
 #: Largest base64 media payload a Converse request was observed to accept (31998668 accepted, 32000000 refused).
 CONVERSE_INLINE_BASE64_LIMIT: int = 31_998_668
@@ -726,11 +763,19 @@ class _HttpSource(_FileSource):
     def _metadata_from_headers(self, resp: ClientResponse) -> None:
         """Record content type, size and filename from a response's headers.
 
+        A generic ``octet-stream`` type is read as no type at all: it names no
+        format, and every backend the file reaches is selected by its format,
+        so the bytes are probed instead of trusting it.
+
         Args:
             resp: The response to read the metadata from.
         """
-        if content_type := resp.headers.get("Content-Type"):
-            self._content_type = content_type.split(";", 1)[0].strip()
+        if (
+            content_type := resp.headers.get("Content-Type", "")
+            .split(";", 1)[0]
+            .strip()
+        ) and content_type.lower() not in _GENERIC_CONTENT_TYPES:
+            self._content_type = content_type
         self._size = _size_from_headers(resp)
         self._filename = parse_content_disposition_filename(
             resp.headers.get("Content-Disposition", "")
@@ -1578,9 +1623,9 @@ class InputFile:
                 document_source: DocumentSourceTypeDef = self._bedrock_source  # type: ignore[assignment]
                 document_block: DocumentBlockTypeDef = {
                     "format": bedrock_format,  # type: ignore[typeddict-item]
-                    "name": _BEDROCK_DOC_NAME_RE.sub(
-                        "", filename or await self.get_filename() or "file"
-                    )[:200],
+                    "name": _bedrock_document_name(
+                        filename or await self.get_filename() or ""
+                    ),
                     "source": document_source,
                 }
                 if context:
@@ -1777,7 +1822,7 @@ def get_s3_input_regions() -> dict[RegionName, int]:
     return regions
 
 
-async def _gather_bounded[T](coroutines: Iterable[Awaitable[T]]) -> list[T]:
+async def _gather_bounded[T](coroutines: Iterable[Coroutine[Any, Any, T]]) -> list[T]:
     """Await *coroutines* with bounded concurrency.
 
     Caps the number of simultaneously running tasks (via
@@ -1785,21 +1830,26 @@ async def _gather_bounded[T](coroutines: Iterable[Awaitable[T]]) -> list[T]:
     inputs cannot spawn an unbounded number of concurrent downloads.
 
     Args:
-        coroutines: Awaitables to run.
+        coroutines: Coroutines to run.
 
     Returns:
-        Their results, in the order the awaitables were given.
+        Their results, in the order the coroutines were given.
     """
     semaphore = Semaphore(SETTINGS.max_concurrent_input_downloads)
 
-    async def _run(coroutine: Awaitable[T]) -> T:
+    async def _run(coroutine: Coroutine[Any, Any, T]) -> T:
         """Await the coroutine under the download concurrency semaphore.
 
         Returns:
             Whatever the coroutine returned.
         """
-        async with semaphore:
-            return await coroutine
+        try:
+            async with semaphore:
+                return await coroutine
+        finally:
+            # Cancelled before its slot came up: closing it here keeps it from
+            # being reported as a coroutine that was never awaited.
+            coroutine.close()
 
     async with TaskGroup() as task_group:
         tasks = [task_group.create_task(_run(coroutine)) for coroutine in coroutines]

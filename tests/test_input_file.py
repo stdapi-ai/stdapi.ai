@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from asyncio import gather, sleep
 from datetime import UTC, datetime
+from inspect import CORO_CLOSED, getcoroutinestate
 from typing import TYPE_CHECKING, Any, NoReturn, Self, cast
 
 import pytest
@@ -625,6 +626,7 @@ def _serve_object(
     get_status: int = 200,
     declares_total: bool = True,
     declares_type: bool = True,
+    content_type: str = "application/pdf",
 ) -> web.Application:
     """Return an application serving ``/object.pdf`` and recording every request.
 
@@ -640,6 +642,7 @@ def _serve_object(
         declares_total: When ``False`` a ranged answer declares an unknown
             total, as an origin streaming a resource of unknown length does.
         declares_type: When ``False`` the origin names no content type.
+        content_type: Content type the origin declares the object with.
 
     Returns:
         The application, ready to be started.
@@ -654,7 +657,7 @@ def _serve_object(
         """
         return {
             "Content-Disposition": 'attachment; filename="object.pdf"',
-            "Content-Type": "application/pdf" if declares_type else "",
+            "Content-Type": content_type if declares_type else "",
         }
 
     async def _head(request: web.Request) -> web.Response:
@@ -794,6 +797,32 @@ class TestRemoteInputMetadata:
 
         assert await file.get_content_type() == "application/pdf"
         assert await file.get_size() == len(_ORIGIN_BODY)
+
+    @pytest.mark.parametrize(
+        "declared", ["application/octet-stream", "binary/octet-stream"]
+    )
+    async def test_an_origin_naming_a_generic_type_has_the_content_identified_for_it(
+        self, serve_origin: Callable[[web.Application], Awaitable[str]], declared: str
+    ) -> None:
+        """An ``octet-stream`` header is read as naming no type at all.
+
+        It is what an origin answers about a resource it cannot describe -- and
+        what a signed link to any object commonly carries. The format is what
+        selects the block an attachment travels in, so trusting that header
+        would make every such input unusable; the bytes are read instead.
+        """
+        requests: list[str] = []
+        base = await serve_origin(_serve_object(requests, content_type=declared))
+
+        file = InputFile(f"{base}/object.pdf")
+
+        assert await file.get_content_type() == "application/pdf"
+        assert await file.get_filename() == "object.pdf", (
+            "the header still answers for everything it does describe"
+        )
+        assert requests == ["HEAD /object.pdf", "GET /object.pdf"], (
+            "the type the origin declined to name costs one ranged read"
+        )
 
     async def test_a_ranged_read_that_is_refused_too_is_reported(
         self, serve_origin: Callable[[web.Application], Awaitable[str]]
@@ -2033,4 +2062,107 @@ class TestUploadedFileExpiry:
 
         assert await InputFile(f"s3://{bucket}/note.txt").get_size() == len(
             _STORED_FILE_CONTENT
+        )
+
+
+@pytest.mark.usefixtures("input_files")
+class TestBedrockDocumentName:
+    """A document block is named with something Bedrock accepts.
+
+    Bedrock validates the name of a document block and refuses the whole
+    request over it: the name must not be empty, must not exceed 200
+    characters, and must repeat no whitespace character. The name comes from
+    what the caller called the file, so none of those three is the caller's to
+    guarantee -- an attachment named in a non-Latin script leaves nothing
+    behind once the characters Bedrock refuses are dropped, and punctuation
+    between two words leaves the spaces that surrounded it side by side.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_DocumentBlock.html
+         stdapi/input_file.py:_bedrock_document_name
+    """
+
+    @staticmethod
+    async def _name(filename: str) -> str:
+        """Return the name the document block carries for *filename*.
+
+        Args:
+            filename: File name the request attached the document under.
+
+        Returns:
+            The block's ``name`` value.
+        """
+        file = InputFile(
+            f"data:application/pdf;base64,{b64encode(b'%PDF-1.7').decode()}"
+        )
+        block = await file.to_bedrock_content_block(filename=filename)
+        return block["document"]["name"]
+
+    async def test_a_name_of_refused_characters_is_replaced(self) -> None:
+        """A name holding nothing Bedrock allows is named for the caller.
+
+        Sending what is left of it is sending an empty name, which Bedrock
+        refuses -- so a document attached under a name written in another
+        script would fail the request rather than the name.
+        """
+        assert await self._name("報告書.文書") == "file"
+
+    async def test_a_name_never_repeats_a_whitespace_character(self) -> None:
+        """Characters dropped from between two spaces do not leave a run of them."""
+        name = await self._name("Q1 . report.pdf")
+
+        assert "  " not in name
+        assert name == "Q1 reportpdf"
+
+    async def test_a_long_name_is_cut_to_what_bedrock_accepts(self) -> None:
+        """A 200-character ceiling is applied after the name is sanitized."""
+        name = await self._name(f"{'a' * 199} bcd.pdf")
+
+        assert len(name) <= 200
+        assert name == "a" * 199, "the cut leaves no trailing whitespace behind"
+
+
+class TestBoundedInputConcurrency:
+    """A fan-out of input reads leaves nothing running, and nothing unopened.
+
+    One request can name many remote inputs, so they are read under a
+    concurrency bound: only some run at a time and the rest wait their turn.
+    The first failure answers the request, which cancels the ones still
+    waiting -- and one cancelled before its turn came was never awaited at all,
+    so unless it is closed it is left to the garbage collector to complain
+    about, holding whatever it captured until then.
+
+    Ref: stdapi/input_file.py:_gather_bounded
+    """
+
+    async def test_a_read_cancelled_before_its_turn_is_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every coroutine handed to the fan-out is closed once one of them fails."""
+        monkeypatch.setattr(SETTINGS, "max_concurrent_input_downloads", 1)
+        started: list[int] = []
+
+        async def _read(index: int) -> int:
+            """Fail the first read, once the others are queued behind it.
+
+            Returns:
+                The index of the read, for the ones that get to run.
+            """
+            started.append(index)
+            await sleep(0)
+            if index == 0:
+                msg = "the first input could not be read"
+                raise ApiError(msg)
+            return index
+
+        reads = [_read(index) for index in range(8)]
+
+        with pytest.raises(BaseExceptionGroup):
+            await input_file._gather_bounded(reads)  # noqa: SLF001
+
+        assert started[0] == 0
+        assert len(started) < len(reads), (
+            "the reads held behind the bound never got their turn"
+        )
+        assert [getcoroutinestate(read) for read in reads] == [CORO_CLOSED] * 8, (
+            "a coroutine cancelled before it ran is closed, not left never-awaited"
         )

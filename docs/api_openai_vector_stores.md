@@ -358,9 +358,9 @@ values. They are returned on the file and on every search result, and are what
 Attributes larger than the total budget are rejected with `400`, naming the
 limit. `POST /v1/vector_stores/{id}/files/{file_id}` **replaces** the whole set;
 the new values apply to later searches once the file is `completed`. Replacing
-the attributes of a file that is still `in_progress` is accepted, but the
-indexing in flight writes the attributes it started with — wait for the file to
-settle, then replace them.
+the attributes of a file that is still `in_progress` is accepted and reaches the
+vectors either way: the indexing in flight writes the attributes it started
+with, then re-writes them once it settles.
 
 ## Expiration
 
@@ -372,8 +372,11 @@ settle, then replace them.
 `last_active_at`** — attaching, reading or updating a store does not — so a
 store that is written to but never searched still expires. Once past its
 expiration a store reads back with `status="expired"` and returns no search
-result; its indexed content is released and a search never brings it back. Send
-`"expires_after": null` on an update to remove the policy.
+result; its indexed content is released and a search never brings it back. An
+expired store also refuses `POST /v1/vector_stores/{id}/files` and any update
+that moves `expires_after`, both with `400`, since the storage those would need
+is gone. Send `"expires_after": null` on an update **before** it expires to
+remove the policy.
 
 ## Listing order
 

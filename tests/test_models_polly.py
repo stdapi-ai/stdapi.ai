@@ -485,6 +485,110 @@ class TestSelectVoiceDeterminism:
         assert await _select_voice("Hello", "alloy", "neural") == ("Joanna", "en-US")
 
 
+class TestSelectVoiceUnknownLanguage:
+    """_select_voice: a language no voice speaks costs the fallback, not the request.
+
+    ``DEFAULT_TTS_LANGUAGE`` is free text, and the voice tables only hold the
+    languages the configured Regions actually returned, so the setting can name
+    a language that is not in them at all -- as can Amazon Comprehend, for a
+    language Polly does not synthesize.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/dg/available-voices.html
+         stdapi/models/audio/amazon_polly.py:_select_voice
+    """
+
+    async def test_a_default_language_without_voices_falls_back_to_en_us(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A configured language absent from the tables still answers with a voice.
+
+        Ref: stdapi/models/audio/amazon_polly.py:_detect_language
+        """
+        monkeypatch.setitem(
+            amazon_polly._VOICES_BY_GENDERS,  # noqa: SLF001
+            "Female",
+            {"Joanna"},
+        )
+        monkeypatch.setitem(
+            amazon_polly._VOICES_BY_LANGUAGE,  # noqa: SLF001
+            "en-US",
+            {"Joanna"},
+        )
+        monkeypatch.setitem(
+            amazon_polly._VOICES_BY_ENGINE,  # noqa: SLF001
+            "neural",
+            {"Joanna"},
+        )
+        monkeypatch.setattr(SETTINGS, "default_tts_language", "xh-ZA")
+
+        assert await _select_voice("Molo", "alloy", "neural") == ("Joanna", "en-US")
+
+    async def test_startup_names_a_default_language_no_voice_speaks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Discovery warns the operator that the setting selects nothing.
+
+        Ref: stdapi/models/audio/amazon_polly.py:initialize_polly_models
+        """
+        _patch_describe_voices(
+            monkeypatch,
+            {
+                ("neural", "us-east-1"): [
+                    {
+                        "Voices": [
+                            {
+                                "Id": "Joanna",
+                                "Gender": "Female",
+                                "LanguageName": "English",
+                                "LanguageCode": "en-US",
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+        monkeypatch.setattr(SETTINGS, "default_tts_language", "xh-ZA")
+        start_event = _start_event()
+
+        await initialize_polly_models(start_event)
+
+        assert start_event["server_warnings"] == [
+            {"unknown_default_tts_language": "xh-ZA"}
+        ]
+        assert start_event["level"] == "warning"
+
+    async def test_startup_stays_quiet_on_a_language_a_voice_speaks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A default language the discovery found is not reported.
+
+        Ref: stdapi/models/audio/amazon_polly.py:initialize_polly_models
+        """
+        _patch_describe_voices(
+            monkeypatch,
+            {
+                ("neural", "us-east-1"): [
+                    {
+                        "Voices": [
+                            {
+                                "Id": "Lea",
+                                "Gender": "Female",
+                                "LanguageName": "French",
+                                "LanguageCode": "fr-FR",
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+        monkeypatch.setattr(SETTINGS, "default_tts_language", "fr-FR")
+        start_event = _start_event()
+
+        await initialize_polly_models(start_event)
+
+        assert "server_warnings" not in start_event
+
+
 class TestPollyExtraParamsLexiconNames:
     """_PollyExtraParams.LexiconNames: accepts and forwards the documented list form.
 

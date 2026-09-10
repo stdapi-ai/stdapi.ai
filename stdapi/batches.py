@@ -10,7 +10,7 @@ the batch reports the aggregate. Results are written per job and translated to
 the calling API's dialect on read.
 """
 
-from asyncio import Semaphore, TaskGroup, gather
+from asyncio import Semaphore, Task, TaskGroup, create_task, gather, shield
 from base64 import b32hexencode
 from binascii import crc32 as _crc32
 from contextlib import contextmanager, suppress
@@ -1301,8 +1301,8 @@ async def create_batch(
         ]
     )
     payload = encode_id_payload(bucket)
-    results = await gather(
-        *(
+    submissions = [
+        create_task(
             _submit_job(
                 payload=payload,
                 index=index,
@@ -1313,10 +1313,18 @@ async def create_batch(
                 requests=job.requests,
                 role_arn=role_arn,
             )
-            for index, job in enumerate(jobs)
-        ),
-        return_exceptions=True,
-    )
+        )
+        for index, job in enumerate(jobs)
+    ]
+    try:
+        results: list[BatchJobRef | BaseException] = await gather(
+            *submissions, return_exceptions=True
+        )
+    except BaseException:
+        # The client went away mid-submission: what did start is billed for its
+        # whole window, and the record naming it is never written.
+        await shield(_abandon_jobs(_submitted(submissions)))
+        raise
     started = [item for item in results if isinstance(item, BatchJobRef)]
     if failures := [item for item in results if isinstance(item, BaseException)]:
         await _abandon_jobs(started)
@@ -1343,6 +1351,22 @@ async def create_batch(
     return BatchState(
         record, [_pending_state(ref, record.created_at) for ref in started]
     )
+
+
+def _submitted(submissions: Sequence[Task[BatchJobRef]]) -> list[BatchJobRef]:
+    """Return the jobs a cancelled submission wave did start.
+
+    Args:
+        submissions: The submission tasks, cancelled or otherwise.
+
+    Returns:
+        The reference of every submission that ran to completion.
+    """
+    return [
+        task.result()
+        for task in submissions
+        if task.done() and not task.cancelled() and task.exception() is None
+    ]
 
 
 def _pending_state(ref: BatchJobRef, created_at: int) -> JobState:

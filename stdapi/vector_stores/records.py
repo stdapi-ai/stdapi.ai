@@ -10,6 +10,7 @@ it — a store still reporting ``in_progress`` for a file already ``completed``
 converges, while counters claiming a completion the listing cannot show does not.
 """
 
+from collections import deque
 from typing import TYPE_CHECKING, Final
 
 from botocore.exceptions import ClientError
@@ -302,6 +303,43 @@ async def list_ids(
     return identifiers[:limit], len(identifiers) > limit
 
 
+async def _newest_ids(prefix: str, limit: int) -> list[str]:
+    """List the newest sub-prefix identifiers under *prefix*, oldest first.
+
+    Identifiers sort in creation order and S3 only lists them ascending, so a
+    single listing call answers a prefix holding more than one page with its
+    *oldest* identifiers -- the opposite of what a newest-first page asks for,
+    and S3 may return fewer keys than ``MaxKeys`` at any size. Paging to the
+    end while keeping a trailing window bounds what is held in memory rather
+    than what is listed.
+
+    Args:
+        prefix: Key prefix to list sub-prefixes under.
+        limit: Maximum identifiers to keep, counted back from the newest.
+
+    Returns:
+        At most *limit* identifiers, oldest first.
+    """
+    newest: deque[str] = deque(maxlen=limit)
+    arguments: dict[str, str | int] = {
+        "Bucket": records_bucket(),
+        "Prefix": prefix,
+        "Delimiter": "/",
+        "MaxKeys": limit,
+    }
+    while True:
+        response = await records_client().list_objects_v2(**arguments)  # type: ignore[arg-type]
+        newest.extend(
+            entry["Prefix"][len(prefix) : -1]
+            for entry in response.get("CommonPrefixes", ())
+            if "Prefix" in entry
+        )
+        token = response.get("NextContinuationToken")
+        if not response.get("IsTruncated") or not token:
+            return list(newest)
+        arguments["ContinuationToken"] = token
+
+
 async def all_record_keys(prefix: str) -> list[str]:
     """Return every record key under *prefix*, however many pages it takes.
 
@@ -331,6 +369,9 @@ async def list_stores(
     A store identifier is minted from the instant the record reports as its
     creation, so ascending key order is ascending creation order and the page is
     cut on the identifiers rather than on a thousand records read to sort them.
+    Every order but plain ascending is served from a window of the newest
+    ``_LIST_SCAN_MAX`` stores: a cursor naming a store older than that window
+    pages from its far end.
 
     Args:
         after: Return the stores following this identifier.
@@ -345,7 +386,7 @@ async def list_stores(
     if order == "asc" and not before:
         ids, has_more = await list_ids(prefix, "/", after=after, limit=limit)
     else:
-        ids, _ = await list_ids(prefix, "/", after="", limit=_LIST_SCAN_MAX)
+        ids = await _newest_ids(prefix, _LIST_SCAN_MAX)
         ids, has_more = page_identifiers(
             ids, after=after, before=before, limit=limit, order=order
         )

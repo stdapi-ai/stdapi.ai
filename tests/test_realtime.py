@@ -68,6 +68,15 @@ _MODEL = "fake.realtime-v1:0"
 #: 16-bit samples covering the range both G.711 codecs have to carry.
 _SAMPLE_SWEEP = (-32000, -8000, -1000, -100, 0, 100, 1000, 8000, 32000)
 
+#: G.711 reference decodings, per media type: encoded byte -> 16-bit sample.
+_G711_VECTORS = {
+    "audio/pcma": {0xD5: 8, 0x55: -8, 0xD4: 24, 0xAA: 32256, 0x2A: -32256},
+    "audio/pcmu": {0xFF: 0, 0x7F: 0, 0xFE: 8, 0x7E: -8, 0x80: 32124, 0x00: -32124},
+}
+
+#: The byte each codec carries silence as, which is also its idle pattern.
+_G711_SILENCE = {"audio/pcma": b"\xd5", "audio/pcmu": b"\xff"}
+
 #: Largest error a G.711 round trip may introduce, in 16-bit sample units.
 _G711_TOLERANCE = 1024
 
@@ -166,12 +175,15 @@ class _FakeSession(RealtimeBackendSession):
 
         Yields:
             Each scripted event, in order; a ``_Gate`` entry reports nothing and
-            holds the replay until the test releases it.
+            holds the replay until the test releases it, and an exception entry
+            is raised out of the stream instead of being reported.
         """
         for event in self._script:
             if isinstance(event, _Gate):
                 await event.wait()
                 continue
+            if isinstance(event, BaseException):
+                raise event
             yield event
         try:
             await self.closed.wait()
@@ -516,6 +528,34 @@ class TestAudioConversion:
         again = encode_client_audio(decoded, media_type)
 
         assert decode_client_audio(again, media_type) == decoded
+
+    @pytest.mark.parametrize("media_type", ["audio/pcmu", "audio/pcma"])
+    def test_the_tables_decode_the_g711_reference_vectors(
+        self, media_type: str
+    ) -> None:
+        """Each table is checked against G.711 rather than against itself.
+
+        A round trip and a re-encode are both satisfied by a table that is
+        internally consistent, so a whole codec inverted end to end passes
+        them: only a value the standard fixes tells the two apart. A-law's
+        sign bit is set on *positive* samples, and it is set in the byte after
+        the 0x55 alternation, not before it.
+
+        Ref: https://www.itu.int/rec/T-REC-G.711
+        """
+        import struct  # noqa: PLC0415
+
+        for encoded, sample in _G711_VECTORS[media_type].items():
+            decoded = decode_client_audio(bytes([encoded]), media_type)
+            assert struct.unpack("<h", decoded)[0] == sample, hex(encoded)
+
+    @pytest.mark.parametrize("media_type", ["audio/pcmu", "audio/pcma"])
+    def test_silence_encodes_to_the_codec_s_idle_byte(self, media_type: str) -> None:
+        """A silent sample encodes to the byte a G.711 line carries when idle.
+
+        Ref: https://www.itu.int/rec/T-REC-G.711
+        """
+        assert encode_client_audio(b"\x00\x00", media_type) == _G711_SILENCE[media_type]
 
 
 class TestWebsocketCredential:
@@ -1408,6 +1448,150 @@ class TestTranscriptionFailure:
         kinds = [event["type"] for event in events]
         assert not [kind for kind in kinds if "transcription" in kind], kinds
         assert events[-1]["type"] == "error", events
+
+
+class TestServerVadItemIdentifiers:
+    """Speech events name the item the detected turn will become.
+
+    A client tracks a turn by the identifier its ``speech_started`` carries --
+    it is how the interruption it may send is addressed -- so an empty one
+    leaves it nothing to reference, and one reused across turns makes the
+    second turn overwrite the first. Only a caller ending its own turns mints
+    that identifier at the commit; a server-detected turn has to mint its own.
+
+    Ref: https://developers.openai.com/api/reference/resources/realtime/server-events
+         stdapi/realtime.py:RealtimeSession._report
+    """
+
+    @staticmethod
+    def _speech_turns(
+        app_client: TestClient, fake_backend: type[_FakeModel], *, transcribe: bool
+    ) -> list[dict[str, Any]]:
+        """Run two server-detected turns and return every event they produced."""
+        fake_backend.script = [
+            SpeechStarted(0),
+            SpeechStopped(100),
+            InputTranscript("one"),
+            SpeechStarted(200),
+            SpeechStopped(300),
+            InputTranscript("two"),
+        ]
+        terminal = (
+            "conversation.item.input_audio_transcription.completed"
+            if transcribe
+            else "input_audio_buffer.speech_stopped"
+        )
+        events: list[dict[str, Any]] = []
+        with _connect(app_client) as websocket:
+            websocket.receive_json()
+            if transcribe:
+                websocket.send_json(
+                    {
+                        "type": "session.update",
+                        "session": {
+                            "type": "realtime",
+                            "audio": {
+                                "input": {"transcription": {"model": "whisper-1"}}
+                            },
+                        },
+                    }
+                )
+                websocket.receive_json()
+            websocket.send_json({"type": "input_audio_buffer.append", "audio": _FRAME})
+            while len([e for e in events if e["type"] == terminal]) < 2:
+                events.append(websocket.receive_json())
+        return events
+
+    def test_each_detected_turn_names_an_item_of_its_own(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """Both speech events of a turn carry the identifier its transcript uses."""
+        events = self._speech_turns(app_client, fake_backend, transcribe=True)
+
+        started = [
+            event["item_id"]
+            for event in events
+            if event["type"] == "input_audio_buffer.speech_started"
+        ]
+        stopped = [
+            event["item_id"]
+            for event in events
+            if event["type"] == "input_audio_buffer.speech_stopped"
+        ]
+        transcribed = [
+            event["item_id"]
+            for event in events
+            if event["type"] == "conversation.item.input_audio_transcription.completed"
+        ]
+        assert all(item_id.startswith("item_") for item_id in started), started
+        assert stopped == started
+        assert transcribed == started
+        assert len(set(started)) == 2, "each turn needs an item of its own"
+
+    def test_an_untranscribed_turn_does_not_lend_its_item_to_the_next_one(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """Without transcription nothing else ends the turn, so the stop does."""
+        events = self._speech_turns(app_client, fake_backend, transcribe=False)
+
+        started = [
+            event["item_id"]
+            for event in events
+            if event["type"] == "input_audio_buffer.speech_started"
+        ]
+        assert all(item_id.startswith("item_") for item_id in started), started
+        assert len(set(started)) == 2, "each turn needs an item of its own"
+
+
+class TestBackendReaderFailure:
+    """A backend stream that breaks ends the session instead of hanging it.
+
+    Nothing awaits the reader task, so anything it raises other than an
+    ``ApiError`` is retrieved by the teardown and dropped: the client half
+    keeps waiting on a conversation that no longer has a backend, and the
+    session only ends on the session timeout, with the cause reported nowhere.
+
+    Ref: https://developers.openai.com/api/reference/resources/realtime/server-events
+         stdapi/realtime.py:RealtimeSession._drive_backend
+    """
+
+    def test_an_unexpected_backend_failure_closes_the_session(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """The caller gets a ``server_error`` and the socket closes on it."""
+        fake_backend.script = [
+            ResponseStarted(),
+            OutputTranscript("Sure thing."),
+            RuntimeError("the backend stream broke"),
+        ]
+
+        with _connect(app_client) as websocket:
+            websocket.receive_json()
+            websocket.send_json({"type": "response.create"})
+            events = _drain(websocket, "error")
+            with pytest.raises(WebSocketDisconnect):
+                _read_until_closed(websocket)
+
+        assert events[-1]["type"] == "error", events
+        assert events[-1]["error"]["type"] == "server_error"
+
+    def test_the_failure_is_logged_for_the_operator(
+        self,
+        app_client: TestClient,
+        fake_backend: type[_FakeModel],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The traceback reaches the request log; the client sees none of it."""
+        fake_backend.script = [RuntimeError("the backend stream broke")]
+
+        with _connect(app_client) as websocket:
+            websocket.receive_json()
+            websocket.send_json({"type": "response.create"})
+            events = _drain(websocket, "error")
+
+        logged = capsys.readouterr().out
+        assert "the backend stream broke" in logged
+        assert "the backend stream broke" not in events[-1]["error"]["message"]
 
 
 class TestSessionBilling:

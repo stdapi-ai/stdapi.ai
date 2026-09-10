@@ -33,6 +33,7 @@ from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import AuthenticationHandler, authenticate
 from stdapi.config import SETTINGS
+from stdapi.metering import SERVER_FULL_VERSION
 from stdapi.models import ModelBase
 from stdapi.monitoring import (
     PRINCIPAL,
@@ -75,6 +76,9 @@ pytestmark = pytest.mark.local
 
 #: Characters AWS accepts in a resource tag value, on every service tagged here.
 _TAG_VALUE_RE = re_compile(r"[a-zA-Z0-9\s._:/=+@-]*")
+
+#: Failure a scripted stream raises out of its close.
+_CLOSE_ERROR = "the source failed to close"
 
 
 def _make_request(method: str = "GET", path: str = "/test") -> StarletteRequest:
@@ -744,6 +748,97 @@ class TestStreamClientDisconnect:
             usage.USAGE.reset(usage_token)
 
 
+class TestStreamCloseFailure:
+    """A source that fails to close still gets its stream log written.
+
+    The close runs in the ``finally`` that also finalizes the entry, and the
+    usage the close itself recovered is already drained by then: an exception
+    escaping it would take the whole entry, and the bill it carries, with it.
+
+    Ref: stdapi/monitoring.py:_rebuild_and_log_stream
+    """
+
+    async def test_a_failing_close_still_bills_the_usage_it_drained(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The entry is written, carries the usage, and reports the close failure."""
+        written = _capture_costed_logs(monkeypatch)
+        usage_token = usage.init_usage()
+        id_token = REQUEST_ID.set("test-request-id")
+        try:
+
+            async def source() -> AsyncGenerator[str]:
+                try:
+                    yield "a"
+                    yield "b"
+                finally:
+                    # What the drain on close recovers, before failing.
+                    record_bedrock_usage("modela", input_tokens=1000, total_tokens=1000)
+                    raise RuntimeError(_CLOSE_ERROR)
+
+            stream = await monitoring.log_request_stream_event(source())
+            assert await stream.__anext__() == "a"
+            assert await stream.__anext__() == "b"  # Enters the logged loop.
+
+            with pytest.raises(RuntimeError, match=_CLOSE_ERROR):
+                await stream.aclose()
+
+            (stream_log,) = [w for w in written if w["type"] == "request_stream"]
+            (entry,) = stream_log["usage"]
+            assert entry["input_tokens"] == 1000
+            assert stream_log["level"] == "error"
+            assert any(_CLOSE_ERROR in str(d) for d in stream_log["error_detail"])
+        finally:
+            REQUEST_ID.reset(id_token)
+            usage.USAGE.reset(usage_token)
+
+
+class TestFlushUsageLogEvent:
+    """Mid-session flush of a long-lived session's accumulated usage.
+
+    Ref: stdapi/monitoring.py:flush_usage_log_event
+    """
+
+    async def test_a_failing_finalize_is_reported_instead_of_dropped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A flush whose finalize failed writes the failure rather than nothing.
+
+        The finalize drains the accumulator whatever happens, so the turn's
+        usage is gone either way: dropping the entry too leaves a session
+        billing nothing with nothing said about it.
+        """
+        written: list[EventLog] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+        monkeypatch.setattr(monitoring, "_finalize_usage", _boom)
+        log_token = REQUEST_LOG.set(make_event_log())
+        try:
+            monitoring.flush_usage_log_event(1234)
+        finally:
+            REQUEST_LOG.reset(log_token)
+
+        (entry,) = written
+        assert entry["type"] == "request_stream"
+        assert entry["level"] in ("error", "critical")
+        assert any("boom" in str(detail) for detail in entry["error_detail"])
+
+    async def test_nothing_is_written_when_there_is_nothing_to_report(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A flush finding neither usage nor a failure writes no entry."""
+        written: list[EventLog] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+        usage_token = usage.init_usage()
+        log_token = REQUEST_LOG.set(make_event_log())
+        try:
+            monitoring.flush_usage_log_event(1234)
+        finally:
+            REQUEST_LOG.reset(log_token)
+            usage.USAGE.reset(usage_token)
+
+        assert written == []
+
+
 class TestSseHandledStreamErrorLevel:
     """SseHandledStreamError.__init__: level defaults from status; explicit override wins.
 
@@ -1383,6 +1478,23 @@ def _suspended_request(span: Span) -> Coroutine[None, None, None]:
             await _NeverResumed()
 
     return request()
+
+
+@pytest.mark.skipif(not SETTINGS.otel_enabled, reason="tracing is disabled")
+def test_traces_are_attributed_to_the_running_release() -> None:
+    """The traced resource reports the server version actually running.
+
+    Every span a collector receives is attributed to ``service.version``: a
+    constant there makes two releases indistinguishable in the trace backend,
+    which is where a regression introduced by a deployment is looked for.
+
+    Ref: https://opentelemetry.io/docs/specs/semconv/resource/#service
+         stdapi/monitoring_otel.py:OpenTelemetryManager
+    """
+    resource = otel_manager._tracer_provider.resource  # noqa: SLF001
+
+    assert resource.attributes["service.version"] == SERVER_FULL_VERSION
+    assert resource.attributes["service.name"] == SETTINGS.otel_service_name
 
 
 @pytest.mark.skipif(not SETTINGS.otel_enabled, reason="tracing is disabled")

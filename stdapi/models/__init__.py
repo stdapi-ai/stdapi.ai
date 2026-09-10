@@ -3143,10 +3143,14 @@ async def _refresh_in_background() -> None:
     with log_background_event("model_cache_refresh", webuuid()):
         try:
             await _refresh_bedrock_models(None)
-        except (BotoCoreError, ClientError, ServerError) as exception:
+        except Exception as exception:
             _CACHE["update_next"] = SETTINGS.now() + min(
                 _CACHE["update_interval"], timedelta(seconds=_REFRESH_RETRY_SECONDS)
             )
+            if not isinstance(exception, BotoCoreError | ClientError | ServerError):
+                # Held off like a backend failure, but reported as the defect
+                # it is: the event log gets it from log_background_event.
+                raise
             # Only ever reached with a catalog to serve, which is what makes
             # this a warning rather than something a caller has to be told.
             age = _catalog_age() or timedelta(0)

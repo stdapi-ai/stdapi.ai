@@ -27,12 +27,15 @@ from uuid import uuid7 as uuid
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse as _JSONResponseBase
 from langcodes import Language
+from langcodes.tag_parser import LanguageTagError
 from PIL import Image, UnidentifiedImageError
 from pybase64 import b64decode as _b64decode
 from pybase64 import b64encode as _b64encode
 from pydantic import BaseModel, JsonValue, ValidationError
 from pydantic_core import from_json, to_json
 from sse_starlette import JSONServerSentEvent, ServerSentEvent
+
+from stdapi.api_errors import ApiError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Buffer, Generator
@@ -240,8 +243,17 @@ def format_language_code(language: str) -> str:
 
     Returns:
         language code in ISO-639-1 format
+
+    Raises:
+        ApiError: When the value is not a language tag at all.
     """
-    return Language(language).maximize().simplify_script().to_tag()
+    try:
+        # Parsed, never constructed: the constructor takes the whole value as
+        # the language subtag, so "en-US" would maximize to "en-US-Latn-US".
+        return Language.get(language).maximize().simplify_script().to_tag()
+    except LanguageTagError:
+        msg = "Invalid language code: expected an IETF BCP 47 tag such as 'en-US'."
+        raise ApiError(msg) from None
 
 
 #: ISO-639-1 base language codes mapped to lowercase English language names.
@@ -528,11 +540,10 @@ def b64_decoded_len(value: str, prefix_len: int = 0) -> int:
     Returns:
         The length of the decoded string.
     """
-    return (
-        (n := len(value) - prefix_len) * 3 // 4
-        - (value[-1] == "=")
-        - (value[-2] == "=" if n > 1 else 0)
-    )
+    if (n := len(value) - prefix_len) <= 0:
+        # An empty payload decodes to nothing, and has no last character.
+        return 0
+    return n * 3 // 4 - (value[-1] == "=") - (value[-2] == "=" if n > 1 else 0)
 
 
 def b64_encoded_len(size: int) -> int:

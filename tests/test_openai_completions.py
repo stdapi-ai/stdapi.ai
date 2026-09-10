@@ -785,35 +785,50 @@ class TestTokenArrayPrompt:
     """Token-array prompts are rejected with a 400 before any model dispatch.
 
     OpenAI's legacy surface accepts token and token-array prompts; this backend
-    speaks Converse text blocks only.  The purpose-written "Token array prompts
-    are not supported" message is unreachable — ``prompt`` is typed as
-    ``InputFileUrl | str | list[InputFileUrl | str]``, so union validation fails
-    before ``_validate_prompt_and_streaming`` runs — and the client sees the
-    generic union errors instead.
+    speaks Converse text blocks only.  A token matches no branch of the
+    declared ``prompt`` type, so left to union validation the answer would be
+    one type error per branch and the actual limitation named in none of them:
+    the shape is refused by name instead, as it is on embeddings.
 
     Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
-         stdapi/types/openai_completions.py:CompletionCreateParams._validate_prompt_and_streaming
+         stdapi/types/openai_completions.py:CompletionCreateParams._reject_token_arrays
     """
 
     pytestmark = pytest.mark.local
 
-    def test_token_array_prompt_is_rejected(self, app_client: TestClientType) -> None:
-        """``prompt=[[15496, 11]]`` is a 400 naming ``prompt``, not a 500."""
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            pytest.param([[15496, 11]], id="token-arrays"),
+            pytest.param([15496, 11], id="flat-tokens"),
+        ],
+    )
+    def test_a_token_prompt_is_refused_by_name(
+        self, app_client: TestClientType, prompt: list[Any]
+    ) -> None:
+        """The 400 says what the backend does not take, and what to send instead."""
         response = app_client.post(
-            "/v1/completions", json={"model": "test-model", "prompt": [[15496, 11]]}
+            "/v1/completions", json={"model": "test-model", "prompt": prompt}
         )
+
         assert response.status_code == 400, response.text
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
-        assert "prompt" in error["message"]
+        assert "Token array prompts are not supported" in error["message"]
+        assert "Provide strings instead" in error["message"]
 
-    def test_flat_token_prompt_is_rejected(self, app_client: TestClientType) -> None:
-        """A flat token list is rejected too — integers are not valid prompt parts."""
-        response = app_client.post(
-            "/v1/completions", json={"model": "test-model", "prompt": [15496, 11]}
+    def test_the_shapes_the_backend_serves_pass_through_untouched(self) -> None:
+        """A batch of string prompts is still accepted, and reaches the route unchanged.
+
+        The shape is checked before the declared type is, so the guard sits in
+        front of every prompt the route does serve: it must let them through
+        rather than trade one bad message for a refusal.
+        """
+        request = CompletionCreateParams.model_validate(
+            {"model": "test-model", "prompt": ["one", "two"]}
         )
-        assert response.status_code == 400, response.text
-        assert response.json()["error"]["type"] == "invalid_request_error"
+
+        assert request.prompt == ["one", "two"]
 
 
 class TestMantleTextCompletionPassthrough:

@@ -327,6 +327,27 @@ class TestStoredResponseSessions:
             int(request_time.timestamp())
         )
 
+    async def test_a_created_session_caches_its_tags_under_the_same_bound(
+        self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Creating a session bounds the tag cache as a tag lookup does.
+
+        A created session's tags are known without asking for them, so they
+        are cached without ever going through a miss -- and a bound applied
+        only where a miss is filled leaves that path to grow for the whole
+        life of the process, one entry per stored object the server creates.
+
+        Ref: stdapi/responses_store.py:_cache_tags
+        """
+        del stub
+        monkeypatch.setattr(responses_store, "_TAG_CACHE_LIMIT", 2)
+        cache = responses_store._TAG_CACHE  # noqa: SLF001 (isolated per-test by the stub fixture)
+        cache.update({f"sess-{index}": ("response", "") for index in range(3)})
+
+        await responses_store.create_stored_response_session("response")
+
+        assert cache == {"sess-1": ("response", "1714979289")}
+
     async def test_try_create_session_access_denied_returns_none(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:

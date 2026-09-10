@@ -400,20 +400,29 @@ async def _append_turn(
 ) -> None:
     """Append a completed turn's input and output items to its conversation.
 
+    A failure is logged rather than raised: the answer is generated, billed and
+    stored by the time its turn is appended, so refusing the request here would
+    answer an error for work the caller has already paid for and, on a streamed
+    response, has already received.
+
     Args:
         conversation_id: Conversation the turn belongs to.
         input_items: The request's own input, already prepared for storage.
         output: The response's output items, as JSON objects.
-
-    Raises:
-        ApiError: 404 when the conversation was deleted meanwhile.
     """
     items = [
         *input_items,
         *(stored_item(entry) for entry in output if isinstance(entry, dict)),
     ]
-    if items:
+    if not items:
+        return
+    try:
         await append_items(conversation_id, items)
+    except Exception:  # noqa: BLE001 - the answer stands; the turn cannot undo it
+        log_error_details(
+            f"Appending the response to conversation '{conversation_id}' failed.",
+            level="error",
+        )
 
 
 async def _append_streamed_turn(
@@ -450,15 +459,8 @@ async def _append_streamed_turn(
                 terminal = True
                 event = ServerSentEvent(to_json_str(payload), event=event.event)
         yield event
-    if not terminal:
-        return
-    try:
+    if terminal:
         await _append_turn(conversation_id, input_items, output)
-    except Exception:  # noqa: BLE001 - the stream is sent; the turn cannot fail it
-        log_error_details(
-            f"Appending the response to conversation '{conversation_id}' failed.",
-            level="error",
-        )
 
 
 def _streamed_result(

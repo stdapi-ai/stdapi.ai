@@ -89,6 +89,18 @@ _KIND_BY_OBJECT: dict[str, StoredObjectKind] = {
 }
 
 
+def _cache_tags(session_id: str, entry: tuple[str, str]) -> None:
+    """Remember a session's tags, bounding what the cache can grow to.
+
+    Args:
+        session_id: Session the tags belong to.
+        entry: The session's kind and reported-creation-time tag values.
+    """
+    if len(_TAG_CACHE) > _TAG_CACHE_LIMIT:
+        _TAG_CACHE.clear()
+    _TAG_CACHE[session_id] = entry
+
+
 def _session_id(response_id: str) -> str:
     """Return the AWS Bedrock session ID backing *response_id*."""
     return response_id.split("-", 1)[-1]
@@ -169,7 +181,7 @@ async def create_stored_response_session(kind: StoredObjectKind) -> str:
             **({"encryptionKeyArn": key} if key else {}),  # type: ignore[arg-type]
         )
     session_id: str = response["sessionId"]
-    _TAG_CACHE[session_id] = (kind, created_at)
+    _cache_tags(session_id, (kind, created_at))
     return session_id
 
 
@@ -232,9 +244,7 @@ async def _cached_session_tags(
         "tags", {}
     )
     entry = (tags.get(KIND_TAG, _UNTAGGED), tags.get(CREATED_AT_TAG, _UNTAGGED))
-    if len(_TAG_CACHE) > _TAG_CACHE_LIMIT:
-        _TAG_CACHE.clear()
-    _TAG_CACHE[session_id] = entry
+    _cache_tags(session_id, entry)
     return entry
 
 

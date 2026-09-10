@@ -30,6 +30,7 @@ from openai import NotFoundError
 from sse_starlette import EventSourceResponse
 
 from stdapi import conversations
+from stdapi.api_errors import ApiError
 from stdapi.responses_store import KIND_TAG
 from stdapi.routes import openai_responses
 from stdapi.types.openai_responses import (
@@ -876,6 +877,43 @@ class TestResponsesConversationParameter:
             f"/v1/conversations/{conversation['id']}/items", params={"order": "asc"}
         ).json()["data"]
         assert [item["role"] for item in items] == ["user", "assistant"]
+
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_a_failed_append_never_takes_the_answer_with_it(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch, stream: bool
+    ) -> None:
+        """A conversation deleted mid-request costs the turn, not the response.
+
+        The answer is generated, billed and -- when asked for -- stored before
+        the turn is appended, so failing the request there returns an error for
+        work the caller has already paid for and cannot retrieve. Both the
+        streamed and the non-streamed path log it and answer normally.
+
+        Ref: stdapi/routes/openai_responses.py:_append_turn
+        """
+        conversation = _create(app_client)
+
+        message = "The conversation was deleted while this request ran."
+
+        async def _deleted(*_args: object, **_kwargs: object) -> None:
+            raise ApiError(message, status=404)
+
+        monkeypatch.setattr(openai_responses, "append_items", _deleted)
+
+        response = app_client.post(
+            "/v1/responses",
+            json={
+                "model": "m",
+                "input": "hello",
+                "conversation": conversation["id"],
+                "stream": stream,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert "canned answer" in response.text
+        items = app_client.get(f"/v1/conversations/{conversation['id']}/items").json()
+        assert items["data"] == []
 
     def test_streamed_store_false_appends_nothing(self, app_client: TestClient) -> None:
         """A streamed response with ``store=false`` adds nothing either.

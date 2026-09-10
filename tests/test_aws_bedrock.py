@@ -459,6 +459,34 @@ class TestGuardrailRegion:
         monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1", "eu-west-1"])
         assert guardrail_region("gr123") == "us-east-1"
 
+    @pytest.mark.parametrize(
+        "identifier",
+        [
+            pytest.param("arn:aws:bedrock", id="truncated"),
+            pytest.param(
+                "arn:aws:bedrock::123456789012:guardrail/gr123", id="no-region"
+            ),
+        ],
+    )
+    def test_a_malformed_arn_is_the_callers_error(
+        self, monkeypatch: pytest.MonkeyPatch, identifier: str
+    ) -> None:
+        """An ARN with no region field in it is a 400, not a 500.
+
+        The identifier can come from the request itself
+        (``X-Amzn-Bedrock-GuardrailIdentifier``), so reading a field out of it
+        by position is reading a value the caller chose: anything shorter than
+        an ARN, or an ARN whose Region field is empty, would otherwise reach
+        the client as an unhandled failure of the server.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1"])
+
+        with pytest.raises(ApiError) as malformed:
+            guardrail_region(identifier)
+
+        assert malformed.value.status == 400
+        assert "not a valid guardrail ARN" in str(malformed.value)
+
 
 class TestMapGuardrailFilters:
     """map_guardrail_filters: pinned filter/category and confidence/score tables.

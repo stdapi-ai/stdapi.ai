@@ -320,6 +320,27 @@ async def initialize_polly_models(start_event: EventLog | None = None) -> None:
             output_modalities=["SPEECH"],
             response_streaming=True,
         )
+    _warn_unknown_default_language(start_event)
+
+
+def _warn_unknown_default_language(start_event: EventLog | None) -> None:
+    """Name a configured default language no discovered voice speaks.
+
+    Nothing else reports it: synthesis silently falls back to en-US for every
+    request naming an OpenAI voice, which is not what the operator asked for.
+
+    Args:
+        start_event: Optional startup event log to record the warning on.
+    """
+    language = SETTINGS.default_tts_language
+    if (
+        start_event is None
+        or language is None
+        or not _VOICES_BY_LANGUAGE
+        or language in _VOICES_BY_LANGUAGE
+    ):
+        return
+    add_server_warning(start_event, {"unknown_default_tts_language": language})
 
 
 def _engine_voice_regions(engine: EngineType, voice_id: str) -> list[RegionName]:
@@ -363,11 +384,13 @@ async def _select_voice(
     except KeyError:
         return voice, None  # type: ignore[return-value]
     # Ordered, deduplicated: try the detected language before the en-US fallback.
+    # A language no discovered voice speaks -- a misconfigured default, or a
+    # region offering none -- has no candidates rather than no answer at all.
     for language in dict.fromkeys((await _detect_language(text), "en-US")):
         candidates = (
-            _VOICES_BY_GENDERS[gender]
-            & _VOICES_BY_LANGUAGE[language]
-            & _VOICES_BY_ENGINE[engine]
+            _VOICES_BY_GENDERS.get(gender, set())
+            & _VOICES_BY_LANGUAGE.get(language, set())
+            & _VOICES_BY_ENGINE.get(engine, set())
         )
         if candidates:
             return min(candidates), language

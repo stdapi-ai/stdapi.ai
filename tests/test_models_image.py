@@ -8,6 +8,7 @@ Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase
 from asyncio import CancelledError, Event, sleep, wait_for
 from decimal import Decimal
 from io import BytesIO
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -652,6 +653,64 @@ class TestGenericImageStreamFallback:
         ]
 
         assert sorted(image.image for image in images) == ["src0-mask", "src1-mask"]
+
+
+class TestUnimplementedImageOperations:
+    """An operation a model does not implement is refused naming that model.
+
+    Each job inherits all three operations and overrides the ones its backend
+    serves, so the base ones answer whenever a route reaches a model that
+    cannot do what was asked -- a capability the catalog advertises more
+    broadly than the backend implements, or an alias repointed at another
+    model. The refusal has to say which model it is about, since the caller
+    named one and the deployment may have resolved another.
+
+    Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._edit_image
+    """
+
+    @staticmethod
+    def _job() -> ImageGenerationJobBase[Any]:
+        """Build a job on a model implementing none of the three operations.
+
+        Returns:
+            The job, reporting ``test.image-v1`` as its model.
+        """
+        model = SimpleNamespace(model=SimpleNamespace(id="test.image-v1"))
+        return ImageGenerationJobBase(
+            model=cast("Any", model),
+            prompt="a cat",
+            count=1,
+            width=64,
+            height=64,
+            quality=None,
+            style=None,
+            output_format=None,
+            output_compression=0,
+            extra_params={},
+        )
+
+    @pytest.mark.parametrize(
+        "operation",
+        [
+            pytest.param("_generate_images_from_text", id="generation"),
+            pytest.param("_edit_image", id="edition"),
+            pytest.param("_create_image_variations", id="variation"),
+        ],
+    )
+    async def test_the_refusal_names_the_model_it_is_about(
+        self, operation: str
+    ) -> None:
+        """The model ID reaches the client, rather than the placeholder for it."""
+        arguments: dict[str, list[Any]] = {
+            "_generate_images_from_text": [],
+            "_edit_image": [["src"], None],
+            "_create_image_variations": [["src"]],
+        }
+
+        with pytest.raises(ApiError) as refused:
+            await getattr(self._job(), operation)(*arguments[operation])
+
+        assert "test.image-v1" in str(refused.value)
 
 
 class _ConvertingStreamJob(ImageGenerationJobBase[Any]):
