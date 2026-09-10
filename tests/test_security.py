@@ -24,9 +24,11 @@ Ref: stdapi/security.py:validate_host_ssrf
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
+from aiodns.error import DNSError
 from aiohttp import ClientConnectorError, ClientSession, TCPConnector, web
 from aiohttp.test_utils import TestServer
 
@@ -261,6 +263,107 @@ async def test_validate_host_ssrf_rejects_unparseable_resolved_address(
         await security.validate_host_ssrf("example.test")
     assert exc.value.status == 403
     assert str(exc.value) == "Forbidden host in URL: example.test."
+
+
+class TestHostResolution:
+    """The DNS resolver behind :func:`stdapi.security.validate_host_ssrf`.
+
+    One resolver serves the whole process: it is built on the first host that
+    needs one and reused afterwards, so a request carrying many URLs does not
+    build a resolver per host.
+
+    Ref: stdapi/security.py:_resolve_hostname
+    """
+
+    @staticmethod
+    def _install_resolver(
+        monkeypatch: pytest.MonkeyPatch, answer: object
+    ) -> list[list[str]]:
+        """Replace the DNS resolver with one returning *answer*.
+
+        Args:
+            monkeypatch: Restores the module's own resolver on teardown.
+            answer: What ``getaddrinfo`` returns, or an exception it raises.
+
+        Returns:
+            One entry per resolver built, holding the hosts it was asked for.
+        """
+        built: list[list[str]] = []
+
+        class _FakeResolver:
+            def __init__(self) -> None:
+                self.hosts: list[str] = []
+                built.append(self.hosts)
+
+            async def getaddrinfo(self, host: str, **_: object) -> object:
+                self.hosts.append(host)
+                if isinstance(answer, BaseException):
+                    raise answer
+                return answer
+
+        monkeypatch.setattr(security, "_RESOLVER", None)
+        monkeypatch.setattr(security, "DNSResolver", _FakeResolver)
+        return built
+
+    async def test_one_resolver_serves_every_host(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The resolver is built once and reused for every later host.
+
+        Building one per host would leak a resolver — and its sockets — for
+        every URL a request carries.
+        """
+        built = self._install_resolver(
+            monkeypatch,
+            SimpleNamespace(nodes=[SimpleNamespace(addr=("93.184.216.34",))]),
+        )
+
+        first = await security._resolve_hostname("one.test")  # noqa: SLF001
+        second = await security._resolve_hostname("two.test")  # noqa: SLF001
+
+        assert first == second == ["93.184.216.34"]
+        assert built == [["one.test", "two.test"]], (
+            f"{len(built)} resolvers were built; one must serve every host"
+        )
+
+    async def test_addresses_of_both_families_are_returned(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every resolved address is returned, whatever family or encoding it has.
+
+        The resolver reports some addresses as bytes, and each one still has to
+        reach the unsafe check as a string: an address dropped here is an
+        address never validated.
+        """
+        self._install_resolver(
+            monkeypatch,
+            SimpleNamespace(
+                nodes=[
+                    SimpleNamespace(addr=(b"93.184.216.34",)),
+                    SimpleNamespace(addr=("2606:2800:220:1::",)),
+                ]
+            ),
+        )
+
+        assert await security._resolve_hostname("example.test") == [  # noqa: SLF001
+            "93.184.216.34",
+            "2606:2800:220:1::",
+        ]
+
+    async def test_a_host_that_does_not_resolve_returns_no_address(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A DNS failure returns no address, which the caller refuses as a bad URL.
+
+        Reported as an unusable URL (400) rather than a policy block, and never
+        as "nothing unsafe was found".
+        """
+        self._install_resolver(monkeypatch, DNSError("NXDOMAIN"))
+
+        assert await security._resolve_hostname("nonexistent.test") == []  # noqa: SLF001
+        with pytest.raises(ApiError) as exc:
+            await security.validate_host_ssrf("nonexistent.test")
+        assert exc.value.status == 400
 
 
 async def test_ssrf_safe_connector_returns_validating_connector() -> None:
