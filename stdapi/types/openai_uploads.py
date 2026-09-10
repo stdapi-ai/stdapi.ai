@@ -74,7 +74,9 @@ class AddUploadPartJsonBody(BaseModelRequest):
 class CompleteUploadBody(BaseModelRequest):
     """Request body for ``POST /v1/uploads/{upload_id}/complete``."""
 
-    part_ids: list[str] = Field(description="The ordered list of Part IDs.")
+    part_ids: list[Annotated[str, Field(pattern=PART_ID_PATTERN)]] = Field(
+        description="The ordered list of Part IDs."
+    )
     md5: Annotated[str, Field(pattern=_MD5_PATTERN)] | None = Field(
         default=None,
         description="Hex-encoded md5 digest of the whole file contents, i.e. of "

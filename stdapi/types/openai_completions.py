@@ -117,7 +117,8 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         default=None,
         ge=1,
         le=128,
-        description="How many completions to generate for each prompt.",
+        description="How many completions to generate for each prompt. The number of "
+        "prompts times this value must not exceed 128.",
     )
     user: str | None = Field(
         default=None,

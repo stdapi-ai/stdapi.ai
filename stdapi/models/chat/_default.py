@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
+from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, PromptCaching
 from stdapi.config import SETTINGS
 from stdapi.input_file import prefetch_all_content_types
@@ -95,6 +96,10 @@ def _native_tool_names(additional_request_fields: JsonMapping) -> frozenset[str]
         for tool in tools
         if isinstance(tool, dict) and isinstance(name := tool.get("name"), str)
     )
+
+
+#: Maximum completions one text-completion request generates, prompts times ``n``.
+_MAX_TEXT_COMPLETION_CHOICES: int = 128
 
 
 class ChatModel(ChatModelBase[Any, Any]):
@@ -301,6 +306,10 @@ class ChatModel(ChatModelBase[Any, Any]):
         Returns:
             ``Completion`` when ``stream`` is ``False``, otherwise an
             ``EventSourceResponse`` streaming completion chunks.
+
+        Raises:
+            ApiError: The prompts and ``n`` together ask for more completions
+                than one request generates.
         """
         await prefetch_all_content_types()
         user_messages = await text_completion_adapter.build_user_messages(
@@ -315,6 +324,17 @@ class ChatModel(ChatModelBase[Any, Any]):
             n,
             request_metadata,
         ) = text_completion_adapter.translate_request(request, self._model_id)
+
+        # One request fans out one Converse call per prompt per choice, and only
+        # 'n' is bounded by the schema: the product is refused before any of them
+        # is sent, since nothing downstream limits what a prompt array costs.
+        if (choices := len(user_messages) * n) > _MAX_TEXT_COMPLETION_CHOICES:
+            msg = (
+                f"'prompt' and 'n' together ask for {choices} completions, more "
+                f"than the {_MAX_TEXT_COMPLETION_CHOICES} this backend generates "
+                "for one request. Send fewer prompts, or lower 'n'."
+            )
+            raise ApiError(msg)
 
         prompt_caching = _openai_common.parse_prompt_cache_key(request.prompt_cache_key)
         prompt_caching_ttl = self._cache_ttl(request.prompt_cache_retention)

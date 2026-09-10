@@ -216,12 +216,17 @@ def _extract_part_number(part_id: str, upload_id: str) -> int:
         1-based S3 part number.
 
     Raises:
-        ApiError: Fingerprint mismatch — part does not belong to this upload (400).
+        ApiError: Fingerprint mismatch — part does not belong to this upload —
+            or a part number that is not hexadecimal (400).
     """
     if part_id[5:21] != _upload_fingerprint(upload_id):
         msg = f"Part '{part_id}' does not belong to upload '{upload_id}'."
         raise ApiError(msg)
-    return int(part_id[21:25], 16)
+    try:
+        return int(part_id[21:25], 16)
+    except ValueError:
+        msg = f"Part '{part_id}' does not carry a valid part number."
+        raise ApiError(msg) from None
 
 
 @dataclass(slots=True)

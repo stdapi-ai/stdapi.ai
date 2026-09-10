@@ -45,7 +45,7 @@ from stdapi.models import (
     usage_service,
 )
 from stdapi.models.capabilities import ROUTE_CAPABILITIES
-from stdapi.models.chat import get_chat_model
+from stdapi.models.chat import _CHAT_MODEL_CACHE, get_chat_model
 from stdapi.models.chat._default import ChatModel
 from stdapi.models.marketplace_endpoints import (
     _model_from_endpoint,
@@ -830,6 +830,42 @@ def test_endpoint_resolves_to_the_generic_converse_implementation() -> None:
     merge_marketplace_endpoint_models({}, {endpoint.id: endpoint})
 
     assert type(get_chat_model(endpoint.id)) is ChatModel
+
+
+def test_a_client_named_endpoint_arn_is_not_memoized() -> None:
+    """Resolving an ARN nobody published leaves nothing behind in the model cache.
+
+    The chat model cache is keyed by model ID and lives as long as the process.
+    An endpoint ARN is written by the client and is never a catalogue key, so on
+    a deployment allowing them a caller iterating over ARNs -- none of which has
+    to exist, since the endpoint is not looked up -- would otherwise add one
+    permanent model instance per request until the process runs out of memory.
+
+    Ref: stdapi/models/chat/__init__.py:get_chat_model
+    """
+    first = get_chat_model(ENDPOINT_ARN)
+
+    assert type(first) is ChatModel, "an endpoint ARN serves the generic class"
+    assert ENDPOINT_ARN not in _CHAT_MODEL_CACHE
+    assert get_chat_model(ENDPOINT_ARN) is not first
+
+
+def test_a_published_endpoint_keeps_its_cached_instance() -> None:
+    """A discovered endpoint is still resolved once and reused.
+
+    The catalogue is what bounds the cache: its keys are the listing names the
+    discovery published, so memoizing them costs a fixed amount of memory.
+
+    Ref: stdapi/models/chat/__init__.py:get_chat_model
+    """
+    endpoint = _published(_endpoint())
+    merge_marketplace_endpoint_models({}, {endpoint.id: endpoint})
+    _CHAT_MODEL_CACHE.pop(endpoint.id, None)
+
+    try:
+        assert get_chat_model(endpoint.id) is get_chat_model(endpoint.id)
+    finally:
+        _CHAT_MODEL_CACHE.pop(endpoint.id, None)
 
 
 def test_endpoint_arn_as_a_model_id_is_refused_by_default(

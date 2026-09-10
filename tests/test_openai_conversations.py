@@ -975,6 +975,39 @@ def test_stored_response_is_not_a_conversation(
 
 
 @pytest.mark.local
+def test_stored_response_cannot_be_written_to_as_a_conversation(
+    app_client: TestClient, store: _FakeSessionClient
+) -> None:
+    """Appending items to a session of another kind is a 404 that writes nothing.
+
+    The read routes check the session tag, so the write route must check it too:
+    an append that lands in a stored response's session both corrupts that
+    object and turns it into a readable conversation, since a session holding a
+    conversation document is one by :func:`stdapi.conversations.load_items`.
+
+    Ref: stdapi/conversations.py:append_items
+         stdapi/routes/openai_conversations.py:add_items
+    """
+    store.sessions["other"] = {
+        "sessionId": "other",
+        "sessionArn": "arn:aws:bedrock:::session/other",
+        "createdAt": datetime.now(tz=UTC),
+        "sessionMetadata": {},
+        "tags": {KIND_TAG: "response"},
+    }
+    store.steps["other"] = []
+
+    response = app_client.post(
+        "/v1/conversations/conv-other/items",
+        json={"items": [{"role": "user", "content": "injected"}]},
+    )
+
+    assert response.status_code == 404, response.text
+    assert store.steps["other"] == [], "a foreign session must not be written to"
+    assert app_client.get("/v1/conversations/conv-other/items").status_code == 404
+
+
+@pytest.mark.local
 def test_minted_item_ids_pass_the_item_id_validator() -> None:
     """Minted item IDs match the shape the item routes accept.
 

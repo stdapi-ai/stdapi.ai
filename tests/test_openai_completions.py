@@ -1355,3 +1355,121 @@ class TestLegacyStreamChunks:
             None,
             "stop",
         ]
+
+
+#: What a model that must never be called reports when it is.
+_UNEXPECTED_CALL = "the refused request reached Bedrock"
+
+
+class _RefusingChatModel(ClaudeChatModel):
+    """Claude chat model failing the test if a request ever reaches Bedrock."""
+
+    async def converse(
+        self, request: ConverseRequestBaseTypeDef
+    ) -> ConverseResponseTypeDef:
+        """Fail: a refused request must send nothing.
+
+        Args:
+            request: Bedrock Converse request payload.
+
+        Raises:
+            AssertionError: Always.
+        """
+        raise AssertionError(_UNEXPECTED_CALL)
+
+    async def converse_stream(self, request: ConverseRequestBaseTypeDef) -> Any:  # noqa: ANN401
+        """Fail: a refused streaming request must send nothing.
+
+        Args:
+            request: Bedrock Converse request payload.
+
+        Raises:
+            AssertionError: Always.
+        """
+        raise AssertionError(_UNEXPECTED_CALL)
+
+
+class TestLegacyFanOutCeiling:
+    """One request cannot ask for an unbounded number of model calls.
+
+    The batch prompt is fanned out into ``len(prompt) * n`` Bedrock calls, all
+    started at once, and only ``n`` is bounded by the schema: a prompt array is
+    a list of any length, so a single small request could otherwise open
+    thousands of concurrent, billed inferences.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         stdapi/models/chat/_default.py:ChatModel.create_text_completion
+    """
+
+    pytestmark = pytest.mark.local
+
+    @pytest.fixture(autouse=True)
+    @staticmethod
+    def _http_request() -> Generator[None]:
+        """Bind a header-less HTTP request for the model's header passthrough."""
+        token = REQUEST.set(
+            Request({"type": "http", "method": "POST", "headers": [], "path": "/"})
+        )
+        try:
+            yield
+        finally:
+            REQUEST.reset(token)
+
+    @staticmethod
+    async def _run(model: ClaudeChatModel, **kwargs: object) -> Completion:
+        """Run a completion through *model* and return it.
+
+        Args:
+            model: Chat model under test.
+            **kwargs: Request fields merged onto ``model``.
+
+        Returns:
+            The completion the model produced.
+        """
+        request = CompletionCreateParams.model_validate({"model": "model", **kwargs})
+        completion = await model.create_text_completion(request, "cmpl-1", 0)
+        assert isinstance(completion, Completion)
+        return completion
+
+    @pytest.mark.parametrize(
+        ("prompts", "n"),
+        [
+            pytest.param(129, 1, id="prompts-alone"),
+            pytest.param(2, 128, id="prompts-times-n"),
+        ],
+    )
+    @pytest.mark.parametrize("stream", [False, True])
+    async def test_too_many_completions_are_refused_before_any_call(
+        self, prompts: int, n: int, stream: bool
+    ) -> None:
+        """Asking for more than 128 completions is a 400, and sends nothing.
+
+        The ceiling is on the product, not on either field: 128 choices is what
+        ``n`` alone may ask for, so a prompt array multiplying it has to be
+        refused on the same total. Both the buffered and the streaming branch
+        fan out, so both refuse.
+        """
+        with pytest.raises(ApiError) as refused:
+            await self._run(
+                _RefusingChatModel(_CACHING_MODEL_ID),
+                prompt=["hi"] * prompts,
+                n=n,
+                stream=stream,
+            )
+
+        assert refused.value.status == 400
+        assert "'prompt'" in str(refused.value)
+        assert "'n'" in str(refused.value)
+
+    async def test_the_ceiling_itself_is_served(self) -> None:
+        """A request asking for exactly 128 completions is answered, not refused.
+
+        The bound is a limit on the fan-out, not a new rejection of requests the
+        route already served: the whole batch comes back.
+        """
+        model = _CapturingChatModel(_CACHING_MODEL_ID)
+
+        completion = await self._run(model, prompt=["hi"] * 64, n=2)
+
+        assert len(model.requests) == 128, "one call per prompt and per choice"
+        assert len(completion.choices) == 128

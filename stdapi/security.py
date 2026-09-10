@@ -1,7 +1,7 @@
 """Security related utilities."""
 
 from asyncio import Lock
-from ipaddress import IPv4Address, IPv6Address, ip_address
+from ipaddress import IPv4Address, IPv6Address, IPv6Network, ip_address
 from socket import AF_INET, AF_INET6, AF_UNSPEC, AI_NUMERICHOST, SOCK_STREAM
 from typing import TYPE_CHECKING, Literal
 
@@ -25,6 +25,9 @@ class SsrfBlockedError(OSError):
 
 _RESOLVER_CACHE: dict[Literal["DNS"], DNSResolver] = {}
 _RESOLVER_LOCK = Lock()
+
+#: AWS IPv6 instance-services prefix, holding the IMDS, DNS and NTP endpoints.
+_AWS_METADATA_V6: IPv6Network = IPv6Network("fd00:ec2::/32")
 
 
 async def validate_host_ssrf(hostname: str) -> list[str]:
@@ -84,6 +87,10 @@ def _is_unsafe_ip(ip: int | str | bytes | IPv4Address | IPv6Address | None) -> b
     covers private ranges and the other special-purpose blocks such as RFC 6598
     shared address space (100.64.0.0/10).
 
+    The AWS IPv6 instance-services prefix is rejected unconditionally too: it
+    serves the same instance metadata as the link-local 169.254.169.254, while
+    Python classifies it as unique-local rather than link-local.
+
     Args:
         ip: IP address string to check.
 
@@ -100,6 +107,7 @@ def _is_unsafe_ip(ip: int | str | bytes | IPv4Address | IPv6Address | None) -> b
         or address.is_reserved
         or address.is_multicast
         or address.is_unspecified
+        or (isinstance(address, IPv6Address) and address in _AWS_METADATA_V6)
         or (SETTINGS.ssrf_protection_block_private_networks and not address.is_global)
     )
 

@@ -1061,10 +1061,17 @@ class _Base64Source(_FileSource):
         self._repr = f"{value[:_B64_REPR_LIMIT]}..."
 
     async def _resolve_metadata(self) -> None:
-        """Decode a prefix of the base64 string to detect content via magic."""
-        self._content_type = _magic_detect(
-            await b64decode(self._value[:_MAGIC_PREFIX_SIZE_BASE64])
-        )
+        """Decode a prefix of the base64 string to detect content via magic.
+
+        Raises:
+            ApiError: When the base64 string is invalid.
+        """
+        try:
+            prefix = await b64decode(self._value[:_MAGIC_PREFIX_SIZE_BASE64])
+        except ValueError:
+            msg = "Invalid base64 data."
+            raise ApiError(msg) from None
+        self._content_type = _magic_detect(prefix)
         self._filename = None
         self._size = b64_decoded_len(self._value)
 
