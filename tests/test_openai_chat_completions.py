@@ -4057,6 +4057,61 @@ class TestReservedModelExtras:
         assert "model_id" in error["message"]
 
 
+class TestFastServiceTierIsServedAsPriority:
+    """``service_tier="fast"`` selects the priority tier and is echoed as ``priority``.
+
+    Upstream renamed Priority processing to Fast mode and kept both spellings:
+    ``fast`` and ``priority`` request the same tier, and the response reports
+    ``priority`` whichever one was sent. Asserting only the echo would pass on a
+    request that never asked for the paid tier, so the tier the model call
+    carries is checked too -- and checked on the outgoing request rather than by
+    buying a completion on a billable tier that not every model offers.
+
+    Ref: https://developers.openai.com/api/docs/guides/fast-mode
+         https://developers.openai.com/api/reference/resources/chat.md
+         stdapi/models/chat/_adapters/_openai_common.py:map_service_tier
+    """
+
+    pytestmark = pytest.mark.local
+
+    @pytest.mark.parametrize("requested", ["fast", "priority"])
+    async def test_the_paid_tier_is_requested_and_reported(
+        self,
+        requested: str,
+        monkeypatch: pytest.MonkeyPatch,
+        request_log: dict[str, Any],
+    ) -> None:
+        """Both spellings reach the model as ``priority`` and report ``priority``."""
+        del request_log
+        captured: dict[str, Any] = {}
+
+        async def fake_converse(
+            _self: ChatModel, bedrock_request: ConverseRequestBaseTypeDef
+        ) -> dict[str, Any]:
+            captured.update(bedrock_request)
+            return {
+                "output": {"message": {"role": "assistant", "content": []}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            }
+
+        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        request = CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "service_tier": requested,
+            }
+        )
+
+        response = await ChatModel("amazon.nova-2-lite-v1:0").create_completion(
+            request, "chatcmpl-1", 0
+        )
+
+        assert captured["serviceTier"] == {"type": "priority"}
+        assert getattr(response, "service_tier", None) == "priority"
+
+
 class TestJsonObjectSystemInstruction:
     """``response_format={"type": "json_object"}`` appends a JSON-only system block.
 

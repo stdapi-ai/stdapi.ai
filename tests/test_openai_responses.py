@@ -39,6 +39,7 @@ from openai.types.responses.response_file_search_tool_call import (
 from openai.types.responses.response_output_text import (
     AnnotationFileCitation as SDKAnnotationFileCitation,
 )
+from pydantic import ValidationError
 
 from stdapi import usage
 from stdapi.api_errors import ApiError, UnsupportedParameterError
@@ -3211,18 +3212,28 @@ class TestServiceTierEchoesTheEffectiveTier:
     ``openai.types.responses.Response.service_tier`` documents that the response
     body carries the tier the request was actually served with, which may differ
     from the requested value -- ``"auto"`` (and any other value the gateway does
-    not map to a Bedrock tier) is always served as ``"default"``. This must match
-    what ``/v1/chat/completions`` and ``/v1/completions`` already report for the
-    same request.
+    not map to a paid tier) is always served as ``"default"``, while the ``fast``
+    alias is served and reported as ``priority``. This must match what
+    ``/v1/chat/completions`` and ``/v1/completions`` already report for the same
+    request.
 
-    Ref: installed ``openai`` package: openai.types.responses.response.Response.service_tier
+    Ref: https://developers.openai.com/api/docs/guides/fast-mode
+         installed ``openai`` package: openai.types.responses.response.Response.service_tier
          stdapi/models/chat/_adapters/_openai_responses.py:_build_response_object
     """
 
-    async def test_auto_is_reported_back_as_default(
-        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    @pytest.mark.parametrize(
+        ("requested", "reported"),
+        [("auto", "default"), ("ultrafast", "default"), ("fast", "priority")],
+    )
+    async def test_the_effective_tier_is_reported_back(
+        self,
+        requested: str,
+        reported: str,
+        monkeypatch: pytest.MonkeyPatch,
+        request_log: dict[str, Any],
     ) -> None:
-        """``service_tier="auto"`` is echoed as ``"default"``, the tier Bedrock served."""
+        """A requested tier is echoed as the tier that actually served the call."""
         del request_log
 
         async def fake_converse(
@@ -3236,7 +3247,7 @@ class TestServiceTierEchoesTheEffectiveTier:
 
         monkeypatch.setattr(ChatModel, "converse", fake_converse)
         request = ResponseCreateParams.model_validate(
-            {"model": "test-model", "input": "hi", "service_tier": "auto"}
+            {"model": "test-model", "input": "hi", "service_tier": requested}
         )
 
         response = await ChatModel("amazon.nova-2-lite-v1:0").create_response(
@@ -3244,7 +3255,42 @@ class TestServiceTierEchoesTheEffectiveTier:
         )
 
         assert isinstance(response, Response)
-        assert response.service_tier == "default"
+        assert response.service_tier == reported
+
+
+@pytest.mark.local
+class TestServiceTierAcceptsEveryUpstreamValue:
+    """``service_tier`` takes every tier the upstream Responses API publishes.
+
+    The Responses API publishes two values Chat Completions does not: ``fast``,
+    upstream's alias for ``priority``, and the access-controlled ``ultrafast``.
+    Both are declared fields rather than extras, so a missing literal refuses the
+    request with a ``400`` before any model is called.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create.md
+         https://developers.openai.com/api/docs/guides/fast-mode
+    """
+
+    @pytest.mark.parametrize(
+        "tier", ["auto", "default", "flex", "scale", "priority", "fast", "ultrafast"]
+    )
+    def test_upstream_tier_is_accepted(self, tier: str) -> None:
+        """Each published tier validates onto the declared field."""
+        request = ResponseCreateParams.model_validate(
+            {"model": "test-model", "input": "hi", "service_tier": tier}
+        )
+        assert request.service_tier == tier
+        assert request.model_extra == {}, (
+            "service_tier must be consumed by the declared Literal, "
+            "not stored as an extra field"
+        )
+
+    def test_a_tier_upstream_does_not_publish_is_refused(self) -> None:
+        """The field stays a closed set, so a typo is still a validation error."""
+        with pytest.raises(ValidationError, match="service_tier"):
+            ResponseCreateParams.model_validate(
+                {"model": "test-model", "input": "hi", "service_tier": "turbo"}
+            )
 
 
 @pytest.mark.local
