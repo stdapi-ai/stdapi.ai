@@ -14,6 +14,7 @@ Ref: https://platform.openai.com/docs/api-reference/vector-stores-files/deleteFi
      stdapi/vector_stores/engine.py:_refuse_expired
 """
 
+from asyncio import Event, wait_for
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -23,6 +24,7 @@ from stdapi.cleanup import CLEANUPS
 from stdapi.vector_stores import (
     StoreRecord,
     detach_file,
+    engine,
     index_files,
     read_file,
     read_store,
@@ -31,7 +33,12 @@ from stdapi.vector_stores import (
     update_record,
     update_store,
 )
-from stdapi.vector_stores.records import file_key, read_record, store_key
+from stdapi.vector_stores.records import (
+    file_key,
+    gather_records,
+    read_record,
+    store_key,
+)
 from stdapi.vector_stores.s3_vectors import attribute_key, index_name
 from tests._helpers import make_client_error
 from tests.test_openai_vector_stores import (
@@ -52,6 +59,9 @@ pytestmark = pytest.mark.local
 
 #: Identifier correlating a wave with the request that asked for it.
 _REQUEST_ID = "test-request"
+
+#: Seconds a read waits for the read it must run beside to start.
+_OVERLAP_TIMEOUT = 5.0
 
 
 async def _expire(store: StoreRecord) -> None:
@@ -427,3 +437,74 @@ class TestAWaveOwnsTheCleanupsItSchedules:
 
         assert scheduled_cleanups == []
         assert await _index_deleted(store)
+
+
+class TestAttachReadsRunTogether:
+    """Attaching files reads the uploads and the store's own records at once.
+
+    Neither read depends on the other and they reach different record spaces,
+    so a request attaching files pays for one round trip rather than two --
+    while a file that does not exist still answers the request, whatever the
+    store's records did.
+
+    Ref: https://platform.openai.com/docs/api-reference/vector-stores-files/createFile
+         stdapi/vector_stores/engine.py:_read_attached_files
+    """
+
+    async def test_the_uploads_and_the_records_are_read_at_the_same_time(
+        self,
+        vector_backend: _FakeBackend,  # noqa: F811
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The record read starts before the upload read has answered.
+
+        The upload read waits for the record read to start, so reading them one
+        after the other never completes and the attach times out instead.
+        """
+        store = await _create_store()
+        file_ids = [vector_backend.upload(_TEXT_FILE) for _ in range(3)]
+        records_started = Event()
+        read_uploaded = vector_backend.get_file
+        read_records = gather_records
+
+        async def _read_uploaded(payload: str) -> Any:  # noqa: ANN401
+            """Answer the upload read once the record read has started."""
+            await wait_for(records_started.wait(), _OVERLAP_TIMEOUT)
+            return await read_uploaded(payload)
+
+        async def _read_records(model: Any, keys: Any) -> Any:  # noqa: ANN401
+            """Mark the record read as started, then run it."""
+            records_started.set()
+            return await read_records(model, keys)
+
+        monkeypatch.setattr(engine, "get_file", _read_uploaded)
+        monkeypatch.setattr(engine, "gather_records", _read_records)
+
+        assert await _attach(store, file_ids) == file_ids
+
+    async def test_an_unknown_file_answers_and_ends_the_record_read(
+        self,
+        vector_backend: _FakeBackend,  # noqa: F811
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A file that does not exist is still what answers the request.
+
+        The record read running beside it is ended with the request instead of
+        being left reading records for an attach that will never happen.
+        """
+        store = await _create_store()
+        finished = False
+
+        async def _read_records(_model: Any, _keys: Any) -> Any:  # noqa: ANN401
+            """Read records for longer than the failing upload read takes."""
+            nonlocal finished
+            await Event().wait()
+            finished = True
+
+        monkeypatch.setattr(engine, "gather_records", _read_records)
+
+        with pytest.raises(ApiError) as exc_info:
+            await _attach(store, [f"file-{'9' * 32}"])
+
+        assert exc_info.value.status == 404
+        assert not finished, "the record read must not outlive the request"

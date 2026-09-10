@@ -4672,6 +4672,55 @@ class TestRefreshPriceCatalogForNewModels:
         await refresh_price_catalog_for_new_models([])
         assert calls == 0, "_load_price_catalog ran with no model IDs"
 
+    async def test_the_batch_is_settled_from_one_scan_of_the_reloaded_index(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every model of a batch is settled against one scan, not one scan each.
+
+        The scan walks the whole price index, which the reload has just
+        refilled, so repeating it per model turns a cold start naming many
+        models into a quadratic pass over the catalog on the event loop.
+
+        Ref: stdapi/pricing.py:_priced_model_keys
+        """
+        monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+        priced = "amazon.reload-priced-model-v1:0"
+        unpriced = ("amazon.still-unpriced-a-v1:0", "amazon.still-unpriced-b-v1:0")
+        scans = 0
+        scan_index = pricing._priced_model_keys  # noqa: SLF001
+
+        def _counting_scan() -> set[str]:
+            """Count one walk of the price index."""
+            nonlocal scans
+            scans += 1
+            return scan_index()
+
+        async def _pricing_load(_diagnostics: list[str]) -> None:
+            """Publish a price for one of the batch's models, and only that one."""
+            nonlocal scans
+            monkeypatch.setitem(
+                pricing._state.price_index,  # noqa: SLF001
+                PriceKey(
+                    Service.BEDROCK,
+                    "reloadpricedmodel",
+                    "us-east-1",
+                    Dimension.INPUT_TOKENS,
+                    "standard",
+                ),
+                Price(Decimal("0.001"), "USD"),
+            )
+            scans = 0
+
+        monkeypatch.setattr(pricing, "_load_price_catalog", _pricing_load)
+        monkeypatch.setattr(pricing, "_priced_model_keys", _counting_scan)
+
+        await refresh_price_catalog_for_new_models([priced, *unpriced])
+
+        assert scans == 1, "the reloaded index is walked once for the whole batch"
+        cooldown = pricing._state.unpriced_cooldown  # noqa: SLF001
+        assert priced not in cooldown, "a model the reload priced is not on cooldown"
+        assert set(unpriced) <= set(cooldown)
+
 
 class TestStartPriceCatalogBackgroundLoad:
     """start/stop_price_catalog: background load task lifecycle and logging.

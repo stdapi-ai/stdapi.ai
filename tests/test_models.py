@@ -18,12 +18,13 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-sup
      stdapi/models/__init__.py:ModelDetails.get_id
 """
 
-from asyncio import create_task
+from asyncio import create_task, gather, sleep
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from stdapi import models
+from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
 from stdapi.models import (
     ModelDetails,
@@ -78,17 +79,18 @@ async def _one_request[T](work: Coroutine[Any, Any, T]) -> T:
     return await create_task(work)
 
 
-def _application_profile_arn(region: str) -> str:
+def _application_profile_arn(region: str, profile: str = "abc123xyz") -> str:
     """Return an application-inference-profile ARN in *region*.
 
     Args:
         region: Region owning the caller's profile.
+        profile: Identifier of the caller's own profile.
 
     Returns:
         The ARN a caller would pass as its ``model``.
     """
     return (
-        f"arn:aws:bedrock:{region}:123456789012:application-inference-profile/abc123xyz"
+        f"arn:aws:bedrock:{region}:123456789012:application-inference-profile/{profile}"
     )
 
 
@@ -151,6 +153,130 @@ def seeded_catalog(monkeypatch: pytest.MonkeyPatch) -> Generator[ModelDetails]:
     models._MODELS.update(saved_models)  # noqa: SLF001
     models._USER_PROFILES.clear()  # noqa: SLF001
     models._USER_PROFILES.update(saved_profiles)  # noqa: SLF001
+
+
+class _CountingProfileLookup:
+    """A profile lookup recording how many of its calls Bedrock serves at once.
+
+    Attributes:
+        calls: How many lookups reached it.
+        peak: The most it ever had in flight together.
+    """
+
+    def __init__(self, region: RegionName, error: Exception | None = None) -> None:
+        self.calls = 0
+        self.peak = 0
+        self._region = region
+        self._error = error
+        self._in_flight = 0
+
+    async def __call__(self, _arn: str) -> tuple[list[dict[str, str]], RegionName]:
+        """Report the seeded catalogue model, after one turn of the event loop.
+
+        Returns:
+            The profile's only member model, and the region it lives in.
+
+        Raises:
+            Exception: Whatever the test asked every lookup to fail with.
+        """
+        self.calls += 1
+        self._in_flight += 1
+        self.peak = max(self.peak, self._in_flight)
+        try:
+            await sleep(0)
+            if self._error is not None:
+                raise self._error
+            return [{"modelArn": _MEMBER_ARN}], self._region
+        finally:
+            self._in_flight -= 1
+
+
+@pytest.mark.local
+@pytest.mark.usefixtures("seeded_catalog")
+class TestArnResolutionsDoNotWaitOnEachOther:
+    """One caller resolving an ARN never holds up another resolving a different one.
+
+    The resolved profile is cached for every caller, so the cache read and write
+    are serialised; the control-plane calls between them are not, because two
+    ARNs share nothing but the cache. Two callers naming the *same* cold ARN
+    still make a single call: they would otherwise hit the account's
+    control-plane quota with a burst of identical lookups.
+
+    Ref: stdapi/models/__init__.py:_validate_model_from_arn
+         stdapi/models/__init__.py:_single_flight
+    """
+
+    async def test_two_arns_are_resolved_at_the_same_time(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two callers naming different ARNs overlap their control-plane calls.
+
+        Ref: stdapi/models/__init__.py:_validate_model_from_arn
+        """
+        lookup = _CountingProfileLookup(_HOME_REGION)
+        monkeypatch.setattr(models, "_get_application_inference_profile_models", lookup)
+
+        await gather(
+            _one_request(
+                validate_model(_application_profile_arn(_HOME_REGION, "profile-one"))
+            ),
+            _one_request(
+                validate_model(_application_profile_arn(_HOME_REGION, "profile-two"))
+            ),
+        )
+
+        assert lookup.calls == 2
+        assert lookup.peak == 2, "one ARN's lookup must not serialise another's"
+
+    async def test_one_cold_arn_is_looked_up_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Concurrent callers naming one uncached ARN share a single lookup.
+
+        Ref: stdapi/models/__init__.py:_single_flight
+        """
+        lookup = _CountingProfileLookup(_HOME_REGION)
+        monkeypatch.setattr(models, "_get_application_inference_profile_models", lookup)
+        arn = _application_profile_arn(_HOME_REGION)
+
+        first, second = await gather(
+            _one_request(validate_model(arn)), _one_request(validate_model(arn))
+        )
+
+        assert lookup.calls == 1
+        assert first is second
+
+    async def test_a_failed_lookup_reaches_every_caller_and_is_not_cached(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A refusal answers the whole wave, and the next caller tries again.
+
+        Ref: stdapi/models/__init__.py:_single_flight
+        """
+        refusal = ApiError("the profile could not be read")
+        failing = _CountingProfileLookup(_HOME_REGION, refusal)
+        monkeypatch.setattr(
+            models, "_get_application_inference_profile_models", failing
+        )
+        arn = _application_profile_arn(_HOME_REGION)
+
+        outcomes = await gather(
+            _one_request(validate_model(arn)),
+            _one_request(validate_model(arn)),
+            return_exceptions=True,
+        )
+
+        assert [type(outcome) for outcome in outcomes] == [ApiError, ApiError]
+        assert failing.calls == 1
+        assert models._PENDING_USER_PROFILES == {}  # noqa: SLF001
+        assert models._USER_PROFILES == {}, "a failure must never be cached"  # noqa: SLF001
+
+        working = _CountingProfileLookup(_HOME_REGION)
+        monkeypatch.setattr(
+            models, "_get_application_inference_profile_models", working
+        )
+        assert await _one_request(validate_model(arn))
+        assert working.calls == 1
 
 
 @pytest.mark.local

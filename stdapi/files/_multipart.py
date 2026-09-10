@@ -28,9 +28,9 @@ ID formats
 - Part: ``part_{fingerprint(16 hex)}{part_number(4 hex)}{random(12 hex)}``
 """
 
-from asyncio import gather
+from asyncio import Lock, create_task, gather, shield, to_thread
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import md5, sha256
 from time import monotonic
 from typing import TYPE_CHECKING, Never
@@ -63,12 +63,16 @@ from stdapi.files._core import (
 from stdapi.utils import now_utc_timestamp
 
 if TYPE_CHECKING:
+    from asyncio import Task
     from hashlib import _Hash
 
     from types_aiobotocore_s3.client import S3Client
 
 #: TTL in seconds for a pending multipart session (1 day, matching the S3 lifecycle cleanup window).
 _MULTIPART_EXPIRY_SECONDS: int = 86400
+
+#: Size below which a checksum update runs inline instead of hopping to a thread.
+_MD5_INLINE_MAX_BYTES: int = 256 * 1024
 
 #: Maximum number of parts a multipart upload session can hold (S3 limit).
 _MAX_PART_NUMBER: int = 10000
@@ -86,12 +90,16 @@ class _SessionState:
         expires: ``monotonic()`` deadline after which the entry is stale.
         digest: Running MD5 over the parts proxied here, or ``None`` if none were.
         parts_signature: Fingerprint of the parts folded into ``digest``.
+        digest_lock: Serialises the two updates above, which only answer for the
+            session while the bytes went into ``digest`` in the order
+            ``parts_signature`` records them.
     """
 
     s3_upload_id: str
     expires: float
     digest: _Hash | None = None
     parts_signature: int = 0
+    digest_lock: Lock = field(default_factory=Lock)
 
 
 #: Per-process cache: upload_id → session state (bounded LRU).
@@ -363,8 +371,25 @@ def _checksum_mismatch() -> Never:
     raise ApiError(msg)
 
 
+async def _update_digest(digest: _Hash, data: bytes) -> None:
+    """Fold *data* into *digest*, off the event loop once it is worth the hop.
+
+    Args:
+        digest: The running digest to extend.
+        data: The bytes to fold in.
+    """
+    if len(data) <= _MD5_INLINE_MAX_BYTES:
+        digest.update(data)
+    else:
+        await to_thread(digest.update, data)
+
+
 async def _object_md5(s3: S3Client, bucket: str, key: str) -> str:
     """Return the hex MD5 of a stored object, reading it in bounded chunks.
+
+    One chunk is hashed while the next is still being read; awaiting the
+    previous update before starting the next keeps the digest ordered and only
+    ever touched by one thread.
 
     Args:
         s3: Authenticated S3 client.
@@ -376,8 +401,20 @@ async def _object_md5(s3: S3Client, bucket: str, key: str) -> str:
     """
     digest = md5(usedforsecurity=False)
     body = (await s3.get_object(Bucket=bucket, Key=key))["Body"]
-    async for chunk in body.iter_chunks(UPLOAD_CHUNK_SIZE):
-        digest.update(chunk)
+    hashing: Task[None] | None = None
+    try:
+        async for chunk in body.iter_chunks(UPLOAD_CHUNK_SIZE):
+            if hashing is not None:
+                await hashing
+            hashing = create_task(_update_digest(digest, chunk))
+        if hashing is not None:
+            await hashing
+            hashing = None
+    finally:
+        # Only reached with an update still in flight when the read failed: the
+        # digest is discarded, so the abandoned thread has nothing to corrupt.
+        if hashing is not None:
+            hashing.cancel()
     return digest.hexdigest()
 
 
@@ -523,11 +560,17 @@ async def add_part(upload_id: str, data: bytes) -> tuple[str, int]:
 
     # Folded in while the bytes are still in memory, so the completion checksum
     # costs no buffering and no read-back; only the digest state outlives the call.
-    state.digest = digest = state.digest or md5(usedforsecurity=False)
-    digest.update(data)
-    state.parts_signature = _fold_part(
-        state.parts_signature, part_number, stored["ETag"]
-    )
+    # Held as a pair, so a concurrent part cannot land its bytes between another's
+    # bytes and the signature that says which bytes the digest covers.
+    async with state.digest_lock:
+        state.digest = digest = state.digest or md5(usedforsecurity=False)
+        # Shielded: cancelling the await does not stop the thread already folding
+        # these bytes in, and a digest advanced past the signature that says what
+        # it covers would fail every later completion of this session.
+        await shield(_update_digest(digest, data))
+        state.parts_signature = _fold_part(
+            state.parts_signature, part_number, stored["ETag"]
+        )
 
     return _make_part_id(upload_id, part_number), now_utc_timestamp()
 

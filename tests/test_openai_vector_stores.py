@@ -575,6 +575,160 @@ class TestIdentifiers:
             assert raised.value.status == 404
 
 
+class _CountingVectorsClient:
+    """An index client recording how many of its calls are in flight together.
+
+    Every call yields once before answering, so a caller that issues its
+    batches serially can never have two of them counted at the same time.
+    """
+
+    def __init__(self, *, fail_on: int | None = None) -> None:
+        #: Most calls this client ever served at once.
+        self.peak = 0
+        #: Key lists it was called with, in the order the calls arrived.
+        self.batches: list[list[str]] = []
+        self._in_flight = 0
+        self._fail_on = fail_on
+
+    async def _serve(self, keys: list[str]) -> None:
+        """Record one call, failing the batch the test asked to fail."""
+        index = len(self.batches)
+        self.batches.append(keys)
+        self._in_flight += 1
+        self.peak = max(self.peak, self._in_flight)
+        try:
+            await sleep(0)
+            if index == self._fail_on:
+                raise make_client_error(_ACCESS_DENIED_CODE, "GetVectors")
+        finally:
+            self._in_flight -= 1
+
+    async def get_vectors(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
+        """Answer every requested key with a vector carrying it as its text."""
+        keys = params["keys"]
+        await self._serve(keys)
+        return {"vectors": [{"key": key, "metadata": {"_text": key}} for key in keys]}
+
+    async def delete_vectors(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
+        """Accept the deletion of every requested key."""
+        await self._serve(params["keys"])
+        return {}
+
+
+@pytest.mark.local
+class TestIndexCallFanOut:
+    """A read or a delete spanning several key batches issues them together.
+
+    One request's batches are independent calls against one index: nothing
+    orders them, they share no cursor, and the service bills per call rather
+    than per wave, so waiting for each before starting the next only adds a
+    round trip per batch. The wave bound is still what keeps a very large key
+    list from opening an unbounded number of calls at once.
+
+    Ref: stdapi/vector_stores/s3_vectors.py:S3VectorsIndex.get_vectors
+         stdapi/vector_stores/s3_vectors.py:S3VectorsIndex.delete_vectors
+    """
+
+    @pytest.fixture
+    def counting_client(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> Callable[..., _CountingVectorsClient]:
+        """Serve the index from a client counting its concurrent calls.
+
+        Returns:
+            A callable installing the client and handing it back.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_s3_vectors_bucket", "stdapi-test-vectors")
+
+        def install(**kwargs: Any) -> _CountingVectorsClient:  # noqa: ANN401
+            client = _CountingVectorsClient(**kwargs)
+            monkeypatch.setattr(s3_vectors, "vectors_client", lambda: client)
+            return client
+
+        return install
+
+    async def test_a_read_issues_its_batches_together(
+        self, counting_client: Callable[..., _CountingVectorsClient]
+    ) -> None:
+        """Three batches of keys are read concurrently, and every chunk comes back.
+
+        Ref: stdapi/vector_stores/s3_vectors.py:S3VectorsIndex.get_vectors
+        """
+        client = counting_client()
+        keys = [f"key-{number:04d}" for number in range(250)]
+
+        vectors = await S3VectorsIndex().get_vectors(
+            new_store_id(), keys, with_embeddings=False
+        )
+
+        assert len(client.batches) == 3
+        assert client.peak == 3
+        assert [vector.text for vector in vectors] == keys
+
+    async def test_a_delete_issues_its_batches_together(
+        self, counting_client: Callable[..., _CountingVectorsClient]
+    ) -> None:
+        """Three batches of keys are deleted concurrently, and none is dropped.
+
+        Ref: stdapi/vector_stores/s3_vectors.py:S3VectorsIndex.delete_vectors
+        """
+        client = counting_client()
+        keys = [f"key-{number:04d}" for number in range(1100)]
+
+        await S3VectorsIndex().delete_vectors(new_store_id(), keys)
+
+        assert client.peak == 3
+        assert [key for batch in client.batches for key in batch] == keys
+
+    async def test_the_wave_bounds_how_many_calls_are_open(
+        self, counting_client: Callable[..., _CountingVectorsClient]
+    ) -> None:
+        """A key list of twenty batches never opens more calls than the wave allows.
+
+        Ref: stdapi/vector_stores/s3_vectors.py:_CALL_WAVE
+        """
+        wave = s3_vectors._CALL_WAVE  # noqa: SLF001
+        client = counting_client()
+        keys = [f"key-{number:04d}" for number in range(100 * (wave + 4))]
+
+        await S3VectorsIndex().get_vectors(new_store_id(), keys, with_embeddings=False)
+
+        assert len(client.batches) == wave + 4
+        assert client.peak == wave
+
+    async def test_a_refused_read_batch_answers_the_whole_read(
+        self, counting_client: Callable[..., _CountingVectorsClient]
+    ) -> None:
+        """One denied batch still surfaces as the feature being unavailable.
+
+        Ref: stdapi/vector_stores/s3_vectors.py:_vectors_guard
+        """
+        counting_client(fail_on=1)
+
+        with pytest.raises(ApiError) as raised:
+            await S3VectorsIndex().get_vectors(
+                new_store_id(),
+                [f"key-{number:04d}" for number in range(250)],
+                with_embeddings=False,
+            )
+
+        assert raised.value.status == 503
+
+    async def test_a_refused_delete_batch_leaves_the_others_running(
+        self, counting_client: Callable[..., _CountingVectorsClient]
+    ) -> None:
+        """Deletion stays best effort: a denied batch neither raises nor stops its siblings.
+
+        Ref: stdapi/vector_stores/s3_vectors.py:S3VectorsIndex.delete_vectors
+        """
+        client = counting_client(fail_on=1)
+        keys = [f"key-{number:04d}" for number in range(1100)]
+
+        await S3VectorsIndex().delete_vectors(new_store_id(), keys)
+
+        assert [key for batch in client.batches for key in batch] == keys
+
+
 @pytest.mark.local
 class TestRequestValidation:
     """The upstream request bounds are enforced before any backend work.

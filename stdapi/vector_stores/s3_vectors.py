@@ -92,8 +92,8 @@ _GET_VECTORS_BATCH: Final[int] = 100
 #: Vector keys deleted per index delete.
 _DELETE_VECTORS_BATCH: Final[int] = 500
 
-#: Queries issued concurrently by one search.
-_QUERY_WAVE: Final[int] = 16
+#: Index calls one operation issues concurrently.
+_CALL_WAVE: Final[int] = 16
 
 #: OpenAI comparison operator → index filter operator.
 _FILTER_OPERATORS: Final[dict[str, str]] = {
@@ -406,18 +406,25 @@ class S3VectorsIndex:
         client = vectors_client()
         bucket = _bucket()
         name = index_name(store_id)
-        vectors: list[IndexVector] = []
-        for start in range(0, len(keys), _GET_VECTORS_BATCH):
-            with _vectors_guard("GetVectors"):
-                response = await client.get_vectors(
-                    vectorBucketName=bucket,
-                    indexName=name,
-                    keys=list(keys[start : start + _GET_VECTORS_BATCH]),
-                    returnData=with_embeddings,
-                    returnMetadata=True,
-                )
-            vectors.extend(_to_vector(entry) for entry in response.get("vectors", ()))
-        return vectors
+        with _vectors_guard("GetVectors"):
+            responses = await gather_bounded(
+                [
+                    client.get_vectors(
+                        vectorBucketName=bucket,
+                        indexName=name,
+                        keys=list(keys[start : start + _GET_VECTORS_BATCH]),
+                        returnData=with_embeddings,
+                        returnMetadata=True,
+                    )
+                    for start in range(0, len(keys), _GET_VECTORS_BATCH)
+                ],
+                _CALL_WAVE,
+            )
+        return [
+            _to_vector(entry)
+            for response in responses
+            for entry in response.get("vectors", ())
+        ]
 
     async def delete_vectors(self, store_id: str, keys: Sequence[str]) -> None:
         """Remove the chunks stored under *keys*, best effort.
@@ -427,7 +434,9 @@ class S3VectorsIndex:
             keys: The chunk keys to remove.
         """
         client = vectors_client()
-        for start in range(0, len(keys), _DELETE_VECTORS_BATCH):
+
+        async def delete_batch(batch: list[str]) -> None:
+            """Remove one batch, its failure reported rather than raised."""
             # The guard's own error is suppressed too: its warning is the report.
             with (
                 suppress(ApiError, BotoCoreError, ClientError),
@@ -436,8 +445,16 @@ class S3VectorsIndex:
                 await client.delete_vectors(
                     vectorBucketName=_bucket(),
                     indexName=index_name(store_id),
-                    keys=list(keys[start : start + _DELETE_VECTORS_BATCH]),
+                    keys=batch,
                 )
+
+        await gather_bounded(
+            [
+                delete_batch(list(keys[start : start + _DELETE_VECTORS_BATCH]))
+                for start in range(0, len(keys), _DELETE_VECTORS_BATCH)
+            ],
+            _CALL_WAVE,
+        )
 
     async def query(
         self,
@@ -477,7 +494,7 @@ class S3VectorsIndex:
             arguments.append(query)
         with _vectors_guard("QueryVectors"):
             responses = await gather_bounded(
-                [client.query_vectors(**query) for query in arguments], _QUERY_WAVE
+                [client.query_vectors(**query) for query in arguments], _CALL_WAVE
             )
         matches: list[VectorMatch] = []
         for response in responses:

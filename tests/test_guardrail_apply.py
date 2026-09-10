@@ -11,12 +11,14 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGu
      stdapi/aws_bedrock.py:apply_guardrail_to_texts
 """
 
+from asyncio import Event, ensure_future, sleep
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from stdapi import aws_bedrock, models
 from stdapi.aws_bedrock import (
+    _GUARDRAIL_TEXT_CONCURRENCY,
     GUARDRAIL_CONFIG_VAR,
     GuardrailInterventionError,
     apply_guardrail_to_text,
@@ -48,7 +50,7 @@ from tests.test_openai_audio_transcriptions import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Iterator
+    from collections.abc import AsyncGenerator, Callable, Iterator
 
     from starlette.testclient import TestClient
 
@@ -88,6 +90,12 @@ _BLOCKED_RESPONSE: dict[str, Any] = {
     "outputs": [{"text": _BLOCKED_MESSAGING}],
     "usage": _USAGE,
 }
+
+#: Texts guarded in one call, past the bound so the queue behind it is observable.
+_FAN_OUT_TEXTS = _GUARDRAIL_TEXT_CONCURRENCY * 3
+
+#: Event loop passes one fake check stays in flight before it answers.
+_YIELDS_PER_CHECK = 3
 
 #: The masked text returned by a masking-only intervention.
 _MASKED_TEXT = "Contact {EMAIL} for details"
@@ -288,6 +296,173 @@ class TestApplyGuardrailHelper:
             "first",
             "second",
         ]
+
+
+class _FanOutGuardrailClient:
+    """Stub bedrock-runtime client recording how the checks of one call overlap.
+
+    Every check stays in flight for a few event loop passes, long enough for
+    the checks the bound lets run beside it to start.
+    """
+
+    def __init__(
+        self, *, blocked: str = "", hold: Callable[[str], bool] = lambda _text: False
+    ) -> None:
+        """Choose which texts the guardrail blocks and which ones it holds open.
+
+        Args:
+            blocked: Text the guardrail blocks, answering the whole call.
+            hold: Whether a text's check waits for the gate the test opens.
+        """
+        self.gate = Event()
+        self.started: list[str] = []
+        self.completed: list[str] = []
+        self.active = 0
+        self.peak = 0
+        self._blocked = blocked
+        self._hold = hold
+
+    async def apply_guardrail(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
+        """Check one text, staying in flight while its siblings start.
+
+        Args:
+            params: ApplyGuardrail parameters; the text is in ``content``.
+
+        Returns:
+            A masking assessment naming the text that was checked, or the
+            blocking one for the text chosen to fail.
+        """
+        text = params["content"][0]["text"]["text"]
+        self.started.append(text)
+        if text == self._blocked:
+            return _BLOCKED_RESPONSE
+        self.active += 1
+        self.peak = max(self.peak, self.active)
+        for _ in range(_YIELDS_PER_CHECK):
+            await sleep(0)
+        if self._hold(text):
+            await self.gate.wait()
+        self.active -= 1
+        self.completed.append(text)
+        return {**_MASKED_RESPONSE, "outputs": [{"text": f"masked-{text}"}]}
+
+
+@pytest.mark.local
+@pytest.mark.usefixtures("guardrail_context")
+class TestApplyGuardrailFanOut:
+    """Concurrency of the ApplyGuardrail call made per text of one request.
+
+    A route guarding a list of texts issues one ApplyGuardrail call per text.
+    They are independent, so they run together under a fixed bound rather than
+    one after another -- and the first intervention answers the request, which
+    ends the calls beside it.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html
+         stdapi/aws_bedrock.py:apply_guardrail_to_texts
+    """
+
+    @staticmethod
+    def _stub(
+        monkeypatch: pytest.MonkeyPatch, client: _FanOutGuardrailClient
+    ) -> _FanOutGuardrailClient:
+        """Serve *client* as the guardrail client and silence usage recording.
+
+        Args:
+            monkeypatch: Patcher applied to the ``aws_bedrock`` module.
+            client: The stub client the helper must call.
+
+        Returns:
+            That same client.
+        """
+        monkeypatch.setattr(aws_bedrock, "get_client", lambda _service, _region: client)
+        _record_usage_calls(monkeypatch)
+        return client
+
+    async def test_checks_run_together_up_to_the_bound(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Many texts are checked concurrently, never more than the bound at once.
+
+        Sequential checks would peak at one call in flight, and an unbounded
+        fan-out at the whole text count.
+        """
+        stub = self._stub(monkeypatch, _FanOutGuardrailClient())
+        texts: list[Any] = [f"text-{index}" for index in range(_FAN_OUT_TEXTS)]
+
+        result = await apply_guardrail_to_texts(texts, source="INPUT")
+
+        assert result == [f"masked-{text}" for text in texts], (
+            "guarded texts must come back in the order they were given"
+        )
+        assert stub.peak == _GUARDRAIL_TEXT_CONCURRENCY, (
+            f"{_FAN_OUT_TEXTS} texts ran {stub.peak} concurrent checks; the "
+            f"bound is {_GUARDRAIL_TEXT_CONCURRENCY}"
+        )
+
+    async def test_a_slow_check_does_not_hold_back_the_queued_ones(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One check still in flight does not stop the texts behind it.
+
+        The bound caps how many calls run at once, not when the next one may
+        start: checking in waves would leave every text after the first wave
+        waiting for the slowest call of that wave.
+        """
+        stub = self._stub(
+            monkeypatch, _FanOutGuardrailClient(hold=lambda text: text == "text-0")
+        )
+        texts: list[Any] = [f"text-{index}" for index in range(_FAN_OUT_TEXTS)]
+
+        checks = ensure_future(apply_guardrail_to_texts(texts, source="INPUT"))
+        for _ in range(_FAN_OUT_TEXTS):
+            await sleep(0)
+
+        assert "text-0" not in stub.completed, "the held check must still be open"
+        assert sorted(stub.started) == sorted(texts), (
+            f"only {len(stub.started)} of {_FAN_OUT_TEXTS} texts were checked "
+            "while one call was still open"
+        )
+
+        stub.gate.set()
+        assert await checks == [f"masked-{text}" for text in texts]
+
+    async def test_a_blocked_text_stops_the_checks_beside_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The intervention that answers the request ends the calls beside it.
+
+        The client already holds the error, so a check still running bills the
+        account for units nobody reads.
+        """
+        blocked = f"text-{_GUARDRAIL_TEXT_CONCURRENCY // 2}"
+        stub = self._stub(
+            monkeypatch,
+            _FanOutGuardrailClient(blocked=blocked, hold=lambda _text: True),
+        )
+        texts: list[Any] = [f"text-{index}" for index in range(_FAN_OUT_TEXTS)]
+
+        with pytest.raises(GuardrailInterventionError) as exc_info:
+            await apply_guardrail_to_texts(texts, source="INPUT")
+
+        assert str(exc_info.value) == _BLOCKED_MESSAGING, (
+            "the blocked text must be what answers the request"
+        )
+        started_when_blocked = len(stub.started)
+        stub.gate.set()
+        for _ in range(_FAN_OUT_TEXTS):
+            await sleep(0)
+
+        assert stub.completed == [], (
+            f"{len(stub.completed)} checks ran on past the intervention that "
+            "answered the request"
+        )
+        assert len(stub.started) == started_when_blocked, (
+            f"{len(stub.started) - started_when_blocked} checks started after "
+            "the request was answered"
+        )
+        assert started_when_blocked < _FAN_OUT_TEXTS, (
+            "the bound must have kept most texts from ever being sent"
+        )
 
 
 class _StubEmbeddingBackend:

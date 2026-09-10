@@ -1,6 +1,6 @@
 """Models."""
 
-from asyncio import CancelledError, Lock, create_task, gather, sleep
+from asyncio import CancelledError, Lock, create_task, gather, shield, sleep
 from asyncio import timeout as async_timeout
 from collections.abc import Mapping
 from contextlib import suppress
@@ -124,6 +124,7 @@ if TYPE_CHECKING:
         AsyncIterable,
         Awaitable,
         Callable,
+        Coroutine,
         Iterable,
         Sequence,
     )
@@ -552,6 +553,9 @@ _INFERENCE_TYPES = {"INFERENCE_PROFILE", "ON_DEMAND"}
 #: TTL cache for application inference profiles and prompt routers
 _USER_PROFILES: dict[str, tuple[ModelDetails, AwareDatetime]] = {}
 
+#: Resolutions of an ARN still in flight, keyed as ``_USER_PROFILES`` is.
+_PENDING_USER_PROFILES: dict[str, Task[ModelDetails]] = {}
+
 #: Per-request details resolved from an ARN the caller named, keyed by model ID.
 _ARN_DETAILS: ContextVar[Mapping[str, ModelDetails] | None] = ContextVar(
     "arn_details", default=None
@@ -559,6 +563,9 @@ _ARN_DETAILS: ContextVar[Mapping[str, ModelDetails] | None] = ContextVar(
 
 #: TTL cache for Prompt Management prompts, keyed by versioned ARN
 _PROMPTS: dict[str, tuple[str, AwareDatetime]] = {}
+
+#: Reads of a prompt still in flight, keyed as ``_PROMPTS`` is.
+_PENDING_PROMPTS: dict[str, Task[str]] = {}
 
 #: Model aliases (populated on import, merged with user settings at startup)
 MODEL_ALIASES: dict[str, str] = {}
@@ -4833,6 +4840,52 @@ async def validate_model(
     return model
 
 
+def _forget_in_flight[ResultT](
+    pending: dict[str, Task[ResultT]], key: str, task: Task[ResultT]
+) -> None:
+    """Drop a finished resolution, so the next caller of *key* fetches again.
+
+    Args:
+        pending: The in-flight resolutions it was registered in.
+        key: The cache key it resolved.
+        task: The resolution that finished.
+    """
+    if pending.get(key) is task:
+        del pending[key]
+    # Read here too: a wave whose every caller went away leaves nobody to read
+    # the failure, which asyncio would then report as never retrieved.
+    if not task.cancelled():
+        task.exception()
+
+
+async def _single_flight[ResultT](
+    pending: dict[str, Task[ResultT]],
+    key: str,
+    fetch: Callable[[], Coroutine[Any, Any, ResultT]],
+) -> ResultT:
+    """Run *fetch* once per *key*, sharing its outcome with concurrent callers.
+
+    Only the cache read and write are serialised by their cache's lock; the
+    call itself runs here, so two callers naming different keys never wait on
+    each other, and two naming the same one make a single call. A failure
+    reaches every caller of the wave and is not cached: the next one retries.
+
+    Args:
+        pending: The in-flight resolutions of one cache, keyed as its entries are.
+        key: The cache key to resolve.
+        fetch: Builds the coroutine resolving *key*, awaited for the first
+            caller of a wave only.
+
+    Returns:
+        What *fetch* returned, for every caller of the wave.
+    """
+    if (in_flight := pending.get(key)) is None:
+        in_flight = pending[key] = create_task(fetch())
+        in_flight.add_done_callback(partial(_forget_in_flight, pending, key))
+    # Shielded: a caller giving up must not cancel the call its siblings share.
+    return await shield(in_flight)
+
+
 async def _validate_model_from_arn(arn: str) -> ModelDetails | None:
     """Resolve an ARN to a ``ModelDetails`` instance, using a TTL cache.
 
@@ -4851,61 +4904,80 @@ async def _validate_model_from_arn(arn: str) -> ModelDetails | None:
             or model endpoint, or if the ARN type is disabled by server
             configuration.
     """
-    models: (
-        Sequence[InferenceProfileModelTypeDef]
-        | Sequence[PromptRouterTargetModelTypeDef]
-        | None
-    ) = None
     async with _CACHE["user_profiles_access_lock"]:
         if cached := _USER_PROFILES.get(arn):
             model, expiration = cached
             if expiration > SETTINGS.now():
                 return model
             del _USER_PROFILES[arn]
+    return await _single_flight(
+        _PENDING_USER_PROFILES, arn, partial(_resolve_model_from_arn, arn)
+    )
 
+
+async def _resolve_model_from_arn(arn: str) -> ModelDetails:
+    """Read the model an ARN names from Bedrock and cache it for its TTL.
+
+    Args:
+        arn: Bedrock ARN of an inference profile or prompt router.
+
+    Returns:
+        Details private to this caller, routing *arn*'s own region to *arn*.
+
+    Raises:
+        ApiError: If *arn* does not match a valid inference profile or prompt
+            router, or names a model this catalogue does not hold.
+    """
+    models: (
+        Sequence[InferenceProfileModelTypeDef]
+        | Sequence[PromptRouterTargetModelTypeDef]
+        | None
+    ) = None
+    region: RegionName | None = None
+    try:
+        models, region = (
+            await _get_application_inference_profile_models(arn)
+            or await _get_prompt_router_models(arn)
+            or (None, None)
+        )
+    except ClientError as error:
+        if (
+            error.response["Error"]["Code"] != "ResourceNotFoundException"
+        ):  # pragma: no cover
+            raise
+
+    model_arn = None
+    while True:
+        if not models or not region:
+            msg = f"ARN does not match a valid inference profile or prompt router: {model_arn or arn}"
+            raise ApiError(msg)
+
+        model_arn = models[0]["modelArn"]
+        if "inference-profile" in model_arn:
+            models = (
+                await get_client("bedrock", region).get_inference_profile(
+                    inferenceProfileIdentifier=model_arn
+                )
+            ).get("models") or ()
+            continue
+
+        model_id = model_arn.rsplit("/", 1)[1]
+        break
+
+    async with _CACHE["access_lock"]:
         try:
-            models, region = (
-                await _get_application_inference_profile_models(arn)
-                or await _get_prompt_router_models(arn)
-                or (None, None)
-            )
-        except ClientError as error:
-            if (
-                error.response["Error"]["Code"] != "ResourceNotFoundException"
-            ):  # pragma: no cover
-                raise
-
-        model_arn = None
-        while True:
-            if not models or not region:
-                msg = f"ARN does not match a valid inference profile or prompt router: {model_arn or arn}"
-                raise ApiError(msg)
-
-            model_arn = models[0]["modelArn"]
-            if "inference-profile" in model_arn:
-                models = (
-                    await get_client("bedrock", region).get_inference_profile(
-                        inferenceProfileIdentifier=model_arn
-                    )
-                ).get("models") or ()
-                continue
-
-            model_id = model_arn.rsplit("/", 1)[1]
-            break
-
-        async with _CACHE["access_lock"]:
-            try:
-                # Deep: the ARN below is this caller's own, and a shallow copy
-                # shares its containers with the entry everyone else resolves.
-                model = _MODELS[model_id].model_copy(deep=True)
-            except KeyError:
-                msg = f"model {model_id} not found for ARN: {arn}"
-                raise ApiError(msg) from None
-        if region not in model.regions:
-            model.regions.append(region)
-        model.set_inference_profile(region, arn)
+            # Deep: the ARN below is this caller's own, and a shallow copy
+            # shares its containers with the entry everyone else resolves.
+            model = _MODELS[model_id].model_copy(deep=True)
+        except KeyError:
+            msg = f"model {model_id} not found for ARN: {arn}"
+            raise ApiError(msg) from None
+    if region not in model.regions:
+        model.regions.append(region)
+    model.set_inference_profile(region, arn)
+    async with _CACHE["user_profiles_access_lock"]:
         _USER_PROFILES[arn] = (model, SETTINGS.now() + _CACHE["update_interval"])
-        return model
+    return model
 
 
 def _marketplace_endpoint_from_arn(arn: str) -> ModelDetails | None:
@@ -5029,28 +5101,52 @@ async def _get_prompt_model_id(
             if expiration > SETTINGS.now():
                 return model_id
             del _PROMPTS[cache_key]
+    return await _single_flight(
+        _PENDING_PROMPTS,
+        cache_key,
+        partial(_read_prompt_model_id, arn, version, region, cache_key),
+    )
 
-        kwargs = {"promptVersion": version} if version else {}
-        with handle_bedrock_client_error():
-            prompt = await get_client("bedrock-agent", region).get_prompt(
-                promptIdentifier=arn, **kwargs
-            )
-        # PromptVariantList is capped at one entry, so defaultVariant is redundant.
-        variant = (prompt.get("variants") or (None,))[0]
-        if variant is None or variant.get("templateType") != "TEXT":
-            msg = f"Prompt '{cache_key}' is not a TEXT prompt: only TEXT prompts are supported."
-            raise ApiError(msg)
-        variant_model_id: str = variant.get("modelId") or ""
-        if not variant_model_id:
-            msg = f"Prompt '{cache_key}' is not bound to a model."
-            raise ApiError(msg)
-        # A prompt may name an inference profile instead of the model itself.
-        variant_model_id = _catalog_model_id(variant_model_id) or variant_model_id
+
+async def _read_prompt_model_id(
+    arn: str, version: str | None, region: RegionName, cache_key: str
+) -> str:
+    """Read a prompt's model from Bedrock and cache it for its TTL.
+
+    Args:
+        arn: Prompt ARN without version suffix.
+        version: Prompt version to read, or ``None`` for the working draft.
+        region: AWS region owning the prompt.
+        cache_key: Key the result is cached under, and the prompt is named by.
+
+    Returns:
+        Bedrock model ID configured on the prompt variant.
+
+    Raises:
+        ApiError: If the prompt has no TEXT variant bound to a model.
+    """
+    kwargs = {"promptVersion": version} if version else {}
+    with handle_bedrock_client_error():
+        prompt = await get_client("bedrock-agent", region).get_prompt(
+            promptIdentifier=arn, **kwargs
+        )
+    # PromptVariantList is capped at one entry, so defaultVariant is redundant.
+    variant = (prompt.get("variants") or (None,))[0]
+    if variant is None or variant.get("templateType") != "TEXT":
+        msg = f"Prompt '{cache_key}' is not a TEXT prompt: only TEXT prompts are supported."
+        raise ApiError(msg)
+    variant_model_id: str = variant.get("modelId") or ""
+    if not variant_model_id:
+        msg = f"Prompt '{cache_key}' is not bound to a model."
+        raise ApiError(msg)
+    # A prompt may name an inference profile instead of the model itself.
+    variant_model_id = _catalog_model_id(variant_model_id) or variant_model_id
+    async with _CACHE["prompts_access_lock"]:
         _PROMPTS[cache_key] = (
             variant_model_id,
             SETTINGS.now() + _CACHE["update_interval"],
         )
-        return variant_model_id
+    return variant_model_id
 
 
 async def resolve_bedrock_prompt(prompt_id: str, version: str | None) -> BedrockPrompt:

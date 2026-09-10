@@ -2052,6 +2052,9 @@ class TestImageGenerationConcurrency:
 #: A syntactically valid vector store identifier, so `parse_store_id` accepts it.
 _STORE_ID = "vs_" + "0" * 26
 
+#: Seconds a stubbed search waits for the search it must run beside to start.
+_FILE_SEARCH_TIMEOUT = 5.0
+
 
 def _stream_search_result(text: str, score: float = 0.9) -> SearchResult:
     """Build one vector store hit the stubbed search answers with."""
@@ -2087,6 +2090,41 @@ def _file_search_stream_events() -> list[dict[str, object]]:
             }
         },
         {"contentBlockStop": {"contentBlockIndex": 0}},
+        {"messageStop": {"stopReason": "tool_use"}},
+        {"metadata": {"usage": {"inputTokens": 10, "outputTokens": 4}}},
+    ]
+
+
+def _two_file_search_stream_events(queries: list[str]) -> list[dict[str, object]]:
+    """Build a Bedrock stream asking for one ``file_search`` call per query.
+
+    Args:
+        queries: The queries the model asks for in a single turn.
+
+    Returns:
+        The fabricated ConverseStream events of that turn.
+    """
+    events: list[dict[str, object]] = []
+    for index, query in enumerate(queries):
+        events += [
+            {
+                "contentBlockStart": {
+                    "start": {
+                        "toolUse": {"toolUseId": f"tu{index}", "name": "file_search"}
+                    },
+                    "contentBlockIndex": index,
+                }
+            },
+            {
+                "contentBlockDelta": {
+                    "delta": {"toolUse": {"input": json.dumps({"query": query})}},
+                    "contentBlockIndex": index,
+                }
+            },
+            {"contentBlockStop": {"contentBlockIndex": index}},
+        ]
+    return [
+        *events,
         {"messageStop": {"stopReason": "tool_use"}},
         {"metadata": {"usage": {"inputTokens": 10, "outputTokens": 4}}},
     ]
@@ -2386,3 +2424,66 @@ class TestFileSearchStreamEvents:
             "completed",
             "incomplete",
         ]
+
+    async def test_the_queries_of_one_round_search_together(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two searches asked for in the same turn run at the same time.
+
+        The searches of one round are independent, and off the streaming path
+        they already run together. Each stubbed search waits for the other to
+        start, so running them one after the other never gets past the first.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_stream_file_search_round
+        """
+        _stub_streamed_file_search(monkeypatch, [])
+        queries = ["vacation days", "sick days"]
+        started: list[str] = []
+        both_started = Event()
+
+        async def _search(
+            _store: StoreRecord, asked: Sequence[str], **_kwargs: object
+        ) -> list[SearchResult]:
+            """Answer one query once the other one is running too.
+
+            Args:
+                _store: The store being searched.
+                asked: The queries of that one search call.
+                _kwargs: Filter and threshold options, unused here.
+
+            Returns:
+                One passage naming the query it answers.
+            """
+            started.append(asked[0])
+            if len(started) >= len(queries):
+                both_started.set()
+            await wait_for(both_started.wait(), _FILE_SEARCH_TIMEOUT)
+            return [_stream_search_result(f"Passage about {asked[0]}.")]
+
+        monkeypatch.setattr(responses_adapter, "search", _search)
+
+        events = await _collect(
+            format_stream(
+                "resp-1",
+                0.0,
+                "amazon.nova-2-lite-v1:0",
+                _stream(_two_file_search_stream_events(queries)),
+                _file_search_request(include=["file_search_call.results"]),
+            )
+        )
+
+        assert sorted(started) == sorted(queries), "both queries must be searched"
+        payloads = [_payload(sse) for sse in events]
+        searched = [
+            payload["item"]
+            for payload in payloads
+            if payload.get("item", {}).get("type") == "file_search_call"
+        ]
+        assert [item["queries"] for item in searched] == [
+            [queries[0]],
+            [queries[0]],
+            [queries[1]],
+            [queries[1]],
+        ], "each call is opened and closed in the order the model asked"
+        assert searched[1]["results"][0]["text"] == f"Passage about {queries[0]}."
+        assert searched[3]["results"][0]["text"] == f"Passage about {queries[1]}."

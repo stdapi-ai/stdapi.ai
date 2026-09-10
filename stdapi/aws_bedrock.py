@@ -1,10 +1,9 @@
 """Common AWS Bedrock utilities."""
 
-from asyncio import gather
+from asyncio import Semaphore, ensure_future, gather
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from itertools import batched
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from botocore.exceptions import ClientError
@@ -744,8 +743,8 @@ class GuardrailInterventionError(ApiError):
     code = "content_filter"
 
 
-#: Guardrail calls run concurrently per batch when guarding multiple texts.
-_GUARDRAIL_TEXT_BATCH_SIZE: int = 10
+#: Guardrail calls in flight at once when guarding multiple texts.
+_GUARDRAIL_TEXT_CONCURRENCY: int = 10
 
 
 async def apply_guardrail_to_text(
@@ -816,10 +815,12 @@ async def apply_guardrail_to_texts[T](
 ) -> list[T | str]:
     """Apply the request's configured guardrail to every string in *items*.
 
-    Each string is checked with one ApplyGuardrail call (run concurrently in
-    batches of :data:`_GUARDRAIL_TEXT_BATCH_SIZE`, like the moderations
-    route); non-string items pass through unchanged. No-op returning the
-    items unchanged when no guardrail is configured for the request.
+    Each string is checked with one ApplyGuardrail call, at most
+    :data:`_GUARDRAIL_TEXT_CONCURRENCY` of them in flight at once; non-string
+    items pass through unchanged. The first intervention answers the request,
+    so the calls beside it are cancelled: one left running bills the account
+    for a check nobody reads. No-op returning the items unchanged when no
+    guardrail is configured for the request.
 
     Args:
         items: Request elements; only strings are guarded.
@@ -838,12 +839,28 @@ async def apply_guardrail_to_texts[T](
     indexed_texts = [
         (index, item) for index, item in enumerate(results) if isinstance(item, str)
     ]
-    for batch in batched(indexed_texts, _GUARDRAIL_TEXT_BATCH_SIZE, strict=False):
-        guarded = await gather(
-            *(apply_guardrail_to_text(item, source=source) for _, item in batch)
-        )
-        for (index, _), new_text in zip(batch, guarded, strict=True):
-            results[index] = new_text
+    semaphore = Semaphore(_GUARDRAIL_TEXT_CONCURRENCY)
+
+    async def _guard(text: str) -> str:
+        """Check one text while holding a slot of the concurrency bound.
+
+        Returns:
+            The text, or the guardrail's masked output.
+        """
+        async with semaphore:
+            return await apply_guardrail_to_text(text, source=source)
+
+    tasks = [ensure_future(_guard(item)) for _, item in indexed_texts]
+    try:
+        guarded = await gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        # Await cancellation so asyncio doesn't log unretrieved exceptions at GC.
+        await gather(*tasks, return_exceptions=True)
+        raise
+    for (index, _), new_text in zip(indexed_texts, guarded, strict=True):
+        results[index] = new_text
     return results
 
 
