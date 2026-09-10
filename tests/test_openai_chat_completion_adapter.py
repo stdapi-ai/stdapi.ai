@@ -879,8 +879,11 @@ class TestServiceTierMapping:
 
     Bedrock only knows ``priority``/``flex``/``reserved``; the remaining OpenAI
     values leave the Converse request untouched and are echoed as ``default``.
+    ``fast`` is upstream's alias for ``priority`` and, per the upstream
+    contract, is echoed as ``priority`` rather than as itself.
 
     Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         https://developers.openai.com/api/docs/guides/fast-mode
          https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
          stdapi/models/chat/_adapters/_openai_common.py:map_service_tier
     """
@@ -889,11 +892,13 @@ class TestServiceTierMapping:
         ("value", "expected"),
         [
             ("priority", ("priority", "priority")),
+            ("fast", ("priority", "priority")),
             ("flex", ("flex", "flex")),
             ("reserved", ("reserved", "reserved")),
             ("auto", (None, "default")),
             ("default", (None, "default")),
             ("scale", (None, "default")),
+            ("ultrafast", (None, "default")),
             (None, (None, None)),
         ],
     )
