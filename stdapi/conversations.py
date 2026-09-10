@@ -507,6 +507,10 @@ async def append_items(
 ) -> None:
     """Append items to a conversation.
 
+    The session kind is checked first: an identifier naming a session this
+    server stores another object in must not be written to, which would both
+    corrupt that object and make its session read back as a conversation.
+
     Args:
         conversation_id: Public conversation identifier.
         items: Items to append, each already carrying its public ID.
@@ -514,13 +518,15 @@ async def append_items(
     Raises:
         ApiError: 404 when the conversation does not exist.
     """
+    client = _client()
+    await _session_metadata(client, conversation_id)
     with (
         _session_calls("CreateInvocation", "PutInvocationStep"),
         handle_bedrock_client_error(),
         not_found_as_404(lambda: conversation_not_found(conversation_id)),
     ):
         await _put_conversation_document(
-            _client(), conversation_id, {_ITEMS_FIELD: list(items)}
+            client, conversation_id, {_ITEMS_FIELD: list(items)}
         )
 
 

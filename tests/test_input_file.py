@@ -119,6 +119,28 @@ async def test_invalid_base64_input_returns_a_fixed_message() -> None:
     assert exc.value.status == 400
 
 
+@pytest.mark.parametrize(
+    "accessor", ["get_content_type", "get_size", "get_filename", "to_data_uri"]
+)
+async def test_invalid_base64_is_a_caller_error_on_every_accessor(
+    accessor: str,
+) -> None:
+    """Malformed base64 is a 400 whichever accessor decodes it first.
+
+    Metadata resolution decodes a prefix of the payload to detect its type, and
+    every ingest route reaches it before reading the content: ``POST /v1/files``
+    asks for the filename to build the object's ``Content-Disposition``, and
+    image moderation asks for the content type. Letting the decoder's
+    ``ValueError`` escape from there answers a malformed request with a 500.
+
+    Ref: stdapi/input_file.py:_Base64Source._resolve_metadata
+         stdapi/files/_core.py:upload_file
+    """
+    with pytest.raises(ApiError, match=r"^Invalid base64 data\.$") as exc:
+        await getattr(InputFile("not-valid-base64!!!"), accessor)()
+    assert exc.value.status == 400
+
+
 def test_max_concurrent_input_downloads_default() -> None:
     """The per-request input-download concurrency limit defaults to 8.
 

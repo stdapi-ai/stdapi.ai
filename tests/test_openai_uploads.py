@@ -4,7 +4,8 @@ Broader ``/v1/uploads`` state-machine coverage (create -> add part ->
 complete/cancel against S3) lives in ``tests/test_openai_files.py::TestOpenAIUploads``,
 which shares the ``openai_files``-namespace fixtures with the ``/v1/files``
 tests. This module covers the ``purpose=batch`` default-expiry resolution, the
-bounded per-process session cache, the completion checksum, the part size cap,
+bounded per-process session cache, the completion checksum, the shape of the
+part IDs a completion accepts, the part size cap,
 and the JSON-body part route's remote-source handling. Everything is offline (no AWS credentials,
 no S3 calls, no network) except ``TestCompleteUploadChecksumOnS3``, which runs
 the checksum against a real two-part upload in the sandbox bucket.
@@ -30,10 +31,11 @@ from openai import NotFoundError as OpenAINotFoundError
 from openai.resources.uploads.uploads import DEFAULT_PART_SIZE
 
 from stdapi import input_file
+from stdapi.api_errors import ApiError
 from stdapi.aws_s3 import BUCKET_TO_REGION
 from stdapi.config import SETTINGS
 from stdapi.files import MultipartSession, _multipart
-from stdapi.files._core import file_id_s3_key, resolve_file_bucket
+from stdapi.files._core import encode_id_payload, file_id_s3_key, resolve_file_bucket
 from stdapi.routes import openai_files as openai_files_routes
 from stdapi.routes import openai_uploads as openai_uploads_routes
 
@@ -736,6 +738,123 @@ class _StubMultipartS3Client:
         return {}
 
 
+@pytest.fixture
+def s3(monkeypatch: pytest.MonkeyPatch) -> _StubMultipartS3Client:
+    """Point the multipart module at an in-memory S3 and empty its caches.
+
+    Returns:
+        The stub S3 client the routes drive.
+    """
+    stub = _StubMultipartS3Client()
+    monkeypatch.setattr(SETTINGS, "aws_s3_bucket", "bucket")
+    monkeypatch.setattr(_multipart, "get_client", lambda *_a, **_k: stub)
+    monkeypatch.setattr(_multipart, "track_temporary_s3_objects", lambda *_a: None)
+    monkeypatch.setattr(_multipart, "_cache", {})
+    monkeypatch.setattr(_multipart, "_MIN_PART_SIZE", 1)
+    return stub
+
+
+def _create_upload_with_one_part(client: TestClient, part: bytes) -> tuple[str, str]:
+    """Create a session and upload one part through the public routes.
+
+    Args:
+        client: Client bound to the gateway.
+        part: Payload of the single part.
+
+    Returns:
+        ``(upload_id, part_id)``.
+    """
+    created = client.post(
+        "/v1/uploads",
+        json={
+            "filename": "f.bin",
+            "mime_type": "text/plain",
+            "purpose": "assistants",
+            "bytes": len(part),
+        },
+    )
+    assert created.status_code == 200, created.text
+    upload_id = created.json()["id"]
+    added = client.post(
+        f"/v1/uploads/{upload_id}/parts", files={"data": ("chunk", part)}
+    )
+    assert added.status_code == 200, added.text
+    return upload_id, added.json()["id"]
+
+
+class TestCompleteUploadPartIds:
+    """POST /v1/uploads/{id}/complete only accepts part IDs of the minted shape.
+
+    A part ID is parsed positionally — an upload fingerprint, then the S3 part
+    number as four hex digits — so a value that is not of that shape has to be
+    refused as a bad request rather than reaching the parser.
+
+    Ref: stdapi/types/openai_uploads.py:CompleteUploadBody
+         stdapi/files/_multipart.py:_extract_part_number
+    """
+
+    def test_a_part_id_with_a_non_hex_part_number_is_refused(
+        self, app_client: TestClient, s3: _StubMultipartS3Client
+    ) -> None:
+        """A forged part number is a 400, not a decoding crash.
+
+        The fingerprint is public — it comes back in every part ID of the
+        session — so a caller can keep it and replace the part number with
+        anything, which the hex parse then chokes on.
+
+        Ref: stdapi/types/openai_uploads.py:CompleteUploadBody
+        """
+        upload_id, part_id = _create_upload_with_one_part(app_client, b"a small file")
+        forged = f"{part_id[:21]}zzzz{part_id[25:]}"
+
+        response = app_client.post(
+            f"/v1/uploads/{upload_id}/complete", json={"part_ids": [forged]}
+        )
+
+        assert response.status_code == 400, response.text
+        assert response.json()["error"]["type"] == "invalid_request_error"
+        assert s3.assembled is None, "a refused completion must not produce a file"
+
+    def test_a_part_id_of_another_upload_is_still_refused_by_its_fingerprint(
+        self, app_client: TestClient, s3: _StubMultipartS3Client
+    ) -> None:
+        """A well-formed part ID minted for another session does not complete this one.
+
+        The shape check is a filter in front of the ownership check, never a
+        replacement for it.
+
+        Ref: stdapi/files/_multipart.py:_extract_part_number
+        """
+        upload_id, _ = _create_upload_with_one_part(app_client, b"a small file")
+        _, other_part_id = _create_upload_with_one_part(app_client, b"another file")
+
+        response = app_client.post(
+            f"/v1/uploads/{upload_id}/complete", json={"part_ids": [other_part_id]}
+        )
+
+        assert response.status_code == 400, response.text
+        assert "does not belong" in response.json()["error"]["message"]
+        assert s3.assembled is None
+
+
+def test_extract_part_number_refuses_a_non_hex_part_number() -> None:
+    """The parser itself refuses a malformed part number instead of raising ``ValueError``.
+
+    ``complete_multipart_session`` is reachable from more than one request
+    shape, so the parse it performs answers a bad ID with the same 400 the
+    ownership check does rather than with an unhandled decoding error.
+
+    Ref: stdapi/files/_multipart.py:_extract_part_number
+    """
+    upload_id = f"upload_{encode_id_payload('bucket')}"
+    fingerprint = _multipart._upload_fingerprint(upload_id)  # noqa: SLF001
+
+    with pytest.raises(ApiError) as exc:
+        _multipart._extract_part_number(f"part_{fingerprint}zzzz", upload_id)  # noqa: SLF001
+
+    assert exc.value.status == 400
+
+
 class TestCompleteUploadChecksum:
     """POST /v1/uploads/{id}/complete verifies the ``md5`` the client declares.
 
@@ -752,21 +871,6 @@ class TestCompleteUploadChecksum:
 
     #: Parts of a two-part upload; the first is short because the 5 MiB floor is relaxed.
     _PARTS = (b"the first part of the file, ", b"and the second part of it.")
-
-    @pytest.fixture
-    def s3(self, monkeypatch: pytest.MonkeyPatch) -> _StubMultipartS3Client:
-        """Point the multipart module at an in-memory S3 and empty its caches.
-
-        Returns:
-            The stub S3 client the routes drive.
-        """
-        stub = _StubMultipartS3Client()
-        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", "bucket")
-        monkeypatch.setattr(_multipart, "get_client", lambda *_a, **_k: stub)
-        monkeypatch.setattr(_multipart, "track_temporary_s3_objects", lambda *_a: None)
-        monkeypatch.setattr(_multipart, "_cache", {})
-        monkeypatch.setattr(_multipart, "_MIN_PART_SIZE", 1)
-        return stub
 
     @staticmethod
     def _upload_parts(

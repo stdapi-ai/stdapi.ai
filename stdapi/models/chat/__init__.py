@@ -13,6 +13,7 @@ from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
 from stdapi.models import (
     MANTLE_MODELS,
+    MARKETPLACE_ENDPOINT_MODELS,
     ModelBase,
     get_model,
     is_mantle_served,
@@ -241,8 +242,13 @@ def get_chat_model(
         from stdapi.models.chat._mantle import get_mantle_chat_model  # noqa: PLC0415
 
         return get_mantle_chat_model(model_id)
-    registry = [] if is_marketplace_endpoint(model_id) else _CHAT_MODEL_REGISTRY
-    return get_model(model_id, _CHAT_MODEL_CACHE, registry, __name__)
+    if is_marketplace_endpoint(model_id):
+        # An endpoint ARN the caller wrote is never a catalogue key, so memoizing
+        # it would let a request add a permanent entry: only the published
+        # endpoints, which the discovery bounds, keep their instance.
+        cache = _CHAT_MODEL_CACHE if model_id in MARKETPLACE_ENDPOINT_MODELS else {}
+        return get_model(model_id, cache, [], __name__)
+    return get_model(model_id, _CHAT_MODEL_CACHE, _CHAT_MODEL_REGISTRY, __name__)
 
 
 load_model_plugins(

@@ -560,7 +560,9 @@ async def _records_for_keys(keys: list[str]) -> list[FileRecord]:
     return [r for r in await gather(*(_head_key(k) for k in keys)) if r is not None]
 
 
-async def _fill_page(keys: list[str], limit: int) -> tuple[list[FileRecord], bool]:
+async def _fill_page(
+    keys: list[str], limit: int, purpose: str | None = None
+) -> tuple[list[FileRecord], bool]:
     """Load *keys* in order until *limit* records exist, reporting whether more follow.
 
     Deleted and expired keys resolve to no record, so loading only the first
@@ -571,13 +573,15 @@ async def _fill_page(keys: list[str], limit: int) -> tuple[list[FileRecord], boo
     Args:
         keys: Candidate keys, already in the answer's order.
         limit: Maximum records the page holds.
+        purpose: Keep only records carrying this purpose, when given.
 
     Returns:
         ``(records, has_more)`` tuple.
     """
     records: list[FileRecord] = []
     for start in range(0, len(keys), limit + 1):
-        records.extend(await _records_for_keys(keys[start : start + limit + 1]))
+        batch = await _records_for_keys(keys[start : start + limit + 1])
+        records.extend(r for r in batch if purpose is None or r.purpose == purpose)
         if len(records) > limit:
             return records[:limit], True
     return records[:limit], False
@@ -601,7 +605,8 @@ async def list_files(
             nearest the cursor rather than from the start of the listing.
         limit: Maximum records to return.
         order: ``"asc"`` or ``"desc"`` (OpenAI default is ``"desc"``).
-        purpose: Filter by purpose; triggers a ``HeadObject`` fan-out to read metadata.
+        purpose: Filter by purpose, read from the ``HeadObject`` metadata of one
+            page-sized batch of candidates at a time.
 
     Returns:
         ``(records, has_more)`` tuple.
@@ -668,16 +673,8 @@ async def list_files(
         ]
 
     ordered = all_keys[::-1] if order == "desc" else all_keys
-    if purpose is not None:
-        filtered = [
-            r for r in (await _records_for_keys(ordered)) if r.purpose == purpose
-        ]
-        return (filtered[-limit:] if before else filtered[:limit]), len(
-            filtered
-        ) > limit
-
     if before:
         # The page ends at the cursor, so it is filled from the far end.
-        page, has_more = await _fill_page(ordered[::-1], limit)
+        page, has_more = await _fill_page(ordered[::-1], limit, purpose)
         return page[::-1], has_more
-    return await _fill_page(ordered, limit)
+    return await _fill_page(ordered, limit, purpose)

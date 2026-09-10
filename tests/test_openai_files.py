@@ -15,6 +15,7 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 import base64
 import io
 import time
+from asyncio import sleep
 from binascii import crc32
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -2339,6 +2340,9 @@ class _StubListS3Client:
     ``list_objects_v2`` honours ``StartAfter`` (the ascending fast path) and always
     reports a single non-truncated page, which is enough for the listing paths that
     scan every key before slicing in Python.
+
+    ``head_object`` suspends once, so ``head_calls`` counts the whole fan-out and
+    ``peak_heads`` records how many of them were in flight at the same time.
     """
 
     def __init__(
@@ -2350,6 +2354,9 @@ class _StubListS3Client:
         self.keys = sorted(keys)
         self.purposes = purposes or {}
         self.expiries = expiries or {}
+        self.head_calls: list[str] = []
+        self.peak_heads = 0
+        self._in_flight = 0
 
     async def list_objects_v2(self, **kwargs: object) -> dict[str, Any]:
         start_after = cast("str | None", kwargs.get("StartAfter"))
@@ -2364,6 +2371,11 @@ class _StubListS3Client:
 
     async def head_object(self, **kwargs: object) -> dict[str, Any]:
         key = cast("str", kwargs["Key"])
+        self.head_calls.append(key)
+        self._in_flight += 1
+        self.peak_heads = max(self.peak_heads, self._in_flight)
+        await sleep(0)
+        self._in_flight -= 1
         return {
             "ContentLength": 3,
             "LastModified": datetime.now(UTC),
@@ -2465,6 +2477,102 @@ class TestListFilesDescendingCursorUnit:
         )
 
         assert [r.file_id for r in records] == [payloads[0]]
+
+
+@pytest.mark.local
+class TestListFilesPurposeFanOutUnit:
+    """The ``purpose`` filter reads metadata one page at a time (unit, stubbed S3).
+
+    ``purpose`` lives in each object's own metadata, so filtering on it needs a
+    ``HeadObject`` per candidate. Issuing one for every object in the bucket, all
+    at once, turns a single cheap request into a fan-out that grows with the
+    stored file count -- billed per request, and holding a task and a connection
+    each -- for a caller who only ever reads ``limit`` records of it.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/files/_core.py:_fill_page
+    """
+
+    @pytest.fixture
+    def stored(self, monkeypatch: pytest.MonkeyPatch) -> _StubListS3Client:
+        """Store fifty files sharing one purpose behind a stubbed S3 client.
+
+        Returns:
+            The stub client, whose ``head_calls`` and ``peak_heads`` record the
+            fan-out the listing made.
+        """
+        keys = [
+            _core.file_id_s3_key(_core.encode_id_payload("bucket")) for _ in range(50)
+        ]
+        stub = _StubListS3Client(keys, purposes=dict.fromkeys(keys, "batch"))
+        monkeypatch.setattr(_core, "get_client", lambda *_: stub)
+        monkeypatch.setattr(_core, "_require_bucket", lambda: "bucket")
+        monkeypatch.setattr(_core, "BUCKET_TO_REGION", {"bucket": "us-east-1"})
+        return stub
+
+    @pytest.mark.parametrize("order", ["asc", "desc"])
+    async def test_a_small_page_heads_a_small_batch(
+        self, stored: _StubListS3Client, order: str
+    ) -> None:
+        """A two-record page stops reading metadata once it is full.
+
+        Ref: stdapi/files/_core.py:list_files
+        """
+        records, has_more = await _core.list_files(None, None, 2, order, "batch")
+
+        assert len(records) == 2
+        assert has_more is True
+        assert len(stored.head_calls) <= 3, (
+            "the filter must stop at the page it answers, not scan the bucket"
+        )
+        assert stored.peak_heads <= 3, (
+            "one task and one connection per stored object is the fan-out to bound"
+        )
+
+    async def test_the_before_cursor_page_is_bounded_too(
+        self, stored: _StubListS3Client
+    ) -> None:
+        """The page taken backwards from a ``before`` cursor bounds its fan-out as well.
+
+        It fills from the far end, which is the branch a bound applied only to the
+        forward walk would miss.
+
+        Ref: stdapi/files/_core.py:list_files
+        """
+        newest = max(stored.keys).removeprefix(SETTINGS.aws_s3_files_prefix)
+
+        records, has_more = await _core.list_files(None, newest, 2, "asc", "batch")
+
+        assert len(records) == 2
+        assert has_more is True
+        assert stored.peak_heads <= 3, "the 'before' page fans out with the bucket"
+
+    async def test_every_match_behind_a_full_batch_is_still_reachable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A batch holding no match does not end the listing.
+
+        Bounding the fan-out must not turn a page into a short one: only the last
+        two files carry the purpose asked for, and both belong to the answer.
+
+        Ref: stdapi/files/_core.py:_fill_page
+        """
+        keys = [
+            _core.file_id_s3_key(_core.encode_id_payload("bucket")) for _ in range(20)
+        ]
+        stub = _StubListS3Client(
+            keys, purposes=dict.fromkeys(sorted(keys)[-2:], "batch")
+        )
+        monkeypatch.setattr(_core, "get_client", lambda *_: stub)
+        monkeypatch.setattr(_core, "_require_bucket", lambda: "bucket")
+        monkeypatch.setattr(_core, "BUCKET_TO_REGION", {"bucket": "us-east-1"})
+
+        records, has_more = await _core.list_files(None, None, 2, "asc", "batch")
+
+        assert [r.file_id for r in records] == [
+            k.removeprefix(SETTINGS.aws_s3_files_prefix) for k in sorted(keys)[-2:]
+        ]
+        assert has_more is False
 
 
 @pytest.mark.local

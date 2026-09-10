@@ -312,6 +312,8 @@ curl -X POST "$BASE/v1/completions" \
 
 **A token-array prompt is rejected with `400`.** Token IDs are specific to the tokenizer that produced them, so send the text and let the serving model tokenize it.
 
+**At most 128 completions per request.** A prompt array is served by one backend call per prompt, so the work a single request asks for is the number of prompts times `n`. That product is capped at 128 — the ceiling `n` alone already carries — and a request above it is rejected with `400` naming both parameters, before any backend call is made. 64 prompts with `n=2` is served; 129 prompts is not.
+
 ## Request headers { #available-request-headers }
 
 This endpoint supports standard Bedrock headers for enhanced control over your requests — they are applied by the shared request middleware, exactly as on the [Chat Completions API](api_openai_chat_completions.md#available-request-headers). All headers are optional and can be combined as needed.

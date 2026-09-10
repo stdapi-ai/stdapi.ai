@@ -32,6 +32,7 @@ from aiohttp.test_utils import TestServer
 
 from stdapi import auth_cognito, input_file, security
 from stdapi.api_errors import ApiError
+from stdapi.config import SETTINGS
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -121,6 +122,49 @@ async def test_validate_host_ssrf_blocks_non_globally_reachable_ip_literals(
         await security.validate_host_ssrf(host)
     assert exc.value.status == 403
     assert str(exc.value) == f"Forbidden host in URL: {host}."
+
+
+@pytest.mark.parametrize(
+    "host", ["fd00:ec2::254", "[fd00:ec2::254]", "fd00:ec2::123", "fd00:ec2::253"]
+)
+async def test_validate_host_ssrf_blocks_aws_ipv6_metadata_prefix_unconditionally(
+    host: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The AWS IPv6 metadata prefix is refused even with private networks allowed.
+
+    ``[fd00:ec2::254]`` is the IMDS endpoint of a dual-stack or IPv6-only Nitro
+    instance — the IPv6 twin of ``169.254.169.254``, and the same credential
+    source. Python classifies it as unique-local rather than link-local, so
+    without a dedicated rule it would only be blocked by
+    ``ssrf_protection_block_private_networks``, while its IPv4 twin is blocked
+    whatever that setting says. The neighbouring addresses of the prefix (NTP,
+    DNS) are covered by the same rule.
+
+    Ref: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-IMDS-existing-instances.html
+         stdapi/security.py:_is_unsafe_ip
+    """
+    monkeypatch.setattr(SETTINGS, "ssrf_protection_block_private_networks", False)
+    _forbid_resolution(monkeypatch)
+    with pytest.raises(ApiError) as exc:
+        await security.validate_host_ssrf(host)
+    assert exc.value.status == 403
+    assert str(exc.value) == f"Forbidden host in URL: {host}."
+
+
+async def test_validate_host_ssrf_still_allows_unique_local_addresses_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Turning the setting off keeps reaching the rest of ``fc00::/7`` possible.
+
+    The metadata rule above is a carve-out, not a widening: an operator who
+    disables private-network blocking to reach an internal IPv6 service must
+    still be able to.
+
+    Ref: stdapi/security.py:_is_unsafe_ip
+    """
+    monkeypatch.setattr(SETTINGS, "ssrf_protection_block_private_networks", False)
+    _forbid_resolution(monkeypatch)
+    assert await security.validate_host_ssrf("fd00:ec3::254") == ["fd00:ec3::254"]
 
 
 async def test_validate_host_ssrf_allows_public_ip_literal(
