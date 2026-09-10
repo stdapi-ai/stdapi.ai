@@ -196,10 +196,12 @@ async def test_no_tools_no_history_has_no_tool_config() -> None:
 class TestAnthropicToolChoiceNone:
     """The Anthropic route disables tool calling the same way as Chat Completions.
 
-    Both surfaces reach the same ``_prepare_converse_request``, so ``none`` can
-    drop the tool config on both: when history still carries ``toolUse``/
+    Both surfaces reach the same ``_prepare_converse_request``, so ``none``
+    drops the tool config on both: when history still carries ``toolUse``/
     ``toolResult`` blocks the model layer synthesizes a permissive config, which
-    is what makes dropping it safe.
+    is what keeps the request acceptable — and leaves the tools it names
+    callable, the documented limit covered by
+    ``tests/test_chat_tool_changes.py``.
 
     Ref: https://docs.claude.com/en/api/messages
          stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config

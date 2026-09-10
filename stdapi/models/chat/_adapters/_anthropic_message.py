@@ -219,7 +219,9 @@ def _synthesize_tool_config_from_history(
     can drop the config entirely), so when no config is otherwise present a
     minimal one is built: one ``toolSpec`` per distinct tool name found in
     history, each with a permissive ``{"type": "object"}`` input schema and no
-    ``toolChoice``.
+    ``toolChoice``.  The model can call one of those stubs, so a turn declaring
+    no tool is not a guarantee that none is called — Converse has no way to
+    declare a tool as uncallable, and no way to omit the configuration.
 
     Args:
         messages: Converted Bedrock message history.
