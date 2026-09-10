@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 import pytest
 from openai.types.realtime.realtime_server_event import RealtimeServerEvent
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 from starlette.websockets import WebSocketDisconnect
 
 from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, PERFORMANCE_CONFIG_VAR
@@ -106,9 +106,50 @@ _ITEM_LIFECYCLE_KINDS = frozenset({"conversation.item.added", "conversation.item
 #: The official client's own server event union, which it validates every frame against.
 _SERVER_EVENT: TypeAdapter[RealtimeServerEvent] = TypeAdapter(RealtimeServerEvent)
 
+#: Keys upstream sends that the SDK model chosen for that event does not declare.
+_UNMODELLED_KEYS: frozenset[str] = frozenset(
+    {
+        # session.created and session.updated are typed against the *request*
+        # models, which carry neither the identifier nor the object tag the
+        # upstream session object is documented to answer with.
+        "session.created.session.id",
+        "session.created.session.object",
+        "session.updated.session.id",
+        "session.updated.session.object",
+    }
+)
+
+
+def _invented_keys(value: Any, path: str) -> Iterator[str]:  # noqa: ANN401
+    """Yield the path of every key the official models do not declare.
+
+    ``openai._models.BaseModel`` sets ``extra="allow"``, so validation alone
+    accepts any key at all; what upstream does not model lands in
+    ``model_extra`` instead, which is where an invented field shows up.
+
+    Args:
+        value: A validated event, or anything reachable inside one.
+        path: How *value* is addressed, for the failure message.
+
+    Yields:
+        One dotted path per key upstream defines nowhere.
+    """
+    if isinstance(value, BaseModel):
+        for key in value.model_extra or ():
+            yield f"{path}.{key}"
+        for name in type(value).model_fields:
+            yield from _invented_keys(getattr(value, name), f"{path}.{name}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _invented_keys(item, f"{path}[{index}]")
+
 
 def _assert_official_shape(events: list[dict[str, Any]]) -> None:
     """Fail on the first event the official client's own models refuse.
+
+    Two ways to be refused: the frame does not validate at all, or it carries a
+    key upstream declares nowhere. The second needs its own check, because the
+    official models accept extra keys rather than rejecting them.
 
     Args:
         events: Every event the session sent, in order.
@@ -117,7 +158,7 @@ def _assert_official_shape(events: list[dict[str, Any]]) -> None:
 
     for event in events:
         try:
-            _SERVER_EVENT.validate_python(event)
+            parsed = _SERVER_EVENT.validate_python(event)
         except ValidationError as error:
             # One error per member of a 45-way union; only ours is readable.
             refused = [
@@ -126,6 +167,12 @@ def _assert_official_shape(events: list[dict[str, Any]]) -> None:
                 if event["type"].replace(".", "-") in line.lower()
             ]
             pytest.fail(f"{event['type']} was refused: {event}\n" + "\n".join(refused))
+        invented = sorted(set(_invented_keys(parsed, event["type"])) - _UNMODELLED_KEYS)
+        if invented:
+            pytest.fail(
+                f"{event['type']} carries fields upstream does not define: "
+                f"{invented}\n{event}"
+            )
 
 
 class _Gate:
@@ -498,6 +545,37 @@ class TestClientSecretRoute:
         body = response.json()
         assert 0 < body["expires_at"] - int(time.time()) <= 60
         assert body["session"]["instructions"] == "Be brief."
+
+    def test_a_session_declaring_a_remote_mcp_server_mints_nothing(
+        self, app_client: TestClient
+    ) -> None:
+        """A secret is never minted for a session no connection could open.
+
+        The response echoes the session back and the secret signs it, so a tool
+        this API refuses has to be refused here rather than at connect time,
+        after the caller has been handed a working-looking credential.
+
+        Ref: stdapi/realtime.py:check_session_tools
+        """
+        response = app_client.post(
+            "/v1/realtime/client_secrets",
+            json={
+                "session": {
+                    "type": "realtime",
+                    "tools": [
+                        {
+                            "type": "mcp",
+                            "server_label": "docs",
+                            "server_url": "https://example.invalid/mcp",
+                            "require_approval": "never",
+                        }
+                    ],
+                }
+            },
+        )
+
+        assert response.status_code == 400, response.text
+        assert "MCP" in response.json()["error"]["message"], response.text
 
     @pytest.mark.parametrize("seconds", [1, 100000])
     def test_a_lifetime_outside_the_accepted_range_is_refused(
@@ -1130,7 +1208,14 @@ class TestConversationItems:
     def test_an_interrupted_answer_settles_as_incomplete(
         self, app_client: TestClient, fake_backend: type[_FakeModel]
     ) -> None:
-        """Every view of the item agrees on the status the answer ended with."""
+        """Every view of the item agrees on the status the answer ended with.
+
+        The item is ``incomplete`` where the response is ``cancelled``: an item
+        has no cancelled status upstream, and what was said before the stop is
+        what the item holds.
+
+        Ref: openai.types.realtime.realtime_conversation_item_assistant_message
+        """
         fake_backend.script = [*_ANSWER_SCRIPT[:-1], ResponseFinished(interrupted=True)]
 
         with _connect(app_client) as websocket:
@@ -1139,7 +1224,7 @@ class TestConversationItems:
         by_kind = {event["type"]: event for event in events}
         assert by_kind["conversation.item.done"]["item"]["status"] == "incomplete"
         assert by_kind["response.output_item.done"]["item"]["status"] == "incomplete"
-        assert by_kind["response.done"]["response"]["status"] == "incomplete"
+        assert by_kind["response.done"]["response"]["status"] == "cancelled"
 
     @pytest.mark.parametrize("modalities", [None, ["text"]])
     def test_one_item_is_rendered_the_same_way_on_every_event_carrying_it(
@@ -1740,10 +1825,16 @@ class TestBargeInAndCancellation:
          stdapi/realtime.py:RealtimeSession._cancel_response
     """
 
-    def test_an_answer_the_caller_spoke_over_reports_incomplete(
+    def test_an_answer_the_caller_spoke_over_reports_cancelled(
         self, app_client: TestClient, fake_backend: type[_FakeModel]
     ) -> None:
-        """An interrupted answer is not reported as a completed one."""
+        """An interrupted answer is not reported as a completed one.
+
+        Upstream pairs ``turn_detected`` with the ``cancelled`` status, and
+        keeps ``incomplete`` for a token cap or a content filter.
+
+        Ref: openai.types.realtime.realtime_response_status.RealtimeResponseStatus
+        """
         fake_backend.script = [
             ResponseStarted(),
             OutputTranscript("Sure thi"),
@@ -1755,7 +1846,7 @@ class TestBargeInAndCancellation:
             websocket.send_json({"type": "response.create"})
             events = _drain(websocket, "response.done")
 
-        assert events[-1]["response"]["status"] == "incomplete", events[-1]
+        assert events[-1]["response"]["status"] == "cancelled", events[-1]
 
     def test_a_cancelled_answer_stops_being_reported(
         self, app_client: TestClient, fake_backend: type[_FakeModel]
@@ -1895,16 +1986,23 @@ class TestResponseObject:
     def test_an_answer_the_caller_spoke_over_reports_why_it_stopped(
         self, app_client: TestClient, fake_backend: type[_FakeModel]
     ) -> None:
-        """A barge-in names the turn that ended the answer, not just its status."""
+        """A barge-in names the turn that ended the answer, not just its status.
+
+        ``turn_detected`` is a reason of a ``cancelled`` answer upstream; the
+        two reasons of an ``incomplete`` one are a token cap and a content
+        filter, neither of which a barge-in is.
+
+        Ref: openai.types.realtime.realtime_response_status.RealtimeResponseStatus
+        """
         fake_backend.script = [*_ANSWER_SCRIPT[:-1], ResponseFinished(interrupted=True)]
 
         with _connect(app_client) as websocket:
             websocket.receive_json()
             _, done = self._both(websocket)
 
-        assert done["status"] == "incomplete", done
+        assert done["status"] == "cancelled", done
         assert done["status_details"] == {
-            "type": "incomplete",
+            "type": "cancelled",
             "reason": "turn_detected",
         }, done
 
@@ -2393,6 +2491,90 @@ class TestMalformedEvents:
         assert error["type"] == "error", error
         assert error["error"]["type"] == "invalid_request_error"
         assert cleared["type"] == "input_audio_buffer.cleared"
+
+
+class TestErrorCorrelation:
+    """What an ``error`` says about the event and the field that caused it.
+
+    A client pipelines its events, so an error carrying neither the event it
+    answers nor the field it is about can only be surfaced as "something was
+    refused" -- which is what the session looked like before both were filled.
+
+    Ref: https://developers.openai.com/api/reference/resources/realtime/server-events/error
+         stdapi/realtime.py:RealtimeSession._error
+    """
+
+    @pytest.mark.usefixtures("fake_backend")
+    def test_an_error_names_the_client_event_that_caused_it(
+        self, app_client: TestClient
+    ) -> None:
+        """``event_id`` is the identifier of the refused event, not null."""
+        with _connect(app_client) as websocket:
+            websocket.receive_json()
+            websocket.send_json(
+                {
+                    "type": "session.update",
+                    "event_id": "evt-from-the-client",
+                    "session": {"type": "realtime", "tool_choice": "sometimes"},
+                }
+            )
+            error = websocket.receive_json()
+
+        assert error["type"] == "error", error
+        assert error["error"]["event_id"] == "evt-from-the-client", error
+
+    @pytest.mark.usefixtures("fake_backend")
+    def test_an_event_sent_without_an_identifier_correlates_to_nothing(
+        self, app_client: TestClient
+    ) -> None:
+        """``event_id`` stays null when the client named none, as upstream leaves it."""
+        with _connect(app_client) as websocket:
+            websocket.receive_json()
+            websocket.send_json({"type": "wat"})
+            error = websocket.receive_json()
+
+        assert error["type"] == "error", error
+        assert error["error"]["event_id"] is None, error
+
+    @pytest.mark.usefixtures("fake_backend")
+    def test_one_error_never_borrows_a_previous_event_identifier(
+        self, app_client: TestClient
+    ) -> None:
+        """Each event answers for itself, whatever the one before it carried."""
+        with _connect(app_client) as websocket:
+            websocket.receive_json()
+            websocket.send_json({"type": "wat", "event_id": "evt-first"})
+            first = websocket.receive_json()
+            websocket.send_json({"type": "wat"})
+            second = websocket.receive_json()
+
+        assert first["error"]["event_id"] == "evt-first", first
+        assert second["error"]["event_id"] is None, second
+
+    @pytest.mark.parametrize(
+        ("session", "param"),
+        [
+            ({"type": "realtime", "tools": 5}, "session.tools"),
+            ({"type": "realtime", "tool_choice": "sometimes"}, "session.tool_choice"),
+            (
+                {"type": "realtime", "output_modalities": ["braille"]},
+                "session.output_modalities",
+            ),
+        ],
+    )
+    @pytest.mark.usefixtures("fake_backend")
+    def test_a_refused_configuration_names_the_field_it_was_refused_for(
+        self, app_client: TestClient, session: dict[str, Any], param: str
+    ) -> None:
+        """``param`` carries the offending field rather than being always null."""
+        with _connect(app_client) as websocket:
+            websocket.receive_json()
+            websocket.send_json({"type": "session.update", "session": session})
+            error = websocket.receive_json()
+
+        assert error["type"] == "error", error
+        assert error["error"]["param"] == param, error
+        assert param.removeprefix("session.") in error["error"]["message"], error
 
     @pytest.mark.usefixtures("fake_backend")
     def test_one_nested_setting_does_not_reset_its_siblings(
@@ -2985,6 +3167,7 @@ class TestFunctionTools:
         assert kinds == [
             "response.created",
             "response.output_item.added",
+            "conversation.item.created",
             "conversation.item.added",
             "response.function_call_arguments.delta",
             "response.function_call_arguments.done",
@@ -3080,11 +3263,19 @@ class TestFunctionTools:
         assert item["call_id"] == "call-1"
         assert item["output"] == '{"temperature_c": 14}'
 
-    def test_an_answer_to_a_call_nothing_made_is_refused(
+    def test_an_answer_to_a_call_this_session_never_made_reaches_the_model(
         self, app_client: TestClient, fake_backend: type[_FakeModel]
     ) -> None:
-        """An output for an unknown call is a client mistake, not model input."""
-        fake_backend.script = list(_ANSWER_SCRIPT)
+        """Upstream writes history into a session, and so may a client here.
+
+        ``conversation.item.create`` populates a conversation's history as well
+        as adding to it mid-stream, so a client replaying a call answered
+        before a reconnection names a ``call_id`` this session never produced.
+        The model is what judges it, not a session-local record.
+
+        Ref: https://developers.openai.com/api/reference/resources/realtime/client-events/conversation/item/create
+        """
+        fake_backend.script = []
 
         with _connect(app_client) as websocket:
             self._declare(websocket)
@@ -3093,21 +3284,62 @@ class TestFunctionTools:
                     "type": "conversation.item.create",
                     "item": {
                         "type": "function_call_output",
-                        "call_id": "call-unknown",
+                        "call_id": "call-from-a-past-session",
                         "output": "{}",
+                    },
+                }
+            )
+            events = _drain(websocket, "conversation.item.done")
+
+        assert [event["type"] for event in events] == [
+            "conversation.item.created",
+            "conversation.item.added",
+            "conversation.item.done",
+        ], events
+        assert fake_backend.opened[0].tool_results == [
+            ("call-from-a-past-session", "{}")
+        ]
+
+    def test_a_client_written_function_call_item_names_why_it_is_refused(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """A ``function_call`` item is refused for being one, not for being audio.
+
+        Upstream's creatable item union includes it; this session cannot hold a
+        call it did not make, and the refusal has to say so rather than point
+        the client at ``input_audio_buffer.append``.
+
+        Ref: openai.types.realtime.conversation_item.ConversationItem
+        """
+        fake_backend.script = list(_ANSWER_SCRIPT)
+
+        with _connect(app_client) as websocket:
+            self._declare(websocket)
+            websocket.send_json(
+                {
+                    "type": "conversation.item.create",
+                    "event_id": "evt-history",
+                    "item": {
+                        "type": "function_call",
+                        "name": "get_weather",
+                        "call_id": "call-1",
+                        "arguments": "{}",
                     },
                 }
             )
             error = websocket.receive_json()
 
         assert error["type"] == "error", error
-        assert "call-unknown" in error["error"]["message"], error
-        assert fake_backend.opened == [], "a stray output opened a conversation"
+        assert "function_call" in error["error"]["message"], error
+        assert "input_audio_buffer" not in error["error"]["message"], error
+        assert error["error"]["param"] == "item.type", error
+        assert error["error"]["event_id"] == "evt-history", error
+        assert fake_backend.opened == [], "a refused item opened a conversation"
 
-    def test_the_same_call_cannot_be_answered_twice(
+    def test_the_same_call_may_be_answered_again(
         self, app_client: TestClient, fake_backend: type[_FakeModel]
     ) -> None:
-        """The model expects one answer per call, and gets exactly one."""
+        """A resent answer is carried, as a re-created history item is upstream."""
         fake_backend.script = [ResponseStarted(), _TOOL_CALL]
         answer: dict[str, Any] = {
             "type": "conversation.item.create",
@@ -3125,10 +3357,13 @@ class TestFunctionTools:
             websocket.send_json(answer)
             _drain(websocket, "conversation.item.done")
             websocket.send_json(answer)
-            error = websocket.receive_json()
+            events = _drain(websocket, "conversation.item.done")
 
-        assert error["type"] == "error", error
-        assert len(fake_backend.opened[0].tool_results) == 1
+        assert events[-1]["type"] == "conversation.item.done", events
+        assert fake_backend.opened[0].tool_results == [
+            ("call-1", "{}"),
+            ("call-1", "{}"),
+        ]
 
     def test_tools_cannot_be_changed_once_the_model_has_answered(
         self, app_client: TestClient, fake_backend: type[_FakeModel]
@@ -3147,6 +3382,89 @@ class TestFunctionTools:
 
         assert error["type"] == "error", error
         assert "tools" in error["error"]["message"], error
+
+    def test_a_tool_that_omits_its_type_is_a_function(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """``type`` is optional upstream, so a tool without one is still declared.
+
+        Ref: openai.types.realtime.realtime_function_tool_param.RealtimeFunctionToolParam
+        """
+        fake_backend.script = list(_ANSWER_SCRIPT)
+        untyped = {key: value for key, value in _WEATHER_TOOL.items() if key != "type"}
+
+        with _connect(app_client) as websocket:
+            websocket.receive_json()
+            websocket.send_json(
+                {
+                    "type": "session.update",
+                    "session": {"type": "realtime", "tools": [untyped]},
+                }
+            )
+            updated = websocket.receive_json()
+            websocket.send_json({"type": "response.create"})
+            _drain(websocket, "response.done")
+
+        assert updated["type"] == "session.updated", updated
+        opened = fake_backend.opened_with[0]
+        assert [tool.name for tool in opened["tools"]] == ["get_weather"], opened
+
+    def test_a_function_tool_without_a_name_is_accepted_and_ignored(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """Upstream's tool has no required field; a nameless one calls nothing.
+
+        Ref: openai.types.realtime.realtime_function_tool_param.RealtimeFunctionToolParam
+        """
+        fake_backend.script = list(_ANSWER_SCRIPT)
+
+        with _connect(app_client) as websocket:
+            websocket.receive_json()
+            websocket.send_json(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "type": "realtime",
+                        "tools": [{"type": "function"}, _WEATHER_TOOL],
+                    },
+                }
+            )
+            updated = websocket.receive_json()
+            websocket.send_json({"type": "response.create"})
+            _drain(websocket, "response.done")
+
+        assert updated["type"] == "session.updated", updated
+        opened = fake_backend.opened_with[0]
+        assert [tool.name for tool in opened["tools"]] == ["get_weather"], opened
+
+    def test_a_tool_choice_naming_an_mcp_server_is_accepted_and_ignored(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """Upstream's tool choice union includes it, so the session is not refused.
+
+        Nothing here calls a remote server, so the choice is dropped rather than
+        failing the whole configuration.
+
+        Ref: openai.types.realtime.realtime_tool_choice_config.RealtimeToolChoiceConfig
+        """
+        fake_backend.script = list(_ANSWER_SCRIPT)
+        choice = {"type": "mcp", "server_label": "docs", "name": "search"}
+
+        with _connect(app_client) as websocket:
+            websocket.receive_json()
+            websocket.send_json(
+                {
+                    "type": "session.update",
+                    "session": {**_TOOL_SESSION, "tool_choice": choice},
+                }
+            )
+            updated = websocket.receive_json()
+            websocket.send_json({"type": "response.create"})
+            _drain(websocket, "response.done")
+
+        assert updated["type"] == "session.updated", updated
+        assert updated["session"]["tool_choice"] == choice, updated
+        assert fake_backend.opened_with[0]["tool_choice"] == "auto"
 
     @pytest.mark.usefixtures("fake_backend")
     def test_a_remote_mcp_server_tool_is_refused_by_name(
@@ -3174,6 +3492,7 @@ class TestFunctionTools:
 
         assert error["type"] == "error", error
         assert "function" in error["error"]["message"], error
+        assert error["error"]["param"] == "session.tools", error
 
     def test_a_call_the_client_cancelled_is_still_answered_to_the_model(
         self, app_client: TestClient, fake_backend: type[_FakeModel]
