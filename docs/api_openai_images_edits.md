@@ -741,6 +741,25 @@ curl -X POST "$BASE/v1/images/edits" \
   -F model="amazon.nova-canvas-v1:0"
 ```
 
+### Streaming the Edit
+
+```bash
+curl -N -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -F image=@image.png \
+  -F prompt="A fantasy castle" \
+  -F model="amazon.nova-canvas-v1:0" \
+  -F stream=true
+```
+
+Each frame names its event before carrying it, so a client reading the raw stream can dispatch
+on the `event:` line as well as on the payload's `type`:
+
+```text
+event: image_edit.completed
+data: {"type":"image_edit.completed","b64_json":"...","output_format":"png","size":"1024x1024","usage":{...}}
+```
+
 ### The `image[]` Array Parameter
 
 !!! warning "One Source Image Per Request"

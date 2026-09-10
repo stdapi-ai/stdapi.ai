@@ -24,6 +24,8 @@ from tests.conftest import smallest_image_size
 
 # Import validation helpers from generations tests
 from .test_openai_images_generations import (
+    assert_sse_frames_name_their_event,
+    stub_streaming_image_model,
     validate_base64_image,
     validate_error_response,
     validate_image_usage,
@@ -1188,3 +1190,40 @@ class TestImagesEditsResponseSizeIsMeasured:
         )
 
         assert (job.width, job.height) == (3, 2)
+
+
+@pytest.mark.local
+class TestEditStreamedFramesAreNamedOnTheWire:
+    """A streamed edit names each frame ``image_edit.*`` before its data.
+
+    The edits endpoint has its own event family upstream, and a client reading
+    the raw stream dispatches on that name rather than on the JSON ``type`` the
+    vendor SDKs read, so the assertions go to the response body itself.
+
+    Ref: https://developers.openai.com/api/reference/resources/images.md
+         stdapi/routes/openai_images_generations.py:stream_generator
+    """
+
+    def test_edit_frames_carry_their_event_name(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A streamed edit names each frame with the edits endpoint's own family."""
+        stub_streaming_image_model(monkeypatch, openai_images_edits)
+
+        response = app_client.post(
+            "/v1/images/edits",
+            json={
+                "model": "stub-model",
+                "prompt": "add a hat",
+                "image": ["data:image/png;base64,AA=="],
+                "response_format": "b64_json",
+                "stream": True,
+                "partial_images": 1,
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert_sse_frames_name_their_event(
+            response.text, ["image_edit.partial_image", "image_edit.completed"]
+        )

@@ -33,6 +33,7 @@ from stdapi.types.openai_images import (
     ImagesResponse,
     Usage,
 )
+from stdapi.utils import json_sse
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -79,7 +80,8 @@ async def stream_generator(
             instead of the generations endpoint's ``image_generation.*`` ones.
 
     Yields:
-        JSONServerSentEvent containing partial image data or the final completed image.
+        JSONServerSentEvent, named for its own type, carrying partial image data
+        or the final completed image.
     """
     partial_event, completed_event = (
         (ImageEditPartialImageEvent, ImageEditCompletedEvent)
@@ -92,32 +94,30 @@ async def stream_generator(
         if result.partial:
             # 0-based, as the OpenAI event declares it.
             index = indexes[result.index] = indexes.get(result.index, -1) + 1
-            yield JSONServerSentEvent(
-                data=partial_event(
-                    partial_image_index=index,
-                    b64_json=result.image,
-                    created_at=created,
-                    output_format=job.output_format,
-                    size=f"{job.width}x{job.height}",
-                    background="opaque",
-                    quality=job.quality,
-                ).model_dump(mode="json", exclude_none=True)
+            partial = partial_event(
+                partial_image_index=index,
+                b64_json=result.image,
+                created_at=created,
+                output_format=job.output_format,
+                size=f"{job.width}x{job.height}",
+                background="opaque",
+                quality=job.quality,
             )
+            yield json_sse(partial.type, partial)
         else:
             # Built after this image completes: the job's token counts are
             # only final once every image has been generated.
             usage = image_usage(job, input_image_count)
-            yield JSONServerSentEvent(
-                data=completed_event(
-                    b64_json=result.image,
-                    created_at=created,
-                    output_format=job.output_format,
-                    size=f"{job.width}x{job.height}",
-                    background="opaque",
-                    quality=job.quality,
-                    usage=usage,
-                ).model_dump(mode="json", exclude_none=True)
+            completed = completed_event(
+                b64_json=result.image,
+                created_at=created,
+                output_format=job.output_format,
+                size=f"{job.width}x{job.height}",
+                background="opaque",
+                quality=job.quality,
+                usage=usage,
             )
+            yield json_sse(completed.type, completed)
     log_response_params(
         {
             "created_at": created,
