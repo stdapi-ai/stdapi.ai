@@ -91,6 +91,29 @@ def test_generate_applies_the_system_prompt(
     assert "banana" in answer.response.lower()
 
 
+def test_generate_serves_an_empty_format(
+    ollama_client: ollama.Client, ollama_chat_model: str
+) -> None:
+    """An empty `format` asks for no structured output and is answered normally.
+
+    The official client types `format` as the empty string, `"json"` or a
+    schema, and clients built on it send the empty string as their "no
+    structured output" value on every call, so it has to be served rather than
+    refused.
+
+    Ref: https://docs.ollama.com/openapi.yaml (GenerateRequest.format)
+         ollama/_types.py:154 (BaseGenerateRequest.format)
+    """
+    answer = ollama_client.generate(
+        model=ollama_chat_model,
+        prompt="The capital of France.",
+        format="",
+        stream=False,
+    )
+    assert answer.done is True
+    assert answer.response
+
+
 def test_generate_streams_to_a_terminal_done_event(
     ollama_client: ollama.Client, ollama_chat_model: str, use_official_api: bool
 ) -> None:

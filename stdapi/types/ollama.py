@@ -5,7 +5,7 @@ Ref: https://docs.ollama.com/openapi.yaml
 
 from typing import Literal, Self
 
-from pydantic import ConfigDict, Field, JsonValue, model_validator
+from pydantic import ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from stdapi.config import SETTINGS
 from stdapi.monitoring import REQUEST_TIME
@@ -17,8 +17,8 @@ _NS_PER_SECOND: int = 1_000_000_000
 #: Thinking levels accepted by ``think`` in addition to a boolean.
 ThinkLevel = Literal["low", "medium", "high", "max"]
 
-#: Structured-output request: the string ``json``, or a JSON schema object.
-ResponseFormat = Literal["json"] | dict[str, JsonValue]
+#: Structured-output request: ``json``, a JSON schema object, or ``""`` for none.
+ResponseFormat = Literal["", "json"] | dict[str, JsonValue]
 
 #: Model residency hint: a duration string (``5m``) or a number of seconds.
 KeepAlive = str | float
@@ -181,7 +181,10 @@ class _InferenceRequest(BaseModelRequest):
     model: str = Field(description="Model name.")
     format: ResponseFormat | None = Field(
         default=None,
-        description="Structured output: `json`, or a JSON schema the answer must match.",
+        description=(
+            "Structured output: `json`, or a JSON schema the answer must match. "
+            "An empty string asks for no structured output."
+        ),
     )
     options: ModelOptions | None = Field(
         default=None, description="Runtime generation options."
@@ -203,6 +206,24 @@ class _InferenceRequest(BaseModelRequest):
     top_logprobs: int | None = Field(
         default=None, description="UNSUPPORTED: log probabilities are not available."
     )
+
+    @field_validator("format", mode="after")
+    @classmethod
+    def _empty_format_means_no_format(
+        cls, value: ResponseFormat | None
+    ) -> ResponseFormat | None:
+        """Read the empty string as the absence of a structured-output request.
+
+        Clients send it as their "no format" value, so it is accepted for them
+        and dropped here rather than carried as a third meaning of the field.
+
+        Args:
+            value: The requested output format.
+
+        Returns:
+            The format to apply, or None when none was asked for.
+        """
+        return None if value == "" else value
 
     @model_validator(mode="after")
     def _reject_logprobs(self) -> Self:
