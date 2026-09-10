@@ -8,16 +8,26 @@ Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
 from __future__ import annotations
 
 from json import loads
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import pytest
+from anthropic.types import CitationCharLocation as SdkCitationCharLocation
+from anthropic.types import CitationsDelta as SdkCitationsDelta
+from anthropic.types import RawContentBlockDeltaEvent as SdkRawContentBlockDeltaEvent
 
-from stdapi.models.chat._adapters._anthropic_message import format_stream
+from stdapi.models.chat._adapters._anthropic_message import (
+    format_response,
+    format_stream,
+)
+from stdapi.types.anthropic_messages import TextBlock
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from types_aiobotocore_bedrock_runtime.type_defs import ConverseStreamOutputTypeDef
+    from types_aiobotocore_bedrock_runtime.type_defs import (
+        ContentBlockOutputTypeDef,
+        ConverseStreamOutputTypeDef,
+    )
 
 # The streaming adapter writes into the request log, which only exists inside a
 # request, so every test needs the shared context fixture.
@@ -454,3 +464,313 @@ async def test_message_delta_usage_reads_bedrock_cache_token_keys() -> None:
     assert usage["output_tokens"] == 5
     assert usage["cache_read_input_tokens"] == 3
     assert usage["cache_creation_input_tokens"] == 7
+
+
+class TestStreamedCitations:
+    """A cited answer carries the same citations streamed as it does whole.
+
+    Anthropic streams each citation as a ``citations_delta`` inside a
+    ``content_block_delta`` event, which adds it to the ``citations`` list of the
+    current ``text`` block; Bedrock carries the same metadata in a ``citation``
+    content block delta.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/citations
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlockDelta.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_delta
+    """
+
+    #: Bedrock citation of a document passage, as carried by a ``citation`` delta.
+    CITATION: ClassVar[dict[str, Any]] = {
+        "title": "Guide",
+        "source": "https://example.com/guide",
+        "sourceContent": [{"text": "42"}],
+        "location": {"documentChar": {"documentIndex": 0, "start": 0, "end": 2}},
+    }
+    #: Answer text the cited passage supports.
+    TEXT: ClassVar[str] = "The answer is 42."
+
+    @staticmethod
+    def _citation_delta(
+        citation: dict[str, Any], index: int = 0
+    ) -> dict[str, dict[str, Any]]:
+        """Return a Converse ``contentBlockDelta`` event carrying *citation*."""
+        return {
+            "contentBlockDelta": {
+                "contentBlockIndex": index,
+                "delta": {"citation": citation},
+            }
+        }
+
+    @staticmethod
+    def _citations(pairs: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
+        """Return the ``citations_delta`` payloads among *pairs*."""
+        return [
+            data
+            for event, data in pairs
+            if event == "content_block_delta"
+            and data["delta"]["type"] == "citations_delta"
+        ]
+
+    async def test_citation_delta_reaches_the_open_text_block(self) -> None:
+        """A ``citation`` delta becomes a ``citations_delta`` on the streamed text block.
+
+        Anthropic attaches the citation to the block being written, so the delta
+        must carry the index of the open text block rather than opening one of
+        its own, and the cited passage comes from the Bedrock ``sourceContent``.
+        """
+        pairs = await _collect(
+            [
+                {
+                    "contentBlockDelta": {
+                        "contentBlockIndex": 0,
+                        "delta": {"text": self.TEXT},
+                    }
+                },
+                self._citation_delta(self.CITATION),
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                {"messageStop": {"stopReason": "end_turn"}},
+            ]
+        )
+        assert [event for event, _data in pairs] == [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ]
+        (citation_data,) = self._citations(pairs)
+        (start_data,) = [
+            data for event, data in pairs if event == "content_block_start"
+        ]
+        assert citation_data["index"] == start_data["index"]
+        assert start_data["content_block"]["type"] == "text"
+        citation = citation_data["delta"]["citation"]
+        assert citation["type"] == "char_location"
+        assert citation["cited_text"] == "42"
+        assert citation["document_index"] == 0
+        assert citation["start_char_index"] == 0
+        assert citation["end_char_index"] == 2
+        assert citation["document_title"] == "Guide"
+
+    async def test_streamed_citation_frame_is_the_anthropic_one(self) -> None:
+        """The emitted frame validates as the SDK's ``citations_delta`` event.
+
+        The Anthropic SDK discriminates both the delta and the citation on their
+        ``type``, so a frame it cannot resolve to ``CitationsDelta`` and
+        ``CitationCharLocation`` is a frame its citation accumulator drops.
+        """
+        pairs = await _collect(
+            [
+                {
+                    "contentBlockDelta": {
+                        "contentBlockIndex": 0,
+                        "delta": {"text": self.TEXT},
+                    }
+                },
+                self._citation_delta(self.CITATION),
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                {"messageStop": {"stopReason": "end_turn"}},
+            ]
+        )
+        (citation_data,) = self._citations(pairs)
+        event = SdkRawContentBlockDeltaEvent.model_validate(citation_data)
+        assert isinstance(event.delta, SdkCitationsDelta)
+        assert isinstance(event.delta.citation, SdkCitationCharLocation)
+        assert event.delta.citation.cited_text == "42"
+
+    async def test_streamed_citation_matches_the_non_streamed_one(self) -> None:
+        """The same answer carries the same citation streamed or whole.
+
+        Bedrock reports a cited answer as one ``citationsContent`` block when the
+        response is whole and as ``text`` plus ``citation`` deltas when it
+        streams, so a client that turns streaming on must not lose the citations
+        the non-streamed call returns.
+        """
+        pairs = await _collect(
+            [
+                {
+                    "contentBlockDelta": {
+                        "contentBlockIndex": 0,
+                        "delta": {"text": self.TEXT},
+                    }
+                },
+                self._citation_delta(self.CITATION),
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                {"messageStop": {"stopReason": "end_turn"}},
+            ]
+        )
+        message = await format_response(
+            contents=cast(
+                "list[ContentBlockOutputTypeDef]",
+                [
+                    {
+                        "citationsContent": {
+                            "content": [{"text": self.TEXT}],
+                            "citations": [self.CITATION],
+                        }
+                    }
+                ],
+            ),
+            stop_reason="end_turn",
+            usage={"inputTokens": 0, "outputTokens": 0, "totalTokens": 0},
+            message_id="msg_1",
+            model_id="model-x",
+            forced_tool=None,
+            resp_map_tool_result=lambda *_args: None,
+        )
+        (block,) = message.content
+        assert isinstance(block, TextBlock)
+        assert block.citations is not None
+        streamed_text = "".join(
+            data["delta"]["text"]
+            for event, data in pairs
+            if event == "content_block_delta" and data["delta"]["type"] == "text_delta"
+        )
+        assert streamed_text == block.text
+        (citation_data,) = self._citations(pairs)
+        assert citation_data["delta"]["citation"] == block.citations[0].model_dump(
+            mode="json", exclude_none=True
+        )
+
+    async def test_citation_after_the_text_block_still_reaches_the_client(self) -> None:
+        """A citation arriving once the text block closed opens a text block of its own.
+
+        A backend that reports its citations after the answer would otherwise
+        have them dropped, since a ``citations_delta`` needs an open text block;
+        the synthesized block mirrors the non-streamed answer, where a citation
+        with no generated text of its own becomes an empty text block carrying it.
+        """
+        pairs = await _collect(
+            [
+                {
+                    "contentBlockDelta": {
+                        "contentBlockIndex": 0,
+                        "delta": {"text": self.TEXT},
+                    }
+                },
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                self._citation_delta(self.CITATION, index=1),
+                {"contentBlockStop": {"contentBlockIndex": 1}},
+                {"messageStop": {"stopReason": "end_turn"}},
+            ]
+        )
+        starts = [data for event, data in pairs if event == "content_block_start"]
+        assert [start["content_block"]["type"] for start in starts] == ["text", "text"]
+        assert [start["index"] for start in starts] == [0, 1]
+        (citation_data,) = self._citations(pairs)
+        assert citation_data["index"] == 1
+        assert citation_data["delta"]["citation"]["cited_text"] == "42"
+
+    async def test_a_citation_sent_before_its_text_shares_the_same_block(self) -> None:
+        """A citation leading its answer opens the block the answer then fills.
+
+        Nothing guarantees the cited passage is reported after the text it
+        supports, and a citation that opened a block of its own would leave the
+        client with an empty text block beside the answer.
+        """
+        pairs = await _collect(
+            [
+                self._citation_delta(self.CITATION),
+                {
+                    "contentBlockDelta": {
+                        "contentBlockIndex": 0,
+                        "delta": {"text": self.TEXT},
+                    }
+                },
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                {"messageStop": {"stopReason": "end_turn"}},
+            ]
+        )
+        (start_data,) = [
+            data for event, data in pairs if event == "content_block_start"
+        ]
+        assert start_data["content_block"]["type"] == "text"
+        (citation_data,) = self._citations(pairs)
+        (text_data,) = [
+            data
+            for event, data in pairs
+            if event == "content_block_delta" and data["delta"]["type"] == "text_delta"
+        ]
+        assert citation_data["index"] == start_data["index"]
+        assert text_data["index"] == start_data["index"]
+
+    @pytest.mark.parametrize(
+        ("location", "citation_type"),
+        [
+            ({"documentChar": {"start": 0, "end": 2}}, "char_location"),
+            ({"documentPage": {"start": 1, "end": 2}}, "page_location"),
+            ({"documentChunk": {"start": 0, "end": 1}}, "content_block_location"),
+            ({"web": {"url": "https://example.com"}}, "web_search_result_location"),
+            (
+                {
+                    "searchResultLocation": {
+                        "searchResultIndex": 0,
+                        "start": 0,
+                        "end": 1,
+                    }
+                },
+                "search_result_location",
+            ),
+        ],
+    )
+    async def test_every_citation_location_streams_its_own_type(
+        self, location: dict[str, Any], citation_type: str
+    ) -> None:
+        """Each Bedrock citation location streams as its Anthropic citation type.
+
+        Bedrock reports where a citation points with a different member per
+        source kind -- a document offset, a page, a chunk, a web result, a search
+        result -- and Anthropic gives each one its own citation type, which the
+        SDK selects on.
+        """
+        pairs = await _collect(
+            [
+                {
+                    "contentBlockDelta": {
+                        "contentBlockIndex": 0,
+                        "delta": {"text": self.TEXT},
+                    }
+                },
+                self._citation_delta({**self.CITATION, "location": location}),
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                {"messageStop": {"stopReason": "end_turn"}},
+            ]
+        )
+        (citation_data,) = self._citations(pairs)
+        assert citation_data["delta"]["citation"]["type"] == citation_type
+
+    async def test_a_citation_with_no_anthropic_equivalent_is_not_streamed(
+        self,
+    ) -> None:
+        """A citation location the API cannot express streams no delta and no error.
+
+        Bedrock may report a location kind Anthropic has no citation type for.
+        The answer itself must still stream to the end, exactly as the
+        non-streamed path answers with the text and without the citation.
+        """
+        pairs = await _collect(
+            [
+                {
+                    "contentBlockDelta": {
+                        "contentBlockIndex": 0,
+                        "delta": {"text": self.TEXT},
+                    }
+                },
+                self._citation_delta(
+                    {**self.CITATION, "location": {"somethingNewLocation": {"id": "1"}}}
+                ),
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                {"messageStop": {"stopReason": "end_turn"}},
+            ]
+        )
+        assert not self._citations(pairs)
+        assert [event for event, _data in pairs] == [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ]
