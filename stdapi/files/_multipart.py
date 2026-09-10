@@ -560,19 +560,34 @@ async def add_part(upload_id: str, data: bytes) -> tuple[str, int]:
 
     # Folded in while the bytes are still in memory, so the completion checksum
     # costs no buffering and no read-back; only the digest state outlives the call.
-    # Held as a pair, so a concurrent part cannot land its bytes between another's
-    # bytes and the signature that says which bytes the digest covers.
-    async with state.digest_lock:
-        state.digest = digest = state.digest or md5(usedforsecurity=False)
-        # Shielded: cancelling the await does not stop the thread already folding
-        # these bytes in, and a digest advanced past the signature that says what
-        # it covers would fail every later completion of this session.
-        await shield(_update_digest(digest, data))
-        state.parts_signature = _fold_part(
-            state.parts_signature, part_number, stored["ETag"]
-        )
+    # The whole update is shielded, lock included: a cancellation that released
+    # the lock mid-fold, or that stopped the signature being written once the
+    # bytes were in, would leave the digest answering for parts the signature
+    # does not name, and fail every later completion of this session.
+    await shield(_fold_part_into_digest(state, data, part_number, stored["ETag"]))
 
     return _make_part_id(upload_id, part_number), now_utc_timestamp()
+
+
+async def _fold_part_into_digest(
+    state: _SessionState, data: bytes, part_number: int, etag: str
+) -> None:
+    """Extend the session digest with one part, and record it in its signature.
+
+    Both are written under the session lock and never apart: the digest only
+    answers for the session while it covers exactly the parts the signature
+    names, in the order it names them.
+
+    Args:
+        state: State of the session the part belongs to.
+        data: Raw bytes of the part.
+        part_number: 1-based S3 part number.
+        etag: Entity tag S3 reported for that part.
+    """
+    async with state.digest_lock:
+        state.digest = digest = state.digest or md5(usedforsecurity=False)
+        await _update_digest(digest, data)
+        state.parts_signature = _fold_part(state.parts_signature, part_number, etag)
 
 
 async def complete_multipart_session(
