@@ -1448,6 +1448,23 @@ class TestEchoFields:
         )
         assert response.parallel_tool_calls is True
 
+    async def test_background_and_safety_identifier_are_echoed(self) -> None:
+        """background and safety_identifier are echoed on the response object.
+
+        Both are accepted but ignored on the Converse path (there is no
+        Bedrock equivalent), yet the requested values must come back
+        unchanged, like every other echoed request field.
+        """
+        response = await format_response(
+            "resp-1",
+            1.0,
+            "model",
+            _bedrock_response([{"text": "hi"}]),
+            _request(background=True, safety_identifier="user-1"),
+        )
+        assert response.background is True
+        assert response.safety_identifier == "user-1"
+
     async def test_streamed_created_at_is_int(self) -> None:
         """Streaming lifecycle and terminal events carry an int created_at.
 

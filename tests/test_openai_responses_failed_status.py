@@ -6,10 +6,11 @@ Ref: https://developers.openai.com/api/reference/resources/responses/methods/ret
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from stdapi.models.chat._default import ChatModel
 from stdapi.routes import openai_responses
 from stdapi.types.openai_responses import Response, ResponseCreateParams, ResponseError
 from tests._helpers import make_model_details
@@ -116,16 +117,38 @@ def test_failed_response_without_error_uses_the_fallback_message(
     assert error["type"] == "server_error"
 
 
-@pytest.mark.usefixtures("failed_chat_backend")
-def test_background_failed_response_stays_200(app_client: TestClient) -> None:
+def test_background_failed_response_stays_200(
+    app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A background request returns the failed terminal state as a 200 Response.
 
     ``background`` responses are polled, so the terminal ``failed`` state and
     its ``error`` object must stay readable on the Response object instead of
     being raised as an HTTP error.
 
+    Only the Bedrock call is stubbed here: the Response itself is built by the
+    real Converse adapter, so the ``background`` echo below pins production
+    behaviour rather than a hand-built stub Response.
+
     Ref: https://developers.openai.com/api/docs/guides/background
     """
+
+    async def _validate_model(
+        model_id: str, *_args: object, **_kwargs: object
+    ) -> ModelDetails:
+        return make_model_details(model_id)
+
+    async def _failed_converse(
+        _self: ChatModel, _bedrock_request: dict[str, Any]
+    ) -> dict[str, Any]:
+        return {
+            "output": {"message": {"role": "assistant", "content": []}},
+            "stopReason": "malformed_model_output",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        }
+
+    monkeypatch.setattr(openai_responses, "validate_model", _validate_model)
+    monkeypatch.setattr(ChatModel, "converse", _failed_converse)
     response = app_client.post(
         "/v1/responses",
         json={"model": "amazon.nova-pro-v1:0", "input": "hi", "background": True},
@@ -137,6 +160,6 @@ def test_background_failed_response_stays_200(app_client: TestClient) -> None:
     assert body["background"] is True
     assert body["error"] == {
         "code": "server_error",
-        "message": "The model failed to generate output.",
+        "message": "The model failed to generate a valid response.",
     }
     assert body["output"] == []
