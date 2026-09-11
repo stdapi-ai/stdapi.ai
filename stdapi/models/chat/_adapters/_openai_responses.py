@@ -2550,6 +2550,8 @@ def _build_response_object(
         top_logprobs=request.top_logprobs,
         usage=usage,
         user=request.user,
+        background=request.background,
+        safety_identifier=request.safety_identifier,
     )
 
 
