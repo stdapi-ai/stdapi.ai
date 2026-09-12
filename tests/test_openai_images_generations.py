@@ -1692,10 +1692,16 @@ class TestImageGenerationJobParameters:
         assert job_kwargs["output_compression"] == 42
         assert job_kwargs["output_format"] == "jpeg"
 
-    def test_output_compression_below_the_minimum_is_rejected(
-        self, app_client: TestClientType
+    def test_output_compression_zero_reaches_the_job(
+        self, app_client: TestClientType, job_kwargs: dict[str, Any]
     ) -> None:
-        """``output_compression=0`` is outside the documented 1-100 range."""
+        """``output_compression=0`` is accepted and forwarded verbatim.
+
+        OpenAI documents the range as 0-100 with no lower bound, and the
+        Responses ``image_generation`` tool surface already accepts 0.
+
+        Ref: stdapi/types/openai_images.py:ImageGenerateParams.output_compression
+        """
         response = app_client.post(
             "/v1/images/generations",
             json={
@@ -1703,6 +1709,23 @@ class TestImageGenerationJobParameters:
                 "prompt": "a cat",
                 "output_format": "jpeg",
                 "output_compression": 0,
+            },
+        )
+
+        assert job_kwargs["output_compression"] == 0
+        assert response.status_code != 422
+
+    def test_output_compression_below_the_minimum_is_rejected(
+        self, app_client: TestClientType
+    ) -> None:
+        """``output_compression=-1`` is outside the documented 0-100 range."""
+        response = app_client.post(
+            "/v1/images/generations",
+            json={
+                "model": "stub-model",
+                "prompt": "a cat",
+                "output_format": "jpeg",
+                "output_compression": -1,
             },
         )
 

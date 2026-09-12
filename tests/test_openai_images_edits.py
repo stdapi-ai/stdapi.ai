@@ -1128,10 +1128,13 @@ class TestImagesEditsOutputEncodingParameters:
         assert job_kwargs["output_format"] == "jpeg"
         assert job_kwargs["output_compression"] == 42
 
-    def test_output_compression_below_the_minimum_is_rejected(
-        self, app_client: TestClient
+    def test_output_compression_zero_reaches_the_job(
+        self, app_client: TestClient, job_kwargs: dict[str, object]
     ) -> None:
-        """``output_compression=0`` is outside the documented 1-100 range."""
+        """``output_compression=0`` is accepted and forwarded verbatim.
+
+        Ref: stdapi/types/openai_images.py:_ImageEditCommonParams.output_compression
+        """
         response = app_client.post(
             "/v1/images/edits",
             json={
@@ -1140,6 +1143,25 @@ class TestImagesEditsOutputEncodingParameters:
                 "images": [{"image_url": "data:image/png;base64,aW1hZ2U="}],
                 "output_format": "jpeg",
                 "output_compression": 0,
+                "response_format": "b64_json",
+            },
+        )
+
+        assert job_kwargs["output_compression"] == 0
+        assert response.status_code != 422
+
+    def test_output_compression_below_the_minimum_is_rejected(
+        self, app_client: TestClient
+    ) -> None:
+        """``output_compression=-1`` is outside the documented 0-100 range."""
+        response = app_client.post(
+            "/v1/images/edits",
+            json={
+                "model": "stub-model",
+                "prompt": "Make it darker",
+                "images": [{"image_url": "data:image/png;base64,aW1hZ2U="}],
+                "output_format": "jpeg",
+                "output_compression": -1,
             },
         )
 
