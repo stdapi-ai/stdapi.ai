@@ -1,7 +1,7 @@
 ---
 title: Files API - Anthropic-Compatible File Storage
-description: Upload, manage, and reference files in Anthropic Messages requests using the Anthropic-compatible Files API backed by Amazon S3. Supports documents, images, selection by ID, and bidirectional cursor pagination.
-keywords: Files API, Anthropic files, file upload, S3 file storage, Anthropic messages file, document source, cursor pagination, list files by id, ids filter, scope_id, AWS Bedrock files
+description: Upload, manage, and reference files in Anthropic Messages requests using the Anthropic-compatible Files API backed by Amazon S3. Supports documents, images, selection by ID, page cursors, and bidirectional cursor pagination.
+keywords: Files API, Anthropic files, file upload, S3 file storage, Anthropic messages file, document source, cursor pagination, page cursor, next_page, SDK auto-pagination, list files by id, ids filter, scope_id, AWS Bedrock files
 ---
 
 # Files API (Anthropic Compatible)
@@ -11,13 +11,13 @@ Upload and manage files via an Anthropic-compatible interface. Files are stored 
 ## At a glance
 
 - :material-upload: **Simple upload** — Upload any file with a single `multipart/form-data` request. Files are immediately available for use in inference.
-- :material-swap-vertical: **Bidirectional pagination** — Traverse your file list in both directions using `after_id` and `before_id` cursors — the gateway's own ID-cursor envelope, not the opaque `page` token the official Files API moved to (see below).
+- :material-page-next: **Page cursors** — Every listing carries a `next_page` cursor; send it back as `page` to get the following page, and the official SDK's own iteration walks the whole list for you.
+- :material-swap-vertical: **Bidirectional pagination** — Traverse your file list in both directions using the `after_id` and `before_id` ID cursors, an addition to the `page` cursor rather than a replacement for it.
 - :material-format-list-checks: **Select by ID** — Pass `ids` to fetch a known set of files in one call, without paging through the list. Up to 100 IDs; the ones that name no readable file are simply left out.
 - :material-file-document-multiple: **Messages integration** — Reference uploaded files directly in Messages requests as document or image source blocks using `"type": "file"`.
 - :material-download: **Content download** — Download raw file bytes at any time via the `/content` endpoint.
 - :material-database: **One file store for both dialects** — a file uploaded here is readable and deletable through the [OpenAI Files API](api_openai_files.md), and vice versa; both are backed by the same S3 bucket.
 - :material-swap-horizontal: **Differs from the Anthropic API:** no file size cap beyond S3's ~5 TB object limit, `downloadable` is always `true`, `expires_after` is not implemented, and `scope_id` filtering is refused — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
-- :material-swap-horizontal: **Differs from the official SDK:** `anthropic` ≥ 1.0 paginates on an opaque `page` cursor this API does not serve, so SDK auto-pagination stops after the first page.
 
 !!! info "Base URL and route prefix"
     By default, all Anthropic-compatible routes are prefixed with `/anthropic`. This means the Files API is available at `/anthropic/v1/files` instead of `/v1/files`. You can customize this prefix using the `ANTHROPIC_ROUTES_PREFIX` configuration variable documented in [HTTP Server and MCP](operations_configuration_server.md#anthropic-routes-prefix).
@@ -58,8 +58,10 @@ curl -X POST "$BASE/v1/files" \
 | **Listing**              |                                          |                                                                  |
 | Listing order            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Most recently created first, by `created_at`                     |
 | `ids` selection          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Up to 100 IDs after de-duplication, served as a single page      |
-| `after_id` cursor        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Forward cursor: returns files older than the given ID            |
-| `before_id` cursor       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Backward cursor: returns files newer than the given ID           |
+| `page` / `next_page`     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Forward page cursor; `null` on the last page                     |
+| `after_id` cursor        | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Forward cursor: returns files older than the given ID            |
+| `before_id` cursor       | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Backward cursor: returns files newer than the given ID           |
+| `first_id` / `last_id` / `has_more` | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Page edges and continuation flag, served alongside `next_page`   |
 | `limit`                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 – 1 000; default 20 — ignored alongside `ids`                  |
 | `scope_id` filter        | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Refused with a `400`: files here are not associated with a scope |
 | **File size cap**        | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | No artificial limit; S3 object limit (~5 TB)                     |
@@ -146,6 +148,11 @@ curl "$BASE/v1/files" \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -H "anthropic-beta: files-api-2025-04-14"
 
+# Next page: send back the `next_page` value the previous response returned
+curl "$BASE/v1/files?limit=20&page=page_MDE5MGM1MWM3ZGU3NDU1ZDliOGMyZWZlMjdkZmJmNjc" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-beta: files-api-2025-04-14"
+
 # Forward pagination: the page following a given ID (older files)
 curl "$BASE/v1/files?after_id=file_0190c51c7de7455d9b8c2efe27dfbf67&limit=20" \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
@@ -162,7 +169,7 @@ curl "$BASE/v1/files?ids=file_0190c51c7de7455d9b8c2efe27dfbf67&ids=file_0190c51c
   -H "anthropic-beta: files-api-2025-04-14"
 ```
 
-Pagination is by ID cursor, as above; the official SDK's own iterator uses a different cursor and stops after one page — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
+Each response carries `next_page`: a `page_`-prefixed cursor to the following page, or `null` on the last one. Send it back unchanged as `page` to continue, and the official SDK's own iteration (`client.beta.files.list()` used as an iterator) walks the whole list on its own. A `page` cursor is a complete instruction on its own, so combining it with `ids`, `after_id` or `before_id` is a `400`, as is a cursor this API never issued.
 
 `ids` selects instead of paging: repeat the parameter once per file, up to 100 distinct IDs. The whole selection comes back in one response, so `after_id`, `before_id` and `limit` have no effect alongside it, and an ID that names a deleted, expired or unknown file is left out of `data` rather than failing the request. More than 100 distinct IDs is a `400`.
 
@@ -310,7 +317,7 @@ Files are stored in S3 under the prefix configured by [`AWS_S3_FILES_PREFIX`](op
 
 **The API needs an S3 bucket.** Every route stores and reads objects in [`AWS_S3_BUCKET`](operations_configuration_storage.md#aws-s3-bucket); without it configured, all five endpoints answer `529 overloaded_error` — the Anthropic envelope's form of an unavailable feature.
 
-**SDK auto-pagination stops after one page.** The gateway serves the ID-cursor envelope (`first_id`, `last_id`, `has_more`, and the `after_id`/`before_id` query parameters), not the opaque `page`/`next_page` cursor the official Files API and `anthropic` SDK ≥ 1.0 moved to. The SDK's own iteration (`client.beta.files.list()` as an async iterator) follows `next_page`, which this response never sets, so it stops after the first page instead of walking your whole file list. Paginate by hand with `after_id`/`before_id`, as the [List Files](#list-files) examples do. Adopting the newer cursor is tracked in [issue #206](https://github.com/stdapi-ai/stdapi.ai/issues/206).
+**Two ways to page, and they do not mix.** The listing serves the `page`/`next_page` cursor the official Files API uses, *and* keeps the ID-cursor envelope (`first_id`, `last_id`, `has_more`, and the `after_id`/`before_id` query parameters) that clients here were written against, and which the official API refuses outright. Pick one scheme per request: `page` together with `ids`, `after_id` or `before_id` is a `400`, because each of them names a different set of files and honouring only one would answer with a page you did not ask for. A cursor carries the whole position, so it can be held and replayed against any instance of your deployment; one this API never issued is refused with a `400` rather than served as an arbitrary page. A `before_id` page carries no `next_page`: its remaining results lie the other way.
 
 **Scope filtering is refused.** A file here is never associated with a scope — no `scope` appears on its metadata — so `GET /v1/files?scope_id=...` answers `400` instead of returning a set that would ignore the filter. Select the files you want with `ids`, or list them without a filter.
 
@@ -331,6 +338,7 @@ Files are stored in S3 under the prefix configured by [`AWS_S3_FILES_PREFIX`](op
 | 400  | Malformed ID after the `file-id:` prefix in a Messages content block                |
 | 400  | More than 100 distinct `ids` on a listing request, or an `ids` entry that is not a file ID |
 | 400  | `scope_id` on a listing request (`GET /v1/files`)                                   |
+| 400  | A `page` cursor this API did not issue, or one sent alongside `ids`, `after_id` or `before_id` |
 | 404  | File not found or already deleted                                                   |
 | 529  | `AWS_S3_BUCKET` is not configured                                                   |
 
