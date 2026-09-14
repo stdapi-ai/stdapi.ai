@@ -17,7 +17,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
 from fastapi.routing import iter_route_contexts
-from starlette.background import BackgroundTask
+from starlette.background import BackgroundTask, BackgroundTasks
 from starlette.exceptions import HTTPException
 from starlette.routing import Match
 
@@ -101,6 +101,11 @@ from stdapi.tenant_keys import (
     initialize_tenant_keys,
     open_tenant_key_reconciliation,
     tenant_key_client_specs,
+)
+from stdapi.tenant_rate_limits import (
+    rate_limit_headers,
+    settle_tenant_reservation,
+    tenant_retry_after,
 )
 from stdapi.utils import JSONResponse, hide_security_details
 from stdapi.vector_stores.engine import drain_indexing
@@ -466,16 +471,29 @@ if SETTINGS.cors_allow_origins:
 def set_retry_after_header(request: Request, response: Response) -> None:
     """Attach ``retry-after`` to a rate-limited response when a delay is known.
 
-    Advertises the region router's own quota backoff so client SDKs wait the
-    server-driven delay instead of a blind exponential backoff; omitted when no
-    region was put on a quota backoff while serving the request.
+    Advertises the region router's own quota backoff, or the seconds left in
+    the minute a tenant's rate limit was reached for, so client SDKs wait the
+    server-driven delay instead of a blind exponential backoff; omitted when
+    neither applies to the request.
 
     Args:
         request: Incoming HTTP request.
         response: Outgoing response object.
     """
-    if response.status_code == 429 and (seconds := quota_retry_after(request)):
+    if response.status_code == 429 and (
+        seconds := quota_retry_after(request) or tenant_retry_after(request)
+    ):
         response.headers["retry-after"] = str(seconds)
+
+
+def set_rate_limit_headers(request: Request, response: Response) -> None:
+    """Attach the dialect's rate-limit headers to a rate-limited tenant's response.
+
+    Args:
+        request: Incoming HTTP request.
+        response: Outgoing response object.
+    """
+    response.headers.update(rate_limit_headers(request))
 
 
 def set_www_authenticate_header(response: Response) -> None:
@@ -524,24 +542,33 @@ async def _middleware(
                     if await request.is_disconnected():
                         log["status_code"] = 499
                         log_error_details(f"Client disconnected: {exc}", status=499)
+                        await settle_tenant_reservation(request)
                         run_cleanups_detached(log["id"])
                         return Response(status_code=499)
                     raise
             except BaseException:
                 # No response will be sent (unhandled error or cancellation),
                 # so the post-response background drain never runs.
+                await settle_tenant_reservation(request)
                 run_cleanups_detached(log["id"])
                 raise
             log["status_code"] = response.status_code
             response.headers[get_request_id_header(request)] = log["id"]
             set_log_fields(request, log)
         set_response_headers(request, response, log["execution_time_ms"])
+        set_rate_limit_headers(request, response)
         set_retry_after_header(request, response)
         set_www_authenticate_header(response)
         # Attached unconditionally: a streamed body has produced nothing yet,
-        # so what it defers is scheduled long after this point. The drain runs
-        # once the body is complete, and is a no-op when nothing was scheduled.
-        response.background = BackgroundTask(run_scheduled_cleanups, log["id"])
+        # so what it defers is scheduled long after this point. Both run once
+        # the body is complete, and are no-ops when nothing was reserved or
+        # scheduled.
+        response.background = BackgroundTasks(
+            [
+                BackgroundTask(settle_tenant_reservation, request),
+                BackgroundTask(run_scheduled_cleanups, log["id"]),
+            ]
+        )
     response.headers["server"] = "stdapi.ai"
     return response
 

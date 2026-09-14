@@ -68,6 +68,7 @@ from stdapi.monitoring import (
     log_request_event,
 )
 from stdapi.tenant_keys import resume_tenant
+from stdapi.tenant_rate_limits import settle_tenant_reservation
 from stdapi.types.openai_realtime import (
     FORMAT_SAMPLE_RATES,
     PCM_SAMPLE_RATE,
@@ -2472,6 +2473,9 @@ async def serve_realtime_session(
             )
             await _refuse(websocket, ApiError(_UNEXPECTED_ERROR, status=500))
         finally:
+            # A handshake bills nothing before its first turn, so the end of
+            # the connection is what gives back what it reserved.
+            await settle_tenant_reservation(websocket)
             run_cleanups_detached(log["id"])
 
 

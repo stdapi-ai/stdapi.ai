@@ -360,6 +360,8 @@ Grouped by page. The defaults work; open a page when a Tier 1 or Tier 2 row abov
     | [`TENANT_KEY_SECRETSMANAGER_PREFIX`](operations_configuration_authentication.md#tenant-key-secretsmanager-prefix) | Authentication & tenants |
     | [`TENANT_KEY_SSM_KMS_KEY_ID`](operations_configuration_authentication.md#tenant-key-ssm-kms-key-id) | Authentication & tenants |
     | [`TENANT_KEY_SSM_PARAMETER_PREFIX`](operations_configuration_authentication.md#tenant-key-ssm-parameter-prefix) | Authentication & tenants |
+    | [`TENANT_RATE_LIMIT_REQUESTS_PER_MINUTE`](operations_configuration_authentication.md#tenant-rate-limit-requests-per-minute) | Authentication & tenants |
+    | [`TENANT_RATE_LIMIT_TOKENS_PER_MINUTE`](operations_configuration_authentication.md#tenant-rate-limit-tokens-per-minute) | Authentication & tenants |
     | [`TIMEZONE`](operations_configuration_observability.md#timezone) | Observability & usage |
     | [`TOKENS_ESTIMATION`](operations_configuration.md#tokens-estimation) | This page |
     | [`TOKENS_ESTIMATION_DEFAULT_ENCODING`](operations_configuration.md#tokens-encoding) | This page |
