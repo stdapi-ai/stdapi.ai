@@ -177,6 +177,9 @@ class ChatModel(_BaseChatModel):
         {"video"}
     )
 
+    #: The prompt is read back out of the messages here, where a tagged block would be lost.
+    GUARDRAIL_SCOPE_SUPPORTED: ClassVar[bool] = False
+
     #: Pegasus refuses an inline video past a 25 MiB base64 string.
     INLINE_MEDIA_LIMITS: ClassVar[InlineMediaLimits] = InlineMediaLimits(
         max_file_base64_size=_PEGASUS_INLINE_BASE64,

@@ -1115,6 +1115,28 @@ class _Settings(BaseSettings):
         ),
     )
 
+    aws_bedrock_guardrail_scope_turns: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Limit guardrail evaluation to the most recent turns of a conversation, "
+            "on the chat routes (Chat Completions, Responses, Completions, "
+            "Anthropic Messages and the Ollama /api/chat and /api/generate "
+            "routes). Set it to the number of trailing user turns to "
+            "evaluate: AWS then bills guardrail units for those turns only, instead "
+            "of re-evaluating the whole conversation the client replays on every "
+            "request. Model output is always evaluated in full, whatever this is "
+            "set to, and the other routes check each request as it is submitted.\n\n"
+            "Trade-off: the earlier turns are no longer evaluated, so content that "
+            "appears only in the conversation history - including an attack built "
+            "across several turns - is no longer detected. Raise the number of turns "
+            "to widen the window. Only the text of a scoped turn is submitted, so "
+            "images and other non-text content stop being evaluated at any value.\n\n"
+            "Example: 1\n\n"
+            "Defaults to unset: the whole conversation is evaluated on every request."
+        ),
+    )
+
     aws_bedrock_guardrail_checks_prompt_attack: bool = Field(
         default=False,
         description=(

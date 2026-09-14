@@ -194,6 +194,10 @@ Falling back is normal, not a gap: where AWS publishes no distinct global rate f
 
 AWS prices each [service tier](operations_configuration_models.md#default-model-service-tiers-section) differently: `flex` trades latency for a lower rate, `priority` does the opposite. Two ways to apply one without changing client code: `DEFAULT_MODEL_SERVICE_TIERS` pins a tier per model, and a [model alias](operations_configuration_models.md#model-aliases-configuration) pins one per alias — publishing, say, a `flex` name for batch workloads and a `priority` name for interactive ones over the same model. Set [`AWS_BEDROCK_ALLOW_SERVICE_TIER_OVERRIDE`](operations_configuration_models.md#aws-bedrock-allow-service-tier-override) to `false` to stop clients selecting another tier, and the cost profile you configured holds. Both settings and the override gate cover models served through the Bedrock Converse and InvokeModel APIs; a Bedrock Mantle-served model runs on the tier its own request names.
 
+### Guardrail Evaluation as a Cost Lever
+
+A guarded chat conversation is charged for everything the client replays: the same history is evaluated again on every turn, so a long conversation pays for its own past. [`AWS_BEDROCK_GUARDRAIL_SCOPE_TURNS`](operations_configuration_bedrock.md#aws-bedrock-guardrail-scope-turns) limits evaluation to the most recent user turns instead — a lower bill for less detection, which is why it is off by default and why the [trade-off](operations_configuration_bedrock.md#bedrock-guardrails) is worth reading before setting it.
+
 ### Batch Inference { #batch-inference }
 
 Requests sent through the [Batch API](api_openai_batches.md) or the [Message Batches API](api_anthropic_batches.md) are billed by AWS at the model's published **batch** rate, roughly half its on-demand rate. stdapi.ai prices them at that rate, reported with `"tier": "batch"` in the usage entry, and falls back to half the standard rate when AWS publishes no batch rate for a model.

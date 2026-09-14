@@ -268,7 +268,7 @@ The same classification is available inline on generation: the `moderation` requ
 
 Personal data is handled in exactly two places, both of which you switch on deliberately:
 
-- **The guardrail's sensitive-information policy** — the PII entity types and regular expressions you configure on the guardrail are masked or blocked wherever that guardrail is checked, in both directions, following the intervention behavior above.
+- **The guardrail's sensitive-information policy** — the PII entity types and regular expressions you configure on the guardrail are masked or blocked wherever that guardrail is checked, in both directions, following the intervention behavior above. The whole conversation is covered unless [`AWS_BEDROCK_GUARDRAIL_SCOPE_TURNS`](operations_configuration_bedrock.md#aws-bedrock-guardrail-scope-turns) is set: it narrows the input side of the chat routes to the trailing user turns it names, leaving earlier turns unchecked, and the output side is unaffected.
 - **Amazon Transcribe PII redaction** — a client may request `ContentRedaction` on a transcription; only the single-output `redacted` mode is accepted, so no unredacted copy is produced. See [Audio Transcriptions](api_openai_audio_transcriptions.md).
 
 Just as importantly, there is no personal-data handling anywhere else, and none should be assumed:
