@@ -43,6 +43,10 @@ Configure **one** API key source. If several are set, precedence is `API_KEY` �
 | [`TENANT_KEY_CACHE_SECONDS`](#tenant-key-cache-seconds)           | `60`      | Per-instance validation cache, which is also the revocation window |
 | [`TENANT_KEY_SSM_PARAMETER_PREFIX`](#tenant-key-ssm-parameter-prefix) | `/stdapi-ai/tenant-keys` | SSM prefix minted tenant keys are delivered under, once |
 | [`TENANT_KEY_SSM_KMS_KEY_ID`](#tenant-key-ssm-kms-key-id)         | None      | KMS key encrypting the delivery parameters, instead of `alias/aws/ssm` |
+| [`TENANT_KEY_SECRETSMANAGER_PREFIX`](#tenant-key-secretsmanager-prefix) | None | Store each tenant key durably in a Secrets Manager secret instead, enabling rotation |
+| [`TENANT_KEY_SECRETSMANAGER_KMS_KEY_ID`](#tenant-key-secretsmanager-kms-key-id) | None | KMS key encrypting those secrets, instead of `alias/aws/secretsmanager` |
+| [`TENANT_KEY_ROTATION_DAYS`](#tenant-key-rotation-days)           | None      | Rotate every stored tenant key once it is this many days old |
+| [`TENANT_KEY_ROTATION_OVERLAP_SECONDS`](#tenant-key-rotation-overlap-seconds) | `604800` | How long a rotated key keeps working after its replacement is promoted |
 | [`TENANT_AWS_CREDENTIALS`](#tenant-aws-credentials)               | `false`   | Let a tenant register a cross-account IAM role its model invocations run under |
 | [`AUTHENTICATION_MODE`](#authentication-mode)                     | `any`     | Accepted methods: `any`, `api_key` or `cognito`                    |
 
@@ -262,7 +266,7 @@ export AWS_COGNITO_ISSUER_TYPE=updated
 
 ## :material-account-key: Method 5: Tenant API Keys { #tenant-authentication }
 
-Accept per-tenant API keys (`sk-std-...`), each backed by a record in the [shared DynamoDB table](operations_configuration_storage.md#aws-dynamodb-table) that scopes what the key may call — model allow/deny lists and endpoint restrictions. The records are declared by the operator (the [Terraform module](operations_getting_started.md#quick-start)'s `tenants` variable, or written directly); the secret is minted by the server and delivered once through SSM Parameter Store. How keys are issued, scoped, cached and revoked is described in [Authentication & Security](operations_authentication_security.md#tenant-api-keys). Clients send the key in the `Authorization: Bearer <key>` or `X-API-Key` header, like any API key.
+Accept per-tenant API keys (`sk-std-...`), each backed by a record in the [shared DynamoDB table](operations_configuration_storage.md#aws-dynamodb-table) that scopes what the key may call — model allow/deny lists and endpoint restrictions. The records are declared by the operator (the [Terraform module](operations_getting_started.md#quick-start)'s `tenants` variable, or written directly); the secret is minted by the server and either delivered once through SSM Parameter Store (the default) or stored durably in AWS Secrets Manager, where it can be [rotated](operations_authentication_security.md#rotating-tenant-keys). How keys are issued, scoped, cached, rotated and revoked is described in [Authentication & Security](operations_authentication_security.md#tenant-api-keys). Clients send the key in the `Authorization: Bearer <key>` or `X-API-Key` header, like any API key.
 
 ```bash
 export AWS_DYNAMODB_TABLE=stdapi-ai
@@ -331,6 +335,87 @@ export TENANT_KEY_SSM_PARAMETER_PREFIX=/stdapi-ai/prod/tenant-keys
 
 ```bash
 export TENANT_KEY_SSM_KMS_KEY_ID=alias/stdapi-ai
+```
+
+#### `TENANT_KEY_SECRETSMANAGER_PREFIX` { #tenant-key-secretsmanager-prefix }
+
+:octicons-package-24: **Purpose**
+:   Store each tenant key durably in an AWS Secrets Manager secret named `<prefix>/<key id>`, as its current version, instead of delivering it once through Parameter Store. This is what makes [rotation](operations_authentication_security.md#rotating-tenant-keys) possible: a rotated key becomes the secret's new current version, the superseded one stays readable as `AWSPREVIOUS`, and a tenant granted read access to its own secret re-reads its key without an operator in the loop
+
+:octicons-gear-24: **Default**
+:   None — minted keys are delivered once under [`TENANT_KEY_SSM_PARAMETER_PREFIX`](#tenant-key-ssm-parameter-prefix) and are never rotated
+
+:octicons-list-unordered-24: **Values**
+:   Segments of letters, digits and `_+=.@-` joined by `/`, without a leading slash
+
+:octicons-alert-24: **Requirement**
+:   Requires [`TENANT_API_KEYS`](#tenant-api-keys). Use a prefix private to this deployment: any principal allowed to read under it can read every tenant's key. The server creates a secret that does not exist yet and writes its versions, but never deletes one — a destroyed tenant's secret is yours (or the Terraform module's) to remove
+
+:octicons-lock-24: **IAM Permissions Required**
+:   `secretsmanager:CreateSecret`, `secretsmanager:DescribeSecret`, `secretsmanager:GetSecretValue`, `secretsmanager:PutSecretValue` and `secretsmanager:UpdateSecretVersionStage` on `<prefix>/*` — see [Tenant API Key Rotation](operations_iam_permissions.md#tenant-key-rotation)
+
+```bash
+export TENANT_KEY_SECRETSMANAGER_PREFIX=stdapi-ai/prod/tenant-keys
+```
+
+#### `TENANT_KEY_SECRETSMANAGER_KMS_KEY_ID` { #tenant-key-secretsmanager-kms-key-id }
+
+:octicons-package-24: **Purpose**
+:   AWS KMS key encrypting the secrets the tenant keys are stored in
+
+:octicons-gear-24: **Default**
+:   None — the secrets are encrypted with the AWS-managed `alias/aws/secretsmanager` key, whose key policy lets **any principal of the account** holding `secretsmanager:GetSecretValue` on a secret decrypt it
+
+:octicons-list-unordered-24: **Values**
+:   A key ID, an alias (`alias/<name>`), or an ARN of either
+
+:octicons-alert-24: **Requirement**
+:   Requires [`TENANT_KEY_SECRETSMANAGER_PREFIX`](#tenant-key-secretsmanager-prefix)
+
+:octicons-lock-24: **IAM Permissions Required**
+:   `kms:GenerateDataKey` and `kms:Decrypt` on the key — see [Tenant API Key Rotation](operations_iam_permissions.md#tenant-key-rotation)
+
+!!! tip "Set for you by the Terraform module"
+    The [Terraform module](operations_getting_started.md#quick-start) passes the deployment's own KMS key here automatically; there is nothing to configure.
+
+```bash
+export TENANT_KEY_SECRETSMANAGER_KMS_KEY_ID=alias/stdapi-ai
+```
+
+#### `TENANT_KEY_ROTATION_DAYS` { #tenant-key-rotation-days }
+
+:octicons-package-24: **Purpose**
+:   Rotate every stored tenant key once it is this many days old, counted from its mint or its last rotation. The new key is stored as the secret's current version and the superseded one keeps working for [`TENANT_KEY_ROTATION_OVERLAP_SECONDS`](#tenant-key-rotation-overlap-seconds)
+
+:octicons-gear-24: **Default**
+:   None — keys are only rotated on demand, by raising `key_generation` on a tenant record
+
+:octicons-list-unordered-24: **Values**
+:   A whole number of days, at least `1`. `90` or less keeps the secrets within the periodic-rotation window AWS Security Hub checks
+
+:octicons-alert-24: **Requirement**
+:   Requires [`TENANT_KEY_SECRETSMANAGER_PREFIX`](#tenant-key-secretsmanager-prefix), and must be longer than [`TENANT_KEY_ROTATION_OVERLAP_SECONDS`](#tenant-key-rotation-overlap-seconds) — with that setting left at its 7-day default, a value of `7` or less refuses to start
+
+```bash
+export TENANT_KEY_ROTATION_DAYS=90
+```
+
+#### `TENANT_KEY_ROTATION_OVERLAP_SECONDS` { #tenant-key-rotation-overlap-seconds }
+
+:octicons-package-24: **Purpose**
+:   Seconds a rotated tenant key keeps authenticating after its replacement was promoted to `AWSCURRENT`, so a client that has not re-read its secret yet is not locked out
+
+:octicons-gear-24: **Default**
+:   `604800` (7 days)
+
+:octicons-list-unordered-24: **Values**
+:   `0` refuses the superseded key as soon as the new one is promoted. Only the last superseded key is kept, so the grace also ends at the next rotation, whichever comes first. Disabling its tenant refuses both keys within [`TENANT_KEY_CACHE_SECONDS`](#tenant-key-cache-seconds), whatever this value
+
+:octicons-alert-24: **Requirement**
+:   Only used with [`TENANT_KEY_SECRETSMANAGER_PREFIX`](#tenant-key-secretsmanager-prefix). Must be shorter than [`TENANT_KEY_ROTATION_DAYS`](#tenant-key-rotation-days) when that is set, or the server refuses to start: an overlap reaching the next rotation retires nothing
+
+```bash
+export TENANT_KEY_ROTATION_OVERLAP_SECONDS=86400
 ```
 
 #### `TENANT_AWS_CREDENTIALS` { #tenant-aws-credentials }

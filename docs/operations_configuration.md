@@ -354,6 +354,10 @@ Grouped by page. The defaults work; open a page when a Tier 1 or Tier 2 row abov
     | [`TENANT_API_KEYS`](operations_configuration_authentication.md#tenant-api-keys) | Authentication & tenants |
     | [`TENANT_AWS_CREDENTIALS`](operations_configuration_authentication.md#tenant-aws-credentials) | Authentication & tenants |
     | [`TENANT_KEY_CACHE_SECONDS`](operations_configuration_authentication.md#tenant-key-cache-seconds) | Authentication & tenants |
+    | [`TENANT_KEY_ROTATION_DAYS`](operations_configuration_authentication.md#tenant-key-rotation-days) | Authentication & tenants |
+    | [`TENANT_KEY_ROTATION_OVERLAP_SECONDS`](operations_configuration_authentication.md#tenant-key-rotation-overlap-seconds) | Authentication & tenants |
+    | [`TENANT_KEY_SECRETSMANAGER_KMS_KEY_ID`](operations_configuration_authentication.md#tenant-key-secretsmanager-kms-key-id) | Authentication & tenants |
+    | [`TENANT_KEY_SECRETSMANAGER_PREFIX`](operations_configuration_authentication.md#tenant-key-secretsmanager-prefix) | Authentication & tenants |
     | [`TENANT_KEY_SSM_KMS_KEY_ID`](operations_configuration_authentication.md#tenant-key-ssm-kms-key-id) | Authentication & tenants |
     | [`TENANT_KEY_SSM_PARAMETER_PREFIX`](operations_configuration_authentication.md#tenant-key-ssm-parameter-prefix) | Authentication & tenants |
     | [`TIMEZONE`](operations_configuration_observability.md#timezone) | Observability & usage |

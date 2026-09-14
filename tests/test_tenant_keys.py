@@ -550,6 +550,45 @@ class TestMinting:
         assert SETTINGS.tenant_key_ssm_kms_key_id is None
         assert "KeyId" not in requests[0]
 
+    async def test_a_generation_bump_without_the_store_is_reported_once(
+        self, tenant_backend: SSMClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A delivered key is never rotated: there is nowhere to publish a new one.
+
+        Raising ``key_generation`` on a tenant whose keys go through
+        Parameter Store is reported once, names the setting that would make
+        it work, and changes nothing.
+
+        Ref: stdapi/tenant_keys.py:_rotation_work
+        """
+        from stdapi.monitoring import log_error_details  # noqa: PLC0415
+
+        del tenant_backend
+        warnings: list[str] = []
+
+        def _spy(
+            *detail: object, level: str | None = None, status: int | None = None
+        ) -> None:
+            if level == "warning":
+                warnings.extend(str(item) for item in detail)
+            log_error_details(*detail, level=level, status=status)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(tenant_keys, "log_error_details", _spy)
+        key_id = "b" + "0" * 15
+        await put_item(_tenant_item(key_id))
+        await reconcile_tenant_keys()
+        before = await get_item("TENANT", f"secret#{key_id}")
+        assert before is not None
+        await put_item(_tenant_item(key_id, key_generation=1))
+
+        await reconcile_tenant_keys()
+        await reconcile_tenant_keys()
+
+        assert await get_item("TENANT", f"secret#{key_id}") == before
+        reported = [w for w in warnings if "key_generation" in w and key_id in w]
+        assert len(reported) == 1
+        assert "tenant_key_secretsmanager_prefix" in reported[0]
+
 
 class TestVerification:
     """The adversarial shapes a validator must refuse, and how fast it answers.
@@ -624,9 +663,12 @@ class TestVerification:
 
         Refusing it without that work would time-leak which key IDs exist,
         which is the property the module docstring claims to close -- on the
-        negative-cached refusal as much as on the cold one.
+        negative-cached refusal as much as on the cold one. A real key is
+        compared against its current and its previous secret, so the
+        fabricated one is compared twice as well.
 
         Ref: stdapi/tenant_keys.py:_reject_unknown
+             stdapi/tenant_keys.py:_matches
         """
         del tenant_backend
         compared: list[tuple[bytes, bytes]] = []
@@ -644,8 +686,8 @@ class TestVerification:
         with pytest.raises(ApiError):
             await verify_tenant_key(credential)
 
-        assert cold == 1, "the cold refusal must hash and compare the secret"
-        assert len(compared) == 2, "the cached refusal must do the same work"
+        assert cold == 2, "the cold refusal must hash and compare the secret twice"
+        assert len(compared) == 4, "the cached refusal must do the same work"
         assert all(len(left) == len(right) for left, right in compared)
 
     async def test_the_negative_cache_expires(
@@ -1694,7 +1736,7 @@ class TestReconciliationLifecycle:
         AWS's own message here carries no IAM denial grammar to attribute, so
         the report falls back to naming the call and the bare error code.
 
-        Ref: stdapi/tenant_keys.py:_mint_failure_detail
+        Ref: stdapi/tenant_keys.py:_store_failure_detail
         """
         from stdapi.monitoring import log_error_details  # noqa: PLC0415
 
@@ -1736,7 +1778,7 @@ class TestReconciliationLifecycle:
         call actually needed, not a guess between the SSM call and its key --
         while the principal ARN AWS's own message carries is never repeated.
 
-        Ref: stdapi/tenant_keys.py:_mint_failure_detail
+        Ref: stdapi/tenant_keys.py:_store_failure_detail
              stdapi/api_errors.py:iam_denial_detail
         """
         from stdapi.monitoring import log_error_details  # noqa: PLC0415
@@ -1831,7 +1873,7 @@ class TestCrossRegionKmsWarning:
             return None
 
         monkeypatch.setattr(tenant_keys, "reconcile_tenant_keys", _noop)
-        monkeypatch.setattr(tenant_keys, "_SSM_REGION", "us-east-1")
+        monkeypatch.setattr(tenant_keys, "_STORE_REGION", "us-east-1")
         monkeypatch.setattr(SETTINGS, "tenant_key_ssm_kms_key_id", key_id)
         start_event: EventLog = {"type": "start", "level": "info"}  # type: ignore[typeddict-item]
         await initialize_tenant_keys(start_event)
@@ -1956,7 +1998,7 @@ class TestRealBackends:
             monkeypatch.setitem(_CLIENTS, "ssm", {AWS_REGION: ssm_client})
             try:
                 await gather(
-                    *(tenant_keys._mint(key_id, "race") for _ in range(4))  # noqa: SLF001
+                    *(tenant_keys._mint(key_id, "race", {}) for _ in range(4))  # noqa: SLF001
                 )
 
                 delivered = await ssm_client.get_parameter(
