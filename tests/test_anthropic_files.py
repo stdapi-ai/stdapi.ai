@@ -18,12 +18,14 @@ Ref: https://platform.claude.com/docs/en/build-with-claude/files
 """
 
 import io
+from base64 import urlsafe_b64encode
 from contextlib import suppress
 from datetime import UTC, datetime
+from itertools import islice
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from anthropic import Anthropic
+from anthropic import Anthropic, BadRequestError
 from anthropic import NotFoundError as AnthropicNotFoundError
 
 from stdapi import input_file as input_file_mod
@@ -53,6 +55,19 @@ _TEXT_FILE: bytes = b"The capital of France is Paris."
 
 #: Bucket added to the input allowlist so an ``s3://`` body reaches the resolver.
 _ALLOWED_BUCKET: str = "stdapi-test-accepted-bucket"
+
+
+def _stub_record(payload: str) -> FileRecord:
+    """Return a stored-file record for *payload*, for tests that stub the store."""
+    return FileRecord(
+        file_id=payload,
+        filename=f"{payload[0]}.txt",
+        content_type="text/plain",
+        purpose="user_data",
+        size=len(_TEXT_FILE),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        expires_at=None,
+    )
 
 
 @pytest.fixture
@@ -177,24 +192,99 @@ class TestAnthropicFiles:
         assert ids.index(f2.id) < ids.index(f1.id), (
             f"the later upload must be listed first, got {ids}"
         )
-        if use_official_api:
-            # Upstream replaced the edge-ID cursors with an opaque ``next_page``
-            # token and no longer sends them at all; the gateway still serves
-            # the envelope its own clients were written against.
-            return
-        # Read through ``model_extra``: the gateway still sends the three
-        # listing fields, but the SDK's page model stopped declaring them in
-        # 1.0.0, when it moved to the opaque cursor.
-        assert (page.model_extra or {})["first_id"] == page.data[0].id
-        assert (page.model_extra or {})["last_id"] == page.data[-1].id
+        if not use_official_api:
+            # Read through ``model_extra``: the gateway serves the edge-ID
+            # cursors alongside the opaque one, but the SDK's page model stopped
+            # declaring them in 1.0.0 and upstream no longer sends them at all.
+            assert (page.model_extra or {})["first_id"] == page.data[0].id
+            assert (page.model_extra or {})["last_id"] == page.data[-1].id
 
-    # The SDK dropped the two cursor parameters from ``files.list()`` in 1.0.0
-    # in favour of an opaque ``page`` token, so they travel in ``extra_query``:
+    def test_anthropic_list_next_page_continues_the_listing(
+        self,
+        anthropic_client: Anthropic,
+        upload_file: Callable[[str, bytes, str], FileMetadata],
+    ) -> None:
+        """``next_page`` resumes the listing where the page stopped, and the SDK follows it alone.
+
+        Three uploads make a one-file page incomplete on either target, so the cursor
+        has to be there: the request that carries it back must not repeat the file
+        already served, and the SDK's own iteration — which follows ``next_page`` and
+        nothing else — must walk three distinct files instead of stopping on the
+        first page.
+
+        Ref: https://platform.claude.com/docs/en/api/beta/files/list
+             stdapi/routes/anthropic_files.py:list_files_endpoint
+        """
+        for index in range(3):
+            upload_file(f"pag{index}.txt", _TEXT_FILE, "text/plain")
+
+        page1 = anthropic_client.beta.files.list(limit=1)
+        assert len(page1.data) == 1
+        assert isinstance(page1.next_page, str), (
+            "an incomplete page must carry the cursor to the next one"
+        )
+        assert page1.next_page.startswith("page_")
+
+        page2 = anthropic_client.beta.files.list(limit=1, page=page1.next_page)
+        assert page1.data[0].id not in {f.id for f in page2.data}
+
+        walked = [f.id for f in islice(anthropic_client.beta.files.list(limit=1), 3)]
+        assert len(set(walked)) == 3, (
+            f"the SDK iterator must follow the cursor across pages, walked {walked}"
+        )
+
+    def test_anthropic_list_refuses_a_page_cursor_it_never_issued(
+        self, anthropic_client: Anthropic
+    ) -> None:
+        """A cursor the API never issued is refused, never answered with the first page.
+
+        The cursor names a position in the listing, so serving an unreadable one would
+        answer with a page the caller did not ask for.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+             stdapi/routes/anthropic_files.py:_page_cursor_position
+        """
+        with pytest.raises(BadRequestError) as excinfo:
+            anthropic_client.beta.files.list(page="page_garbage")
+
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.type == "invalid_request_error"
+        message = str(excinfo.value).lower()
+        assert "page" in message
+        assert "cursor" in message
+
+    def test_anthropic_list_ids_cannot_be_combined_with_a_page_cursor(
+        self,
+        anthropic_client: Anthropic,
+        upload_file: Callable[[str, bytes, str], FileMetadata],
+    ) -> None:
+        """Naming the files and resuming a page are two different requests, so both at once is a 400.
+
+        The cursor sent here is a real one taken from a prior page, so the refusal can
+        only be about the combination rather than about the cursor itself.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+             stdapi/routes/anthropic_files.py:list_files_endpoint
+        """
+        named = upload_file("idspag1.txt", _TEXT_FILE, "text/plain")
+        upload_file("idspag2.txt", _TEXT_FILE, "text/plain")
+        cursor = anthropic_client.beta.files.list(limit=1).next_page
+        assert cursor, "two uploads must not fit in a one-file page"
+
+        with pytest.raises(BadRequestError) as excinfo:
+            anthropic_client.beta.files.list(ids=[named.id], page=cursor)
+
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.type == "invalid_request_error"
+        assert "ids" in str(excinfo.value).lower()
+
+    # The SDK dropped the two ID cursor parameters from ``files.list()`` in 1.0.0
+    # in favour of the opaque ``page`` token, so they travel in ``extra_query``:
     # the wire request stays the one a client that still sends them makes.
 
     @pytest.mark.gateway(
-        "upstream replaced the ID cursors with an opaque `page` token; the "
-        "gateway still serves the ID scheme its clients were written against"
+        "upstream refuses `after_id` as an unknown query field; the ID cursors "
+        "are a gateway superset alongside the `page` cursor it shares with upstream"
     )
     def test_anthropic_list_after_id(
         self,
@@ -230,8 +320,8 @@ class TestAnthropicFiles:
         assert {f.id for f in files[:2]} <= ids_after_own
 
     @pytest.mark.gateway(
-        "upstream replaced the ID cursors with an opaque `page` token; the "
-        "gateway still serves the ID scheme its clients were written against"
+        "upstream refuses `before_id` as an unknown query field; the ID cursors "
+        "are a gateway superset alongside the `page` cursor it shares with upstream"
     )
     def test_anthropic_list_before_id(
         self,
@@ -915,6 +1005,206 @@ class TestAnthropicListIdsSelection:
         body = response.json()
         assert body["error"]["type"] == "invalid_request_error"
         assert "scope_id" in body["error"]["message"]
+
+
+class TestAnthropicListPageCursor:
+    """``GET /anthropic/v1/files?page=`` — the opaque cursor the listing serves and takes back.
+
+    The store is stubbed to a known three-file listing so the cursor's own contract is
+    what is under test: which position it names, when it is served at all, and what a
+    cursor this deployment never issued does.
+
+    Ref: https://platform.claude.com/docs/en/api/beta/files/list
+         stdapi/routes/anthropic_files.py:list_files_endpoint
+    """
+
+    pytestmark = pytest.mark.local
+
+    #: The stubbed store, newest first — the order the listing itself serves.
+    _PAYLOADS: tuple[str, ...] = ("c" * 32, "b" * 32, "a" * 32)
+
+    @staticmethod
+    def _cursor(payload: str) -> str:
+        """Return the cursor a client gets for a page ending on *payload*."""
+        return f"page_{urlsafe_b64encode(payload.encode()).decode().rstrip('=')}"
+
+    @staticmethod
+    @pytest.fixture
+    def listed(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str | None]]:
+        """Serve the stubbed listing, recording the cursors the route resolved it with."""
+        payloads = TestAnthropicListPageCursor._PAYLOADS
+        calls: list[tuple[str | None, str | None]] = []
+
+        async def _fake_list_files(
+            after: str | None,
+            before: str | None,
+            limit: int,
+            _order: str,
+            _purpose: str | None,
+        ) -> tuple[list[FileRecord], bool]:
+            calls.append((after, before))
+            if before:
+                # A backward page reports more results in the backward direction.
+                return [_stub_record(payloads[-1])], True
+            start = payloads.index(after) + 1 if after else 0
+            page = payloads[start : start + limit]
+            return [_stub_record(p) for p in page], start + limit < len(payloads)
+
+        async def _no_read(*_args: object) -> FileRecord:
+            msg = "a paged listing must not resolve files one by one"
+            raise AssertionError(msg)
+
+        monkeypatch.setattr(anthropic_files, "list_files", _fake_list_files)
+        monkeypatch.setattr(anthropic_files, "get_file", _no_read)
+        return calls
+
+    def test_the_cursor_resumes_after_the_last_file_of_the_page(
+        self,
+        anthropic_app_client: TestClient,
+        listed: list[tuple[str | None, str | None]],
+    ) -> None:
+        """The cursor names the page's last file, and sending it back resumes just after it.
+
+        A cursor that named anything else would either repeat a file or skip one, so
+        the follow-up page starting at the next file is what proves the position it
+        carries.
+
+        Ref: stdapi/routes/anthropic_files.py:_page_cursor
+             stdapi/routes/anthropic_files.py:_page_cursor_position
+        """
+        first = anthropic_app_client.get("/anthropic/v1/files", params={"limit": 1})
+
+        assert first.status_code == 200, first.text
+        body = first.json()
+        assert [f["id"] for f in body["data"]] == [f"file_{self._PAYLOADS[0]}"]
+        assert body["next_page"] == self._cursor(self._PAYLOADS[0])
+
+        second = anthropic_app_client.get(
+            "/anthropic/v1/files", params={"limit": 1, "page": body["next_page"]}
+        )
+
+        assert second.status_code == 200, second.text
+        assert [f["id"] for f in second.json()["data"]] == [f"file_{self._PAYLOADS[1]}"]
+        assert listed == [(None, None), (self._PAYLOADS[0], None)]
+
+    def test_the_last_page_carries_an_explicit_null_cursor(
+        self,
+        anthropic_app_client: TestClient,
+        listed: list[tuple[str | None, str | None]],
+    ) -> None:
+        """The final page sends ``next_page`` as ``null`` rather than leaving the key out.
+
+        A client reading the key to decide whether to keep paging must find it on
+        every page, which an omitted field cannot promise.
+
+        Ref: https://platform.claude.com/docs/en/api/beta/files/list
+             stdapi/routes/anthropic_files.py:_list_response
+        """
+        response = anthropic_app_client.get(
+            "/anthropic/v1/files", params={"limit": len(self._PAYLOADS)}
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert "next_page" in body
+        assert body["next_page"] is None
+
+    def test_a_backward_page_carries_no_cursor(
+        self,
+        anthropic_app_client: TestClient,
+        listed: list[tuple[str | None, str | None]],
+    ) -> None:
+        """A ``before_id`` page ends without a cursor, even with more results behind it.
+
+        The cursor only ever moves forward, so serving one on a page whose remaining
+        results are in the other direction would walk the caller the wrong way.
+
+        Ref: stdapi/routes/anthropic_files.py:list_files_endpoint
+             stdapi/files/_core.py:list_files
+        """
+        response = anthropic_app_client.get(
+            "/anthropic/v1/files", params={"before_id": f"file_{self._PAYLOADS[0]}"}
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["has_more"] is True
+        assert "next_page" in body
+        assert body["next_page"] is None
+
+    @pytest.mark.parametrize(
+        "cursor",
+        [
+            "page_garbage",
+            "garbage",
+            f"page_{urlsafe_b64encode(b'not-a-position').decode().rstrip('=')}",
+            f"page_{urlsafe_b64encode(b'a' * 31).decode().rstrip('=')}",
+            f"page_{urlsafe_b64encode(b'a' * 32 + b'\n').decode().rstrip('=')}",
+            f"page_{urlsafe_b64encode(bytes([0xFF, 0xFE])).decode().rstrip('=')}",
+            "",
+        ],
+    )
+    def test_a_cursor_this_deployment_never_issued_is_refused(
+        self,
+        anthropic_app_client: TestClient,
+        listed: list[tuple[str | None, str | None]],
+        cursor: str,
+    ) -> None:
+        """An unreadable cursor is a 400, and the store is never read for it.
+
+        Every rejected form decodes to something that is not a position in this
+        listing — wrong prefix, wrong encoding, wrong length, a trailing newline
+        past the position, or not text at all — and honouring any of them would
+        answer with an arbitrary page.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+        """
+        response = anthropic_app_client.get(
+            "/anthropic/v1/files", params={"page": cursor}
+        )
+
+        assert response.status_code == 400, response.text
+        body = response.json()
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "invalid_request_error"
+        message = body["error"]["message"].lower()
+        assert "page" in message
+        assert "cursor" in message
+        assert not listed, "a refused cursor must read nothing"
+
+    @pytest.mark.parametrize(
+        "conflicting",
+        [
+            {"after_id": f"file_{'a' * 32}"},
+            {"before_id": f"file_{'a' * 32}"},
+            {"ids": f"file_{'a' * 32}"},
+        ],
+    )
+    def test_a_page_cursor_cannot_be_combined_with_another_selection(
+        self,
+        anthropic_app_client: TestClient,
+        listed: list[tuple[str | None, str | None]],
+        conflicting: dict[str, str],
+    ) -> None:
+        """Two ways of choosing what to return is a 400, never one of them silently dropped.
+
+        An ID cursor names a different position and ``ids`` names a set instead of a
+        position; picking one for the caller would serve a page they did not ask for.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+        """
+        response = anthropic_app_client.get(
+            "/anthropic/v1/files",
+            params={"page": self._cursor(self._PAYLOADS[0]), **conflicting},
+        )
+
+        assert response.status_code == 400, response.text
+        body = response.json()
+        assert body["error"]["type"] == "invalid_request_error"
+        message = body["error"]["message"]
+        assert "page" in message
+        assert next(iter(conflicting)) in message
+        assert not listed, "a refused request must read nothing"
 
 
 class _StubListS3Client:

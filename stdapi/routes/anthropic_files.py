@@ -1,7 +1,9 @@
 """Anthropic-compatible Files API routes."""
 
 from asyncio import gather
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from contextlib import suppress
+from re import compile as re_compile
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Path, Query, Request, UploadFile
@@ -77,6 +79,48 @@ _SelectedIds = Annotated[
 
 #: Query key the Anthropic client writes a list under: its serialiser uses brackets.
 _IDS_BRACKET_KEY = "ids[]"
+
+#: Prefix every listing cursor carries, as the Anthropic Files API does.
+_PAGE_CURSOR_PREFIX = "page_"
+
+#: A cursor position is the payload a file ID carries, so the ID pattern validates it.
+_FILE_ID_RE = re_compile(FILE_ID_PATTERN).fullmatch
+
+
+def _page_cursor(position: str) -> str:
+    """Return the cursor resuming the listing after the file at *position*.
+
+    Args:
+        position: Bare 32-char payload of the page's last file.
+
+    Returns:
+        The opaque cursor a client sends back as ``page``.
+    """
+    encoded = urlsafe_b64encode(position.encode()).decode()
+    return f"{_PAGE_CURSOR_PREFIX}{encoded.rstrip('=')}"
+
+
+def _page_cursor_position(cursor: str) -> str:
+    """Return the listing position *cursor* names.
+
+    Args:
+        cursor: Cursor a previous response served as ``next_page``.
+
+    Returns:
+        The bare 32-char payload the listing resumes after.
+
+    Raises:
+        ApiError: 400 when the cursor is not one this API issued.
+    """
+    if cursor.startswith(_PAGE_CURSOR_PREFIX):
+        encoded = cursor[len(_PAGE_CURSOR_PREFIX) :]
+        with suppress(ValueError):
+            position = urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
+            if _FILE_ID_RE(f"file_{position}"):
+                return position
+    error = ApiError("Invalid `page` cursor.")
+    error.param = "page"
+    raise error
 
 
 _router = APIRouter(
@@ -201,12 +245,15 @@ async def _visible_file(payload: str) -> FileRecord | None:
     return None
 
 
-def _list_response(files: list[FileMetadata], *, has_more: bool) -> FileListResponse:
+def _list_response(
+    files: list[FileMetadata], *, has_more: bool, next_page: str | None = None
+) -> FileListResponse:
     """Wrap *files* in the listing envelope, reporting the page edges as cursors.
 
     Args:
         files: The page's file metadata, in the order it is served.
         has_more: Whether further pages follow this one.
+        next_page: Cursor to the following page, when one can be resumed forward.
 
     Returns:
         Serialisable ``FileListResponse``.
@@ -216,6 +263,7 @@ def _list_response(files: list[FileMetadata], *, has_more: bool) -> FileListResp
         has_more=has_more,
         first_id=files[0].id if files else None,
         last_id=files[-1].id if files else None,
+        next_page=next_page,
     )
 
 
@@ -226,11 +274,13 @@ def _list_response(files: list[FileMetadata], *, has_more: bool) -> FileListResp
     description=(
         "Returns a paginated list of uploaded files with metadata, most recently "
         "created first (Anthropic Files API).\n\n"
+        "Walk the list by sending each response's `next_page` value back as `page`, "
+        "until `next_page` is null. The `after_id` and `before_id` ID cursors page "
+        "the same list in either direction.\n\n"
         "Pass `ids` to fetch a known set of files in one call instead of paging "
         "through the whole list."
     ),
     response_description="A list of file metadata objects.",
-    response_model_exclude_none=True,
 )
 async def list_files_endpoint(
     ids: Annotated[
@@ -239,8 +289,17 @@ async def list_files_endpoint(
             description=(
                 "Restrict the result to the files whose ID is in this list, at most "
                 "100 after de-duplication. The whole selection is returned as a single "
-                "page, so `after_id`, `before_id` and `limit` are ignored; IDs naming "
-                "no readable file are omitted instead of reported."
+                "page, so `after_id`, `before_id` and `limit` are ignored and `page` is "
+                "refused; IDs naming no readable file are omitted instead of reported."
+            )
+        ),
+    ] = None,
+    page: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Cursor served as `next_page` by a previous response. Returns the page "
+                "that follows it; cannot be combined with `ids`, `after_id` or `before_id`."
             )
         ),
     ] = None,
@@ -299,7 +358,8 @@ async def list_files_endpoint(
         FileListResponse with the selected or paginated file metadata.
 
     Raises:
-        ApiError: If a scope filter is requested, or if S3 is not configured.
+        ApiError: If a scope filter, an unreadable `page` cursor or two ways of
+            choosing the page are requested, or if S3 is not configured.
     """
     if bracketed_ids is not None:
         try:
@@ -312,6 +372,14 @@ async def list_files_endpoint(
             "a scope. Omit it to list files, or name the ones you want in `ids`."
         )
         raise ApiError(msg)
+    if page is not None and (ids is not None or after_id or before_id):
+        named = "ids" if ids is not None else "after_id" if after_id else "before_id"
+        conflict = ApiError(
+            f"`page` cannot be combined with `{named}`: each names a different set of "
+            "files. Send the `page` cursor on its own to continue the listing."
+        )
+        conflict.param = "page"
+        raise conflict
     if ids is not None:
         log_request_params({"ids": ids})
         selected = await gather(*(_visible_file(_strip(fid)) for fid in ids))
@@ -325,16 +393,29 @@ async def list_files_endpoint(
                 has_more=False,
             )
         )
-    log_request_params({"after_id": after_id, "before_id": before_id, "limit": limit})
+    after: str | None = None
+    if page is not None:
+        after = _page_cursor_position(page)
+    elif after_id:
+        after = _strip(after_id)
+    log_request_params(
+        {"after_id": after_id, "before_id": before_id, "limit": limit, "page": page}
+    )
     records, has_more = await list_files(
-        _strip(after_id) if after_id else None,
-        _strip(before_id) if before_id else None,
-        limit,
-        "desc",
-        None,
+        after, _strip(before_id) if before_id else None, limit, "desc", None
     )
     return log_response_params(
-        _list_response([_to_file_metadata(r) for r in records], has_more=has_more)
+        _list_response(
+            [_to_file_metadata(r) for r in records],
+            has_more=has_more,
+            # A backward page's remaining results lie the other way, so the
+            # forward cursor would walk the caller away from them.
+            next_page=(
+                _page_cursor(records[-1].file_id)
+                if has_more and records and not before_id
+                else None
+            ),
+        )
     )
 
 

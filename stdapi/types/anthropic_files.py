@@ -50,6 +50,13 @@ class FileListResponse(BaseModelResponse):
     last_id: str | None = Field(
         default=None, description="ID of the last file in this page of results."
     )
+    next_page: str | None = Field(
+        default=None,
+        description=(
+            "Opaque cursor to the page following this one, or null when this is the "
+            "last page. Send it back as the `page` query parameter."
+        ),
+    )
 
 
 class AnthropicFileUploadJsonBody(BaseModelRequest):
