@@ -114,6 +114,14 @@ _SSM_PARAMETER_PREFIX_RE = re.compile(r"^(?:/[A-Za-z0-9_.-]+)+$").match
 #: Longest ``KeyId`` AWS Systems Manager accepts on a parameter.
 _SSM_KEY_ID_MAX = 256
 
+#: AWS Secrets Manager secret name prefix, in the name alphabet, without a leading slash.
+_SECRETSMANAGER_PREFIX_RE = re.compile(
+    r"^[A-Za-z0-9_+=.@-]+(?:/[A-Za-z0-9_+=.@-]+)*$"
+).match
+
+#: Longest secret name prefix leaving room for ``/<key id>`` under the 512-character name limit.
+_SECRETSMANAGER_PREFIX_MAX = 495
+
 #: AWS KMS key reference as a ``KeyId`` field takes it: key id, alias, or either ARN.
 _KMS_KEY_ID_RE = re.compile(
     r"^(?:[a-zA-Z0-9-]{36}|alias/[A-Za-z0-9:/_-]{1,250}"
@@ -1765,6 +1773,85 @@ class _Settings(BaseSettings):
             "AWS-managed 'alias/aws/ssm' key, whose key policy lets any "
             "principal of this account holding ssm:GetParameter under the "
             "prefix decrypt them."
+        ),
+    )
+
+    tenant_key_secretsmanager_prefix: str | None = Field(
+        default=None,
+        description=(
+            "AWS Secrets Manager name prefix under which each tenant API key "
+            "is stored durably, in a secret named '<prefix>/<key id>', in "
+            "place of the one-shot Parameter Store delivery. The key is the "
+            "secret's current version ('AWSCURRENT'), and a rotation keeps "
+            "the superseded one readable as 'AWSPREVIOUS': a tenant granted "
+            "read access to its own secret re-reads its key itself, so keys "
+            "can be rotated without an operator in the loop. Rotation "
+            "happens on the tenant_key_rotation_days schedule and whenever "
+            "the tenant record's 'key_generation' is raised; both are only "
+            "available with this store.\n\n"
+            "The server creates each secret when it does not exist yet and "
+            "writes its versions; it never deletes one, so a destroyed "
+            "tenant's secret is yours (or the Terraform module's) to remove. "
+            "Use a prefix private to this deployment: any principal allowed "
+            "to read under it can read every tenant's key.\n\n"
+            "Required IAM permissions: secretsmanager:CreateSecret, "
+            "secretsmanager:DescribeSecret, secretsmanager:GetSecretValue, "
+            "secretsmanager:PutSecretValue and "
+            "secretsmanager:UpdateSecretVersionStage on '<prefix>/*'.\n\n"
+            "Example: 'stdapi-ai/production/tenant-keys'\n\n"
+            "Unset (default): minted keys are delivered once through "
+            "Parameter Store under tenant_key_ssm_parameter_prefix, and are "
+            "never rotated."
+        ),
+    )
+
+    tenant_key_secretsmanager_kms_key_id: str | None = Field(
+        default=None,
+        description=(
+            "AWS KMS key encrypting the secrets the tenant API keys are "
+            "stored in, as a key id, an alias ('alias/<name>') or an ARN of "
+            "either. Reading a stored key then requires kms:Decrypt on that "
+            "key on top of secretsmanager:GetSecretValue on the secret, "
+            "instead of the AWS-managed key's account-wide reach.\n\n"
+            "Requires tenant_key_secretsmanager_prefix. The server's role "
+            "needs kms:GenerateDataKey and kms:Decrypt on the key.\n\n"
+            "Example: 'alias/stdapi-ai'\n\n"
+            "Unset (default): the secrets are encrypted with the AWS-managed "
+            "'alias/aws/secretsmanager' key, whose key policy lets any "
+            "principal of this account holding secretsmanager:GetSecretValue "
+            "on a secret decrypt it."
+        ),
+    )
+
+    tenant_key_rotation_days: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Rotate every tenant API key stored in AWS Secrets Manager once "
+            "it is this many days old, counted from its mint or its last "
+            "rotation. The new key is stored as the secret's current version "
+            "and the superseded one keeps working for "
+            "tenant_key_rotation_overlap_seconds. 90 or less keeps the "
+            "secrets within the periodic-rotation window AWS Security Hub "
+            "checks.\n\n"
+            "Requires tenant_key_secretsmanager_prefix.\n\n"
+            "Example: 90\n\n"
+            "Unset (default): keys are only rotated on demand, by raising "
+            "'key_generation' on a tenant record."
+        ),
+    )
+
+    tenant_key_rotation_overlap_seconds: float = Field(
+        default=604800.0,
+        ge=0.0,
+        description=(
+            "Seconds a rotated tenant API key keeps authenticating after its "
+            "replacement was stored, so a client that has not re-read its "
+            "secret yet is not locked out. 0 refuses the superseded key as "
+            "soon as the new one is stored. A compromised key is revoked "
+            "immediately, whatever this value, by disabling the tenant.\n\n"
+            "Only used with tenant_key_secretsmanager_prefix. Defaults to "
+            "604800 (7 days)."
         ),
     )
 
@@ -3756,9 +3843,10 @@ class _Settings(BaseSettings):
 
         Raises:
             ValueError: If tenant keys are enabled without the table, if the
-                delivery prefix is not a Parameter Store path, if the delivery
-                KMS key is not a KMS key reference, or if the delivery key is
-                set without the feature.
+                delivery prefix is not a Parameter Store path, if a KMS key is
+                not a KMS key reference, if a delivery or store setting is set
+                without the feature, or if a rotation or store-key setting is
+                set without the Secrets Manager store.
         """
         if not self.tenant_api_keys:
             if self.tenant_key_ssm_kms_key_id:
@@ -3767,7 +3855,14 @@ class _Settings(BaseSettings):
                     "without the feature no key is ever delivered under it."
                 )
                 raise ValueError(msg)
+            if self.tenant_key_secretsmanager_prefix:
+                msg = (
+                    "tenant_key_secretsmanager_prefix requires tenant_api_keys: "
+                    "without the feature no key is ever stored under it."
+                )
+                raise ValueError(msg)
             return
+        self._validate_tenant_key_store()
         if not self.aws_dynamodb_table:
             msg = (
                 "tenant_api_keys requires aws_dynamodb_table: the tenant "
@@ -3792,6 +3887,54 @@ class _Settings(BaseSettings):
                 f'Invalid tenant_key_ssm_kms_key_id "{key_id}": must be an AWS '
                 "KMS key id, an alias 'alias/<name>', or an ARN of either, of "
                 f"at most {_SSM_KEY_ID_MAX} characters."
+            )
+            raise ValueError(msg)
+
+    def _validate_tenant_key_store(self) -> None:
+        """Ensure the Secrets Manager store and its rotation are configured whole.
+
+        Raises:
+            ValueError: If the prefix is not a secret name prefix, if the
+                store's KMS key is not a KMS key reference, or if a rotation
+                or store-key setting is set without the store.
+        """
+        prefix = self.tenant_key_secretsmanager_prefix
+        if prefix is None:
+            if self.tenant_key_rotation_days is not None:
+                msg = (
+                    "tenant_key_rotation_days requires "
+                    "tenant_key_secretsmanager_prefix: a rotated key is "
+                    "published as a new version of the tenant's secret, and "
+                    "the one-shot Parameter Store delivery has no place for it."
+                )
+                raise ValueError(msg)
+            if self.tenant_key_secretsmanager_kms_key_id:
+                msg = (
+                    "tenant_key_secretsmanager_kms_key_id requires "
+                    "tenant_key_secretsmanager_prefix: without the store no "
+                    "secret is ever encrypted with it."
+                )
+                raise ValueError(msg)
+            return
+        prefix = prefix.rstrip("/")
+        if len(prefix) > _SECRETSMANAGER_PREFIX_MAX or not _SECRETSMANAGER_PREFIX_RE(
+            prefix
+        ):
+            msg = (
+                "tenant_key_secretsmanager_prefix must be an AWS Secrets Manager "
+                "secret name prefix: segments of letters, digits and '_+=.@-' "
+                "joined by '/', without a leading slash, of at most "
+                f"{_SECRETSMANAGER_PREFIX_MAX} characters, e.g. "
+                "'stdapi-ai/tenant-keys'."
+            )
+            raise ValueError(msg)
+        self.tenant_key_secretsmanager_prefix = prefix
+        key_id = self.tenant_key_secretsmanager_kms_key_id
+        if key_id is not None and not _KMS_KEY_ID_RE(key_id):
+            msg = (
+                f'Invalid tenant_key_secretsmanager_kms_key_id "{key_id}": must '
+                "be an AWS KMS key id, an alias 'alias/<name>', or an ARN of "
+                "either."
             )
             raise ValueError(msg)
 

@@ -39,6 +39,7 @@ Each row below is one section of this page. Find the features your deployment en
 | **[Durable Vector Store Indexing](#durable-vector-store-indexing)** | `sqs:SendMessage`<br>`sqs:ReceiveMessage`<br>`sqs:DeleteMessage`<br>`sqs:ChangeMessageVisibility`<br>`sqs:GetQueueAttributes` (on the queue ARN only)<br>`kms:Decrypt` and `kms:GenerateDataKey`, with a `kms:ViaService` condition, when the queue uses SSE-KMS with your own key | `AWS_SQS_VECTOR_STORE_QUEUE_URL` |
 | **[Shared Table](#shared-table)** | `dynamodb:GetItem`<br>`dynamodb:PutItem`<br>`dynamodb:DeleteItem`<br>`dynamodb:Query`<br>`dynamodb:DescribeTable`<br>`dynamodb:DescribeTimeToLive` (on the table ARN; no `dynamodb:Scan`, no index ARN) | `AWS_DYNAMODB_TABLE`<br>`AWS_DYNAMODB_REGION`<br>`MODEL_CACHE_SHARED` |
 | **[Tenant API Key Delivery](#tenant-key-delivery)** | `ssm:PutParameter`<br>`ssm:GetParameter` (on the delivery prefix)<br>`kms:Encrypt`, `kms:Decrypt`, `kms:GenerateDataKey` on the key, with a `kms:ViaService` condition, when `TENANT_KEY_SSM_KMS_KEY_ID` names a key of your own<br>plus the Shared Table permissions above | `TENANT_API_KEYS`<br>`TENANT_KEY_SSM_PARAMETER_PREFIX`<br>`TENANT_KEY_SSM_KMS_KEY_ID` |
+| **[Tenant API Key Rotation](#tenant-key-rotation)** | `secretsmanager:CreateSecret`<br>`secretsmanager:DescribeSecret`<br>`secretsmanager:GetSecretValue`<br>`secretsmanager:PutSecretValue`<br>`secretsmanager:UpdateSecretVersionStage` (on the secret prefix; replaces the Parameter Store delivery)<br>`kms:GenerateDataKey`, `kms:Decrypt` on the key, with a `kms:ViaService` condition, when `TENANT_KEY_SECRETSMANAGER_KMS_KEY_ID` names a key of your own<br>plus the Shared Table permissions above | `TENANT_KEY_SECRETSMANAGER_PREFIX`<br>`TENANT_KEY_SECRETSMANAGER_KMS_KEY_ID`<br>`TENANT_KEY_ROTATION_DAYS` |
 | **[Tenant AWS Credentials](#tenant-aws-credentials)** | `sts:AssumeRole` on the tenant role ARNs, conditioned on `sts:ExternalId` | `TENANT_AWS_CREDENTIALS` |
 | **[Knowledge Base Vector Stores](#knowledge-base-vector-stores)** | `bedrock:GetKnowledgeBase`<br>`bedrock:Retrieve`<br>`bedrock:ListDataSources`<br>`bedrock:IngestKnowledgeBaseDocuments`<br>`bedrock:ListKnowledgeBaseDocuments`<br>`bedrock:GetKnowledgeBaseDocuments`<br>`bedrock:DeleteKnowledgeBaseDocuments` (on each allowlisted knowledge base ARN; no `bedrock:ListKnowledgeBases`) | `AWS_BEDROCK_KNOWLEDGE_BASE_IDS` |
 | **[Video Generation](#video-generation-optional)** | Core Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:TagResource`)<br>`bedrock:ListAsyncInvokes` and `bedrock:ListTagsForResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for job listing<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS` |
@@ -708,6 +709,62 @@ Required, together with the [shared table permissions](#shared-table), when [ten
 
     !!! info "Replace the Placeholders"
         `REGION` is the deployment's own Region, `ACCOUNT_ID` your AWS account ID, and `KEY_ID` the key's own identifier. `Resource` is always the key ARN, even where `TENANT_KEY_SSM_KMS_KEY_ID` names the key by alias: KMS does not accept an alias ARN as the resource of a cryptographic action.
+
+---
+
+## :material-key-change: Tenant API Key Rotation (Optional) { #tenant-key-rotation }
+
+**Environment Variables**: [`TENANT_KEY_SECRETSMANAGER_PREFIX`](operations_configuration_authentication.md#tenant-key-secretsmanager-prefix), [`TENANT_KEY_SECRETSMANAGER_KMS_KEY_ID`](operations_configuration_authentication.md#tenant-key-secretsmanager-kms-key-id), [`TENANT_KEY_ROTATION_DAYS`](operations_configuration_authentication.md#tenant-key-rotation-days)
+
+Required, together with the [shared table permissions](#shared-table), when tenant keys are [stored in AWS Secrets Manager](operations_authentication_security.md#rotating-tenant-keys) — it replaces the [Parameter Store delivery](#tenant-key-delivery) statements, which are then not needed. The gateway creates a tenant's secret when none exists, writes each minted or rotated key as a version of it, reads a version back only to recover a write another instance or a crashed pass made first, and moves the `AWSCURRENT` label onto the new version. It never deletes a secret and never tags one: the secret's lifecycle and tags are yours, or the Terraform module's. Grant it on the secret prefix and nothing wider — a secret's ARN ends with a random suffix, so the wildcard after the prefix is what matches it.
+
+??? example "Tenant Key Rotation IAM Policy Statement"
+    ```json
+    {
+      "Sid": "TenantKeyRotation",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:UpdateSecretVersionStage"
+      ],
+      "Resource": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:PREFIX/*"
+    }
+    ```
+
+    !!! info "Replace the Placeholders"
+        `REGION` is the deployment's own Region, `ACCOUNT_ID` your AWS account ID, and `PREFIX` your [`TENANT_KEY_SECRETSMANAGER_PREFIX`](operations_configuration_authentication.md#tenant-key-secretsmanager-prefix).
+
+    !!! note "One prefix per deployment"
+        Any principal allowed to read under the prefix can read every tenant's key — unless [`TENANT_KEY_SECRETSMANAGER_KMS_KEY_ID`](operations_configuration_authentication.md#tenant-key-secretsmanager-kms-key-id) names a key of your own, which also takes `kms:Decrypt` on it. Keep the prefix private to one deployment, and grant each tenant `secretsmanager:GetSecretValue` on its own secret alone.
+
+??? example "Customer Managed Key Statement (with `TENANT_KEY_SECRETSMANAGER_KMS_KEY_ID`)"
+    Add this statement when the secrets are encrypted with a key of your own instead of the AWS-managed `alias/aws/secretsmanager` key. `kms:GenerateDataKey` covers writing a version, `kms:Decrypt` covers reading one back. The `kms:ViaService` condition keeps the grant usable through Secrets Manager alone, and the encryption-context condition narrows it to the tenant secrets rather than every secret the account encrypts under the key.
+
+    ```json
+    {
+      "Sid": "TenantKeyRotationKms",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:REGION:ACCOUNT_ID:key/KEY_ID",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "secretsmanager.REGION.amazonaws.com"
+        },
+        "StringLike": {
+          "kms:EncryptionContext:SecretARN": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:PREFIX/*"
+        }
+      }
+    }
+    ```
+
+    !!! info "Replace the Placeholders"
+        `REGION` is the deployment's own Region, `ACCOUNT_ID` your AWS account ID, `KEY_ID` the key's own identifier and `PREFIX` your secret prefix. `Resource` is always the key ARN, even where `TENANT_KEY_SECRETSMANAGER_KMS_KEY_ID` names the key by alias: KMS does not accept an alias ARN as the resource of a cryptographic action.
 
 ---
 

@@ -143,8 +143,10 @@ aws ssm get-parameter --name /my-deployment/tenant-keys/AbC123... \
   --with-decryption --query Parameter.Value --output text
 ```
 
+Where keys must be rotated, the server stores each key in an AWS Secrets Manager secret of its own instead — see [Rotating tenant keys](#rotating-tenant-keys) below.
+
 !!! abstract "Only a hash is ever stored"
-    The table holds a salted BLAKE2b-256 digest of the secret, compared in constant time on every request — the same in-memory protection the deployment API key gets. Neither the table, nor Terraform state, nor a backup of either can reconstruct a tenant's key; the only copy is the delivered parameter, which is yours to delete after delivery.
+    The table holds a salted BLAKE2b-256 digest of the secret, compared in constant time on every request — the same in-memory protection the deployment API key gets. Neither the table, nor Terraform state, nor a backup of either can reconstruct a tenant's key; the only copy is the delivered parameter, which is yours to delete after delivery — or, with the Secrets Manager store, the secret the tenant reads.
 
 !!! warning "The delivery prefix is a trust boundary in both directions"
     The parameter is created once and never overwritten, which is what makes minting idempotent across instances — so **whoever creates it defines the secret**. A principal able to call `ssm:PutParameter` under the prefix can therefore pre-create `<prefix>/<key id>` for a tenant that does not exist yet and hold a valid key from the moment it is declared, exactly as read access there exposes the keys already delivered. Grant both actions on `<prefix>/*` to the deployment's task role and to the operators who collect the keys, and to nothing else.
@@ -191,13 +193,49 @@ Both are enforced at choke points every request passes through — the authentic
 
 #### Validation, caching and revocation
 
-Validation is a direct read of the tenant's two records, cached in each server instance for [`TENANT_KEY_CACHE_SECONDS`](operations_configuration_authentication.md#tenant-key-cache-seconds) — 60 seconds by default. That cache is the revocation window: **a key that is revoked, disabled or re-scoped keeps its previous decision for up to 60 seconds per instance**, and no longer. Revoke a key by removing its tenant from `tenants` (destroying the record), or suspend it by setting `disabled = true`. Unknown key IDs are negative-cached, bounded in size and time, so a flood of fabricated keys neither amplifies table reads nor grows memory.
+Validation is a direct read of the tenant's two records, cached in each server instance for [`TENANT_KEY_CACHE_SECONDS`](operations_configuration_authentication.md#tenant-key-cache-seconds) — 60 seconds by default. That cache is the revocation window: **a key that is revoked, disabled or re-scoped keeps its previous decision for up to 60 seconds per instance**, and no longer. Revoke a key by removing its tenant from `tenants` (destroying the record), or suspend it by setting `disabled = true` — both also end the [overlap](#rotating-tenant-keys) during which a rotated key's predecessor still works. Unknown key IDs are negative-cached, bounded in size and time, so a flood of fabricated keys neither amplifies table reads nor grows memory; a key that does not match its cached entry is re-read at most once a second, so a freshly rotated key is accepted everywhere within one read.
 
 !!! warning "The table being unreachable fails closed"
     When tenant keys are enabled but the DynamoDB table cannot be read, a tenant-shaped credential is refused with `503` — never accepted, and never turned into a `401` that would mislabel a valid key as wrong. The reason (the IAM action, the table) is written to the server log. Other credential kinds are unaffected.
 
 !!! tip "A tenant key and a user token together"
     A request may carry both `X-API-Key: sk-std-...` (the tenant key) and `Authorization: Bearer <token>` (a Cognito user token): **both are then verified** — the tenant key authorizes and scopes the request, the token identifies the user for [per-user cost attribution](operations_cost_management.md#per-user-attribution). This is the one place tenant keys extend the header rules: for every other combination, `X-API-Key` keeps winning exactly as before. Without a user, the tenant's key ID is the identity the request is attributed to.
+
+#### Rotating tenant keys { #rotating-tenant-keys }
+
+A key delivered through Parameter Store is delivered once and never changes: rotating it means destroying the tenant and declaring it again, under a new key ID. Set [`TENANT_KEY_SECRETSMANAGER_PREFIX`](operations_configuration_authentication.md#tenant-key-secretsmanager-prefix) and the server stores each key **durably** instead, as the current version (`AWSCURRENT`) of an [AWS Secrets Manager](https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html) secret named `<prefix>/<key id>`, and rotates it in place. The Terraform module switches to this store as soon as `tenant_key_rotation_days` is set or any tenant declares `key_generation`, creates one secret per tenant on the deployment's KMS key, and names it in the `tenant_keys` output.
+
+A rotation happens without an operator in the loop, on two triggers that combine:
+
+- **On a schedule** — [`TENANT_KEY_ROTATION_DAYS`](operations_configuration_authentication.md#tenant-key-rotation-days): every key older than that, counted from its mint or its last rotation, is rotated by the next reconciliation pass (at startup, then once a minute).
+- **On demand** — raise `key_generation` on the tenant record (`tenants["acme"].key_generation = 2` in the module, or the attribute written directly): the key is rotated once, when the value exceeds the generation recorded with the secret, and never again for the same value. Declarative and idempotent, so a plan that bumps it is safe to apply twice.
+
+```hcl
+tenant_key_rotation_days = 90
+
+tenants = {
+  "acme" = {
+    models_allow   = ["anthropic.*"]
+    key_generation = 2   # raise to rotate now
+  }
+}
+```
+
+The new key is written as the secret's pending version, accepted by the gateway, then promoted to `AWSCURRENT`; the superseded key becomes `AWSPREVIOUS` and **keeps authenticating for** [`TENANT_KEY_ROTATION_OVERLAP_SECONDS`](operations_configuration_authentication.md#tenant-key-rotation-overlap-seconds) — 7 days by default — so a client that re-reads its secret on its own cadence is never locked out. A client that re-reads `AWSCURRENT` right after the rotation is accepted on every instance within one read. Set the overlap to `0` for a hard cutover; a compromised key is revoked immediately either way by setting `disabled = true`, which refuses both keys at once.
+
+A tenant re-reads its own key with a policy granting it `secretsmanager:GetSecretValue` on its own secret alone (and `kms:Decrypt` on the deployment's key, through Secrets Manager); the secret's ARN is in the module's `tenant_keys` output. That grant is yours to write — the module does not attach a resource policy to the secret.
+
+!!! warning "The secret prefix is a trust boundary in both directions"
+    Exactly as with the [delivery prefix](#tenant-api-keys): **whoever writes a version defines the key**. A principal able to call `secretsmanager:PutSecretValue` under the prefix can stage a well-formed key as a tenant's next version and hold it from the moment the rotation adopts it, and read access there exposes every tenant's current and previous key. Grant the write actions to the deployment's task role and to nothing else; grant each tenant read access to its own secret only.
+
+!!! note "What the server owns, and what it does not"
+    The server creates a tenant's secret when none exists and writes every version, so a deployment without the module works the same. It never deletes a secret and never tags one: the module creates each secret with the deployment's tags and destroys it with the tenant record, and a deployment declaring tenants by hand deletes the secret when it destroys the tenant — the revocation names it in the server log. A key minted through Parameter Store before the store was enabled keeps working unchanged and receives a secret of its own at its first rotation.
+
+!!! note "AWS Security Hub"
+    The rotation is driven by the gateway, not by a rotation function, so the secrets carry no rotation configuration and the `SecretsManager.1` control ("secrets should have automatic rotation enabled") reports them as failed — a control that only a Lambda-based rotation can pass. The periodic-rotation control (`SecretsManager.4`) passes while `TENANT_KEY_ROTATION_DAYS` is 90 or less, and the unused-secret control (`SecretsManager.3`) flags a secret no tenant has read for 90 days, which is expected for a tenant that keeps its key locally.
+
+!!! warning "A mixed fleet during a rolling deployment"
+    Instances still on a release without rotation keep validating a rotated tenant's current key — its hash is stored where they read it — but do not honour the overlap: on those instances the superseded key is refused as soon as the new one is recorded. Roll the fleet before the first rotation is due, or disable the schedule until it is rolled.
 
 #### Tenant AWS credentials — the tenant's own quota and bill { #tenant-aws-credentials }
 
