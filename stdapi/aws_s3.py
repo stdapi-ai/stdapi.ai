@@ -231,8 +231,8 @@ def require_s3_bucket_for_region(region: RegionName, *, feature: str) -> str:
 def require_url_response_bucket() -> str:
     """Return the bucket a ``url`` response format is served from.
 
-    The single answer to that deployment gap: request validation calls it to
-    refuse the format up front, and the upload resolves its bucket through it,
+    The single answer to that deployment gap: each image route calls it before
+    it builds a job, and the upload resolves its bucket through it,
     so neither can answer differently from the other.
 
     Returns:

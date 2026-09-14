@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
+from stdapi.aws_s3 import require_url_response_bucket
 from stdapi.config import SETTINGS
 from stdapi.input_file import InputFile
 from stdapi.models import validate_model
@@ -191,7 +192,8 @@ async def create_image_variations(
 
     Raises:
         ApiError: With 404 if the model does not exist; 400 on unsupported
-            options or invalid values.
+            options or invalid values; 503 when a `url` response format is
+            requested on a server with no bucket to host the images.
     """
     content_type = http_request.headers.get("content-type", "")
 
@@ -242,13 +244,21 @@ async def create_image_variations(
     ).id
 
     width, height = map(int, request.size.split("x"))
+    # Variations never stream, so a URL format always needs a host. Checked once
+    # the request is known valid -- a missing bucket is a deployment gap, not
+    # something the caller sent wrong -- and before the variation, so nothing is
+    # billed for images that cannot be served.
+    is_url = request.response_format == "url"
+    if is_url:
+        require_url_response_bucket()
+
     job = get_image_model(model_id).get_image_variation_job(
         count=request.n,
         width=width,
         height=height,
         output_format=None,
         output_compression=100,
-        is_url=request.response_format == "url",
+        is_url=is_url,
         extra_params=get_extra_model_parameters(model_id, request),
     )
 

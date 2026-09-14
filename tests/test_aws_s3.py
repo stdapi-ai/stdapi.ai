@@ -644,8 +644,8 @@ class TestBucketForRegion:
 class TestPresignedUrlWithoutBucket:
     """A URL response with no bucket to host it refuses like any other missing feature.
 
-    Request validation refuses ``response_format="url"`` through the same
-    helper the upload resolves its bucket with, so the misconfiguration has one
+    Every image route refuses ``response_format="url"`` through the same helper
+    the upload resolves its bucket with, so the misconfiguration has one
     answer: the shared 503 sentence to the caller, and the setting that is
     missing to the operator.
 

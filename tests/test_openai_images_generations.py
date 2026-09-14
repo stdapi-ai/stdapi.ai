@@ -15,21 +15,20 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from openai import BadRequestError, OpenAI
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
-from stdapi.api_errors import FeatureUnavailableError, UnsupportedModelError
+from stdapi.api_errors import UnsupportedModelError
 from stdapi.config import SETTINGS
 from stdapi.models.image import ImageGenerationJobBase, ImageGenerationResponse
 from stdapi.monitoring import REQUEST_LOG, REQUEST_TIME, EventLog
-from stdapi.routes import openai_images_generations
+from stdapi.routes import (
+    openai_images_edits,
+    openai_images_generations,
+    openai_images_variations,
+)
 from stdapi.routes._images_common import build_images_response, image_usage
 from stdapi.routes.openai_images_generations import stream_generator
-from stdapi.types.openai_images import (
-    ImageEditJsonBody,
-    ImageEditParams,
-    ImageGenerateParams,
-    ImageVariationJsonBody,
-)
+from stdapi.types.openai_images import ImageEditParams, ImageGenerateParams
 from tests.conftest import (
     image_returns_base64_only,
     image_size_supported,
@@ -1619,6 +1618,23 @@ class TestImageGenerationUnsupportedOptions:
         assert _generation_params(moderation="auto").moderation == "auto"
 
 
+#: A minimal JSON body each image endpoint accepts, keyed by its route path.
+_IMAGE_BODIES: dict[str, dict[str, Any]] = {
+    "/v1/images/generations": {"model": "m", "prompt": "p"},
+    "/v1/images/edits": {
+        "model": "m",
+        "prompt": "p",
+        "image": ["data:image/png;base64,AA=="],
+    },
+    "/v1/images/variations": {"model": "m", "image": "data:image/png;base64,AA=="},
+}
+
+#: The three image endpoints, over which the ``url`` bucket guard must hold.
+_IMAGE_PATHS = pytest.mark.parametrize(
+    "path", list(_IMAGE_BODIES), ids=["generations", "edits", "variations"]
+)
+
+
 @pytest.mark.local
 class TestResponseFormatUrlRequiresBucket:
     """``response_format="url"`` is refused when the server has no S3 bucket.
@@ -1631,101 +1647,111 @@ class TestResponseFormatUrlRequiresBucket:
     A streamed request is the exception: its images come back inline, so it
     needs no bucket and is served on the same deployment.
 
+    It is the last word on the request, not the first: everything the caller
+    could have sent wrong -- the parameters, the model, the prompt the
+    guardrail blocks -- is answered before it, since a request that is invalid
+    is invalid whatever the deployment can host.
+
     Ref: https://stdapi.ai/api_openai_images_generations/
-         stdapi/types/openai_images.py:_ImageBaseParams._validate_response_format
+         stdapi/routes/openai_images_generations.py:create_images
          stdapi/aws_s3.py:require_url_response_bucket
     """
 
-    def test_url_rejected_without_a_bucket(
-        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
-    ) -> None:
-        """Validation refuses the format as unavailable, and logs why for the operator."""
-        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
+    @pytest.fixture
+    def image_jobs(self, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+        """Serve the three image routes from a bucket-less deployment with no backend.
 
-        with pytest.raises(FeatureUnavailableError) as exc_info:
-            _generation_params(response_format="url")
+        The bucket is unset, and model resolution and the image model are
+        stubbed: the stub records the parameters of every job asked of it and
+        then fails the request with a 400, so a request that got as far as
+        generating is visible as a recorded job and nothing reaches Bedrock.
 
-        assert exc_info.value.status == 503
-        assert str(exc_info.value) == (
-            "The 'url' response format is not available on the current server. "
-            "Please contact the administrator to enable it."
-        )
-        assert "aws_s3_bucket" not in str(exc_info.value)
-        assert any(
-            "aws_s3_bucket" in str(detail) for detail in request_log["error_detail"]
-        ), request_log
-        assert request_log["level"] == "warning", (
-            "an unconfigured bucket is an operator warning, not a critical"
-        )
-
-    def test_the_route_answers_the_refusal_as_a_503(
-        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The error raised during body validation still reaches the API envelope.
-
-        Raised from a field validator, it travels out of FastAPI's own request
-        parsing rather than out of the route body, which is the only thing that
-        decides whether the caller reads the shared sentence or a 422.
+        Returns:
+            The list the stub records each requested job into.
         """
+        jobs: list[dict[str, Any]] = []
+
+        def _record_job(**kwargs: object) -> object:
+            """Record a requested job, then fail the request with a 400."""
+            jobs.append(kwargs)
+            model_id = "stub-model"
+            raise UnsupportedModelError(model_id, status=400)
+
+        class _StubModel:
+            """Image model recording every job asked of it instead of running one."""
+
+            get_image_generation_job = staticmethod(_record_job)
+            get_image_edit_job = staticmethod(_record_job)
+            get_image_variation_job = staticmethod(_record_job)
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> object:
+            """Accept any model ID without calling AWS."""
+            return SimpleNamespace(id=model_id)
+
         monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
+        for module in (
+            openai_images_generations,
+            openai_images_edits,
+            openai_images_variations,
+        ):
+            monkeypatch.setattr(module, "validate_model", _validate_model)
+            monkeypatch.setattr(
+                module, "get_image_model", lambda _model_id: _StubModel()
+            )
+        return jobs
 
-        response = app_client.post(
-            "/v1/images/generations",
-            json={"model": "m", "prompt": "p", "response_format": "url"},
-        )
+    @_IMAGE_PATHS
+    @pytest.mark.parametrize("response_format", [None, "url"])
+    def test_url_rejected_without_a_bucket(
+        self,
+        app_client: TestClientType,
+        image_jobs: list[dict[str, Any]],
+        path: str,
+        response_format: str | None,
+    ) -> None:
+        """Every endpoint refuses ``url``, named or left at its default.
 
-        assert response.status_code == 503
+        Omitting the format is the ordinary request shape, so a guard reached
+        only by the explicit value would let the far more common request
+        generate and bill the images before the deployment discovers it cannot
+        serve them.
+        """
+        named = {} if response_format is None else {"response_format": response_format}
+
+        response = app_client.post(path, json={**_IMAGE_BODIES[path], **named})
+
+        assert response.status_code == 503, response.text
         error = response.json()["error"]
         assert error["code"] == "feature_unavailable"
         assert "not available on the current server" in error["message"]
+        assert not image_jobs, "refused before any image was generated"
 
+    @_IMAGE_PATHS
     def test_b64_json_still_accepted_without_a_bucket(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClientType, image_jobs: list[dict[str, Any]], path: str
     ) -> None:
         """``b64_json`` needs no bucket and stays available on such a deployment."""
-        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
-
-        assert _generation_params(response_format="b64_json").response_format == (
-            "b64_json"
+        response = app_client.post(
+            path, json={**_IMAGE_BODIES[path], "response_format": "b64_json"}
         )
 
+        assert response.status_code == 400, response.text
+        assert [job["is_url"] for job in image_jobs] == [False]
+
     @pytest.mark.parametrize(
-        ("body_model", "body"),
-        [
-            (ImageGenerateParams, {"model": "m", "prompt": "p"}),
-            (
-                ImageEditJsonBody,
-                {"model": "m", "image": ["data:image/png;base64,AA=="]},
-            ),
-            (
-                ImageVariationJsonBody,
-                {"model": "m", "image": "data:image/png;base64,AA=="},
-            ),
-        ],
-        ids=["generations", "edits", "variations"],
+        "path",
+        ["/v1/images/generations", "/v1/images/edits"],
+        ids=["generations", "edits"],
     )
-    def test_url_rejected_when_left_to_the_default(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        body_model: type[BaseModel],
-        body: dict[str, Any],
-    ) -> None:
-        """A body that omits the format falls back to ``url`` and is refused there too.
-
-        Omitting it is the ordinary request shape, so a guard reached only by
-        the explicit value would let the far more common request generate and
-        bill the images before the deployment discovers it cannot serve them.
-        """
-        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
-
-        with pytest.raises(FeatureUnavailableError) as exc_info:
-            body_model.model_validate(body)
-
-        assert exc_info.value.status == 503
-
     @pytest.mark.parametrize("response_format", [None, "url"])
     def test_a_streamed_request_needs_no_bucket(
-        self, monkeypatch: pytest.MonkeyPatch, response_format: str | None
+        self,
+        app_client: TestClientType,
+        image_jobs: list[dict[str, Any]],
+        path: str,
+        response_format: str | None,
     ) -> None:
         """Streaming answers inline whatever the format, so it is served regardless.
 
@@ -1733,38 +1759,100 @@ class TestResponseFormatUrlRequiresBucket:
         the caller named the format or left it at its default: refusing either
         one would take a working capability away from that deployment.
         """
-        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
         named = {} if response_format is None else {"response_format": response_format}
 
-        assert _generation_params(stream=True, **named).stream is True
+        response = app_client.post(
+            path, json={**_IMAGE_BODIES[path], "stream": True, **named}
+        )
+
+        assert response.status_code == 400, response.text
+        assert [job["is_url"] for job in image_jobs] == [False]
 
     def test_a_stream_field_on_an_endpoint_that_cannot_stream_is_not_the_mode(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClientType, image_jobs: list[dict[str, Any]]
     ) -> None:
         """Variations take no ``stream``, so one sent anyway does not lift the refusal.
 
         Extra parameters are carried through to the model, so the field name is
         one a caller can set on a request that has no streaming mode at all.
         """
-        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
+        path = "/v1/images/variations"
 
-        with pytest.raises(FeatureUnavailableError):
-            ImageVariationJsonBody.model_validate(
-                {"model": "m", "image": "data:image/png;base64,AA==", "stream": True}
-            )
+        response = app_client.post(path, json={**_IMAGE_BODIES[path], "stream": True})
 
-    def test_the_route_answers_the_default_refusal_as_a_503(
+        assert response.status_code == 503, response.text
+        assert not image_jobs
+
+    @pytest.mark.parametrize(
+        ("path", "invalid", "expected"),
+        [
+            (
+                "/v1/images/generations",
+                {"background": "transparent"},
+                "Background transparency is not supported",
+            ),
+            (
+                "/v1/images/generations",
+                {"moderation": "low"},
+                "'moderation' parameter is not supported",
+            ),
+            (
+                "/v1/images/generations",
+                {"partial_images": 1},
+                "partial_images requires streaming mode",
+            ),
+            (
+                "/v1/images/edits",
+                {"input_fidelity": "high"},
+                "'input_fidelity' parameter is not supported",
+            ),
+            ("/v1/images/variations", {"size": "not-a-size"}, "size"),
+        ],
+        ids=["background", "moderation", "partial_images", "input_fidelity", "size"],
+    )
+    def test_an_invalid_parameter_is_refused_before_the_bucket(
+        self,
+        app_client: TestClientType,
+        image_jobs: list[dict[str, Any]],
+        path: str,
+        invalid: dict[str, Any],
+        expected: str,
+    ) -> None:
+        """An unsupported parameter gets its own 400 on a deployment with no bucket.
+
+        These bodies leave the format at its ``url`` default, so the bucket
+        guard has something to say about every one of them -- but a 503 about a
+        setting the caller cannot see names nothing they can fix, while the 400
+        names the parameter they got wrong.
+        """
+        response = app_client.post(path, json={**_IMAGE_BODIES[path], **invalid})
+
+        assert response.status_code == 400, response.text
+        assert expected in response.json()["error"]["message"]
+        assert not image_jobs
+
+    def test_an_unknown_model_is_refused_before_the_bucket(
         self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A request that names no format is refused before any image is generated."""
+        """Model resolution answers first, so its 400 names the model it could not find."""
         monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
 
-        response = app_client.post(
-            "/v1/images/generations", json={"model": "m", "prompt": "p"}
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> object:
+            """Refuse every model, as an unknown one is refused."""
+            raise UnsupportedModelError(model_id, status=400)
+
+        monkeypatch.setattr(
+            openai_images_generations, "validate_model", _validate_model
         )
 
-        assert response.status_code == 503
-        assert response.json()["error"]["code"] == "feature_unavailable"
+        response = app_client.post(
+            "/v1/images/generations", json={"model": "no-such-model", "prompt": "p"}
+        )
+
+        assert response.status_code == 400, response.text
+        assert response.json()["error"]["code"] == "model_not_found"
 
 
 @pytest.mark.local

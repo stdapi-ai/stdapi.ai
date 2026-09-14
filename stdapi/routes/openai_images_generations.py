@@ -8,6 +8,7 @@ from sse_starlette import EventSourceResponse, JSONServerSentEvent
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import apply_guardrail_to_text, get_extra_model_parameters
+from stdapi.aws_s3 import require_url_response_bucket
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
 from stdapi.models.capabilities import Capability, register_route_capability
@@ -201,7 +202,8 @@ async def create_images(
 
     Raises:
         ApiError: With 404 if the model does not exist; 400 on unsupported
-            options or invalid values.
+            options or invalid values; 503 when a `url` response format is
+            requested on a server with no bucket to host the images.
     """
     log_request_params(request, user_id=request.user)
     model_id = (
@@ -215,8 +217,17 @@ async def create_images(
     ).id
 
     width, height = map(int, request.size.split("x"))
+    prompt = await apply_guardrail_to_text(request.prompt, source="INPUT")
+    # A streamed response carries its images inline, so only a URL one needs a
+    # host. Checked once the request is known valid -- a missing bucket is a
+    # deployment gap, not something the caller sent wrong -- and before the
+    # generation, so nothing is billed for images that cannot be served.
+    is_url = request.response_format == "url" and not request.stream
+    if is_url:
+        require_url_response_bucket()
+
     job = get_image_model(model_id).get_image_generation_job(
-        prompt=await apply_guardrail_to_text(request.prompt, source="INPUT"),
+        prompt=prompt,
         count=request.n,
         width=width,
         height=height,
@@ -224,7 +235,7 @@ async def create_images(
         style=request.style,
         output_format=request.output_format,
         output_compression=request.output_compression,
-        is_url=request.response_format == "url" and not request.stream,
+        is_url=is_url,
         extra_params=get_extra_model_parameters(model_id, request),
     )
 
