@@ -827,7 +827,7 @@ curl -X POST "$BASE/v1/chat/completions" \
 
 **What is rejected with a `400`.** `logprobs` when enabled, `web_search_options` on a model that runs no [web search](#web-grounding) (and its `user_location` on every model), `translation_options`, `custom` (free-form) tools, `tool_choice: {"type": "allowed_tools"}`, a whitespace-only `stop` sequence (an Amazon Bedrock limitation), audio output combined with `stream: true`, and `n > 1` combined with `stream: true`. Each error names the parameter it refuses.
 
-**What is accepted and ignored.** `prediction` and `verbosity` are latency and length hints the Converse API has no equivalent for, `web_search_options.search_context_size` only tunes a search that still runs, and `stream_options.include_obfuscation` never pads the stream. The first two are forwarded verbatim on [Mantle passthrough models](#bedrock-mantle), where the upstream API decides what to do with them.
+**What is accepted and ignored.** `prediction` and `verbosity` are latency and length hints the Converse API has no equivalent for, `web_search_options.search_context_size` only tunes a search that still runs, and `stream_options.include_obfuscation` never pads the stream. `prediction`, `verbosity` and `stream_options.include_obfuscation` are forwarded verbatim on [Mantle passthrough models](#bedrock-mantle), where the upstream API decides what to do with them.
 
 **`temperature` above `1.0` is served at `1.0`.** The documented `0`–`2` range is accepted in full: a higher value is applied at the maximum Amazon Bedrock accepts rather than refused, so `1.5` and `2.0` sample as `1.0` does. [Mantle passthrough models](#bedrock-mantle) receive the value as sent.
 

@@ -266,10 +266,11 @@ The same classification is available inline on generation: the `moderation` requ
 
 ### Personal Data in Content
 
-Personal data is handled in exactly two places, both of which you switch on deliberately:
+Personal data is handled in exactly three places, all of which you switch on deliberately:
 
 - **The guardrail's sensitive-information policy** — the PII entity types and regular expressions you configure on the guardrail are masked or blocked wherever that guardrail is checked, in both directions, following the intervention behavior above.
 - **Amazon Transcribe PII redaction** — a client may request `ContentRedaction` on a transcription; only the single-output `redacted` mode is accepted, so no unredacted copy is produced. See [Audio Transcriptions](api_openai_audio_transcriptions.md).
+- **Inline guardrail checks PII detection** — when [`AWS_BEDROCK_GUARDRAIL_CHECKS_PII_ENTITIES`](operations_configuration_bedrock.md#aws-bedrock-guardrail-checks-pii-entities) names entity types, the [Moderations API](api_openai_moderations.md) submits the text it is given for PII detection, on the deployments with no guardrail resource where it resolves to inline guardrail checks. It detects only: a hit raises the result's `flagged` field and nothing is masked, redacted or blocked, and no other route is affected.
 
 Just as importantly, there is no personal-data handling anywhere else, and none should be assumed:
 

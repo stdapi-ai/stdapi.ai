@@ -187,9 +187,9 @@ Grouped by page. The defaults work; open a page when a Tier 1 or Tier 2 row abov
 | [Regions & AWS clients](operations_configuration_aws.md) | 24 | Region pinning, retry and connection tuning, failover backoff, Mantle, data residency |
 | [Storage](operations_configuration_storage.md) | 22 | A separate bucket or prefix, lifecycle rules, vector stores, the shared DynamoDB table |
 | [Models & routing](operations_configuration_models.md) | 26 | A model name your clients already use, a Marketplace or SageMaker model, per-model defaults |
-| [Authentication & tenants](operations_configuration_authentication.md) | 18 | Cognito instead of an API key, per-tenant keys, the discovery documents agents read |
+| [Authentication & tenants](operations_configuration_authentication.md) | 24 | Cognito instead of an API key, per-tenant keys, the discovery documents agents read |
 | [HTTP server & MCP](operations_configuration_server.md) | 28 | Mounting the routes elsewhere, a browser client, a proxy in front, TLS, MCP tool selection |
-| [Bedrock features](operations_configuration_bedrock.md) | 25 | Guardrails, stored sessions, a cheaper or faster service tier, the Realtime API, ARN access |
+| [Bedrock features](operations_configuration_bedrock.md) | 28 | Guardrails, stored sessions, a cheaper or faster service tier, the Realtime API, ARN access |
 | [Observability & usage](operations_configuration_observability.md) | 21 | Sending traces or metrics somewhere, per-request cost, the Usage API |
 
 ??? note "All variables A-Z"
