@@ -35,6 +35,7 @@ The Amazon Bedrock capabilities the gateway turns on for you, and the ARNs it is
 | [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](#aws-bedrock-guardrail-identifier)                           | None    | Bedrock Guardrails ID for content filtering and safety controls                                     |
 | [`AWS_BEDROCK_GUARDRAIL_VERSION`](#aws-bedrock-guardrail-version)                                 | None    | Bedrock Guardrails version number (required with identifier)                                        |
 | [`AWS_BEDROCK_GUARDRAIL_TRACE`](#aws-bedrock-guardrail-trace)                                     | None    | Guardrails trace level: `disabled`, `enabled`, or `enabled_full`                                    |
+| [`AWS_BEDROCK_GUARDRAIL_SCOPE_TURNS`](#aws-bedrock-guardrail-scope-turns)                         | None    | Evaluate only the N most recent user turns of a conversation on the chat routes, instead of all of it |
 | [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](#aws-bedrock-allow-guardrail-override)                   | `false` | Allow users to override global guardrail configuration via request headers (security: default off)  |
 | [`AWS_BEDROCK_GUARDRAIL_CHECKS_PROMPT_ATTACK`](#bedrock-guardrail-checks)                         | `false` | Detect prompt attacks on the Moderations API when it classifies with inline guardrail checks         |
 | [`AWS_BEDROCK_GUARDRAIL_CHECKS_PII_ENTITIES`](#bedrock-guardrail-checks)                          | empty   | PII entity types to detect on the Moderations API when it classifies with inline guardrail checks    |
@@ -87,6 +88,15 @@ The configured guardrail applies to every route that serves a request directly. 
 
     On native routes the guardrail still runs and AWS still charges for it, but the Converse and InvokeModel responses carry no unit counts for the gateway to record. **Reported costs on these routes are lower than the AWS bill by the guardrail's share.** Deriving the units from text length instead would be a guess, not a measurement, so none is made.
 
+!!! warning "Evaluation Scope"
+    A chat client replays the conversation on every request, and by default the guardrail evaluates all of it again each time — every earlier question and every earlier answer. [`AWS_BEDROCK_GUARDRAIL_SCOPE_TURNS`](#aws-bedrock-guardrail-scope-turns) narrows that to the most recent user turns on the chat routes. It buys a lower bill with less detection, so it is off unless you set it:
+
+    - **Still evaluated:** every new user turn, and every model response — blocking and personal-data masking are unchanged on the output side.
+    - **No longer evaluated:** the earlier user turns, and the conversation history the client sends — including the answers it attributes to the model, which nothing obliges it to have received. A forbidden word or denied topic placed there stops being detected, and an attack assembled across several turns can get through. The moderation results a chat request asks for with the [`moderation` parameter](api_openai_chat_completions.md) describe the evaluated turns only. Only the *text* of a scoped turn is submitted, so an image sent alongside the newest question stops being screened too, and a newest turn carrying no text at all is skipped rather than counted as one of the scoped turns — the window falls back on the most recent turns that do carry text.
+    - **Measured saving:** on a 6,400-character conversation, evaluating one turn instead of the whole history took the request from 7 to 1 billed text unit per policy, and roughly 200 ms off that request's latency.
+
+    The other routes are unaffected: each checks the content of the request it is given, and so does a chat model served through InvokeModel rather than Converse. An account- or organization-level [enforced guardrail](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-enforcements.html) set to comprehensive guarding evaluates everything whatever this deployment scopes.
+
 !!! info "Intervention Behavior"
     On ApplyGuardrail-enforced routes, a blocking intervention fails the request with HTTP 400 and error code `content_filter` (the same code chat routes report as their finish reason), carrying the guardrail's configured blocked messaging. A masking-only intervention (sensitive-information anonymization) substitutes the masked text — input masking reaches the backend model, and a masked transcript or translation is returned on the plain `json`/`text` formats. Response formats that cannot carry masked text (`srt`, `vtt`, `verbose_json`, `diarized_json`) fail with the same `content_filter` error instead of leaking the unmasked content.
 
@@ -129,6 +139,21 @@ export AWS_BEDROCK_GUARDRAIL_VERSION=1
 
 ```bash
 export AWS_BEDROCK_GUARDRAIL_TRACE=enabled
+```
+
+#### `AWS_BEDROCK_GUARDRAIL_SCOPE_TURNS` { #aws-bedrock-guardrail-scope-turns }
+
+:octicons-package-24: **Purpose**
+:   Number of trailing user turns the guardrail evaluates on the chat routes (Chat Completions, Responses, Completions, Anthropic Messages and the Ollama `/api/chat` and `/api/generate` routes)
+
+:octicons-gear-24: **Default**
+:   None — the whole conversation the client sends is evaluated on every request
+
+:octicons-shield-24: **Security Consideration**
+:   Scoping lowers the bill by no longer evaluating the history a client replays, and lowers detection by the same amount: see [Evaluation Scope](#bedrock-guardrails) above for what stops being checked. Model output is always evaluated in full. Start at `1` only where the conversation history is not a threat you are guarding against, and raise it to widen the window.
+
+```bash
+export AWS_BEDROCK_GUARDRAIL_SCOPE_TURNS=1
 ```
 
 #### `AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE` { #aws-bedrock-allow-guardrail-override }

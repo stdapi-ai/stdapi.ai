@@ -226,6 +226,7 @@ Grouped by page. The defaults work; open a page when a Tier 1 or Tier 2 row abov
     | [`AWS_BEDROCK_GUARDRAIL_CHECKS_PII_ENTITIES`](operations_configuration_bedrock.md#aws-bedrock-guardrail-checks-pii-entities) | Bedrock features |
     | [`AWS_BEDROCK_GUARDRAIL_CHECKS_PROMPT_ATTACK`](operations_configuration_bedrock.md#aws-bedrock-guardrail-checks-prompt-attack) | Bedrock features |
     | [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](operations_configuration_bedrock.md#aws-bedrock-guardrail-identifier) | Bedrock features |
+    | [`AWS_BEDROCK_GUARDRAIL_SCOPE_TURNS`](operations_configuration_bedrock.md#aws-bedrock-guardrail-scope-turns) | Bedrock features |
     | [`AWS_BEDROCK_GUARDRAIL_TRACE`](operations_configuration_bedrock.md#aws-bedrock-guardrail-trace) | Bedrock features |
     | [`AWS_BEDROCK_GUARDRAIL_VERSION`](operations_configuration_bedrock.md#aws-bedrock-guardrail-version) | Bedrock features |
     | [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration_storage.md#aws-bedrock-knowledge-base-ids) | Storage |

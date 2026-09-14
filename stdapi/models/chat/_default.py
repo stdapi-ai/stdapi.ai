@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     )
     from types_aiobotocore_bedrock_runtime.type_defs import (
         ContentBlockTypeDef,
+        ContentBlockUnionTypeDef,
         ConverseResponseTypeDef,
         InferenceConfigurationTypeDef,
         JsonSchemaDefinitionTypeDef,
@@ -98,6 +99,40 @@ def _native_tool_names(additional_request_fields: JsonMapping) -> frozenset[str]
     )
 
 
+def _scope_guardrail_content(messages: list[MessageTypeDef], user_turns: int) -> None:
+    """Restrict guardrail evaluation to the *user_turns* most recent user turns.
+
+    Tags the text of those turns with ``guardContent``; Bedrock then evaluates
+    the tagged text alone, and skips everything else it was sent. Only non-empty
+    text of a user message is tagged: Bedrock rejects a blank tag, never
+    evaluates tool results or documents, and takes a tagged image as inline
+    bytes only. Untagged blocks stay the objects a later stage resolves in
+    place.
+
+    Args:
+        messages: Converse messages, rewritten in place.
+        user_turns: Number of trailing user turns to keep evaluated.
+    """
+    remaining = user_turns
+    for index in range(len(messages) - 1, -1, -1):
+        if not remaining:
+            return
+        message = messages[index]
+        if message["role"] != "user":
+            continue
+        content = message["content"]
+        if not any(block.get("text") for block in content):
+            continue
+        tagged: list[ContentBlockUnionTypeDef] = [
+            {"guardContent": {"text": {"text": text}}}
+            if (text := block.get("text"))
+            else block
+            for block in content
+        ]
+        messages[index] = {"role": "user", "content": tagged}
+        remaining -= 1
+
+
 #: Maximum completions one text-completion request generates, prompts times ``n``.
 _MAX_TEXT_COMPLETION_CHOICES: int = 128
 
@@ -143,6 +178,9 @@ class ChatModel(ChatModelBase[Any, Any]):
 
     #: Refusal for a model whose backend serves no server tool at all; ``None`` (default) instead forwards an undeclared server tool as a stub ``toolSpec``, which Claude needs to accept ``toolResult`` blocks in multi-turn.
     SERVER_TOOLS_UNSERVED: ClassVar[NoServerTools | None] = None
+
+    #: Whether the guardrail reads ``guardContent`` blocks, which only Converse does.
+    GUARDRAIL_SCOPE_SUPPORTED: ClassVar[bool] = True
 
     @property
     def server_tool_names(self) -> ServerToolNames | None:
@@ -830,6 +868,12 @@ class ChatModel(ChatModelBase[Any, Any]):
             request["requestMetadata"] = request_metadata
         with suppress(LookupError):
             request["guardrailConfig"] = GUARDRAIL_CONFIG_VAR.get()
+        if (
+            self.GUARDRAIL_SCOPE_SUPPORTED
+            and (turns := SETTINGS.aws_bedrock_guardrail_scope_turns)
+            and request.get("guardrailConfig")
+        ):
+            _scope_guardrail_content(bedrock_messages, turns)
         return request
 
     def _get_passthrough_header_fields(self) -> dict[str, Any]:
