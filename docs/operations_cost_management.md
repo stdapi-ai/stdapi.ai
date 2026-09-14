@@ -492,7 +492,7 @@ The [Terraform module](operations_getting_started.md) provisions:
 | **S3 buckets** (regional)         | Input files, generated media; see `AWS_S3_VIDEOS_EXPIRES_AFTER`           |
 | **S3 vector bucket** (optional)   | Created with `aws_s3_vectors_bucket_create`; billed on stored vectors and on the bytes each search reads — see [Vector Stores](#vector-stores) |
 | **SQS queue** + dead-letter queue (optional) | Created with `aws_sqs_vector_store_queue_create`; a handful of requests per attached file, plus one long poll per task every 20 seconds |
-| **DynamoDB table** (optional)     | Created with `aws_dynamodb_table_create`; on-demand, so nothing at rest — billed only by the features that use it, see [Model List Sharing](#model-list-sharing) |
+| **DynamoDB table** (optional)     | Created with `aws_dynamodb_table_create`; on-demand, so nothing at rest — billed only by the features that use it, see [Model List Sharing](#model-list-sharing) and [Tenant Rate Limits](#tenant-rate-limits-cost) |
 | **CloudWatch** logs, metrics, alarms | Grows with log verbosity and EMF metric volume; the [Usage API](#usage-api-cost) adds stored metric series and a per-query charge on top |
 | **KMS**, IAM, networking          | Keys and roles; NAT/VPC endpoints only when the module creates the network |
 | **WAF** (optional)                | Per-rule and per-request charges when `alb_waf_enabled = true`            |
@@ -530,7 +530,7 @@ None of these include AI service usage (Bedrock, Polly, Transcribe, …), which 
 
 ### Model List Sharing { #model-list-sharing }
 
-[`MODEL_CACHE_SHARED`](operations_configuration_models.md#model-cache-shared) is the one optional feature whose own AWS cost is worth stating rather than rounding away. **Left off, or with no [`AWS_DYNAMODB_TABLE`](operations_configuration_storage.md#aws-dynamodb-table) configured, it costs nothing**: no table is created, no request is made. The table alone, created but unused, is also $0 — DynamoDB on-demand has no idle charge, this table holds kilobytes, and its storage sits inside the 25 GB always-free allowance.
+[`MODEL_CACHE_SHARED`](operations_configuration_models.md#model-cache-shared) is one of the two optional features whose own AWS cost is worth stating rather than rounding away ([Tenant Rate Limits](#tenant-rate-limits-cost) is the other). **Left off, or with no [`AWS_DYNAMODB_TABLE`](operations_configuration_storage.md#aws-dynamodb-table) configured, it costs nothing**: no table is created, no request is made. The table alone, created but unused, is also $0 — DynamoDB on-demand has no idle charge, this table holds kilobytes, and its storage sits inside the 25 GB always-free allowance.
 
 Enabled, it is not free. What it costs is the published list itself:
 
@@ -544,6 +544,18 @@ On [DynamoDB on-demand pricing](https://aws.amazon.com/dynamodb/pricing/on-deman
     That range assumes the compressed list lands in the low hundreds of kilobytes, which is what a catalogue of a few hundred models across a handful of regions produces. A deployment with many regions and Marketplace endpoints will sit at the top of it or a little above; the figure scales linearly with the compressed size and inversely with `MODEL_CACHE_SECONDS`. Doubling the interval halves this cost.
 
     It buys back the discovery passes it replaces: *N* servers make one pass per interval between them instead of one each. Those Bedrock control-plane calls are not billed, so the saving is in start-up latency and API rate-limit headroom rather than in dollars — which is why this is worth enabling for a fleet and not worth enabling for a single container.
+
+---
+
+### Tenant Rate Limits { #tenant-rate-limits-cost }
+
+[Per-tenant rate limits](operations_authentication_security.md#tenant-rate-limits) are the other writer of the shared table, and unlike the model list they write on the admission path. **With no limit declared — on a tenant record or as a deployment default — nothing is counted and no request is made.** Declared, the writes are bounded per key and per instance rather than per request:
+
+- **The floor is one write per limited key, per instance, per minute.** Each minute is one counter item, and an instance reserves request slots in batches that start at one and double within the window, so it waits for a table write on the first requests of the minute and then serves the rest from its local ledger.
+- **Billed tokens add up to one write per second, per key, per instance.** A token limit is reconciled from the usage each request billed, flushed at most once a second — so a key under continuous traffic costs up to 60 extra writes a minute per instance, and an idle one none.
+- **A request limit below `16` costs one write per request.** The batch is capped at an eighth of the limit, which rounds to a single slot below that, so every request of such a tenant waits for its own write. It is the one configuration where the table scales with traffic.
+
+The items are tiny — a partition key, a sort key and two counters, well inside the 1 KB write unit — and the table's time-to-live drops them two minutes after their window, so storage stays $0. On the same [on-demand pricing](https://aws.amazon.com/dynamodb/pricing/on-demand/) in `us-east-1` ($0.625 per million write request units), the floor is about **$0.03 per key per instance per month** of continuous activity — a hundred limited keys busy on three instances around the clock is roughly **$8 a month** — and token flushing multiplies that by up to sixty while the traffic never stops. The below-`16` case bounds itself, since the limit also bounds the requests: at most fifteen writes a minute for that key across the whole fleet. It shows up as [latency on every request of that tenant](operations_authentication_security.md#tenant-rate-limits), not on the bill.
 
 ---
 
