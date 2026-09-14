@@ -129,13 +129,14 @@ class TestKeys:
         import stdapi.aws_dynamodb as module  # noqa: PLC0415
         from stdapi.models._shared_cache import NAMESPACE  # noqa: PLC0415
         from stdapi.tenant_keys import _PARTITION  # noqa: PLC0415
+        from stdapi.tenant_rate_limits import _KIND  # noqa: PLC0415
 
         assert module.__doc__ is not None
         documented = {
             match.split(KEY_SEPARATOR, 1)[0]
             for match in re.findall(r"``pk=([^`]+)``", module.__doc__)
         }
-        assert documented == {_PARTITION, NAMESPACE}
+        assert documented == {_PARTITION, NAMESPACE, _KIND}
 
 
 class TestSchemaVersion:

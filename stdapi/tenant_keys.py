@@ -11,8 +11,9 @@ The record is split in two so the operator's declarative tooling and the
 server never write the same item:
 
 - ``pk=TENANT``, ``sk=tenant#<key id>`` -- the operator-declared tenant:
-  name, ``disabled``, the scope patterns and ``key_generation``. Rewritten
-  freely by tooling such as the Terraform module.
+  name, ``disabled``, the scope patterns, the per-minute limits and
+  ``key_generation``. Rewritten freely by tooling such as the Terraform
+  module.
 - ``pk=TENANT``, ``sk=secret#<key id>`` -- the server-minted credential:
   ``secret_hash``, ``salt``, the ``external_id`` a cross-account role's trust
   policy must require, and the rotation state. Never written by the
@@ -79,6 +80,7 @@ from stdapi.aws_dynamodb import (
 )
 from stdapi.config import AWS_REGION, SETTINGS
 from stdapi.monitoring import (
+    REQUEST,
     EventLog,
     Tenant,
     TenantAwsCredential,
@@ -86,6 +88,7 @@ from stdapi.monitoring import (
     log_background_event,
     log_error_details,
 )
+from stdapi.tenant_rate_limits import admit_tenant_request, verify_counter_access
 from stdapi.utils import webuuid
 
 if TYPE_CHECKING:
@@ -186,6 +189,9 @@ _DAY_SECONDS: Final = 86400
 _ROLE_ARN_RE: Final = re_compile(
     r"^arn:aws[a-z-]*:iam::\d{12}:role/[\w+=,.@/-]+$"
 ).match
+
+#: Tenant record attributes declaring a per-minute limit, each a whole number of at least 1.
+_LIMIT_ATTRIBUTES: Final = ("requests_per_minute", "tokens_per_minute")
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,6 +329,32 @@ def _patterns(item: Item, attribute: str, key_id: str) -> tuple[str, ...] | None
     return tuple(value)  # type: ignore[arg-type]
 
 
+def _limit(item: Item, attribute: str, key_id: str) -> int | None:
+    """Read one per-minute limit off a tenant record.
+
+    Args:
+        item: The tenant record.
+        attribute: The limit's attribute name.
+        key_id: The key the record belongs to, for the operator's log line.
+
+    Returns:
+        The limit, or None when the operator never set the attribute -- which
+        defers to the deployment default.
+
+    Raises:
+        FeatureUnavailableError: The attribute is not a whole number of at
+            least 1; zero is refused rather than read as unlimited.
+    """
+    value = item.get(attribute)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise _malformed_record(
+            key_id, f"'{attribute}' is not a whole number of at least 1"
+        )
+    return value
+
+
 def _aws_credential(
     key_id: str, tenant_item: Item, secret_item: Item
 ) -> TenantAwsCredential | None:
@@ -445,6 +477,8 @@ def _build_entry(key_id: str, tenant_item: Item, secret_item: Item) -> _Entry:
             endpoints_allow=_patterns(tenant_item, "endpoints_allow", key_id),
             endpoints_deny=_patterns(tenant_item, "endpoints_deny", key_id) or (),
             aws_credential=_aws_credential(key_id, tenant_item, secret_item),
+            requests_per_minute=_limit(tenant_item, _LIMIT_ATTRIBUTES[0], key_id),
+            tokens_per_minute=_limit(tenant_item, _LIMIT_ATTRIBUTES[1], key_id),
         ),
         disabled=bool(tenant_item.get("disabled")),
         secret_hash=secret_hash,
@@ -586,6 +620,8 @@ async def resume_tenant(key_id: str) -> Tenant:
     A minted Realtime client secret proves a tenant-authenticated request
     happened; what must be re-checked at connect time is that the tenant still
     exists and is not disabled, so revocation reaches sessions opened later.
+    The connection then counts as one request against the tenant's rate
+    limits, exactly as a request presenting the key itself does.
 
     Args:
         key_id: The key ID the grant was issued under.
@@ -594,15 +630,20 @@ async def resume_tenant(key_id: str) -> Tenant:
         The tenant, scopes included.
 
     Raises:
-        ApiError: 401 when the key no longer exists or is disabled.
-        FeatureUnavailableError: The table cannot be read, or the record
-            cannot be used.
+        ApiError: 401 when the key no longer exists or is disabled; 429 when
+            the tenant reached a rate limit.
+        FeatureUnavailableError: The table cannot be read, the record cannot
+            be used, or the rate-limit counter cannot be written.
     """
     if not _KEY_ID_RE(key_id):
         unauthorized("Malformed tenant key ID")
     entry = await _lookup(key_id, "")
     if entry.disabled:
         unauthorized(f"Tenant API key '{key_id}' is disabled")
+    connection = REQUEST.get(None)
+    await admit_tenant_request(
+        connection.scope if connection is not None else None, entry.tenant
+    )
     return entry.tenant
 
 
@@ -1358,7 +1399,7 @@ async def _list_records() -> tuple[dict[str, Item], dict[str, Item], dict[str, s
     return tenants, secrets, secret_sort_keys
 
 
-async def reconcile_tenant_keys() -> None:
+async def reconcile_tenant_keys() -> dict[str, Item]:
     """Mint, rotate and clean up every tenant key that needs it.
 
     A tenant record with no credential record is pending: the operator's
@@ -1367,6 +1408,9 @@ async def reconcile_tenant_keys() -> None:
     is inert, so it is removed. A key stored in Secrets Manager is rotated
     when its schedule or its tenant's ``key_generation`` says so, and its
     superseded secret dropped once the overlap has ended.
+
+    Returns:
+        The tenant records by key ID, as listed.
 
     Raises:
         TableUnavailableError: The partition could not be listed.
@@ -1398,7 +1442,7 @@ async def reconcile_tenant_keys() -> None:
         if key_id not in unminted_external
     }
     if not (pending or orphans or unminted_external or due or stale):
-        return
+        return tenants
     with log_background_event("tenant_keys_reconcile", webuuid()):
         for key_id, item in pending.items():
             await _mint_pending(key_id, item)
@@ -1410,6 +1454,7 @@ async def reconcile_tenant_keys() -> None:
             await _scrub_previous(key_id, item)
         for key_id, sort_key in orphans.items():
             await _drop_orphan(key_id, sort_key)
+    return tenants
 
 
 async def _drop_orphan(key_id: str, sort_key: str) -> None:
@@ -1573,7 +1618,10 @@ async def initialize_tenant_keys(start_event: EventLog) -> None:
 
     Reported and never fatal: a table or parameter a moment away from existing
     must not turn into an outage, and validation fails closed on its own terms
-    until the table is reachable.
+    until the table is reachable. When any tenant is rate limited -- by its
+    record or by a deployment default -- the counter is probed too, so a
+    missing write permission is reported here rather than at the first
+    limited request.
 
     Args:
         start_event: Startup event log any finding is reported on.
@@ -1596,7 +1644,7 @@ async def initialize_tenant_keys(start_event: EventLog) -> None:
             f"not in region '{_STORE_REGION}'",
         )
     try:
-        await reconcile_tenant_keys()
+        tenants = await reconcile_tenant_keys()
     except (TableUnavailableError, ClientError, BotoCoreError) as error:
         detail = (
             error.detail
@@ -1606,6 +1654,17 @@ async def initialize_tenant_keys(start_event: EventLog) -> None:
         add_server_warning(
             start_event, f"Tenant API keys cannot be reconciled yet: {detail}"
         )
+        return
+    if (
+        SETTINGS.tenant_rate_limit_requests_per_minute
+        or SETTINGS.tenant_rate_limit_tokens_per_minute
+        or any(
+            item.get(attribute) is not None
+            for item in tenants.values()
+            for attribute in _LIMIT_ATTRIBUTES
+        )
+    ):
+        await verify_counter_access(start_event)
 
 
 def open_tenant_key_reconciliation() -> None:

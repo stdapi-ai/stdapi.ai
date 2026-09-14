@@ -206,6 +206,33 @@ class TenantCredentialError(ApiError):
     disclosed = True
 
 
+class RateLimitExceededError(ApiError):
+    """A request refused because its tenant key used up a per-minute limit.
+
+    The vendors' own ``429 rate_limit_error``; the OpenAI envelope carries the
+    code their SDK types for it. The message names the key ID -- public by
+    design -- and the limit, never the secret or where it is counted.
+    """
+
+    status = 429
+    code = "rate_limit_exceeded"
+
+    def __init__(self, key_id: str, limit: int, unit: str, retry_after: int) -> None:
+        """Refuse a request over its tenant's limit, and say when to retry.
+
+        Args:
+            key_id: The tenant key the limit belongs to.
+            limit: The limit that was reached.
+            unit: What the limit counts, ``"request"`` or ``"token"``.
+            retry_after: Seconds until the limit resets.
+        """
+        super().__init__(
+            f"Rate limit reached for tenant API key '{key_id}': limit {limit} "
+            f"{unit}{'s' if limit != 1 else ''} per minute. Please retry after "
+            f"{retry_after} seconds."
+        )
+
+
 class NoModelStoreError(ApiError):
     """A refusal of an operation that would have to change a model store.
 

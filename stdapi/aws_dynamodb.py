@@ -14,6 +14,9 @@ can never produce the same key:
   credential hash -- one partition, so one query lists every tenant.
 - Shared model cache: ``pk=MODELCACHE#<fingerprint>``, ``sk`` one of
   ``manifest``, ``lease`` or ``shard#<version>#<n>``.
+- Tenant rate-limit counters: ``pk=LIMIT#<key id>``, ``sk=<window start
+  epoch>``, the only items written in place (:func:`add_to_item`), so the
+  write-in-place permission can be confined to that partition prefix.
 
 A ``sk`` is the *kind* of record within its partition: a bare token for a kind
 that has one record per partition, and ``<kind>#<discriminator>`` for a kind
@@ -521,6 +524,63 @@ async def delete_item(
     except BotoCoreError as error:
         raise _failure(error, "DeleteItem") from error
     return True
+
+
+async def add_to_item(
+    partition_key: str, sort_key: str, increments: Mapping[str, int], *, expires_at: int
+) -> Item:
+    """Add to the numeric attributes of one item, creating it on first touch.
+
+    The atomic counter every server instance shares: each call adds its
+    increments in one operation and answers with the item after it, so a
+    grant decided from those totals can never exceed what the instances added
+    between them. The expiry is set by the first writer and kept by every
+    later one, and the item carries the schema version of whoever created it.
+
+    Args:
+        partition_key: The item's ``pk``.
+        sort_key: The item's ``sk``.
+        increments: Attribute name to the amount to add, negative to release,
+            zero to read the totals without changing them.
+        expires_at: Epoch second the item expires at, for the table's
+            time-to-live; only written when the item does not exist yet.
+
+    Returns:
+        The whole item after the addition, each counter at its total. The
+        whole item rather than the touched attributes: an addition of zero
+        touches nothing, and the local stand-in then answers with nothing.
+
+    Raises:
+        TableUnavailableError: The write did not complete.
+    """
+    # Every attribute is aliased, so a name DynamoDB reserves never breaks
+    # the expression.
+    names = {f"#a{i}": name for i, name in enumerate(increments)}
+    names["#exp"] = EXPIRES_AT_ATTRIBUTE
+    names["#schema"] = SCHEMA_ATTRIBUTE
+    values: Item = {f":v{i}": value for i, value in enumerate(increments.values())}
+    values[":exp"] = expires_at
+    values[":schema"] = SCHEMA_VERSION
+    expression = (
+        "ADD " + ", ".join(f"#a{i} :v{i}" for i in range(len(increments))) + " "
+        "SET #exp = if_not_exists(#exp, :exp), "
+        "#schema = if_not_exists(#schema, :schema)"
+    )
+    try:
+        response = await _client().update_item(
+            TableName=_table(),
+            Key=encode_item({PARTITION_KEY: partition_key, SORT_KEY: sort_key}),
+            UpdateExpression=expression,
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=encode_item(values),
+            ReturnValues="ALL_NEW",
+        )
+    except (BotoCoreError, ClientError) as error:
+        raise _failure(error, "UpdateItem") from error
+    try:
+        return decode_item(response.get("Attributes") or {})
+    except ValueError as error:
+        raise _decode_failure(error, "UpdateItem") from error
 
 
 async def query_partition(

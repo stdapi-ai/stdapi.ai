@@ -37,7 +37,7 @@ Each row below is one section of this page. Find the features your deployment en
 | **[S3 Accepted Input Buckets](#s3-accepted-input-buckets)** | `s3:GetObject` on the objects of each declared bucket (no `s3:ListBucket`)<br>`kms:Decrypt`, with a `kms:ViaService` condition, when those buckets use KMS encryption | `AWS_S3_ACCEPTED_BUCKETS`<br>If those buckets use KMS encryption |
 | **[Vector Stores](#vector-stores-optional)** | `s3vectors:CreateIndex`<br>`s3vectors:DeleteIndex`<br>`s3vectors:PutVectors`<br>`s3vectors:GetVectors`<br>`s3vectors:QueryVectors`<br>`s3vectors:DeleteVectors` (on the vector bucket and its indexes)<br>File Storage S3 permissions on `AWS_S3_BUCKET` for the stores' records<br>`kms:Decrypt` and `kms:GenerateDataKey`, with a `kms:ViaService` condition, when the vector bucket uses KMS encryption | `AWS_S3_VECTORS_BUCKET`<br>`AWS_S3_VECTORS_REGION` |
 | **[Durable Vector Store Indexing](#durable-vector-store-indexing)** | `sqs:SendMessage`<br>`sqs:ReceiveMessage`<br>`sqs:DeleteMessage`<br>`sqs:ChangeMessageVisibility`<br>`sqs:GetQueueAttributes` (on the queue ARN only)<br>`kms:Decrypt` and `kms:GenerateDataKey`, with a `kms:ViaService` condition, when the queue uses SSE-KMS with your own key | `AWS_SQS_VECTOR_STORE_QUEUE_URL` |
-| **[Shared Table](#shared-table)** | `dynamodb:GetItem`<br>`dynamodb:PutItem`<br>`dynamodb:DeleteItem`<br>`dynamodb:Query`<br>`dynamodb:DescribeTable`<br>`dynamodb:DescribeTimeToLive` (on the table ARN; no `dynamodb:Scan`, no index ARN) | `AWS_DYNAMODB_TABLE`<br>`AWS_DYNAMODB_REGION`<br>`MODEL_CACHE_SHARED` |
+| **[Shared Table](#shared-table)** | `dynamodb:GetItem`<br>`dynamodb:PutItem`<br>`dynamodb:DeleteItem`<br>`dynamodb:Query`<br>`dynamodb:DescribeTable`<br>`dynamodb:DescribeTimeToLive` (on the table ARN; no `dynamodb:Scan`, no index ARN)<br>`dynamodb:UpdateItem` on the `LIMIT#*` items only, when any tenant is rate limited | `AWS_DYNAMODB_TABLE`<br>`AWS_DYNAMODB_REGION`<br>`MODEL_CACHE_SHARED`<br>`TENANT_RATE_LIMIT_REQUESTS_PER_MINUTE`<br>`TENANT_RATE_LIMIT_TOKENS_PER_MINUTE` |
 | **[Tenant API Key Delivery](#tenant-key-delivery)** | `ssm:PutParameter`<br>`ssm:GetParameter` (on the delivery prefix)<br>`kms:Encrypt`, `kms:Decrypt`, `kms:GenerateDataKey` on the key, with a `kms:ViaService` condition, when `TENANT_KEY_SSM_KMS_KEY_ID` names a key of your own<br>plus the Shared Table permissions above | `TENANT_API_KEYS`<br>`TENANT_KEY_SSM_PARAMETER_PREFIX`<br>`TENANT_KEY_SSM_KMS_KEY_ID` |
 | **[Tenant API Key Rotation](#tenant-key-rotation)** | `secretsmanager:CreateSecret`<br>`secretsmanager:DescribeSecret`<br>`secretsmanager:GetSecretValue`<br>`secretsmanager:PutSecretValue`<br>`secretsmanager:UpdateSecretVersionStage` (on the secret prefix; replaces the Parameter Store delivery)<br>`kms:GenerateDataKey`, `kms:Decrypt` on the key, with a `kms:ViaService` condition, when `TENANT_KEY_SECRETSMANAGER_KMS_KEY_ID` names a key of your own<br>plus the Shared Table permissions above | `TENANT_KEY_SECRETSMANAGER_PREFIX`<br>`TENANT_KEY_SECRETSMANAGER_KMS_KEY_ID`<br>`TENANT_KEY_ROTATION_DAYS` |
 | **[Tenant AWS Credentials](#tenant-aws-credentials)** | `sts:AssumeRole` on the tenant role ARNs, conditioned on `sts:ExternalId` | `TENANT_AWS_CREDENTIALS` |
@@ -623,9 +623,9 @@ Required to keep indexing a vector store file when the server that accepted it s
 
 ## :material-table: Shared Table (Optional) { #shared-table }
 
-**Environment Variables**: [`AWS_DYNAMODB_TABLE`](operations_configuration_storage.md#aws-dynamodb-table), [`AWS_DYNAMODB_REGION`](operations_configuration_storage.md#aws-dynamodb-region), [`MODEL_CACHE_SHARED`](operations_configuration_models.md#model-cache-shared)
+**Environment Variables**: [`AWS_DYNAMODB_TABLE`](operations_configuration_storage.md#aws-dynamodb-table), [`AWS_DYNAMODB_REGION`](operations_configuration_storage.md#aws-dynamodb-region), [`MODEL_CACHE_SHARED`](operations_configuration_models.md#model-cache-shared), [`TENANT_RATE_LIMIT_REQUESTS_PER_MINUTE`](operations_configuration_authentication.md#tenant-rate-limit-requests-per-minute), [`TENANT_RATE_LIMIT_TOKENS_PER_MINUTE`](operations_configuration_authentication.md#tenant-rate-limit-tokens-per-minute)
 
-Required by the features whose records every instance of a deployment reads and writes, on the one [Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html) table you create. Grant it on that table's ARN. [Model list sharing](operations_resilience.md#model-list-refresh) is the feature that uses it today; a server missing these permissions reports it at `WARNING` and keeps discovering the model list itself.
+Required by the features whose records every instance of a deployment reads and writes, on the one [Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html) table you create. Grant it on that table's ARN. [Model list sharing](operations_resilience.md#model-list-refresh), [tenant API keys](operations_authentication_security.md#tenant-api-keys) and their [rate limits](operations_authentication_security.md#tenant-rate-limits) are the features that use it; a server missing these permissions reports it at `WARNING` and keeps discovering the model list itself, while tenant keys fail closed.
 
 ??? example "Shared Table IAM Policy Statements"
     ```json
@@ -641,6 +641,15 @@ Required by the features whose records every instance of a deployment reads and 
         "dynamodb:DescribeTimeToLive"
       ],
       "Resource": "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/TABLE_NAME"
+    },
+    {
+      "Sid": "SharedTableRateLimitCounters",
+      "Effect": "Allow",
+      "Action": "dynamodb:UpdateItem",
+      "Resource": "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/TABLE_NAME",
+      "Condition": {
+        "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["LIMIT#*"] }
+      }
     }
     ```
 
@@ -652,6 +661,9 @@ Required by the features whose records every instance of a deployment reads and 
 
     !!! note "No index and no scan"
         The table has no secondary index, so no index ARN is needed, and every read is addressed by key — `dynamodb:Scan` is deliberately not granted.
+
+    !!! note "The counter statement is only needed with rate limits"
+        `dynamodb:UpdateItem` is the one action that changes an item in place, and the [per-tenant rate limits](operations_authentication_security.md#tenant-rate-limits) are its only user: the counters live in the items whose partition key starts with `LIMIT#`, and the [`dynamodb:LeadingKeys`](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/specifying-conditions.html) condition keeps the grant to those, so it can never rewrite a tenant record or the shared model list. Omit the statement when no tenant is rate limited; a server that is asked to enforce a limit without it reports the missing action at startup and refuses the limited tenants' requests with `503` rather than serving them unlimited.
 
     !!! note "If the table uses a customer managed key"
         A table encrypted with a customer managed AWS KMS key needs no `kms:*` permission here: Amazon DynamoDB creates the grants it uses on your behalf when the table is created. Encryption at rest is always on, and the default AWS owned key is free.

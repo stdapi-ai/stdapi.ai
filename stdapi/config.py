@@ -1526,7 +1526,10 @@ class _Settings(BaseSettings):
             "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html\n\n"
             "Required IAM permissions, on the table ARN: dynamodb:GetItem, "
             "dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:Query, "
-            "dynamodb:DescribeTable and dynamodb:DescribeTimeToLive.\n\n"
+            "dynamodb:DescribeTable and dynamodb:DescribeTimeToLive; plus "
+            "dynamodb:UpdateItem, which may be confined to the items whose "
+            "partition key starts with 'LIMIT#' (dynamodb:LeadingKeys), when "
+            "tenant rate limits are declared.\n\n"
             "Example: 'stdapi-ai'\n\n"
             "Unset (default): every feature that needs the table is disabled."
         ),
@@ -1725,9 +1728,50 @@ class _Settings(BaseSettings):
             "alongside tenant keys.\n\n"
             "Required IAM permissions: the aws_dynamodb_table set, plus "
             "ssm:PutParameter and ssm:GetParameter on "
-            "'tenant_key_ssm_parameter_prefix/*'.\n\n"
+            "'tenant_key_ssm_parameter_prefix/*', and dynamodb:UpdateItem on "
+            "the table's 'LIMIT#*' items when any tenant is rate limited.\n\n"
             "Disabled (default): tenant-shaped credentials are only compared "
             "against the deployment API key, like any other value."
+        ),
+    )
+
+    tenant_rate_limit_requests_per_minute: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Requests each tenant API key may make per minute, unless its "
+            "tenant record declares its own 'requests_per_minute'. Windows "
+            "are fixed minutes shared by every server instance through the "
+            "table named by aws_dynamodb_table; a request over the limit is "
+            "refused with 429 and a 'retry-after' naming the seconds left in "
+            "the minute. Only tenant keys are limited: the deployment API "
+            "key and Amazon Cognito tokens are not.\n\n"
+            "Requires tenant_api_keys. Required IAM permission: "
+            "dynamodb:UpdateItem on the table, which may be confined to the "
+            "items whose partition key starts with 'LIMIT#'.\n\n"
+            "Example: 600\n\n"
+            "Unset (default): no request limit, except for the tenant "
+            "records that declare one."
+        ),
+    )
+
+    tenant_rate_limit_tokens_per_minute: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Tokens each tenant API key may bill per minute -- input, "
+            "cache-write and output tokens; cached reads are free -- unless "
+            "its tenant record declares its own 'tokens_per_minute'. A "
+            "request is admitted on the key's recent average and reconciled "
+            "from what the model actually billed, so a minute may exceed the "
+            "limit by the requests in flight when it was reached; the next "
+            "requests are refused with 429 until the minute ends.\n\n"
+            "Requires tenant_api_keys. Required IAM permission: "
+            "dynamodb:UpdateItem on the table, which may be confined to the "
+            "items whose partition key starts with 'LIMIT#'.\n\n"
+            "Example: 200000\n\n"
+            "Unset (default): no token limit, except for the tenant records "
+            "that declare one."
         ),
     )
 
@@ -3851,9 +3895,9 @@ class _Settings(BaseSettings):
         Raises:
             ValueError: If tenant keys are enabled without the table, if the
                 delivery prefix is not a Parameter Store path, if a KMS key is
-                not a KMS key reference, if a delivery or store setting is set
-                without the feature, or if a rotation or store-key setting is
-                set without the Secrets Manager store.
+                not a KMS key reference, if a delivery, store or rate-limit
+                setting is set without the feature, or if a rotation or
+                store-key setting is set without the Secrets Manager store.
         """
         if not self.tenant_api_keys:
             if self.tenant_key_ssm_kms_key_id:
@@ -3866,6 +3910,16 @@ class _Settings(BaseSettings):
                 msg = (
                     "tenant_key_secretsmanager_prefix requires tenant_api_keys: "
                     "without the feature no key is ever stored under it."
+                )
+                raise ValueError(msg)
+            if (
+                self.tenant_rate_limit_requests_per_minute is not None
+                or self.tenant_rate_limit_tokens_per_minute is not None
+            ):
+                msg = (
+                    "tenant_rate_limit_requests_per_minute and "
+                    "tenant_rate_limit_tokens_per_minute require tenant_api_keys: "
+                    "only tenant API keys are rate limited."
                 )
                 raise ValueError(msg)
             return

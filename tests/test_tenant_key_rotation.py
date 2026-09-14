@@ -594,8 +594,8 @@ class TestStoreKmsWarning:
             The startup event log the check reports into.
         """
 
-        async def _noop() -> None:
-            return None
+        async def _noop() -> dict[str, Item]:
+            return {}
 
         monkeypatch.setattr(tenant_keys, "reconcile_tenant_keys", _noop)
         monkeypatch.setattr(tenant_keys, "_STORE_REGION", "us-east-1")

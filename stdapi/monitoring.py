@@ -215,6 +215,9 @@ class Tenant:
         endpoints_deny: Patterns refusing a route path template, checked first.
         aws_credential: Cross-account role this tenant's model invocations
             run under, when the tenant registered one.
+        requests_per_minute: Requests the key may make per minute, when its
+            record declares a limit; None defers to the deployment default.
+        tokens_per_minute: Tokens the key may bill per minute, likewise.
     """
 
     key_id: str
@@ -224,6 +227,8 @@ class Tenant:
     endpoints_allow: tuple[str, ...] | None = None
     endpoints_deny: tuple[str, ...] = ()
     aws_credential: TenantAwsCredential | None = None
+    requests_per_minute: int | None = None
+    tokens_per_minute: int | None = None
 
     @staticmethod
     def _allows(
@@ -399,6 +404,11 @@ def _finalize_usage(log: EventLog) -> None:
         # later stream finalize can't re-log the same records: tasks spawned
         # before a stream's log scope keep recording into this same dict.
         if (records := USAGE.get(None)) is not None:
+            # Imported here: that module imports this one (import cycle).
+            from stdapi.tenant_rate_limits import debit_tenant_tokens  # noqa: PLC0415
+
+            # Before the drain empties the mapping.
+            debit_tenant_tokens(records.values())
             records.clear()
 
 

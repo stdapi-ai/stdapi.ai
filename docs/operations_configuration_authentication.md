@@ -48,6 +48,8 @@ Configure **one** API key source. If several are set, precedence is `API_KEY` �
 | [`TENANT_KEY_ROTATION_DAYS`](#tenant-key-rotation-days)           | None      | Rotate every stored tenant key once it is this many days old |
 | [`TENANT_KEY_ROTATION_OVERLAP_SECONDS`](#tenant-key-rotation-overlap-seconds) | `604800` | How long a rotated key keeps working after its replacement is promoted |
 | [`TENANT_AWS_CREDENTIALS`](#tenant-aws-credentials)               | `false`   | Let a tenant register a cross-account IAM role its model invocations run under |
+| [`TENANT_RATE_LIMIT_REQUESTS_PER_MINUTE`](#tenant-rate-limit-requests-per-minute) | None | Requests per minute each tenant key may make, unless its record says otherwise |
+| [`TENANT_RATE_LIMIT_TOKENS_PER_MINUTE`](#tenant-rate-limit-tokens-per-minute) | None | Tokens per minute each tenant key may bill, unless its record says otherwise |
 | [`AUTHENTICATION_MODE`](#authentication-mode)                     | `any`     | Accepted methods: `any`, `api_key` or `cognito`                    |
 
 Amazon Cognito user pool tokens are an alternative to the API key — see [Amazon Cognito Authentication](#cognito-authentication):
@@ -285,7 +287,7 @@ export TENANT_API_KEYS=true
 :   [`AWS_DYNAMODB_TABLE`](operations_configuration_storage.md#aws-dynamodb-table) must be set, or startup fails. [`TENANT_KEY_SSM_PARAMETER_PREFIX`](#tenant-key-ssm-parameter-prefix) has a default and needs no configuration of its own — override it if this deployment shares an AWS account with another
 
 :octicons-lock-24: **IAM Permissions Required**
-:   The [shared table permissions](operations_iam_permissions.md#shared-table), plus `ssm:PutParameter` and `ssm:GetParameter` on the delivery prefix — see [Tenant API Key Delivery](operations_iam_permissions.md#tenant-key-delivery)
+:   The [shared table permissions](operations_iam_permissions.md#shared-table), plus `ssm:PutParameter` and `ssm:GetParameter` on the delivery prefix — see [Tenant API Key Delivery](operations_iam_permissions.md#tenant-key-delivery). Rate-limited tenants also need the [counter permission](operations_iam_permissions.md#shared-table) (`dynamodb:UpdateItem` on the `LIMIT#*` items)
 
 #### `TENANT_KEY_CACHE_SECONDS` { #tenant-key-cache-seconds }
 
@@ -434,6 +436,48 @@ export TENANT_KEY_ROTATION_OVERLAP_SECONDS=86400
 
 ```bash
 export TENANT_AWS_CREDENTIALS=true
+```
+
+#### `TENANT_RATE_LIMIT_REQUESTS_PER_MINUTE` { #tenant-rate-limit-requests-per-minute }
+
+:octicons-package-24: **Purpose**
+:   Requests each tenant API key may make per minute, unless its tenant record declares its own `requests_per_minute`. Minutes are fixed windows shared by every instance; a request over the limit answers `429 rate_limit_error` with a `retry-after` naming the seconds left in the minute — a Realtime handshake, an `error` event after the upgrade instead. The value is a ceiling, not an exact allowance: slots are reserved per instance in batches and not returned within the minute, so a tenant spread over many instances can be refused somewhat below it. See [Rate limits per tenant](operations_authentication_security.md#tenant-rate-limits)
+
+:octicons-gear-24: **Default**
+:   None — no request limit, except for the tenant records that declare one
+
+:octicons-list-unordered-24: **Values**
+:   A whole number of at least `1`
+
+:octicons-alert-24: **Requirement**
+:   Requires [`TENANT_API_KEYS`](#tenant-api-keys): only tenant keys are limited, never the deployment API key or Cognito tokens
+
+:octicons-lock-24: **IAM Permissions Required**
+:   `dynamodb:UpdateItem` on the shared table, confined to its `LIMIT#*` items — see [Shared Table](operations_iam_permissions.md#shared-table)
+
+```bash
+export TENANT_RATE_LIMIT_REQUESTS_PER_MINUTE=600
+```
+
+#### `TENANT_RATE_LIMIT_TOKENS_PER_MINUTE` { #tenant-rate-limit-tokens-per-minute }
+
+:octicons-package-24: **Purpose**
+:   Tokens each tenant API key may bill per minute — input, cache-write and output tokens; cached reads are free — unless its tenant record declares its own `tokens_per_minute`. A request is admitted on an estimate and reconciled from what the model actually billed, so the next requests are refused once the minute's total reaches the limit. The estimate is learned per instance: until a request of the key bills on an instance, each request in flight counts as an eighth of the limit, so a cold instance admits about eight concurrent requests of the key and refuses the next with a `429` naming this limit; afterwards each counts as the key's mean tokens per billed request there. A burst larger than the mean can overshoot the limit, and a token limit alone caps the requests a key holds in flight at 64 per instance rather than at a concurrency you chose — pair it with [`TENANT_RATE_LIMIT_REQUESTS_PER_MINUTE`](#tenant-rate-limit-requests-per-minute), which replaces that ceiling. See [Rate limits per tenant](operations_authentication_security.md#tenant-rate-limits)
+
+:octicons-gear-24: **Default**
+:   None — no token limit, except for the tenant records that declare one
+
+:octicons-list-unordered-24: **Values**
+:   A whole number of at least `1`
+
+:octicons-alert-24: **Requirement**
+:   Requires [`TENANT_API_KEYS`](#tenant-api-keys)
+
+:octicons-lock-24: **IAM Permissions Required**
+:   `dynamodb:UpdateItem` on the shared table, confined to its `LIMIT#*` items — see [Shared Table](operations_iam_permissions.md#shared-table)
+
+```bash
+export TENANT_RATE_LIMIT_TOKENS_PER_MINUTE=200000
 ```
 
 ## :material-magnify: Authentication Discovery for Agents { #oauth-discovery }

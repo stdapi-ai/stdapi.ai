@@ -18,9 +18,10 @@ from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
 from stdapi.exceptions import ServerError
 from stdapi.monitoring import PRINCIPAL, TENANT, EventLog, add_server_warning
 from stdapi.tenant_keys import is_tenant_key, verify_tenant_key
+from stdapi.tenant_rate_limits import admit_tenant_request
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, MutableMapping
 
 #: HTTPBearer scheme extracting the Authorization header's credential, whatever kind it is.
 _authorization_bearer = HTTPBearer(auto_error=False)
@@ -323,7 +324,8 @@ async def authenticate(
     except that a tenant key in ``x-api-key`` verifies *alongside* a Bearer
     credential rather than instead of it: the tenant key authorizes, the token
     identifies, and both must hold. No-op when no authentication method is
-    configured, allowing all requests.
+    configured, allowing all requests. A verified tenant's request is then
+    counted against its rate limits, once, whatever carried the key.
 
     Args:
         credentials: HTTP Bearer token credentials from the Authorization header.
@@ -334,7 +336,10 @@ async def authenticate(
 
     Raises:
         ApiError: 401 if authentication is required but missing/invalid, or if
-            a tenant key is not allowed on this endpoint.
+            a tenant key is not allowed on this endpoint; 429 when the tenant
+            reached a rate limit.
+        FeatureUnavailableError: 503 when the tenant records or the rate-limit
+            counter cannot be reached; never accepted, never a 401.
     """
     # Cleared first, every request: a nested tool call must not inherit an identity.
     PRINCIPAL.set(None)
@@ -358,6 +363,8 @@ async def authenticate(
     else:
         await verify_credential(x_api_key or bearer)
     enforce_tenant_endpoint_scope(request.scope)
+    if (verified := TENANT.get()) is not None:
+        await admit_tenant_request(request.scope, verified)
 
 
 def enforce_tenant_endpoint_scope(scope: Mapping[str, Any] | None) -> None:
@@ -429,29 +436,36 @@ async def verify_credential(credential: str | None) -> None:
 
 
 async def verify_websocket_credentials(
-    credential: str | None, scope: Mapping[str, Any] | None = None
+    credential: str | None, scope: MutableMapping[str, Any] | None = None
 ) -> None:
     """Verify the credential a WebSocket client presented.
 
     The HTTP dependency cannot serve this: FastAPI's security schemes are
     annotated ``request: Request`` and the solver fills the *websocket*
     parameter on a WebSocket scope instead, so the scheme is called with no
-    argument at all and the handshake fails as a ``TypeError``.
+    argument at all and the handshake fails as a ``TypeError``. The handshake
+    counts as one request against a tenant's rate limits.
 
     Args:
         credential: The credential read off the connection, if any.
         scope: The connection's ASGI scope, letting a tenant key's endpoint
-            restrictions apply to the matched WebSocket route.
+            restrictions apply to the matched WebSocket route and carrying
+            the tenant's rate-limit reservation for the session.
 
     Raises:
         ApiError: 401 if authentication is required but missing/invalid, or if
-            a tenant key is not allowed on this endpoint.
+            a tenant key is not allowed on this endpoint; 429 when the tenant
+            reached a rate limit.
+        FeatureUnavailableError: 503 when the tenant records or the rate-limit
+            counter cannot be reached.
     """
     # Cleared per connection: a session must not inherit another's identity.
     PRINCIPAL.set(None)
     TENANT.set(None)
     await verify_credential(credential)
     enforce_tenant_endpoint_scope(scope)
+    if (tenant := TENANT.get()) is not None:
+        await admit_tenant_request(scope, tenant)
 
 
 def realtime_signing_key(person: bytes, size: int) -> bytes | None:

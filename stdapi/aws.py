@@ -75,6 +75,12 @@ _STS_REGION: RegionName = AWS_REGION  # type: ignore[assignment]
 #: Region-rotated Bedrock services that get single-attempt ".no-retry" client pools
 _NO_RETRY_SERVICES: Final = ("bedrock-runtime", "bedrock-agent-runtime")
 
+#: Read timeout of a shared-table call, in seconds: single items, on the authentication path
+_DYNAMODB_READ_TIMEOUT: Final = 5
+
+#: Attempts of a shared-table call, so a stalled table fails closed within seconds
+_DYNAMODB_MAX_ATTEMPTS: Final = 3
+
 #: Default retry configuration (configurable attempts and retry mode)
 _RETRIES = {
     "max_attempts": SETTINGS.aws_bedrock_max_retries + 1,
@@ -298,6 +304,17 @@ class AWSConnectionManager:
                             # Always adaptive: the Pricing API rate quota is very low.
                             "mode": "adaptive",
                         }
+                    )
+                ),
+                # Read and written on the authentication path, where the
+                # model-sized default timeout would hang every waiter.
+                "dynamodb": _BASE_CONFIG.merge(
+                    AioConfig(
+                        retries={
+                            "max_attempts": _DYNAMODB_MAX_ATTEMPTS,
+                            "mode": _RETRIES["mode"],
+                        },
+                        read_timeout=_DYNAMODB_READ_TIMEOUT,
                     )
                 ),
             }
