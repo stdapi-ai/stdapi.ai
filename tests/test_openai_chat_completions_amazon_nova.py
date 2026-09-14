@@ -268,8 +268,21 @@ class TestNovaGrounding:
             assert ann.url_citation.start_index == 0
             assert ann.url_citation.end_index == 0
 
+    @pytest.mark.retry(
+        "a content filter can cut off the grounded answer after every tool-use "
+        "event was suppressed cleanly, finishing content_filter instead of stop "
+        "(issue #169, same prompt and same cause as the Responses twin)"
+    )
     def test_tool_calls_suppressed_streaming(self, openai_client: OpenAI) -> None:
         """Streaming with nova_grounding emits no tool_call delta chunks.
+
+        Shares issue #169's flake with
+        ``test_openai_responses.py::test_web_search_type_tool_streaming``: same
+        prompt, same cause. Captured over five live runs, one of which failed
+        `assert 'content_filter' == 'stop'` with the suppression assertions
+        already passed, so the search lifecycle is intact and only the answer
+        was cut. Retried rather than accepted: the terminal assertion stays
+        exactly as strict.
 
         ``_suppress_system_tool_event`` tracks the Bedrock content-block index of a
         suppressed ``toolUse`` and drops its start, delta and stop events, so the client

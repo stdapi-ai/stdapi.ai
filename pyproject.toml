@@ -216,6 +216,12 @@ ignore_missing_imports = true
 module = ["material.*"]
 ignore_missing_imports = true
 
+# The agentic clients float by design rather than being locked, so whether one
+# ships a py.typed marker changes under us; the tests only drive them.
+[[tool.mypy.overrides]]
+module = ["llama_index.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 addopts = [
