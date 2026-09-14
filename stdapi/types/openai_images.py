@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Literal, Self
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 
-from stdapi.aws_s3 import require_url_response_bucket
 from stdapi.input_file import FileIdInputFile, InputFileUrl
 from stdapi.types import (
     BaseModelRequest,
@@ -301,32 +300,6 @@ class _ImageBaseParams(BaseModelRequestWithExtra):
             A concrete `WIDTHxHEIGHT` size.
         """
         return _DEFAULT_SIZE if value == "auto" else value
-
-    @model_validator(mode="after")
-    def _validate_response_format(self) -> Self:
-        """Refuse ``url`` when no bucket can host the images it points at.
-
-        Refused here rather than at upload time, so a deployment that cannot
-        serve the format never bills the caller for images it has to discard.
-        A streamed response carries its images inline whatever format was
-        asked for, so it needs no host and is left alone. Checked on the whole
-        request rather than on the field, which is only visited when the
-        caller names a format -- and most callers take the default.
-
-        Returns:
-            The validated request.
-
-        Raises:
-            FeatureUnavailableError: No bucket is configured to host the images.
-        """
-        # Only the requests that can stream declare ``stream``; on the others a
-        # field of that name is extra input, not a mode.
-        streamed = "stream" in type(self).model_fields and getattr(
-            self, "stream", False
-        )
-        if self.response_format == "url" and not streamed:
-            require_url_response_bucket()
-        return self
 
 
 # Ref: openai.types.image_generate_params.ImageGenerateParams
