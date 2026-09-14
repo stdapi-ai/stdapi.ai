@@ -80,6 +80,7 @@ if TYPE_CHECKING:
     )
 
     from stdapi.models.chat import ReasoningParams
+    from stdapi.models.chat._adapters._common import ServerToolNames
     from stdapi.types import JsonMapping
     from stdapi.types.openai_chat_completions import (
         ChatCompletionAssistantMessageParam,
@@ -210,6 +211,24 @@ def _map_tool_spec(
         raise ApiError(msg)
 
 
+def _web_search_tool_spec(name: str) -> ToolTypeDef:
+    """Build the ``toolSpec`` entry a backend-served web search is declared with.
+
+    Args:
+        name: Bedrock tool name of the model's web search.
+
+    Returns:
+        Bedrock tool entry, promoted to a ``systemTool`` at the model layer.
+    """
+    return {
+        "toolSpec": {
+            "name": name,
+            "description": name,
+            "inputSchema": {"json": _EMPTY_TOOL},
+        }
+    }
+
+
 def _map_tool_choice_literal(value: str) -> ToolChoiceTypeDef:
     """Map OpenAI tool_choice literal to Bedrock ToolChoiceTypeDef.
 
@@ -273,37 +292,95 @@ def _map_function_call(
     return {"tool": {"name": function_call.name}}
 
 
+def _resolve_web_search_tool(
+    request: CompletionCreateParams, tool_name_map: ServerToolNames | None
+) -> str | None:
+    """Resolve the backend name of the web search ``web_search_options`` asks for.
+
+    ``web_search_options`` is the Chat Completions spelling of the canonical
+    ``web_search`` server tool, so it resolves through the same declaration the
+    Responses and Messages dialects resolve their own web search through.  A
+    model that runs no web search refuses: an answer written from the model's
+    own knowledge is not a degraded grounded answer, and nothing in the response
+    tells the caller which of the two it got.
+
+    Args:
+        request: OpenAI chat completion creation request.
+        tool_name_map: What the model declares about server tool names.
+
+    Returns:
+        Bedrock tool name to declare, or ``None`` when the request asks for no
+        web search.
+
+    Raises:
+        ApiError: If the request restricts the search in a way no backend-served
+            web search applies, or if the model runs no web search.
+    """
+    if (options := request.web_search_options) is None:
+        return None
+    if isinstance(tool_name_map, _common.NoServerTools):
+        tool_name_map.refuse("web_search")
+    _common.reject_unsupported_web_search_fields(
+        {"user_location": options.user_location}
+    )
+    if tool_name_map is not None and (name := tool_name_map.get("web_search")):
+        return name
+    msg = (
+        "The 'web_search_options' parameter is not available with this model. "
+        "Remove the parameter, or use a model that runs a web search."
+    )
+    raise ApiError(msg)
+
+
 def build_tool_config(
-    request: CompletionCreateParams,
+    request: CompletionCreateParams, tool_name_map: ServerToolNames | None = None
 ) -> ToolConfigurationTypeDef | None:
     """Build a Bedrock tool configuration from an OpenAI request.
 
     All function tools are mapped to ``toolSpec`` entries as-is.  System tool
     routing (``SUPPORTED_SYSTEM_TOOLS`` auto-promotion) is handled at the model
-    layer by ``_req_promote_system_tools``.
+    layer by ``_req_promote_system_tools``, which the ``web_search_options``
+    entry is declared for too — once, even when the request also names it as a
+    function tool.
 
     When ``tool_choice`` (or legacy ``function_call``) is ``'none'``, no tool
     config is returned, which drops every tool the request declared.  A history
     carrying ``toolUse``/``toolResult`` blocks still gets a permissive config
     synthesized by the model layer, and the tools it names stay callable: that
     is the documented limit of ``'none'`` on a conversation that already called
-    a tool.
+    a tool.  ``web_search_options`` is not a tool the request declared, so it
+    survives ``'none'``.
 
     Args:
         request: The request object containing the data to map and configure tools.
+        tool_name_map: What the model declares about server tool names
+            (``ChatModel.server_tool_names``).
 
     Returns:
         Bedrock tool configuration, or ``None`` if no tools are present or tool
         calling is disabled via ``'none'``.
+
+    Raises:
+        ApiError: If ``web_search_options`` asks for a web search this model
+            does not run, or restricts one it cannot restrict.
     """
+    web_search_name = _resolve_web_search_tool(request, tool_name_map)
+
     if request.tool_choice == "none" or (
         "function_call" in request.model_fields_set and request.function_call == "none"
     ):
-        return None
+        if web_search_name is None:
+            return None
+        return {"tools": [_web_search_tool_spec(web_search_name)]}
 
     tools: list[ToolTypeDef] = []
     for tool in _map_tools(request):
         _map_tool_spec(tool, tools)
+    if web_search_name is not None and not any(
+        (spec := entry.get("toolSpec")) is not None and spec["name"] == web_search_name
+        for entry in tools
+    ):
+        tools.append(_web_search_tool_spec(web_search_name))
     if not tools:
         return None
 
@@ -355,7 +432,9 @@ def build_output_config(
 
 
 def translate_request(
-    request: CompletionCreateParams, model_id: str
+    request: CompletionCreateParams,
+    model_id: str,
+    tool_name_map: ServerToolNames | None = None,
 ) -> tuple[
     InferenceConfigurationTypeDef,
     JsonMapping,
@@ -374,11 +453,17 @@ def translate_request(
     Args:
         request: OpenAI chat completion creation request.
         model_id: The Bedrock model identifier.
+        tool_name_map: What the model declares about server tool names
+            (``ChatModel.server_tool_names``).
 
     Returns:
         Tuple of (inference_cfg, additional_request_fields, tool_config,
         bedrock_service_tier, openai_service_tier, choices_count, output_config,
         request_metadata).
+
+    Raises:
+        ApiError: If ``web_search_options`` asks for a web search this model
+            does not run, or restricts one it cannot restrict.
     """
     max_tokens = request.max_completion_tokens or request.max_tokens
     additional_request_fields: JsonMapping = {}
@@ -401,7 +486,7 @@ def translate_request(
     bedrock_service_tier, openai_service_tier = _openai_common.map_service_tier(
         request.service_tier
     )
-    tool_config = build_tool_config(request)
+    tool_config = build_tool_config(request, tool_name_map)
 
     # Legacy format is declared by `functions`, or detected from the message history
     # by `map_messages` (which runs first) when no `tools` are declared.

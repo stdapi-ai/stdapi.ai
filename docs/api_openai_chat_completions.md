@@ -15,7 +15,8 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 - :material-lightbulb: **Reasoning in the dialect your client speaks.** `reasoning_effort` (OpenAI), `enable_thinking` and `thinking_budget` (Qwen), `thinking` (Moonshot) and the OpenRouter `reasoning` object all reach the same control.
 - :material-content-save: **Prompt caching and stored completions.** Cache breakpoints map to Amazon Bedrock `cachePoint`s, and `store: true` keeps the completion in Amazon Bedrock session storage in your own AWS account.
 - :material-shield-check: **Content safety per request.** An Amazon Bedrock guardrail applies through a request header or the `moderation` parameter, on requests served by the Converse API.
-- :material-swap-horizontal: **Differs from OpenAI:** `logprobs` is rejected with `400` while `top_logprobs` keeps working, `n > 1` is not available with streaming, and `web_search_options` is rejected — web search is a tool of the [Responses API](api_openai_responses.md#openai-gpt-web-search).
+- :material-web: **Web search where the model runs one.** `web_search_options` grounds the answer in a live search and cites it in the message `annotations` — see [Web Grounding](#web-grounding).
+- :material-swap-horizontal: **Differs from OpenAI:** `logprobs` is rejected with `400` while `top_logprobs` keeps working, `n > 1` is not available with streaming, and `web_search_options` needs a model that runs a web search — it is rejected elsewhere rather than answered ungrounded.
 
 ```bash
 curl -X POST "$BASE/v1/chat/completions" \
@@ -87,7 +88,7 @@ Two outcomes are possible for a parameter no model behind this API can honor, an
 | `response_format: "json_object"`         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Accepted for all models; syntactically valid JSON is not guaranteed for every model |
 | `response_format: "json_schema"`         |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Structured JSON output validated against the supplied schema     |
 | `verbosity`                              | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Model verbosity. Accepted and ignored — steer the answer length from the prompt; forwarded upstream on [Mantle](#bedrock-mantle) passthrough models |
-| `web_search_options`                     | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Web search tool. Rejected with `400` when set                    |
+| `web_search_options`                     |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Grounds the answer in a web search, cited in the message `annotations` — see [Web Grounding](#web-grounding). Rejected with `400` on a model that runs no web search. `search_context_size` is accepted and ignored; `user_location` is rejected with `400` |
 | `translation_options` (Qwen API-compatible) | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Translation tuning options. Rejected with `400` when set          |
 | `prompt_cache_key`                       |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Cache prompts to reduce costs and latency                       |
 | `prompt_cache_options`                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | `mode: "explicit"` caches only the parts marked with `prompt_cache_breakpoint`; `ttl: "30m"` mapped to a 1 hour Amazon Bedrock retention on Anthropic models (other models use the default 5 minute TTL) when `prompt_cache_retention` is unset |
@@ -100,7 +101,7 @@ Two outcomes are possible for a parameter no model behind this API can honor, an
 | Audio                                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Model output or synthesis from text output (synthesis is Converse-only — not performed for Mantle-served requests); non-streaming only — `stream: true` with audio output is rejected with `400` |
 | `response_format` (JSON mode)            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | `json_object` accepted for all models, without a syntax guarantee on every model; `json_schema` structured output is model-specific |
 | `reasoning_content` (From Deepseek API)  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Text reasoning messages. The single response field; on an assistant message replayed in `messages`, `reasoning` is accepted as an alias for it, and it is [dropped on models that only accept their own thinking](#replaying-reasoning-in-a-multi-turn-conversation) |
-| `annotations` (URL citations)            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | URL citations from system tools (non-streaming only)            |
+| `annotations` (URL citations)            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | URL citations from a [web search](#web-grounding) or another server tool (non-streaming only) |
 | **Usage tracking**                       |                                          |                                                                 |
 | Input text tokens                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Billing unit                                                    |
 | Output tokens                            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Billing unit                                                    |
@@ -403,7 +404,7 @@ Amazon Nova Web Grounding enables models to search the web for current informati
     - [Amazon Nova Web Grounding - User Guide](https://docs.aws.amazon.com/nova/latest/userguide/grounding.html)
     - [Build More Accurate AI Applications with Amazon Nova Web Grounding - Blog Post](https://aws.amazon.com/blogs/aws/build-more-accurate-ai-applications-with-amazon-nova-web-grounding/)
 
-**Usage:**
+**Usage:** set `web_search_options`, the standard OpenAI parameter for a grounded answer. An empty object is enough.
 
 ```bash
 curl -X POST "$BASE/v1/chat/completions" \
@@ -417,15 +418,14 @@ curl -X POST "$BASE/v1/chat/completions" \
         "content": "What are the current AWS Regions and their locations?"
       }
     ],
-    "tools": [
-      {
-        "type": "function",
-        "function": {
-          "name": "nova_grounding"
-        }
-      }
-    ]
+    "web_search_options": {}
   }'
+```
+
+Naming `nova_grounding` as a function tool does the same thing, and is what a client that only speaks `tools` can send. Sending both declares the search once.
+
+```json
+{"tools": [{"type": "function", "function": {"name": "nova_grounding"}}]}
 ```
 
 **Response Format:**
@@ -458,6 +458,8 @@ When using web grounding, the API response includes `annotations` with URL citat
 **Limitations:**
 
 - **No streaming citations**: URL citation `annotations` are not emitted in streaming responses.
+- **`web_search_options` sub-fields**: `search_context_size` is accepted and ignored — the search runs with the amount the model applies. `user_location` is rejected with `400`: the search cannot be restricted to a location, and running it worldwide would answer something other than what was asked.
+- **Models without a web search**: `web_search_options` is rejected with `400` on every model that runs no web search of its own, including [Mantle-served](#bedrock-mantle) ones. Use one of the models above, or the `web_search` tool of the [Responses API](api_openai_responses.md#openai-gpt-web-search).
 
 !!! warning "Region Compatibility"
     Web Grounding is only available in US Amazon Bedrock regions. To ensure all requests are routed to a US region, restrict the model using [`AWS_BEDROCK_MODEL_REGION_RESTRICT`](operations_configuration_aws.md#bedrock-model-region-restrict):
@@ -823,13 +825,13 @@ curl -X POST "$BASE/v1/chat/completions" \
 
 ## Limits and behaviour to know
 
-**What is rejected with a `400`.** `logprobs` when enabled, `web_search_options`, `translation_options`, `custom` (free-form) tools, `tool_choice: {"type": "allowed_tools"}`, a whitespace-only `stop` sequence (an Amazon Bedrock limitation), audio output combined with `stream: true`, and `n > 1` combined with `stream: true`. Each error names the parameter it refuses.
+**What is rejected with a `400`.** `logprobs` when enabled, `web_search_options` on a model that runs no [web search](#web-grounding) (and its `user_location` on every model), `translation_options`, `custom` (free-form) tools, `tool_choice: {"type": "allowed_tools"}`, a whitespace-only `stop` sequence (an Amazon Bedrock limitation), audio output combined with `stream: true`, and `n > 1` combined with `stream: true`. Each error names the parameter it refuses.
 
-**What is accepted and ignored.** `prediction` and `verbosity` are latency and length hints the Converse API has no equivalent for, and `stream_options.include_obfuscation` never pads the stream. All three are forwarded verbatim on [Mantle passthrough models](#bedrock-mantle), where the upstream API decides what to do with them.
+**What is accepted and ignored.** `prediction` and `verbosity` are latency and length hints the Converse API has no equivalent for, `web_search_options.search_context_size` only tunes a search that still runs, and `stream_options.include_obfuscation` never pads the stream. The first two are forwarded verbatim on [Mantle passthrough models](#bedrock-mantle), where the upstream API decides what to do with them.
 
 **`temperature` above `1.0` is served at `1.0`.** The documented `0`–`2` range is accepted in full: a higher value is applied at the maximum Amazon Bedrock accepts rather than refused, so `1.5` and `2.0` sample as `1.0` does. [Mantle passthrough models](#bedrock-mantle) receive the value as sent.
 
-**What changes on a Mantle-served model.** An Amazon Bedrock guardrail is not applied to a Mantle-served request, the `moderation` parameter is rejected with `400`, and audio synthesis from text output is not performed. Where the model is not chat-native, the request is converted to the Responses or Messages API and a documented set of parameters is dropped or clamped — the three serving paths and their exact parameter fidelity are tabled under [Bedrock Mantle](#bedrock-mantle).
+**What changes on a Mantle-served model.** An Amazon Bedrock guardrail is not applied to a Mantle-served request, the `moderation` and `web_search_options` parameters are rejected with `400` (ask for the search with the `web_search` tool of the [Responses API](api_openai_responses.md#openai-gpt-web-search) instead), and audio synthesis from text output is not performed. Where the model is not chat-native, the request is converted to the Responses or Messages API and a documented set of parameters is dropped or clamped — the three serving paths and their exact parameter fidelity are tabled under [Bedrock Mantle](#bedrock-mantle).
 
 **Reasoning tokens are not split out on Converse-served models.** `completion_tokens_details` is not populated and reasoning tokens are billed inside `completion_tokens`; Mantle-native models report whatever split their upstream API returns.
 

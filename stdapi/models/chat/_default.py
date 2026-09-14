@@ -239,7 +239,9 @@ class ChatModel(ChatModelBase[Any, Any]):
             choices_count,
             output_config,
             request_metadata,
-        ) = openai_adapter.translate_request(request, self._model_id)
+        ) = openai_adapter.translate_request(
+            request, self._model_id, tool_name_map=self.server_tool_names
+        )
 
         server_tools = self._req_extract_server_tools(tool_config)
         tool_config = self._req_promote_system_tools(tool_config)
