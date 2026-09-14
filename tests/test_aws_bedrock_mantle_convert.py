@@ -2618,6 +2618,27 @@ class TestChatCompletionsPayloadBuilder:
         assert content[2]["text"] == "Answer in one word."
         assert content[1]["image_url"]["url"] == image_uri
 
+    async def test_web_search_options_is_refused_rather_than_forwarded(self) -> None:
+        """This serving path runs no web search, so the request is refused.
+
+        Forwarding the parameter would answer from the model's own knowledge
+        with no citation and nothing saying the search never ran.
+
+        Ref: https://developers.openai.com/api/docs/guides/tools-web-search?api-mode=chat
+             stdapi/models/chat/_mantle/_convert.py:_reject_web_search_options
+        """
+        request = ChatCompletionCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "messages": [{"role": "user", "content": "hi"}],
+                "web_search_options": {"search_context_size": "low"},
+            }
+        )
+        with pytest.raises(ApiError) as exc_info:
+            await mantle_convert.chat_completions_payload(request, "model-id")
+        assert exc_info.value.status == 400
+        assert "web_search_options" in str(exc_info.value)
+
     async def test_named_tool_choice_forwarded_verbatim(self) -> None:
         """A named-function ``tool_choice`` reaches the upstream payload unchanged.
 

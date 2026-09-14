@@ -511,10 +511,12 @@ async def chat_completions_payload(
         JSON-ready request payload.
 
     Raises:
-        ApiError: When the request sets the ``moderation`` parameter, or asks
-            for web access this API cannot give it.
+        ApiError: When the request sets the ``moderation`` parameter, asks for a
+            web search this API does not run, or asks for web access it cannot
+            give it.
     """
     _reject_moderation_param(request.moderation)
+    _reject_web_search_options(request.web_search_options)
     await prefetch_all_content_types()
     payload = request.model_dump(mode="json", by_alias=True, exclude_unset=True)
     payload["model"] = model_id
@@ -888,6 +890,28 @@ def _reject_moderation_param(moderation: object) -> None:
         msg = (
             "The 'moderation' parameter is not available with this model. "
             "Remove the parameter, or use a model that supports moderation."
+        )
+        raise ApiError(msg, status=400)
+
+
+def _reject_web_search_options(web_search_options: object) -> None:
+    """Reject ``web_search_options`` on a Mantle-served Chat Completions request.
+
+    This serving path runs no web search, so the answer would come back
+    ungrounded and uncited with nothing telling the caller it never searched.
+
+    Args:
+        web_search_options: The request ``web_search_options`` field value, if any.
+
+    Raises:
+        ApiError: When the field is set.
+    """
+    if web_search_options is not None:
+        msg = (
+            "The 'web_search_options' parameter is not available with this "
+            "model. Remove the parameter, use a model that runs a web search, "
+            "or ask for the search with the 'web_search' tool of the Responses "
+            "API."
         )
         raise ApiError(msg, status=400)
 

@@ -22,6 +22,7 @@ from sse_starlette import EventSourceResponse
 
 from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
+from stdapi.models.chat import get_chat_model
 from stdapi.models.chat._adapters import _openai_chat_completion as chat_adapter
 from stdapi.models.chat._adapters._openai_chat_completion import (
     _LEGACY_FUNCTION,
@@ -1895,9 +1896,9 @@ class TestChatCompletions:
     ) -> None:
         """A blocklisted upstream parameter is refused up front, naming the field.
 
-        ``web_search_options`` asks for an answer grounded in the web, which no
-        Converse-served model can produce, so the request is rejected instead of
-        being answered with something else than what it asked for.
+        ``translation_options`` asks for a translation tuned by a glossary and a
+        translation memory, which no model here applies, so the request is
+        rejected instead of being answered with an untuned translation.
 
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
              stdapi/types/openai_chat_completions.py:CompletionCreateParams._UNSUPPORTED
@@ -1906,12 +1907,11 @@ class TestChatCompletions:
             openai_client.chat.completions.create(
                 model=chat_model,
                 messages=[{"role": "user", "content": "Hi"}],
-                web_search_options={
-                    "search_context_size": "low",
-                    "user_location": {
-                        "type": "approximate",
-                        "approximate": {"city": "x", "country": "US"},
-                    },
+                extra_body={
+                    "translation_options": {
+                        "source_lang": "English",
+                        "target_lang": "French",
+                    }
                 },
             )
         assert exc_info.value.status_code == 400
@@ -1919,7 +1919,7 @@ class TestChatCompletions:
         assert isinstance(body, dict)
         assert body["type"] == "invalid_request_error"
         assert body["code"] == "unsupported_parameter"
-        assert body["param"] == "web_search_options"
+        assert body["param"] == "translation_options"
         assert "unsupported parameter" in body["message"].lower()
         assert body.keys() >= {"message", "type", "param", "code"}, (
             "The gateway envelope always carries all four keys"
@@ -4682,3 +4682,445 @@ class TestAssistantReasoningAlias:
             {"role": "assistant", "content": "a"}
         )
         assert message.reasoning_content is None
+
+
+class TestWebSearchOptions:
+    """``web_search_options`` runs the model's own web search, or is refused.
+
+    The parameter is the Chat Completions spelling of "ground this answer in the
+    web", so it reaches the same server-side search the Responses API reaches
+    through its ``web_search`` tool, and the answer comes back with
+    ``url_citation`` annotations. A model that runs no search is refused: an
+    ungrounded answer is not a degraded grounded one, and nothing in the
+    response would let the caller tell the difference.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools-web-search?api-mode=chat
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:build_tool_config
+    """
+
+    pytestmark = pytest.mark.local
+
+    #: Model whose backend runs the web search itself.
+    _GROUNDED_MODEL = "amazon.nova-2-lite-v1:0"
+
+    #: Backend name the web search carries on that model.
+    _GROUNDING_TOOL = "nova_grounding"
+
+    #: Model served by the same catalogue whose backend runs no web search.
+    _UNGROUNDED_MODEL = "amazon.nova-micro-v1:0"
+
+    #: Model whose backend serves no server tool at all.
+    _NO_SERVER_TOOL_MODEL = "openai.gpt-oss-20b-1:0"
+
+    @staticmethod
+    def _stub_converse(
+        monkeypatch: pytest.MonkeyPatch, content: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
+        """Replace ``ChatModel.converse`` with a stub capturing its request body.
+
+        Args:
+            monkeypatch: Fixture used to stub ``ChatModel.converse``.
+            content: Content blocks the stubbed model answers with.
+
+        Returns:
+            The dict the captured Converse request body is written into.
+        """
+        captured: dict[str, Any] = {}
+
+        async def fake_converse(
+            _self: ChatModel, bedrock_request: ConverseRequestBaseTypeDef
+        ) -> dict[str, Any]:
+            captured.update(bedrock_request)
+            return {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": content if content is not None else [{"text": "ok"}],
+                    }
+                },
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            }
+
+        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        return captured
+
+    @classmethod
+    async def _completion(
+        cls,
+        model_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+        content: list[dict[str, Any]] | None = None,
+        **params: object,
+    ) -> tuple[Any, dict[str, Any]]:
+        """Answer one completion against a stubbed backend.
+
+        Args:
+            model_id: Model identifier to resolve the chat model class from.
+            monkeypatch: Fixture used to stub ``ChatModel.converse``.
+            content: Content blocks the stubbed model answers with.
+            params: Extra request parameters.
+
+        Returns:
+            Tuple of (completion, captured Converse request body).
+        """
+        request = CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                **params,
+            }
+        )
+        captured = cls._stub_converse(monkeypatch, content)
+        completion = await get_chat_model(
+            model_id, allow_mantle=False
+        ).create_completion(request, "chatcmpl-1", 0)
+        return completion, captured
+
+    @staticmethod
+    def _tools(captured: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return the tool entries of a captured Converse request.
+
+        Args:
+            captured: Captured Converse request body.
+
+        Returns:
+            The ``toolConfig.tools`` entries, empty when no tool config was sent.
+        """
+        return list((captured.get("toolConfig") or {}).get("tools", ()))
+
+    async def test_the_model_is_asked_to_search(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """The request carries the model's web search and no undeclared function tool.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:build_tool_config
+        """
+        del request_log
+        _, captured = await self._completion(
+            self._GROUNDED_MODEL, monkeypatch, web_search_options={}
+        )
+        assert self._tools(captured) == [{"systemTool": {"name": self._GROUNDING_TOOL}}]
+
+    async def test_the_search_is_declared_once_beside_the_same_tool(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A request naming the search as a function tool too declares it once.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:build_tool_config
+        """
+        del request_log
+        _, captured = await self._completion(
+            self._GROUNDED_MODEL,
+            monkeypatch,
+            web_search_options={},
+            tools=[{"type": "function", "function": {"name": self._GROUNDING_TOOL}}],
+        )
+        assert self._tools(captured) == [{"systemTool": {"name": self._GROUNDING_TOOL}}]
+
+    async def test_tool_choice_none_keeps_the_search(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """``tool_choice: "none"`` withdraws the declared tools, never the search.
+
+        ``web_search_options`` is not a tool the request declared, so the
+        instruction that withdraws them leaves it alone.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:build_tool_config
+        """
+        del request_log
+        _, captured = await self._completion(
+            self._GROUNDED_MODEL,
+            monkeypatch,
+            web_search_options={},
+            tool_choice="none",
+            tools=[{"type": "function", "function": {"name": "get_weather"}}],
+        )
+        assert self._tools(captured) == [{"systemTool": {"name": self._GROUNDING_TOOL}}]
+        assert "toolChoice" not in (captured.get("toolConfig") or {}), (
+            "a promoted system tool is not a tool the model can be forced onto"
+        )
+
+    async def test_search_context_size_is_accepted_and_never_forwarded(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """``search_context_size`` only tunes the search, so it is accepted and dropped.
+
+        The answer is still grounded, so refusing the request would break it for
+        nothing; the value has no backend equivalent to travel in.
+
+        Ref: https://developers.openai.com/api/docs/guides/tools-web-search?api-mode=chat
+        """
+        del request_log
+        _, captured = await self._completion(
+            self._GROUNDED_MODEL,
+            monkeypatch,
+            web_search_options={"search_context_size": "low"},
+        )
+        assert self._tools(captured) == [{"systemTool": {"name": self._GROUNDING_TOOL}}]
+        assert "search_context_size" not in _json.dumps(captured, default=str)
+
+    async def test_a_user_location_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A location the search cannot be restricted to is refused, not widened.
+
+        Ref: stdapi/models/chat/_adapters/_common.py:reject_unsupported_web_search_fields
+        """
+        del request_log
+        with pytest.raises(ApiError) as exc_info:
+            await self._completion(
+                self._GROUNDED_MODEL,
+                monkeypatch,
+                web_search_options={
+                    "user_location": {
+                        "type": "approximate",
+                        "approximate": {"city": "Paris", "country": "FR"},
+                    }
+                },
+            )
+        assert exc_info.value.status == 400
+        assert "user_location" in str(exc_info.value)
+
+    async def test_a_model_that_runs_no_search_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A model with no web search refuses rather than answering ungrounded.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:build_tool_config
+        """
+        del request_log
+        with pytest.raises(ApiError) as exc_info:
+            await self._completion(
+                self._UNGROUNDED_MODEL, monkeypatch, web_search_options={}
+            )
+        assert exc_info.value.status == 400
+        message = str(exc_info.value)
+        assert "web_search_options" in message
+        assert "not available with this model" in message
+
+    async def test_a_model_serving_no_server_tool_is_refused_without_leaking(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """The refusal tells the caller to change model, never how to route it.
+
+        What would make the search reachable is the operator's to change and is
+        logged for them; the caller gets none of it (AGENTS.md, Never Leak
+        Internals).
+
+        Ref: stdapi/models/chat/_adapters/_common.py:NoServerTools.refuse
+        """
+        del request_log
+        with pytest.raises(ApiError) as exc_info:
+            await self._completion(
+                self._NO_SERVER_TOOL_MODEL, monkeypatch, web_search_options={}
+            )
+        assert exc_info.value.status == 400
+        message = str(exc_info.value)
+        assert "Server tool 'web_search'" in message, (
+            "the refusal must be the model's own, not the blanket parameter refusal"
+        )
+        assert "contact the administrator" in message
+        assert "MANTLE" not in message.upper()
+        assert "bedrock" not in message.lower()
+
+    async def test_the_answer_carries_url_citations(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A cited answer comes back with ``url_citation`` annotations.
+
+        Ref: https://developers.openai.com/api/docs/guides/tools-web-search?api-mode=chat
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_citations
+        """
+        del request_log
+        completion, _ = await self._completion(
+            self._GROUNDED_MODEL,
+            monkeypatch,
+            content=[
+                {"text": "There are many regions."},
+                {
+                    "citationsContent": {
+                        "content": [{"text": "There are many regions."}],
+                        "citations": [
+                            {
+                                "title": "AWS Global Infrastructure",
+                                "location": {
+                                    "web": {
+                                        "url": "https://aws.amazon.com/about-aws/global-infrastructure/",
+                                        "domain": "aws.amazon.com",
+                                    }
+                                },
+                            }
+                        ],
+                    }
+                },
+            ],
+            web_search_options={},
+        )
+        assert not isinstance(completion, EventSourceResponse)
+        message = completion.choices[0].message
+        assert message.tool_calls is None, (
+            "the search runs on the backend: it is never an unanswered tool call"
+        )
+        assert message.annotations is not None
+        (annotation,) = message.annotations
+        assert annotation.type == "url_citation"
+        assert (
+            annotation.url_citation.url
+            == "https://aws.amazon.com/about-aws/global-infrastructure/"
+        )
+        assert annotation.url_citation.title == "AWS Global Infrastructure"
+
+    async def test_a_streamed_answer_carries_no_citation_and_no_tool_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Streaming publishes the text only: the chunk schema has no annotations.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
+        """
+        monkeypatch.setattr(SETTINGS, "log_request_params", False)
+        token = _LEGACY_FUNCTION.set(False)
+        try:
+            events = [
+                event
+                async for event in format_stream(
+                    completion_id="chatcmpl-1",
+                    created=0,
+                    model_id="model",
+                    stream=_stub_converse_stream(  # type: ignore[arg-type]
+                        [
+                            {
+                                "contentBlockStart": {
+                                    "contentBlockIndex": 0,
+                                    "start": {
+                                        "toolUse": {
+                                            "toolUseId": "t1",
+                                            "name": self._GROUNDING_TOOL,
+                                        }
+                                    },
+                                }
+                            },
+                            {"contentBlockStop": {"contentBlockIndex": 0}},
+                            {
+                                "contentBlockDelta": {
+                                    "contentBlockIndex": 1,
+                                    "delta": {"text": "Regions"},
+                                }
+                            },
+                            {
+                                "contentBlockDelta": {
+                                    "contentBlockIndex": 1,
+                                    "delta": {
+                                        "citation": {
+                                            "title": "AWS",
+                                            "location": {
+                                                "web": {"url": "https://aws.amazon.com"}
+                                            },
+                                        }
+                                    },
+                                }
+                            },
+                            {"messageStop": {"stopReason": "end_turn"}},
+                        ]
+                    ),
+                    service_tier=None,
+                    suppress_tool_names=frozenset({self._GROUNDING_TOOL}),
+                )
+            ]
+        finally:
+            _LEGACY_FUNCTION.reset(token)
+
+        raw = "".join(event.encode().decode() for event in events)
+        assert "Regions" in raw
+        assert "annotations" not in raw
+        assert "tool_calls" not in raw, (
+            "a backend-run search is never surfaced as a tool call to answer"
+        )
+        assert "https://aws.amazon.com" not in raw
+        assert raw.rstrip("\r\n").endswith("data: [DONE]")
+
+    def test_the_route_answers_a_completion_rather_than_a_400(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The parameter validates and reaches the model instead of being blocklisted.
+
+        Ref: stdapi/routes/openai_chat_completions.py:create_chat_completion
+        """
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> ModelDetails:
+            return make_model_details(model_id)
+
+        monkeypatch.setattr(openai_chat_completions, "validate_model", _validate_model)
+        captured = self._stub_converse(monkeypatch)
+
+        response = app_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": self._GROUNDED_MODEL,
+                "messages": [{"role": "user", "content": "hi"}],
+                "web_search_options": {"search_context_size": "high"},
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert self._tools(captured) == [{"systemTool": {"name": self._GROUNDING_TOOL}}]
+
+
+@pytest.mark.gateway("Only an Amazon Bedrock model runs the search this route reaches")
+class TestWebSearchOptionsLive:
+    """``web_search_options`` grounds a real answer end to end.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools-web-search?api-mode=chat
+         https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
+    """
+
+    #: Cheapest catalogue model whose backend runs the search itself.
+    _MODEL = "amazon.nova-2-lite-v1:0"
+
+    @pytest.mark.expensive
+    def test_the_answer_is_grounded_and_carries_no_tool_call(
+        self, openai_client: OpenAI
+    ) -> None:
+        """The search runs on the backend: text comes back, never a call to answer.
+
+        Whether the model searches is its own decision, so the citations are
+        asserted only when it returned some.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:build_tool_config
+        """
+        response = openai_client.chat.completions.create(
+            model=self._MODEL,
+            messages=[{"role": "user", "content": "What is today's date? Be concise."}],
+            web_search_options={"search_context_size": "low"},
+        )
+        message = response.choices[0].message
+        assert message.content
+        assert message.tool_calls is None, (
+            f"a backend-run search must not reach the client: {message.tool_calls}"
+        )
+        assert response.choices[0].finish_reason == "stop"
+        for annotation in message.annotations or ():
+            assert annotation.type == "url_citation"
+            assert annotation.url_citation.url.startswith("http")
+
+    def test_a_model_that_runs_no_search_is_refused(
+        self, openai_client: OpenAI, chat_model: str
+    ) -> None:
+        """A model with no web search refuses rather than answering ungrounded.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:_resolve_web_search_tool
+        """
+        with pytest.raises(BadRequestError) as exc_info:
+            openai_client.chat.completions.create(
+                model=chat_model,
+                messages=[{"role": "user", "content": "Hi"}],
+                web_search_options={},
+            )
+        assert exc_info.value.status_code == 400
+        body = exc_info.value.body
+        assert isinstance(body, dict)
+        assert body["type"] == "invalid_request_error"
+        assert "web_search_options" in str(body["message"])

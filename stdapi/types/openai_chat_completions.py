@@ -821,18 +821,17 @@ class WebSearchOptionsUserLocation(BaseModelResponse):
 
 # Ref: openai.types.chat.completion_create_params.WebSearchOptions
 class WebSearchOptions(BaseModelResponse):
-    """Web search tool options.
-
-    UNSUPPORTED on this implementation.
-    """
+    """Web search tool options."""
 
     search_context_size: Literal["low", "medium", "high"] = Field(
         default="medium",
-        description="Search context size: `low`, `medium`, or `high`. Default: `medium`. UNSUPPORTED on this implementation.",
+        description="How much search context to retrieve. Accepted and ignored — "
+        "the search runs with the amount the model applies.",
     )
     user_location: WebSearchOptionsUserLocation | None = Field(
         default=None,
-        description="Approximate location parameters. UNSUPPORTED on this implementation.",
+        description="Approximate location to search from. UNSUPPORTED on this "
+        "implementation: setting it is rejected rather than searching worldwide.",
     )
 
 
@@ -1368,7 +1367,9 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     web_search_options: WebSearchOptions | None = Field(
         default=None,
-        description="Web search tool options. UNSUPPORTED on this implementation.",
+        description="Ground the answer in a web search run before the model replies, "
+        "cited in the message `annotations`. Model-dependent: a model that runs no "
+        "web search rejects the request.",
     )
     stream: bool = Field(
         default=False,
@@ -1432,8 +1433,8 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     _UNSUPPORTED: ClassVar[frozenset[str]] = frozenset(
         {
             # Ignored silently: "prediction", "verbosity"
+            # Refused per model, not here: "web_search_options"
             "logprobs",
-            "web_search_options",
             "translation_options",
         }
     )
