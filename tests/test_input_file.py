@@ -420,10 +420,15 @@ async def test_unsupported_document_type_is_a_caller_error() -> None:
 
 
 class _StubHttpResponse:
-    """Minimal aiohttp response stand-in serving a fixed body and headers."""
+    """Minimal aiohttp response stand-in serving a fixed body and headers.
+
+    ``served`` counts the bytes actually handed to the reader, so a test can
+    assert a bounded read stopped instead of consuming the whole body.
+    """
 
     def __init__(self, body: bytes, content_length: int | None = None) -> None:
         self.body = body
+        self.served = 0
         self._offset = 0
         self.headers = {
             "Content-Type": "application/pdf",
@@ -452,15 +457,18 @@ class _StubHttpResponse:
         """
         if size < 0:
             chunk, self._offset = self.body[self._offset :], len(self.body)
-            return chunk
-        chunk = self.body[self._offset : self._offset + size]
-        self._offset += len(chunk)
+        else:
+            chunk = self.body[self._offset : self._offset + size]
+            self._offset += len(chunk)
+        self.served += len(chunk)
         return chunk
 
     async def iter_chunked(self, size: int) -> AsyncIterator[bytes]:
-        """Yield the stubbed body in *size*-byte chunks."""
+        """Yield the stubbed body in *size*-byte chunks, counting what it handed over."""
         for start in range(0, len(self.body), size):
-            yield self.body[start : start + size]
+            chunk = self.body[start : start + size]
+            self.served += len(chunk)
+            yield chunk
 
 
 class _StubHttpSession:
@@ -606,6 +614,146 @@ class TestHttpsSourceDownload:
         assert len(staged) <= 1024 + UPLOAD_CHUNK_SIZE, (
             "the upload must abort at the cap, not after the whole body is sent"
         )
+
+
+class _RangedS3Client:
+    """S3 stand-in serving a large object, recording the range each read asked for.
+
+    ``HeadObject`` understates the object so the declared size never refuses the
+    read on its own: what the read transfers is then the only thing left to
+    assert on.
+    """
+
+    def __init__(self, payload: bytes, declared: int = 1) -> None:
+        self.payload = payload
+        self.declared = declared
+        self.ranges: list[str] = []
+
+    async def head_object(self, **_kwargs: object) -> dict[str, Any]:
+        """Describe the object with the size it declares.
+
+        Returns:
+            The head of an object no bound would refuse.
+        """
+        return {"ContentLength": self.declared, "ContentType": "application/pdf"}
+
+    async def get_object(self, *, Range: str, **_kwargs: object) -> dict[str, Any]:  # noqa: N803
+        """Serve the requested byte range, recording it.
+
+        Args:
+            Range: The requested range, as S3 receives it.
+
+        Returns:
+            The object body limited to that range.
+        """
+        self.ranges.append(Range)
+        first, _, last = Range.removeprefix("bytes=").partition("-")
+        return {"Body": _StubHttpResponse(self.payload[int(first) : int(last) + 1])}
+
+
+class TestReaderBound:
+    """A reader may bound a read on its own, whatever ``max_input_file_size`` is.
+
+    The setting is unlimited by default, so a route carrying a protocol maximum
+    of its own -- an upload part is capped at 64 MiB -- cannot lean on it. Its
+    bound has to hold on both of the routes a reference can take: the declared
+    size, which costs nothing to refuse, and the bytes themselves, which an
+    origin is free to serve past whatever it declared.
+
+    Ref: https://developers.openai.com/api/reference/resources/uploads
+         stdapi/input_file.py:_FileSource.to_bytes
+         stdapi/routes/openai_uploads.py:add_upload_part
+    """
+
+    #: Bound the reads are given, small enough to assert on the bytes transferred.
+    _BOUND = 16
+
+    async def test_a_declared_size_past_the_bound_costs_no_download(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An origin declaring more than the bound is refused before the body is fetched.
+
+        Refusing it after the download would answer exactly the same to the
+        caller while having paid for every byte of the file they named.
+        """
+        monkeypatch.setattr(SETTINGS, "max_input_file_size", 0)
+        session = _patch_http(monkeypatch, _StubHttpResponse(b"x" * 4096))
+
+        with pytest.raises(ApiError, match=f"{self._BOUND} bytes") as exc:
+            await InputFile("https://example.com/big.pdf").to_bytes(limit=self._BOUND)
+
+        assert exc.value.status == 413
+        assert session.requests == ["HEAD https://example.com/big.pdf"], (
+            "a size the origin itself declares is refused without fetching anything"
+        )
+
+    async def test_an_origin_serving_past_its_declared_size_is_cut_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A body larger than the bound is stopped mid-stream, with no configured maximum.
+
+        The declared length is the caller's origin talking, so an origin that
+        understates it -- or declares none at all -- would otherwise be read
+        whole into memory before the refusal.
+        """
+        monkeypatch.setattr(SETTINGS, "max_input_file_size", 0)
+        response = _StubHttpResponse(b"x" * 4096, content_length=1)
+        _patch_http(monkeypatch, response)
+
+        with pytest.raises(ApiError, match=f"{self._BOUND} bytes") as exc:
+            await InputFile("https://example.com/big.pdf").to_bytes(limit=self._BOUND)
+
+        assert exc.value.status == 413
+        assert response.served <= self._BOUND + 1, (
+            "the read must stop one byte past the bound, not at the end of the body"
+        )
+
+    async def test_a_stored_object_is_read_through_a_range(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bounded read of an ``s3://`` source transfers one byte past the bound.
+
+        Storage is the other route a caller's reference takes, and an object is
+        as unbounded there as a remote body: the read asks for the range that
+        decides the refusal instead of the whole object.
+        """
+        bucket = _allowed_bucket(monkeypatch)
+        client = _RangedS3Client(b"x" * 4096)
+        monkeypatch.setattr(input_file, "get_client", lambda *_a, **_kw: client)
+
+        with pytest.raises(ApiError, match=f"{self._BOUND} bytes") as exc:
+            await InputFile(f"s3://{bucket}/big.pdf").to_bytes(limit=self._BOUND)
+
+        assert exc.value.status == 413
+        assert client.ranges == [f"bytes=0-{self._BOUND}"]
+
+    async def test_an_empty_stored_object_is_read_without_a_range(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An object of no bytes is read whole rather than through a range.
+
+        No range describes a byte of it, which storage answers as an error
+        instead of an empty body -- turning a file the caller may legitimately
+        have stored into a failure.
+        """
+        bucket = _allowed_bucket(monkeypatch)
+        client = _RangedS3Client(b"", declared=0)
+        monkeypatch.setattr(input_file, "get_client", lambda *_a, **_kw: client)
+
+        async def _whole_object(_bucket: str, _key: str) -> bytes:
+            """Serve the empty object the unranged read asks for.
+
+            Returns:
+                No bytes at all.
+            """
+            return b""
+
+        monkeypatch.setattr(input_file, "get_bytes_from_s3", _whole_object)
+
+        file = InputFile(f"s3://{bucket}/empty.pdf", content_type="application/pdf")
+
+        assert await file.to_bytes(limit=self._BOUND) == b""
+        assert client.ranges == []
 
 
 #: Body a local origin serves; a real signature so a sniffed type is right too.

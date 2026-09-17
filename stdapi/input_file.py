@@ -79,6 +79,7 @@ if TYPE_CHECKING:
         ImageSourceTypeDef,
         VideoBlockTypeDef,
     )
+    from types_aiobotocore_s3.client import S3Client
 
 
 #: Media type literal for Bedrock content blocks.
@@ -302,6 +303,19 @@ _URL_ONLY_ORIGINS: frozenset[_FileOrigin] = frozenset(
 )
 
 
+def _size_limit_error(limit: int) -> ApiError:
+    """Return the refusal for content larger than the reader accepts.
+
+    Args:
+        limit: Largest accepted size, in bytes.
+
+    Returns:
+        The error to raise.
+    """
+    msg = f"Input file exceeds the maximum allowed size of {limit} bytes."
+    return ApiError(msg, status=413)
+
+
 class _FileSource(ABC):
     """Abstract base class for file source backends."""
 
@@ -324,6 +338,26 @@ class _FileSource(ABC):
         Returns:
             The complete file bytes.
         """
+
+    async def _read_bounded(self, limit: int) -> bytes:
+        """Return the file content, reading no more than one byte past *limit*.
+
+        Only a source that fetches its content can stop short of it; one that
+        already holds it has nothing left to save, so the default reads it and
+        refuses what the declared size did not catch.
+
+        Args:
+            limit: Largest content the reader accepts, in bytes.
+
+        Returns:
+            The complete file bytes.
+
+        Raises:
+            ApiError: When the content exceeds *limit* (413).
+        """
+        if len(data := await self._read()) > limit:
+            raise _size_limit_error(limit)
+        return data
 
     async def get_content_type(self) -> str:
         """Return the content type.
@@ -390,19 +424,27 @@ class _FileSource(ABC):
         """
         return self._repr
 
-    async def to_bytes(self) -> bytes:
+    async def to_bytes(self, *, limit: int = 0) -> bytes:
         """Return the full file content as bytes.
 
         This is a **terminal method** — calling it consumes the source.
+
+        Args:
+            limit: Largest content the caller can hold, in bytes; ``0`` for no
+                bound of its own.  Applied on top of ``max_input_file_size``: a
+                size the source already declares past it costs no read at all,
+                and a fetched body is stopped one byte past it.
 
         Returns:
             The complete file content.
 
         Raises:
-            ApiError: When the file exceeds ``max_input_file_size`` (413).
+            ApiError: When the file exceeds ``max_input_file_size`` or *limit* (413).
         """
         await self.enforce_size_limit()
-        data = await self._read()
+        if limit and await self.get_size() > limit:
+            raise _size_limit_error(limit)
+        data = await (self._read_bounded(limit) if limit else self._read())
         self._metadata_from_bytes(data)
         return data
 
@@ -413,8 +455,7 @@ class _FileSource(ABC):
             ApiError: When the size exceeds ``max_input_file_size`` (413).
         """
         if (limit := SETTINGS.max_input_file_size) and await self.get_size() > limit:
-            msg = f"Input file exceeds the maximum allowed size of {limit} bytes."
-            raise ApiError(msg, status=413)
+            raise _size_limit_error(limit)
 
     async def to_base64(self) -> str:
         """Return file content as a base64-encoded string.
@@ -597,6 +638,39 @@ class _S3Source(_FileSource):
         await self._enforce_expiry()
         with caller_input_denial_guard(self._bucket, self._uri):
             return await get_bytes_from_s3(self._bucket, self._key)
+
+    async def _read_bounded(self, limit: int) -> bytes:
+        """Download the S3 object body, asking for one byte past *limit* only.
+
+        An object larger than the reader accepts therefore costs that much and
+        no more, whatever size its metadata declared.
+
+        Args:
+            limit: Largest content the reader accepts, in bytes.
+
+        Returns:
+            The complete file bytes.
+
+        Raises:
+            ApiError: When the object exceeds *limit* (413).
+            FileNotExistError: When the source resolves a Files API ID whose
+                underlying object has expired.
+            InputAccessDeniedError: When the caller named an object this server
+                is not allowed to read.
+        """
+        await self._enforce_expiry()
+        if not await self.get_size():
+            # An empty object satisfies no range at all, which S3 answers as an error.
+            return await self._read()
+        with caller_input_denial_guard(self._bucket, self._uri):
+            s3_client: S3Client = get_client("s3", self._region)
+            response = await s3_client.get_object(
+                Bucket=self._bucket, Key=self._key, Range=f"bytes=0-{limit}"
+            )
+            data: bytes = await response["Body"].read()
+        if len(data) > limit:
+            raise _size_limit_error(limit)
+        return data
 
     async def to_s3(
         self,
@@ -838,43 +912,65 @@ class _HttpSource(_FileSource):
             The complete file bytes.
 
         Raises:
-            ApiError: When the HTTP download fails or returns an empty body.
+            ApiError: When the HTTP download fails, returns an empty body, or
+                exceeds ``max_input_file_size`` (413).
+        """
+        return await self._read_bounded(0)
+
+    async def _read_bounded(self, limit: int) -> bytes:
+        """Download the response body, stopping one byte past *limit*.
+
+        Args:
+            limit: Largest content the reader accepts, in bytes; ``0`` for no
+                bound of its own.
+
+        Returns:
+            The complete file bytes.
+
+        Raises:
+            ApiError: When the HTTP download fails, returns an empty body, or
+                exceeds ``max_input_file_size`` or *limit* (413).
         """
         async with self._client_session() as session:
             try:
                 async with session.get(self._url) as resp:
                     resp.raise_for_status()
-                    if not (body := await self._read_capped(resp)):
+                    if not (body := await self._read_capped(resp, limit)):
                         msg = f"Error downloading {self._repr}: Empty body"
                         raise ApiError(msg)
             except AIOHTTPClientError as error:
                 raise self._download_error(error) from error
         return body
 
-    async def _read_capped(self, resp: ClientResponse) -> bytes:
-        """Read the response body, enforcing the configured size limit.
+    async def _read_capped(self, resp: ClientResponse, limit: int = 0) -> bytes:
+        """Read the response body, enforcing the tightest size bound that applies.
 
         The declared ``Content-Length`` is attacker-controlled, so the body is
-        streamed and aborted as soon as it exceeds the limit rather than trusting
+        streamed and aborted as soon as it exceeds the bound rather than trusting
         the header.
 
         Args:
             resp: The streaming HTTP response.
+            limit: Largest content the reader accepts, in bytes; ``0`` for no
+                bound of its own.  ``max_input_file_size`` applies as well, and
+                the smaller of the two is the one enforced.
 
         Returns:
             The full response body.
 
         Raises:
-            ApiError: When the body exceeds ``max_input_file_size`` (413).
+            ApiError: When the body exceeds ``max_input_file_size`` or *limit* (413).
         """
-        if not (limit := SETTINGS.max_input_file_size):
+        if not (
+            cap := min(filter(None, (limit, SETTINGS.max_input_file_size)), default=0)
+        ):
             return await resp.read()
         chunks = bytearray()
-        async for chunk in resp.content.iter_chunked(UPLOAD_CHUNK_SIZE):
+        # One byte past the bound is all it takes to know the body is too large.
+        async for chunk in resp.content.iter_chunked(min(UPLOAD_CHUNK_SIZE, cap + 1)):
             chunks += chunk
-            if len(chunks) > limit:
-                msg = f"Input file exceeds the maximum allowed size of {limit} bytes."
-                raise ApiError(msg, status=413)
+            if len(chunks) > cap:
+                raise _size_limit_error(cap)
         return bytes(chunks)
 
     async def _stream_capped(self, resp: ClientResponse) -> AsyncIterator[bytes]:
@@ -898,10 +994,7 @@ class _HttpSource(_FileSource):
             if limit:
                 received += len(chunk)
                 if received > limit:
-                    msg = (
-                        f"Input file exceeds the maximum allowed size of {limit} bytes."
-                    )
-                    raise ApiError(msg, status=413)
+                    raise _size_limit_error(limit)
             yield chunk
 
     async def to_s3(
@@ -1493,15 +1586,24 @@ class InputFile:
         """
         await self._source.enforce_size_limit()
 
-    async def to_bytes(self) -> bytes:
+    async def to_bytes(self, *, limit: int = 0) -> bytes:
         """Return the full file content as bytes.
 
         This is a **terminal method** — calling it consumes the source.
 
+        Args:
+            limit: Largest content the caller can hold, in bytes; ``0`` for no
+                bound of its own.  Enforced whatever ``max_input_file_size`` is
+                set to, on the declared size first and on the bytes as they
+                arrive after that.
+
         Returns:
             The complete file content.
+
+        Raises:
+            ApiError: When the file exceeds ``max_input_file_size`` or *limit* (413).
         """
-        return await self._source.to_bytes()
+        return await self._source.to_bytes(limit=limit)
 
     async def to_base64(self) -> str:
         """Return file content as a base64-encoded string.

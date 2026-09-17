@@ -7,8 +7,9 @@ tests. This module covers the ``purpose=batch`` default-expiry resolution, the
 bounded per-process session cache, the completion checksum, the shape of the
 part IDs a completion accepts, the part size cap,
 and the JSON-body part route's remote-source handling. Everything is offline (no AWS credentials,
-no S3 calls, no network) except ``TestCompleteUploadChecksumOnS3``, which runs
-the checksum against a real two-part upload in the sandbox bucket.
+no S3 calls, no network beyond a loopback origin a test starts itself) except
+``TestCompleteUploadChecksumOnS3``, which runs the checksum against a real
+two-part upload in the sandbox bucket.
 
 Ref: stdapi/routes/openai_uploads.py:create_upload_endpoint
      stdapi/routes/openai_uploads.py:add_upload_part
@@ -21,16 +22,17 @@ from base64 import b64encode
 from contextlib import suppress
 from datetime import UTC, datetime
 from hashlib import md5
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from aiobotocore.session import get_session
+from aiohttp import web
 from botocore.exceptions import ClientError
+from httpx2 import ASGITransport, AsyncClient
 from openai import APIStatusError, BadRequestError
 from openai import NotFoundError as OpenAINotFoundError
 from openai.resources.uploads.uploads import DEFAULT_PART_SIZE
 
-from stdapi import input_file
 from stdapi.api_errors import ApiError
 from stdapi.aws_s3 import BUCKET_TO_REGION
 from stdapi.config import SETTINGS
@@ -38,9 +40,14 @@ from stdapi.files import MultipartSession, _multipart
 from stdapi.files._core import encode_id_payload, file_id_s3_key, resolve_file_bucket
 from stdapi.routes import openai_files as openai_files_routes
 from stdapi.routes import openai_uploads as openai_uploads_routes
+from tests.test_input_file import _patch_http, _StubHttpResponse
+from tests.test_input_file import serve_origin as serve_origin_fixture
+
+#: Local-origin fixture, owned by the input-file tests the download path belongs to.
+serve_origin = serve_origin_fixture
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
     # Starlette types TestClient against httpx2; these helpers only ever carry its
     # responses, so they are typed from the same module it returns them from.
@@ -61,6 +68,12 @@ _STUB_PART_ID = f"part_{'a' * 32}"
 
 #: Upload ID the part route is called with; must match ``UPLOAD_ID_PATTERN``.
 _STUB_UPLOAD_ID = f"upload_{'b' * 32}"
+
+#: Chunk a streaming origin writes at a time, large enough to outrun the socket buffers.
+_STREAM_CHUNK = b"x" * (64 * 1024)
+
+#: Number of chunks that origin offers, for 16 MiB no bounded read should take.
+_STREAM_CHUNKS = 256
 
 
 class TestCreateUploadBatchDefaultExpiry:
@@ -269,62 +282,6 @@ class TestMultipartSessionCacheBound:
         assert len(cache) == 4
 
 
-class _StubHttpResponse:
-    """Minimal aiohttp response stand-in serving a fixed body."""
-
-    def __init__(self, body: bytes) -> None:
-        self.body = body
-        self.headers = {
-            "Content-Type": "application/octet-stream",
-            "Content-Length": str(len(body)),
-        }
-        self.content = self
-
-    async def __aenter__(self) -> Self:
-        """Enter the response context."""
-        return self
-
-    async def __aexit__(self, *_exc: object) -> None:
-        """Leave the response context."""
-
-    def raise_for_status(self) -> None:
-        """Accept the stubbed 200 response."""
-
-    async def read(self) -> bytes:
-        """Return the whole stubbed body."""
-        return self.body
-
-    async def iter_chunked(self, size: int) -> AsyncIterator[bytes]:
-        """Yield the stubbed body in *size*-byte chunks."""
-        for start in range(0, len(self.body), size):
-            yield self.body[start : start + size]
-
-
-class _StubHttpSession:
-    """Minimal aiohttp session stand-in recording the requests it served."""
-
-    def __init__(self, response: _StubHttpResponse) -> None:
-        self.response = response
-        self.requests: list[str] = []
-
-    async def __aenter__(self) -> Self:
-        """Enter the session context."""
-        return self
-
-    async def __aexit__(self, *_exc: object) -> None:
-        """Leave the session context."""
-
-    def head(self, url: str) -> _StubHttpResponse:
-        """Serve the stubbed response to a ``HEAD``."""
-        self.requests.append(f"HEAD {url}")
-        return self.response
-
-    def get(self, url: str) -> _StubHttpResponse:
-        """Serve the stubbed response to a ``GET``."""
-        self.requests.append(f"GET {url}")
-        return self.response
-
-
 class TestAddUploadPartJsonBodyRemoteSources:
     """POST /v1/uploads/{id}/parts resolves a remote ``data`` reference before storing.
 
@@ -363,19 +320,14 @@ class TestAddUploadPartJsonBodyRemoteSources:
 
         The recorded chunk must be the origin's bytes, not the URL text, and the
         gateway must actually issue the ``GET`` rather than treat the string as
-        base64. The size cap is disabled so the fetch stays a single ``GET``: with
-        a cap set the source probes the metadata with a ``HEAD`` first.
+        base64. The ``HEAD`` ahead of it is the part maximum being applied to the
+        size the origin declares, which no configured maximum takes part in.
 
         Ref: stdapi/input_file.py:_HttpSource._read
              stdapi/config.py:_Settings.max_input_file_size
         """
         monkeypatch.setattr(SETTINGS, "max_input_file_size", 0)
-        session = _StubHttpSession(_StubHttpResponse(_REMOTE_PART_BYTES))
-        monkeypatch.setattr(
-            input_file._HttpSource,  # noqa: SLF001
-            "_client_session",
-            lambda _self, _extra_headers=None: session,
-        )
+        session = _patch_http(monkeypatch, _StubHttpResponse(_REMOTE_PART_BYTES))
         chunks: list[bytes] = []
         monkeypatch.setattr(
             openai_uploads_routes, "add_part", self._record_add_part(chunks)
@@ -390,7 +342,8 @@ class TestAddUploadPartJsonBodyRemoteSources:
         assert response.json()["id"] == _STUB_PART_ID
         assert chunks == [_REMOTE_PART_BYTES]
         assert session.requests == [
-            "GET https://example.com/chunk.bin?signature=secret"
+            "HEAD https://example.com/chunk.bin?signature=secret",
+            "GET https://example.com/chunk.bin?signature=secret",
         ]
 
     def test_s3_uri_outside_the_allowlist_is_rejected(
@@ -568,27 +521,25 @@ class TestAddUploadPartSizeCap:
 
         self._assert_refused(response, chunks)
 
-    def test_an_oversized_remote_part_is_refused(
+    def test_an_oversized_remote_part_is_refused_without_fetching_its_body(
         self,
         app_client: TestClient,
         chunks: list[bytes],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """An HTTPS ``data`` value serving more than the maximum is refused with 413.
+        """An origin declaring more than the maximum is refused before the ``GET``.
 
         A remote reference carries none of its bytes in the request, so the body
-        bound cannot see it; the maximum still has to hold.
+        bound cannot see it; the maximum still has to hold, and an honest
+        ``Content-Length`` already answers for the whole file. Downloading it
+        first would refuse exactly the same request after paying for every byte
+        of it -- which is the caller choosing how much memory the gateway holds.
 
         Ref: stdapi/routes/openai_uploads.py:add_upload_part
-             stdapi/input_file.py:_HttpSource._read
+             stdapi/input_file.py:_FileSource.to_bytes
         """
         monkeypatch.setattr(SETTINGS, "max_input_file_size", 0)
-        session = _StubHttpSession(_StubHttpResponse(b"x" * (self._CAP + 1)))
-        monkeypatch.setattr(
-            input_file._HttpSource,  # noqa: SLF001
-            "_client_session",
-            lambda _self, _extra_headers=None: session,
-        )
+        session = _patch_http(monkeypatch, _StubHttpResponse(b"x" * (self._CAP + 1)))
 
         response = app_client.post(
             f"/v1/uploads/{_STUB_UPLOAD_ID}/parts",
@@ -596,6 +547,72 @@ class TestAddUploadPartSizeCap:
         )
 
         self._assert_refused(response, chunks)
+        assert session.requests == ["HEAD https://example.com/chunk.bin"], (
+            "the declared size is refused on its own, with no body requested"
+        )
+
+    async def test_a_remote_part_of_undeclared_length_is_cut_off_at_the_maximum(
+        self,
+        app_client: TestClient,
+        api_key: str,
+        chunks: list[bytes],
+        serve_origin: Callable[[web.Application], Awaitable[str]],
+    ) -> None:
+        """An origin streaming past the maximum has its transfer aborted, then refused.
+
+        An origin that declares no length -- or lies about it -- is the case the
+        declared-size refusal cannot catch, and ``max_input_file_size`` defaults
+        to unlimited, so nothing else bounds this read: the part maximum has to
+        stop the transfer itself. The origin is driven from the gateway's own
+        process, so what it managed to write is what the gateway agreed to hold.
+
+        Ref: stdapi/routes/openai_uploads.py:add_upload_part
+             stdapi/input_file.py:_HttpSource._read_capped
+        """
+        written = 0
+
+        async def _head(_request: web.Request) -> web.Response:
+            """Describe the object without declaring a length.
+
+            Returns:
+                A typed response of no declared size.
+            """
+            return web.Response(headers={"Content-Type": "application/pdf"})
+
+        async def _get(request: web.Request) -> web.StreamResponse:
+            """Stream chunks until the reader stops taking them.
+
+            Returns:
+                The streamed response, however much of it was written.
+            """
+            nonlocal written
+            response = web.StreamResponse(headers={"Content-Type": "application/pdf"})
+            await response.prepare(request)
+            with suppress(ConnectionResetError):
+                for _ in range(_STREAM_CHUNKS):
+                    await response.write(_STREAM_CHUNK)
+                    written += len(_STREAM_CHUNK)
+            return response
+
+        app = web.Application()
+        app.router.add_route("HEAD", "/chunk.bin", _head)
+        app.router.add_get("/chunk.bin", _get, allow_head=False)
+        base = await serve_origin(app)
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app_client.app),
+            base_url="http://gateway",
+            headers={"Authorization": f"Bearer {api_key}"},
+        ) as client:
+            response = await client.post(
+                f"/v1/uploads/{_STUB_UPLOAD_ID}/parts",
+                json={"data": f"{base}/chunk.bin"},
+            )
+
+        self._assert_refused(response, chunks)
+        assert written < _STREAM_CHUNKS * len(_STREAM_CHUNK), (
+            "the transfer must be aborted, not paid for in full and then refused"
+        )
 
     def test_an_oversized_json_body_is_refused_before_it_is_parsed(
         self,

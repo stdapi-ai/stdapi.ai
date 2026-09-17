@@ -208,7 +208,10 @@ async def add_upload_part(
             body = AddUploadPartJsonBody.model_validate_json(
                 await _read_json_part_body(http_request)
             )
-        chunk = await body.data.to_bytes()
+        if await body.data.get_size() > _MAX_PART_SIZE:
+            # A source declaring more than a part holds is refused before it is read.
+            _part_too_large()
+        chunk = await body.data.to_bytes(limit=_MAX_PART_SIZE)
     elif data is None:
         missing_file_error("data")
     else:
