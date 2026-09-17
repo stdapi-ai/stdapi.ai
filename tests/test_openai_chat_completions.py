@@ -2730,6 +2730,36 @@ class TestChatCompletions:
             pytest.fail(f"Audio data is not valid base64: {error}")
         assert decoded, "Audio payload decodes to no bytes"
 
+    def test_audio_output_takes_a_custom_voice_object(
+        self, openai_client: OpenAI, chat_audio_model: str, use_official_api: bool
+    ) -> None:
+        """``audio.voice`` accepts the ``{"id": ...}`` custom voice object.
+
+        The OpenAI specification types the voice as a name or a custom voice
+        object, so the object form must reach synthesis instead of being
+        refused in request validation.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_chat_completions.py:ChatCompletionAudioParam
+        """
+        if use_official_api:
+            pytest.skip(
+                "A custom voice object names a voice the account itself owns, "
+                "and the account under test has none."
+            )
+
+        resp = openai_client.chat.completions.create(
+            model=chat_audio_model,
+            messages=[{"role": "user", "content": "Reply with OK"}],
+            audio={"voice": {"id": "echo"}, "format": "mp3"},
+            modalities=["text", "audio"],
+            max_completion_tokens=16,
+        )
+
+        audio = resp.choices[0].message.audio
+        assert audio is not None
+        assert base64.b64decode(audio.data), "Audio payload decodes to no bytes"
+
     def test_audio_output_with_modalities_audio_only_unsupported(
         self, openai_client: OpenAI, chat_audio_model: str, use_official_api: bool
     ) -> None:

@@ -320,6 +320,37 @@ class TestClientSecrets:
         assert created.expires_at > 0, "the client secret carries no expiry"
         assert created.session.type == "realtime"
 
+    def test_a_session_takes_its_voice_as_a_custom_voice_object(
+        self, openai_client: OpenAI, realtime_model: str, use_official_api: bool
+    ) -> None:
+        """``audio.output.voice`` accepts the ``{"id": ...}`` custom voice object.
+
+        The OpenAI specification types the voice as a name or a custom voice
+        object; the session the secret carries is echoed back with the name the
+        object holds, which is what every session opened with that secret then
+        asks the model for.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_realtime.py:AudioOutputConfig
+        """
+        if use_official_api:
+            pytest.skip(
+                "A custom voice object names a voice the account itself owns, "
+                "and the account under test has none."
+            )
+
+        created = openai_client.realtime.client_secrets.create(
+            session={
+                "type": "realtime",
+                "model": realtime_model,
+                "audio": {"output": {"voice": {"id": "alloy"}}},
+            }
+        )
+
+        assert created.session.type == "realtime"
+        # The SDK types the audio configuration as optional on both session kinds.
+        assert created.session.audio.output.voice == "alloy"  # type: ignore[union-attr]
+
     def test_a_transcription_session_secret_is_minted(
         self, openai_client: OpenAI
     ) -> None:
@@ -377,6 +408,42 @@ class TestRealtimeSession:
 
         assert events[-1].type == "session.updated", _types(events)
         assert events[-1].session.instructions == "Answer in one short sentence."
+
+    async def test_session_update_takes_the_voice_as_a_custom_voice_object(
+        self,
+        async_openai_client: AsyncOpenAI,
+        realtime_model: str,
+        use_official_api: bool,
+    ) -> None:
+        """``session.update`` accepts the ``{"id": ...}`` custom voice object.
+
+        The only path where the client's raw JSON is merged into the session in
+        force before being validated, so the object has to survive a merge onto
+        a voice the session already carries as a plain name or as null.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/realtime.py:_update_session
+        """
+        if use_official_api:
+            pytest.skip(
+                "A custom voice object names a voice the account itself owns, "
+                "and the account under test has none."
+            )
+
+        async with async_openai_client.realtime.connect(
+            model=realtime_model
+        ) as connection:
+            await connection.recv()
+            await connection.session.update(
+                session={
+                    "type": "realtime",
+                    "audio": {"output": {"voice": {"id": "alloy"}}},
+                }
+            )
+            events = await _drain_until(connection, "session.updated")
+
+        assert events[-1].type == "session.updated", _types(events)
+        assert events[-1].session.audio.output.voice == "alloy"
 
     async def test_clearing_the_input_buffer_is_acknowledged(
         self, async_openai_client: AsyncOpenAI, realtime_model: str

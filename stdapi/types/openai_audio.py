@@ -8,7 +8,7 @@ from stdapi.api_errors import UnsupportedParameterError
 from stdapi.config import SETTINGS
 from stdapi.input_file import InputFile
 from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelResponse
-from stdapi.types.openai import Auto
+from stdapi.types.openai import Auto, VoiceName
 
 # Ref: openai.types.audio_response_format.AudioResponseFormat
 AudioResponseFormat = Literal[
@@ -409,7 +409,7 @@ class SpeechCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=True):
         "Wildcard patterns are not selectable here: none of these models carries "
         "a release date, so a pattern never matches; name one of the models above.",
     )
-    voice: str = Field(
+    voice: VoiceName = Field(
         default="alloy",
         validation_alias=AliasChoices("voice", "VoiceId"),
         description="Voice for audio generation. "

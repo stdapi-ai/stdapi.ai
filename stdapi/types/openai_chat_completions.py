@@ -34,6 +34,7 @@ from stdapi.types.openai import (
     ResponseFormatJSONSchema,
     ResponseFormatText,
     TextLiteral,
+    VoiceName,
 )
 
 #: Reasoning effort selector for reasoning models.
@@ -655,7 +656,7 @@ class ChatCompletionAudioParam(BaseModelRequest):
     format: Literal["wav", "aac", "mp3", "flac", "opus", "pcm16"] = Field(
         description="Output audio format: `wav`, `aac`, `mp3`, `flac`, `opus`, or `pcm16`."
     )
-    voice: str = Field(description="Voice for audio response.")
+    voice: VoiceName = Field(description="Voice for audio response.")
 
 
 # Ref: openai.types.chat.chat_completion_stream_options_param.ChatCompletionStreamOptionsParam

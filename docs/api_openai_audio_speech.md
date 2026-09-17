@@ -52,6 +52,7 @@ curl -OJ -X POST "$BASE/v1/audio/speech" \
 | OpenAI voice names          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Mapped to Polly voices                                          |
 | Polly voice IDs             | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | 60+ voices across 30+ languages                                 |
 | Dynamic voice selection     | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Select best Polly voice based on the detected language          |
+| Custom voice object         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `voice` also accepts `{"id": "Joanna"}`; the `id` names the voice, as the plain string does |
 | **Input**                   |                                          |                                                                 |
 | Plain text                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Standard text input                                             |
 | SSML markup                 | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Fine-grained speech control                                     |
@@ -283,11 +284,11 @@ The following parameters from the Amazon Polly [SynthesizeSpeech API](https://do
   SSML, or a different voice, to get the delivery you want.
 - `speed` is rejected with SSML input, because SSML carries a speaking rate of
   its own: set it with `<prosody>` instead.
-- Usage is counted in characters, the native billing unit of Amazon Polly and
 - `speed` runs from `0.2` to `4.0`. Above `2.0` a generative voice
   (`amazon.polly-generative`) speaks no faster: the request succeeds and the
   audio is simply no shorter. Every other voice speeds up across the whole
   range.
+- Usage is counted in characters, the native billing unit of Amazon Polly and
   Amazon Comprehend, rather than in OpenAI-style tokens. No output token count
   is reported.
 - Once an SSE stream is accepted, a synthesis failure can no longer be an HTTP

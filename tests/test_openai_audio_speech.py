@@ -706,6 +706,64 @@ class TestAudioSpeech:
                 "the error must echo the rejected voice name"
             )
 
+    def test_a_custom_voice_object_is_synthesized(
+        self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
+    ) -> None:
+        """A voice given as ``{"id": ...}`` is accepted and speaks.
+
+        The OpenAI specification types ``voice`` as a name or a custom voice
+        object, so a client sending the object form must not be refused in
+        request validation.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_audio.py:SpeechCreateParams
+        """
+        if use_official_api:
+            pytest.skip(
+                "A custom voice object names a voice the account itself owns, "
+                "and the account under test has none."
+            )
+
+        response = openai_client.audio.speech.create(
+            model=speech_standard_model, voice={"id": "alloy"}, input="Test."
+        )
+
+        audio_data = response.content
+        assert isinstance(audio_data, bytes)
+        assert len(audio_data) > 0
+        _assert_is_mp3(audio_data)
+
+    def test_a_custom_voice_object_names_the_voice_that_speaks(
+        self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
+    ) -> None:
+        """The ``id`` of a custom voice object is the voice the request asks for.
+
+        Proved on the rejection: an unknown name is refused with that same name
+        quoted back, which it could not be if the object were being dropped and
+        the default voice used instead.
+
+        Ref: https://docs.aws.amazon.com/polly/latest/dg/available-voices.html
+             stdapi/models/audio/amazon_polly.py:_select_voice
+        """
+        if use_official_api:
+            pytest.skip(
+                "A custom voice object names a voice the account itself owns, "
+                "and the account under test has none."
+            )
+
+        with pytest.raises(BadRequestError) as exc_info:
+            openai_client.audio.speech.create(
+                model=speech_standard_model,
+                voice={"id": "invalid_voice_name"},
+                input="Test message.",
+            )
+
+        error = exc_info.value
+        assert error.status_code == 400
+        assert "invalid_voice_name" in str(error), (
+            "the error must echo the rejected voice name"
+        )
+
     @pytest.mark.parametrize("speed", [0.0, -1.0, 10.0])
     def test_invalid_speed_error(
         self, openai_client: OpenAI, speech_standard_model: str, speed: float
@@ -1304,64 +1362,6 @@ class TestSpeechCreateParamsSsml:
 
 
 @pytest.mark.local
-class TestSpeechCreateParamsCompatibility:
-    """Fields kept for OpenAI compatibility: accepted, and never forwarded to Polly.
-
-    Only the declared fields are read by the route; anything else lands in
-    ``model_extra`` and is forwarded to SynthesizeSpeech, where an unknown
-    parameter is rejected. A field that is dropped from the request model would
-    therefore turn a working request into a 400.
-
-    Ref: https://stdapi.ai/api_openai_audio_speech/
-         stdapi/types/openai_audio.py:SpeechCreateParams
-         stdapi/routes/openai_audio_speech.py:create_speech
-    """
-
-    def test_instructions_is_accepted_and_not_forwarded(self) -> None:
-        """``instructions`` is parsed as a known field, so Polly never sees it.
-
-        Polly has no equivalent of OpenAI's voice instructions, so the value is
-        accepted and ignored rather than rejected.
-        """
-        params = SpeechCreateParams(
-            model="amazon.polly-neural",
-            voice="Joanna",
-            input="Hello",
-            instructions="Speak in a cheerful tone",
-        )
-
-        assert params.instructions == "Speak in a cheerful tone"
-        assert params.model_extra == {}
-
-    def test_unknown_fields_are_kept_as_polly_extras(self) -> None:
-        """An undeclared field is collected as a Polly SynthesizeSpeech extra."""
-        params = SpeechCreateParams.model_validate(
-            {
-                "model": "amazon.polly-neural",
-                "voice": "Joanna",
-                "input": "Hello",
-                "LexiconNames": ["MyLexicon"],
-            }
-        )
-
-        assert params.model_extra == {"LexiconNames": ["MyLexicon"]}
-
-
-@pytest.mark.local
-class TestSpeechCreateParamsPollyAliases:
-    """A raw Polly SynthesizeSpeech body is accepted through the field aliases.
-
-    ``Text``/``Engine``/``VoiceId``/``OutputFormat`` are validation aliases for
-    the OpenAI field names. A broken alias would not fail loudly: the key would
-    fall through to ``model_extra`` and be forwarded to Polly as a duplicate
-    parameter.
-
-    Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
-         stdapi/types/openai_audio.py:SpeechCreateParams
-    """
-
-    def test_polly_field_names_populate_the_openai_fields(self) -> None:
-@pytest.mark.local
 class TestSpeechCreateParamsSpeedBounds:
     """``speed`` covers the range OpenAI documents, and refuses either side of it.
 
@@ -1457,6 +1457,64 @@ class TestSpeechCreateParamsVoiceBounds:
         )
 
 
+@pytest.mark.local
+class TestSpeechCreateParamsCompatibility:
+    """Fields kept for OpenAI compatibility: accepted, and never forwarded to Polly.
+
+    Only the declared fields are read by the route; anything else lands in
+    ``model_extra`` and is forwarded to SynthesizeSpeech, where an unknown
+    parameter is rejected. A field that is dropped from the request model would
+    therefore turn a working request into a 400.
+
+    Ref: https://stdapi.ai/api_openai_audio_speech/
+         stdapi/types/openai_audio.py:SpeechCreateParams
+         stdapi/routes/openai_audio_speech.py:create_speech
+    """
+
+    def test_instructions_is_accepted_and_not_forwarded(self) -> None:
+        """``instructions`` is parsed as a known field, so Polly never sees it.
+
+        Polly has no equivalent of OpenAI's voice instructions, so the value is
+        accepted and ignored rather than rejected.
+        """
+        params = SpeechCreateParams(
+            model="amazon.polly-neural",
+            voice="Joanna",
+            input="Hello",
+            instructions="Speak in a cheerful tone",
+        )
+
+        assert params.instructions == "Speak in a cheerful tone"
+        assert params.model_extra == {}
+
+    def test_unknown_fields_are_kept_as_polly_extras(self) -> None:
+        """An undeclared field is collected as a Polly SynthesizeSpeech extra."""
+        params = SpeechCreateParams.model_validate(
+            {
+                "model": "amazon.polly-neural",
+                "voice": "Joanna",
+                "input": "Hello",
+                "LexiconNames": ["MyLexicon"],
+            }
+        )
+
+        assert params.model_extra == {"LexiconNames": ["MyLexicon"]}
+
+
+@pytest.mark.local
+class TestSpeechCreateParamsPollyAliases:
+    """A raw Polly SynthesizeSpeech body is accepted through the field aliases.
+
+    ``Text``/``Engine``/``VoiceId``/``OutputFormat`` are validation aliases for
+    the OpenAI field names. A broken alias would not fail loudly: the key would
+    fall through to ``model_extra`` and be forwarded to Polly as a duplicate
+    parameter.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
+         stdapi/types/openai_audio.py:SpeechCreateParams
+    """
+
+    def test_polly_field_names_populate_the_openai_fields(self) -> None:
         """Every Polly alias maps onto its OpenAI counterpart, leaving no extras."""
         params = SpeechCreateParams.model_validate(
             {

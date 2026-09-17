@@ -1,8 +1,8 @@
 """Local OpenAI-compatible common types."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import ConfigDict, Field
+from pydantic import BeforeValidator, ConfigDict, Field, StringConstraints
 
 from stdapi.types import BaseModelRequest, BaseModelResponse, JsonMapping
 
@@ -15,6 +15,31 @@ Auto = Literal["auto"]
 
 #: Arbitrary metadata key/value mapping attached to requests.
 Metadata = dict[str, str]
+
+
+def _voice_name(value: object) -> object:
+    """Read the voice name out of the custom voice object form.
+
+    Args:
+        value: Voice as the client sent it, a name or a `{"id": ...}` object.
+
+    Returns:
+        The name the object carries. Anything else is returned unchanged, and
+        so refused unless it is already the name the field declares.
+    """
+    if isinstance(value, dict) and isinstance(name := value.get("id"), str):
+        return name
+    return value
+
+
+#: Voice named directly, or as the `{"id": ...}` custom voice object.
+VoiceName = Annotated[
+    str,
+    # A name matching none of the known voices is forwarded to the backend as
+    # given, so it is bounded here like every other free-form request string.
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=255),
+    BeforeValidator(_voice_name),
+]
 
 
 class _Strict(BaseModelRequest):

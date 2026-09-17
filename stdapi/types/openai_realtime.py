@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, JsonValue
 
 from stdapi.types import BaseModelRequest, BaseModelResponse
+from stdapi.types.openai import VoiceName
 
 #: Sample rate the ``audio/pcm`` format is defined at, in hertz.
 PCM_SAMPLE_RATE = 24000
@@ -160,7 +161,9 @@ class AudioOutputConfig(BaseModel):
     format: AudioFormat = Field(
         default_factory=AudioFormat, description="Format of the returned audio."
     )
-    voice: str | None = Field(default=None, description="Voice the model answers with.")
+    voice: VoiceName | None = Field(
+        default=None, description="Voice the model answers with."
+    )
     speed: float | None = Field(
         default=None,
         gt=0.0,
