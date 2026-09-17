@@ -47,6 +47,7 @@ from stdapi.types.openai_responses import (
     ResponseFunctionToolCall,
     ResponseFunctionToolCallOutputItem,
     ResponseFunctionWebSearch,
+    ResponseItem,
     ResponseItemList,
     ResponseOutputItem,
 )
@@ -188,6 +189,33 @@ class TestAdditionalToolsItem:
         )
         assert isinstance(item, AdditionalTools)
         assert item.tools[0].name == "get_weather"  # type: ignore[union-attr]
+
+    def test_the_listed_item_union_carries_additional_tools(self) -> None:
+        """A stored additional_tools item parses through the listed item union.
+
+        The union is what a conversation listing and an input-item listing
+        validate against, so an item type missing from it is an item a client
+        can send and never read back.
+
+        Ref: openai.types.responses.response_item.ResponseItem
+             openai.types.conversations.conversation_item.ConversationItem
+        """
+        item = TypeAdapter[ResponseItem](ResponseItem).validate_python(
+            {
+                "id": "item_1",
+                "role": "assistant",
+                "type": "additional_tools",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "get_weather",
+                        "parameters": {"type": "object"},
+                        "strict": True,
+                    }
+                ],
+            }
+        )
+        assert isinstance(item, AdditionalTools)
 
 
 class TestClientCompatibilityFields:

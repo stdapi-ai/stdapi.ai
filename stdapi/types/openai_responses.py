@@ -1847,6 +1847,33 @@ class CompactionTrigger(BaseModelRequest):
     )
 
 
+# Ref: openai.types.responses.response_configuration_update_item_param.Reasoning
+class ConfigurationUpdateReasoningInput(BaseModelRequest):
+    """The reasoning settings carried by a configuration update item."""
+
+    effort: ReasoningEffort | None = Field(
+        default=None,
+        description="Reasoning effort recorded by this history item. Accepted "
+        "and ignored: a response is configured by the `reasoning` parameter of "
+        "its own request.",
+    )
+
+
+# Ref: openai.types.responses.response_input_item.ResponseConfigurationUpdateItemParam
+class ConfigurationUpdateInput(BaseModelRequest):
+    """A response configuration change recorded in conversation history."""
+
+    type: Literal["configuration_update"] = Field(
+        description="The type of the item. Always `configuration_update`."
+    )
+    id: str | None = Field(
+        default=None, description="The unique ID of the configuration update item."
+    )
+    reasoning: ConfigurationUpdateReasoningInput | None = Field(
+        default=None, description="Reasoning settings recorded by this item."
+    )
+
+
 # Ref: openai.types.responses.response_input_item.ResponseInputItem
 # EasyInputMessage and InputMessage share type="message", so a discriminated
 # union cannot be used here.
@@ -1876,6 +1903,7 @@ ResponseInputItem = (
     | CustomToolCallInput
     | CustomToolCallOutput
     | AdditionalToolsInput
+    | ConfigurationUpdateInput
     | ProgramInput
     | ProgramOutputInput
     | CompactionTrigger
@@ -2584,6 +2612,28 @@ class ResponseToolSearchOutputItem(BaseModelResponse):
     )
     created_by: str | None = Field(
         default=None, description="The identifier of the actor that created the item."
+    )
+
+
+# Ref: openai.types.responses.response_configuration_update_item.Reasoning
+class ConfigurationUpdateReasoning(BaseModelResponse):
+    """The reasoning settings carried by a configuration update item."""
+
+    effort: ReasoningEffort | None = Field(
+        default=None, description="Reasoning effort recorded by this item."
+    )
+
+
+# Ref: openai.types.responses.response_configuration_update_item.ResponseConfigurationUpdateItem
+class ResponseConfigurationUpdateItem(BaseModelResponse):
+    """A response configuration change recorded in conversation history."""
+
+    id: str = Field(description="The unique ID of the configuration update item.")
+    type: Literal["configuration_update"] = Field(
+        description="The type of the item. Always `configuration_update`."
+    )
+    reasoning: ConfigurationUpdateReasoning | None = Field(
+        default=None, description="Reasoning settings recorded by this item."
     )
 
 
