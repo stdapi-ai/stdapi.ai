@@ -288,14 +288,15 @@ class TestBotocoreConnectionErrorHandler:
         assert any(endpoint in entry for entry in logged)
 
     async def test_no_param_names_a_field_the_request_never_sent(self) -> None:
-        """The 503 envelope names no request parameter.
+        """The 503 envelope types the outage and names no request parameter.
 
         ``param`` is the name of the offending request field: upstream sends it
         null on every server-side error, so a client telling a client mistake
-        from a transient outage by ``param is None`` keeps retrying. The error
-        type belongs in ``type``, which the 503 status already yields.
+        from a transient outage by ``param is None`` keeps retrying. Upstream
+        types a 503 ``service_unavailable_error`` rather than ``server_error``,
+        which is how a client knows the request is worth retrying unchanged.
 
-        Ref: https://platform.openai.com/docs/guides/error-codes
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
              openai/types/shared/error_object.py:ErrorObject
              stdapi/main.py:handle_botocore_connection_error
         """
@@ -310,7 +311,7 @@ class TestBotocoreConnectionErrorHandler:
 
         assert response.status_code == 503
         error = loads(bytes(response.body))["error"]
-        assert error["type"] == "server_error"
+        assert error["type"] == "service_unavailable_error"
         assert error["param"] is None
         assert error["code"] is None
 

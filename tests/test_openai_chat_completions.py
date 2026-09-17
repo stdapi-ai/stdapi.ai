@@ -117,6 +117,41 @@ def _xfail_on_invalid_tool_use() -> Iterator[None]:
         raise
 
 
+def _assert_halted_on_stop(
+    content: str | None, stops: tuple[str, ...], *, retained: bool
+) -> None:
+    """Assert generation halted at a stop sequence with nothing produced after it.
+
+    ``finish_reason`` cannot carry this: the OpenAI reference gives ``"stop"`` to
+    a natural stop too, and Bedrock reports ``end_turn`` rather than
+    ``stop_sequence`` when it does halt on one.  The content is the only witness,
+    and it is what a client reads.
+
+    Args:
+        content: Generated text, concatenated across chunks when streamed.
+        stops: Stop sequences the request sent.
+        retained: Whether the backend keeps the matched sequence in the text.
+            The OpenAI API strips it; Amazon Bedrock returns it.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat.md
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:translate_request
+    """
+    assert content, "a run halted by a stop sequence still returns the text before it"
+    if not retained:
+        assert not any(stop in content for stop in stops), (
+            f"upstream strips the matched stop sequence: {content!r}"
+        )
+        return
+    matched = next((stop for stop in stops if content.endswith(stop)), None)
+    assert matched is not None, (
+        f"generation must halt on a stop sequence, keeping it last: {content!r}"
+    )
+    head = content[: -len(matched)]
+    assert not any(stop in head for stop in stops), (
+        f"nothing may follow the matched stop sequence: {content!r}"
+    )
+
+
 @pytest.fixture(scope="module")
 def envelope_completion(openai_client: OpenAI, chat_model: str) -> ChatCompletion:
     """One cheap completion shared by the request-independent envelope assertions.
@@ -341,16 +376,20 @@ class TestChatCompletions:
         assert finish_reasons[0] in {"stop", "length"}
 
     def test_stop_sequences_functionality(
-        self, openai_client: OpenAI, chat_legacy_model: str
+        self, openai_client: OpenAI, chat_legacy_model: str, use_official_api: bool
     ) -> None:
-        """``stop`` is honored both as a bare string and as a sequence list.
+        """``stop`` truncates the answer, as a bare string and as a sequence list.
 
-        A single string is wrapped into Bedrock's ``stopSequences`` list, and a
-        run stopped by a sequence reports ``finish_reason="stop"`` because
-        Bedrock's ``stop_sequence`` reason has no dedicated OpenAI value.
+        A single string is wrapped into a one-entry list, so both forms must
+        halt generation at the first sequence matched.  The proof is the content:
+        ``finish_reason`` reads ``"stop"`` for a natural stop as well, so it
+        stays green even when the sequences are dropped on the way to the model.
+        The two lanes differ on the matched sequence itself, which the OpenAI API
+        strips and this gateway's models return.
 
-        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
-             stdapi/models/chat/_adapters/_openai_chat_completion.py:_FINISH_REASONS
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:translate_request
         """
         response = openai_client.chat.completions.create(
             model=chat_legacy_model,
@@ -362,19 +401,31 @@ class TestChatCompletions:
 
         assert len(response.choices) == 1
         assert response.choices[0].finish_reason == "stop"
-        assert isinstance(response.choices[0].message.content, str)
+        _assert_halted_on_stop(
+            response.choices[0].message.content, ("5",), retained=not use_official_api
+        )
 
         response = openai_client.chat.completions.create(
             model=chat_legacy_model,
             messages=[
-                {"role": "user", "content": "List colors: red, blue, green, yellow"}
+                {
+                    "role": "user",
+                    "content": "Repeat exactly, nothing else: red, blue, green, yellow",
+                }
             ],
             stop=["green", "yellow"],
         )
 
         assert len(response.choices) == 1
         assert response.choices[0].finish_reason == "stop"
-        assert isinstance(response.choices[0].message.content, str)
+        content = response.choices[0].message.content
+        assert content is not None
+        _assert_halted_on_stop(
+            content, ("green", "yellow"), retained=not use_official_api
+        )
+        assert "red" in content, (
+            f"the prompt dictates the text before the stop sequence: {content!r}"
+        )
 
     def test_tools_calling(self, openai_client: OpenAI, chat_vision_model: str) -> None:
         """A full tool round trip: forced call, tool result, then a text answer.
@@ -1826,18 +1877,19 @@ class TestChatCompletions:
 
         The word "json" must appear in the input or OpenAI rejects the request
         with a 400.  OpenAI's JSON mode constrains the syntax only, so the object
-        carries whatever the prompt asked for.  Upstream never wraps ``json_object``
-        output in a Markdown code fence, so the official lane requires the raw
-        prefix; the gateway's Bedrock-backed models are not constrained the same
-        way, so that lane tolerates a fence -- a common, harmless way models wrap
-        JSON -- rather than requiring an exact-prefix match.  The token budget is
-        larger on the official lane because ``gpt-5-nano`` bills reasoning tokens
-        against ``max_completion_tokens`` and would otherwise stop on ``length``
-        before emitting any content.
+        carries whatever the prompt asked for, and the prompt here names it
+        exactly.  Upstream decodes under that constraint and never fences the
+        output, so the official lane requires the raw prefix; here ``json_object``
+        is a system-prompt instruction with no decoding constraint behind it, and
+        the model is free to wrap the object in a Markdown code fence -- the
+        documented limitation this lane pins rather than hides.  The token budget
+        is larger on the official lane because ``gpt-5-nano`` bills reasoning
+        tokens against ``max_completion_tokens`` and would otherwise stop on
+        ``length`` before emitting any content.
 
         Ref: https://developers.openai.com/api/docs/guides/structured-outputs
              https://developers.openai.com/api/docs/guides/reasoning
-             stdapi/models/chat/_adapters/_openai_chat_completion.py:build_output_config
+             stdapi/models/chat/_adapters/_openai_common.py:enforce_json_object
         """
         response = openai_client.chat.completions.create(
             model=chat_reasoning_model,
@@ -1860,9 +1912,8 @@ class TestChatCompletions:
             f"json_object output must not be wrapped in prose: {content!r}"
         )
         parsed = _json.loads(unfenced)
-        assert isinstance(parsed, dict), f"json_object must be an object: {parsed!r}"
-        assert "status" in parsed, (
-            f"json_object must carry the prompted content: {parsed!r}"
+        assert parsed == {"status": "ok"}, (
+            f"json_object must carry the object the prompt dictated: {parsed!r}"
         )
 
     @pytest.mark.gateway("Unsupported fields are project-specific here")
@@ -2576,9 +2627,11 @@ class TestChatCompletions:
 
         Per the OpenAI contract that extra chunk carries the whole request's usage
         and an empty ``choices`` array, and it is emitted after the finish chunk and
-        before ``[DONE]``.
+        before ``[DONE]``.  Every chunk before it carries the ``usage`` key with a
+        null value; ``model_fields_set`` is what tells a present-but-null key from
+        an absent one, since both read as ``None`` on the parsed object.
 
-        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
              stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
         """
         stream = openai_client.chat.completions.create(
@@ -2588,17 +2641,25 @@ class TestChatCompletions:
             stream_options={"include_usage": True},
             max_completion_tokens=32,
         )
-        last_chunk = None
+        chunks = []
         for item in stream:
             if isinstance(item, str) and item == "[DONE]":
                 break
-            last_chunk = item
-        assert last_chunk is not None
+            chunks.append(item)
+        assert chunks
+        last_chunk = chunks[-1]
         usage = getattr(last_chunk, "usage", None)
         assert usage is not None
         assert last_chunk.choices == [], "The usage chunk carries no choices"
         assert usage.completion_tokens > 0
         assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
+        for chunk in chunks[:-1]:
+            assert "usage" in chunk.model_fields_set, (
+                f"every chunk carries the usage key: {chunk!r}"
+            )
+            assert chunk.usage is None, (
+                f"only the trailing chunk carries totals: {chunk!r}"
+            )
 
     def test_file_part_pdf(
         self,
@@ -3077,15 +3138,18 @@ class TestChatCompletions:
             break  # Only need to check first chunk
 
     def test_streaming_with_stop_sequences(
-        self, openai_client: OpenAI, chat_legacy_model: str
+        self, openai_client: OpenAI, chat_legacy_model: str, use_official_api: bool
     ) -> None:
-        """A stream cut short by a stop sequence still reports ``finish_reason="stop"``.
+        """A stream cut short by a stop sequence carries no delta past the sequence.
 
-        The 200-token budget is far above what the truncated answer needs, so a
-        ``length`` finish would mean the stop sequence was not applied.
+        The deltas are concatenated and read as one answer, because a stop
+        sequence is applied to the generated text and not to a chunk boundary.
+        ``finish_reason`` proves nothing on its own: it reads ``"stop"`` for a
+        natural stop too, and the 200-token budget is far above what this answer
+        needs, so ``"length"`` could not appear either way.
 
-        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
-             stdapi/models/chat/_adapters/_openai_chat_completion.py:map_bedrock_stop_reason
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
         """
         response = openai_client.chat.completions.create(
             model=chat_legacy_model,
@@ -3098,13 +3162,18 @@ class TestChatCompletions:
         )
 
         finish_reason = None
+        content = ""
         for chunk in response:
             if isinstance(chunk, str) and chunk == "[DONE]":
                 break
-            if chunk.choices and chunk.choices[0].finish_reason is not None:
+            if not chunk.choices:
+                continue
+            content += chunk.choices[0].delta.content or ""
+            if chunk.choices[0].finish_reason is not None:
                 finish_reason = chunk.choices[0].finish_reason
 
         assert finish_reason == "stop"
+        _assert_halted_on_stop(content, ("5",), retained=not use_official_api)
 
     def test_user_parameter_accepted(
         self, openai_client: OpenAI, chat_model: str, use_official_api: bool
@@ -3734,9 +3803,11 @@ class TestFormatStreamSentinelAndUsage:
         """With ``include_usage``, usage arrives in its own empty-choices chunk after the finish chunk.
 
         The stub stream reports 10 input and 5 output tokens, so the trailing chunk
-        must total 15; the finish chunk itself must stay usage-free.
+        must total 15.  Every earlier chunk carries the ``usage`` key with a null
+        value, which is what upstream sends and what lets a client read the key
+        unconditionally.
 
-        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
         """
         events = await self._run(include_usage=True)
         assert events[-1].data == "[DONE]"
@@ -3755,7 +3826,12 @@ class TestFormatStreamSentinelAndUsage:
 
         finish_chunk = _json.loads(events[-3].data)
         assert finish_chunk["choices"][0]["finish_reason"] == "stop"
-        assert "usage" not in finish_chunk
+        for event in events[:-2]:
+            chunk = _json.loads(event.data)
+            assert "usage" in chunk, f"every chunk carries the key: {chunk!r}"
+            assert chunk["usage"] is None, (
+                f"only the trailing chunk carries totals: {chunk!r}"
+            )
 
     async def test_no_chunk_carries_stream_obfuscation(self) -> None:
         """No emitted chunk carries an obfuscation field.

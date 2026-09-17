@@ -1286,7 +1286,9 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     response_format: ResponseFormat | None = Field(
         default=None,
-        description="Output format. Use `json_schema` for structured outputs, `json_object` for JSON mode.",
+        description="Output format. `json_object` is best effort: the content "
+        "may be invalid JSON or wrapped in a Markdown code fence. Use "
+        "`json_schema` when the output has to parse.",
     )
     safety_identifier: str | None = Field(
         default=None,
@@ -1307,7 +1309,11 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         default=None,
         # Aliases: stopSequences (Bedrock Inference), stop_sequences (various models).
         validation_alias=AliasChoices("stop", "stop_sequences", "stopSequences"),
-        description="Stop sequences. Generated text will not contain the stop sequence.",
+        description="Stop sequences. Generation halts at the first match and "
+        "nothing after it is returned. Whether the matched sequence itself is "
+        "kept at the end of the text depends on the model, so do not rely on "
+        "it as an end-of-answer marker; some models refuse the parameter "
+        "outright.",
     )
     store: bool | None = Field(
         default=None,

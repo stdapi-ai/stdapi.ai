@@ -153,7 +153,7 @@ class TestFormatErrorFunctions:
         [
             (500, "server_error"),
             (502, "server_error"),
-            (503, "server_error"),
+            (503, "service_unavailable_error"),
             (529, "server_error"),
             (404, "invalid_request_error"),
             (429, "rate_limit_error"),
@@ -164,6 +164,8 @@ class TestFormatErrorFunctions:
     ) -> None:
         """Each status code maps to its OpenAI ``error.type``, and the status is unchanged.
 
+        503 is the one status upstream types apart from the other server faults:
+        it means the model has no capacity right now, which a client retries.
         529 is not an OpenAI status: the gateway maps it to ``server_error`` so
         an Anthropic-style overload surfaced on an OpenAI route stays typed.
 
@@ -581,20 +583,23 @@ class TestRoutingErrorPayloads:
         assert "Method Not Allowed" in err["message"]
 
     def test_unknown_path_returns_error_envelope(self, test_client: TestClient) -> None:
-        """An undefined path returns the route-less ``{"error": <message>}`` fallback.
+        """An undefined ``/v1`` path answers in the dialect of the surface it is under.
 
-        No route matches, so no provider tag is available and
-        ``_default_formatter`` emits the minimal envelope — still not
+        No route matches, so the path prefix alone selects the formatter: a
+        client that mistypes an endpoint, or calls one this deployment does not
+        mount, still reads the envelope its own SDK parses — and never
         Starlette's ``{"detail": ...}``.
 
-        Ref: stdapi/api_providers/__init__.py:_default_formatter
+        Ref: https://platform.openai.com/docs/guides/error-codes
+             stdapi/main.py:handle_http_exception
         """
         resp = test_client.get("/v1/nonexistent")
         assert resp.status_code == 404
         body = resp.json()
         assert "detail" not in body
         assert set(body) == {"error"}
-        assert "Not Found" in body["error"]
+        err = _assert_openai_error_shape(body)
+        assert "Not Found" in err["message"]
 
 
 def _openai_request(

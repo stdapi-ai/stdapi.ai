@@ -791,8 +791,8 @@ stdapi.ai translates upstream AWS error codes into standard HTTP responses with 
 | `403` | `permission_error`          | `AccessDeniedException` — on a model call an end user's own role signed                                 | That end user is not allowed that model[^3]   |
 | `404` | `invalid_request_error`[^1] | `ResourceNotFoundException`                                                                             | Model or resource not available in the region |
 | `429` | `rate_limit_error`          | `ThrottlingException`, `TooManyRequestsException`, `ServiceQuotaExceededException`                      | Bedrock quota / throttling                    |
-| `503` | `feature_unavailable`       | `AccessDeniedException`, `AccessDenied` — every other denial                                            | IAM task role lacks permission / model access |
-| `503` | `server_error`[^2]          | `ServiceUnavailableException`, `InternalServerException`, `ServiceFailureException`, `ReadTimeoutError` | Transient AWS-side error — retry              |
+| `503` | `service_unavailable_error`<br>(code `feature_unavailable`) | `AccessDeniedException`, `AccessDenied` — every other denial                            | IAM task role lacks permission / model access |
+| `503` | `service_unavailable_error`[^2] | `ServiceUnavailableException`, `InternalServerException`, `ServiceFailureException`, `ReadTimeoutError` | Transient AWS-side error — retry          |
 
 [^1]: Anthropic-compatible routes return `not_found_error` instead.
 [^2]: Anthropic-compatible routes return HTTP `529` with error type `overloaded_error` instead.

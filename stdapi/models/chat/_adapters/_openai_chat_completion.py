@@ -1341,11 +1341,15 @@ def _suppress_system_tool_event(
     return False
 
 
-def _dump_chunk(chunk: ChatCompletionChunk) -> dict[str, Any]:
+def _dump_chunk(
+    chunk: ChatCompletionChunk, *, include_usage: bool = False
+) -> dict[str, Any]:
     """Serialize a streamed chunk the way OpenAI sends it.
 
     Args:
         chunk: Chunk to serialize.
+        include_usage: Whether the request asked for usage reporting. When set,
+            every chunk carries a ``usage`` key, null until the trailing one.
 
     Returns:
         The JSON-ready chunk, with the keys OpenAI always sends per choice
@@ -1356,6 +1360,8 @@ def _dump_chunk(chunk: ChatCompletionChunk) -> dict[str, Any]:
     for choice in data["choices"]:
         choice.setdefault("finish_reason", None)
         choice.setdefault("logprobs", None)
+    if include_usage:
+        data.setdefault("usage", None)
     return data
 
 
@@ -1374,7 +1380,9 @@ async def format_stream(
 
     When ``include_usage`` is set, usage is reported in its own trailing chunk
     with empty ``choices`` (per OpenAI spec), separate from the finish-reason
-    chunk. The stream always ends with a ``[DONE]`` sentinel.
+    chunk, and every earlier chunk carries a null ``usage`` key. Without it no
+    chunk carries the key at all. The stream always ends with a ``[DONE]``
+    sentinel.
 
     Args:
         completion_id: Unique identifier for the completion.
@@ -1402,7 +1410,8 @@ async def format_stream(
                     model=model_id,
                     object="chat.completion.chunk",
                     service_tier=service_tier,
-                )
+                ),
+                include_usage=include_usage,
             )
         )
     )
@@ -1430,7 +1439,8 @@ async def format_stream(
                             object="chat.completion.chunk",
                             service_tier=service_tier,
                             usage=usage,
-                        )
+                        ),
+                        include_usage=include_usage,
                     )
                 )
             continue
@@ -1446,7 +1456,9 @@ async def format_stream(
         )
         end_state |= end
         if chunk:
-            yield JSONServerSentEvent(data=_dump_chunk(chunk))
+            yield JSONServerSentEvent(
+                data=_dump_chunk(chunk, include_usage=include_usage)
+            )
     if not end_state:
         # The stream ran to completion without a messageStop event, so nothing
         # carried a finish reason. Amazon Bedrock Marketplace model endpoints do
@@ -1468,7 +1480,8 @@ async def format_stream(
                     model=model_id,
                     object="chat.completion.chunk",
                     service_tier=service_tier,
-                )
+                ),
+                include_usage=include_usage,
             )
         )
     yield ServerSentEvent(data="[DONE]", event=None)

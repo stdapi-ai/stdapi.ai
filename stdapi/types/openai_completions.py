@@ -103,7 +103,10 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     stop: str | list[str] | None = Field(
         default=None,
         description="Up to 4 sequences where the API will stop generating. "
-        "The returned text will not contain the stop sequence.",
+        "Generation halts at the first match and nothing after it is returned. "
+        "Whether the matched sequence itself is kept at the end of the text "
+        "depends on the model, so do not rely on it as an end-of-answer "
+        "marker; some models refuse the parameter outright.",
     )
     stream: bool | None = Field(
         default=None,

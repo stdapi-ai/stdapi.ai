@@ -1090,7 +1090,7 @@ class TestMidStreamTerminalErrorEvent:
         assert body["message"] == (
             "The service is temporarily unavailable. Retry the request."
         )
-        assert body["type"] == "server_error"
+        assert body["type"] == "service_unavailable_error"
         # An unexpected transport failure is a server fault, logged as critical.
         assert stream_log["level"] == "critical"
         assert request_log["level"] == "error"
@@ -1108,7 +1108,7 @@ class TestMidStreamTerminalErrorEvent:
 
         body = loads(str(events[-1].data))["error"]
         assert body["message"] == "Internal Server Error"
-        assert body["type"] == "server_error"
+        assert body["type"] == "service_unavailable_error"
         assert "arn:aws" not in str(events[-1].data)
         assert request_log["level"] == "critical"
         assert any("RuntimeError" in str(d) for d in request_log["error_detail"])
