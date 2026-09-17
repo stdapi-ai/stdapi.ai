@@ -926,9 +926,9 @@ stdapi.ai translates upstream AWS error codes into standard HTTP responses with 
     Each instance caches a validated key for [`TENANT_KEY_CACHE_SECONDS`](operations_configuration_authentication.md#tenant-key-cache-seconds) — 60 seconds by default — so a revocation, a `disabled = true` or a scope change takes up to that long to reach every instance. That window is the documented trade against a table read per request; lower the setting if a minute is too long, `0` disables the cache entirely.
 
 ??? failure "A superseded tenant key is still accepted after a rotation"
-    By design, for [`TENANT_KEY_ROTATION_OVERLAP_SECONDS`](operations_configuration_authentication.md#tenant-key-rotation-overlap-seconds) — 7 days by default: the key a [rotation](operations_authentication_security.md#rotating-tenant-keys) superseded stays readable as the secret's `AWSPREVIOUS` version and keeps authenticating, so a client that has not re-read its secret yet is not locked out. The cutoff is exact, whatever the cache: the key stops at the end of the window on every instance at once.
+    By design, for [`TENANT_KEY_ROTATION_OVERLAP_SECONDS`](operations_configuration_authentication.md#tenant-key-rotation-overlap-seconds) — 7 days by default: the key a [rotation](operations_authentication_security.md#rotating-tenant-keys) superseded stays readable as the secret's `AWSPREVIOUS` version and keeps authenticating, so a client that has not re-read its secret yet is not locked out. The cutoff is exact, whatever the cache: the key stops at the end of the window on every instance at once. Only the last superseded key is kept, so a further rotation inside the window — raising `key_generation` again — retires it there and then.
 
-    - **Shorter window**: lower the setting; `0` refuses the superseded key as soon as the new one is stored.
+    - **Shorter window**: lower the setting; `0` refuses the superseded key as soon as the new one is promoted to `AWSCURRENT`.
     - **Compromised key**: set `disabled = true` on the tenant, which refuses both keys within [`TENANT_KEY_CACHE_SECONDS`](operations_configuration_authentication.md#tenant-key-cache-seconds), whatever the overlap.
 
 ??? failure "A rotated tenant key is refused, or a tenant key is never rotated"
