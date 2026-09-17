@@ -26,8 +26,7 @@ from uuid import uuid4
 
 import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
-from openai import NotFoundError
-from openai.types.conversations import ConversationItemList
+from openai import BadRequestError, NotFoundError
 from sse_starlette import EventSourceResponse
 
 from stdapi import conversations
@@ -629,18 +628,21 @@ class TestConversationItems:
         )
         assert response.status_code == 404, response.text
 
-    def test_add_of_only_known_references_answers_a_complete_page(
+    def test_reference_to_an_item_already_held_is_refused(
         self, app_client: TestClient
     ) -> None:
-        """A batch of only known references answers with the items they name.
+        """Referencing an item the conversation holds is a 400, as upstream.
 
-        ``first_id`` and ``last_id`` are required and non-nullable on the item
-        list envelope, so a page carrying neither cannot be parsed by a client
-        at all -- the envelope is validated here through the official model
-        rather than field by field.
+        An ``item_reference`` asks for an item that exists elsewhere to be
+        brought in, so naming one already here is refused rather than answered
+        with a page -- the code is asserted because a client tells this refusal
+        apart from the other 400s by it.
 
-        Ref: openai/types/conversations/conversation_item_list.py
-             stdapi/routes/openai_conversations.py:_new_items
+        Ref: https://developers.openai.com/api/reference/resources/conversations.md
+             Live: POST /v1/conversations/{id}/items with a reference to an item
+             of that conversation answers 400 {'message': 'Item already in
+             conversation', 'type': 'invalid_request_error', 'param': 'items',
+             'code': 'item_already_in_conversation'}
         """
         conversation = _create(app_client, items=[{"role": "user", "content": "first"}])
         url = f"/v1/conversations/{conversation['id']}/items"
@@ -650,21 +652,19 @@ class TestConversationItems:
             url, json={"items": [{"type": "item_reference", "id": item_id}]}
         )
 
-        assert response.status_code == 200, response.text
-        page = ConversationItemList.model_validate(response.json())
-        assert page.object == "list"
-        assert page.has_more is False
-        assert [item.id for item in page.data] == [item_id]
-        assert page.first_id == item_id
-        assert page.last_id == item_id
+        assert response.status_code == 400, response.text
+        assert _error(response)["code"] == "item_already_in_conversation"
+        assert _error(response)["param"] == "items"
         assert len(app_client.get(url).json()["data"]) == 1
 
-    def test_add_mixing_a_reference_and_a_new_item_answers_both(
+    def test_a_refused_reference_stores_none_of_the_batch(
         self, app_client: TestClient
     ) -> None:
-        """The page echoes every requested item, in the order it was sent.
+        """One bad reference refuses the whole add, storing nothing.
 
-        Ref: stdapi/routes/openai_conversations.py:add_items
+        Ref: Live: the same request against the official API answers 400
+             `item_already_in_conversation` and the listing afterwards holds
+             only the item created with the conversation.
         """
         conversation = _create(app_client, items=[{"role": "user", "content": "first"}])
         url = f"/v1/conversations/{conversation['id']}/items"
@@ -680,14 +680,34 @@ class TestConversationItems:
             },
         )
 
-        assert response.status_code == 200, response.text
-        page = ConversationItemList.model_validate(response.json())
-        assert len(page.data) == 2
-        assert page.data[0].id == item_id
-        assert page.first_id == item_id
-        assert page.last_id == page.data[-1].id
+        assert response.status_code == 400, response.text
         listed = app_client.get(url, params={"order": "asc"}).json()["data"]
-        assert [item["content"][0]["text"] for item in listed] == ["first", "second"]
+        assert [item["content"][0]["text"] for item in listed] == ["first"]
+
+    def test_an_unknown_reference_wins_over_a_known_one(
+        self, app_client: TestClient
+    ) -> None:
+        """An unresolvable reference is the 404, wherever it sits in the batch.
+
+        Ref: Live: a batch holding a known and an unknown reference answers 404
+             for the unknown one in either order, never the 400 the known one
+             alone would earn.
+        """
+        conversation = _create(app_client, items=[{"role": "user", "content": "first"}])
+        url = f"/v1/conversations/{conversation['id']}/items"
+        item_id = app_client.get(url).json()["data"][0]["id"]
+
+        response = app_client.post(
+            url,
+            json={
+                "items": [
+                    {"type": "item_reference", "id": item_id},
+                    {"type": "item_reference", "id": "msg_missing"},
+                ]
+            },
+        )
+
+        assert response.status_code == 404, response.text
 
     def test_pagination_across_a_page_boundary(self, app_client: TestClient) -> None:
         """``order=asc`` with ``after`` walks the conversation in order.
@@ -1197,19 +1217,18 @@ class TestConversationsLive:
             with contextlib.suppress(Exception):
                 openai_client.conversations.delete(conversation.id)
 
-    def test_adding_a_known_item_reference_answers_a_complete_page(
+    def test_adding_a_reference_to_an_item_already_held_is_refused(
         self, openai_client: OpenAI
     ) -> None:
-        """Adding only an ``item_reference`` answers a page a client can read.
+        """An ``item_reference`` to an item already here answers a typed 400.
 
-        ``items.create`` parses its answer through ``ConversationItemList``,
-        whose ``first_id`` and ``last_id`` are required and non-nullable, so an
-        answer that carries no item raises in the client instead of returning:
-        the call completing at all is the assertion, and the cursors are then
-        checked against the page they describe.
+        An ``item_reference`` brings an item that exists elsewhere into the
+        conversation, so one naming an item it already holds is refused. The
+        error code carries the whole meaning for a client, which is why it is
+        asserted rather than the message.
 
         Ref: https://developers.openai.com/api/reference/resources/conversations.md
-             openai/types/conversations/conversation_item_list.py
+             stdapi/routes/openai_conversations.py:_new_items
         """
         conversation = openai_client.conversations.create(
             items=[{"role": "user", "content": "line 0"}]
@@ -1218,14 +1237,14 @@ class TestConversationsLive:
             listed = openai_client.conversations.items.list(conversation.id, limit=1)
             item_id = _item_id(listed.data[0])
 
-            added = openai_client.conversations.items.create(
-                conversation.id, items=[{"type": "item_reference", "id": item_id}]
-            )
+            with pytest.raises(BadRequestError) as refused:
+                openai_client.conversations.items.create(
+                    conversation.id, items=[{"type": "item_reference", "id": item_id}]
+                )
 
-            assert added.data, "a reference-only add must answer with an item"
-            assert added.first_id == _item_id(added.data[0])
-            assert added.last_id == _item_id(added.data[-1])
-            assert added.has_more is False
+            assert refused.value.status_code == 400
+            assert refused.value.code == "item_already_in_conversation"
+            assert refused.value.param == "items"
         finally:
             with contextlib.suppress(Exception):
                 openai_client.conversations.delete(conversation.id)

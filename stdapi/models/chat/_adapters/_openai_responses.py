@@ -3234,7 +3234,6 @@ def _emit_tool_done(state: _StreamState) -> Generator[JSONServerSentEvent]:
             item_id=state.current_item_id,
             output_index=state.output_index,
             arguments=arguments,
-            name=state.current_tool_name,
             sequence_number=state.next_seq(),
             type="response.function_call_arguments.done",
         ),

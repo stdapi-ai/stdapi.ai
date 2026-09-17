@@ -508,7 +508,10 @@ dislikes included, since the name is never used as a path. An upload that
 declares no name at all — an empty `filename`, or a JSON body carrying only
 content — is named `unnamed` plus the extension of its media type, or `unnamed`
 when the type implies none. Only a double quote (`"`) and control characters are
-refused, with a `400`.
+refused, with a `400`. This is the naming the Anthropic Files API applies;
+OpenAI's own Files API stores the string verbatim instead — path included, and
+empty when it is sent empty — so a client that reads its own path back out of
+`filename` gets only the last component here.
 
 ### Errors { #error-reference }
 

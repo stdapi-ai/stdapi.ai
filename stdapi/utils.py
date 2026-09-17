@@ -246,8 +246,9 @@ def format_language_code(language: str) -> str:
 
     Raises:
         InvalidLanguageFormatError: When the value is not a language tag at
-            all. The same code the backend's own refusal is mapped to, so a
-            tag refused here and one refused there answer alike.
+            all, worded and parametrized as OpenAI words its own refusal of
+            the same value. The same code the backend's own refusal is mapped
+            to, so a tag refused here and one refused there answer alike.
     """
     try:
         # Parsed, never constructed: the constructor takes the whole value as
@@ -264,8 +265,15 @@ def format_language_code(language: str) -> str:
             subtag = written
         return Language.make(language=subtag, territory=maximized.territory).to_tag()
     except LanguageTagError:
-        msg = "Invalid language code: expected an IETF BCP 47 tag such as 'en-US'."
-        raise InvalidLanguageFormatError(msg) from None
+        # OpenAI's own message for this value, verbatim: a client that reads the
+        # refusal rather than the code reads the same sentence from both.
+        msg = (
+            f"Invalid language '{language}'. "
+            "Language parameter must be specified in ISO-639-1 format."
+        )
+        error = InvalidLanguageFormatError(msg)
+        error.param = "language"
+        raise error from None
 
 
 #: ISO-639-1 base language codes mapped to lowercase English language names.

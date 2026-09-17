@@ -3521,7 +3521,6 @@ class ResponseFunctionCallArgumentsDoneEvent(_StreamEventItemBase):
     """Emitted when function-call arguments are finalized."""
 
     arguments: str = Field(description="The function-call arguments.")
-    name: str = Field(description="The name of the function that was called.")
     type: Literal["response.function_call_arguments.done"] = Field(
         description="The type of the event. Always `response.function_call_arguments.done`."
     )

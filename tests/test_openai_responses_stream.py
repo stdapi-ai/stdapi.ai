@@ -1389,7 +1389,8 @@ class TestEmptyToolArguments:
         by_event = {sse.event: _payload(sse) for sse in events}
         args_done = by_event["response.function_call_arguments.done"]
         assert args_done["arguments"] == "{}"
-        assert args_done["name"] == "fn"
+        assert "name" not in args_done, "the published done event declares no name"
+        assert by_event["response.output_item.done"]["item"]["name"] == "fn"
         assert args_done["item_id"] == "resp-1-fc-t1"
         assert by_event["response.output_item.done"]["item"]["arguments"] == "{}"
         assert by_event["response.output_item.done"]["item"]["status"] == "completed"

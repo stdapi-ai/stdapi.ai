@@ -400,19 +400,20 @@ class TestAudioTranscriptions:
     def test_invalid_language_error(
         self, openai_client: OpenAI, sample_audio_file: bytes, transcription_model: str
     ) -> None:
-        """An unsupported ``language`` yields 400 ``invalid_language_format``.
+        """A ``language`` that is no language tag yields 400 ``invalid_language_format``.
 
-        The gateway expands the OpenAI ISO-639-1 code into a Transcribe locale.
-        A value that is no language tag at all is refused before the job is
-        submitted, and one that is a tag but not one the service runs is
-        refused by ``StartTranscriptionJob`` with a ``BadRequestException``
-        mentioning ``languageCode``; both answer with this dedicated code, so a
-        client reads one answer either way.
+        OpenAI answers this value with ``{"type": "invalid_request_error",
+        "param": "language", "code": "invalid_language_format"}`` and the
+        message "Invalid language 'invalid-lang'. Language parameter must be
+        specified in ISO-639-1 format." — the whole envelope, the naming of the
+        parameter and the echo of the rejected value included, is what the
+        gateway has to answer with, since that is what a client already reads.
 
-        The message names the parameter and not the value, which is the rule
-        the whole API follows for a rejected request.
+        The gateway expands the code into a Transcribe locale, so the value is
+        refused while parsing, before any job is submitted.
 
-        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/supported-languages.html
+        Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
+             https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/api_errors.py:InvalidLanguageFormatError
              stdapi/utils.py:format_language_code
         """
@@ -429,9 +430,9 @@ class TestAudioTranscriptions:
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
         assert error_body["code"] == "invalid_language_format"
-        assert "invalid-lang" not in error_body["message"], (
-            f"a rejected request is described by field, never by value: "
-            f"{error_body['message']!r}"
+        assert error_body["param"] == "language"
+        assert "invalid-lang" in error_body["message"], (
+            f"Error does not name the rejected language: {error_body['message']!r}"
         )
         error_message = str(error).lower()
         assert any(
@@ -1105,6 +1106,29 @@ class TestAudioTranscriptionsResponseFormatBugs:
         assert [segment["text"] for segment in body["segments"]] == ["hello", "world"]
         assert [segment["start"] for segment in body["segments"]] == [0.0, 1.0]
         assert [segment["end"] for segment in body["segments"]] == [1.0, 2.0]
+
+    @pytest.mark.usefixtures("request_log")
+    async def test_verbose_json_reports_the_transcribe_task(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``verbose_json`` carries ``task="transcribe"``, as upstream always does.
+
+        ``task`` is the first key of the upstream payload and is the documented
+        discriminator between a transcription and a translation result, so it
+        must also survive the route's ``response_model_exclude_none=True``
+        serialisation.
+
+        Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
+             stdapi/types/openai_audio.py:TranscriptionVerbose
+        """
+        _stub_transcribe(monkeypatch)
+
+        response = await AudioModel("amazon.transcribe").stt(
+            InputFile("data:audio/wav;base64,AAAA"), "verbose_json", logprobs=False
+        )
+
+        assert not isinstance(response, str | Response)
+        assert response.model_dump(exclude_none=True)["task"] == "transcribe"
 
 
 @pytest.mark.local

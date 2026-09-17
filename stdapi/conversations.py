@@ -101,6 +101,12 @@ _ID_MAX_LENGTH: int = 64
 #: Item types that reference an existing item instead of adding a new one.
 _REFERENCE_TYPE: str = "item_reference"
 
+#: Error code refusing a reference to an item the conversation already holds.
+_ALREADY_PRESENT_CODE: str = "item_already_in_conversation"
+
+#: Message sent with the error code above.
+_ALREADY_PRESENT_MESSAGE: str = "Item already in conversation"
+
 #: The feature name a caller reads when the deployment cannot serve conversations.
 _FEATURE: str = "The Conversations API"
 
@@ -284,6 +290,18 @@ def item_not_found(item_id: str) -> Never:
     """
     msg = f"Item with id '{item_id}' not found in conversation."
     raise ApiError(msg, status=404)
+
+
+def item_already_in_conversation() -> Never:
+    """Raise the refusal of a reference to an item the conversation already holds.
+
+    Raises:
+        ApiError: Always, with status 400.
+    """
+    error = ApiError(_ALREADY_PRESENT_MESSAGE, status=400)
+    error.code = _ALREADY_PRESENT_CODE
+    error.param = "items"
+    raise error
 
 
 def new_item_id(item_type: str | None) -> str:

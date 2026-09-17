@@ -684,7 +684,9 @@ def _handle_transcription_error(language: str | None) -> Generator[None]:
             error_message = error.response["Error"]["Message"]
             if "languageCode" in error_message:
                 msg = f"Language '{language}' is not supported by the model"
-                raise InvalidLanguageFormatError(msg) from error
+                language_error = InvalidLanguageFormatError(msg)
+                language_error.param = "language"
+                raise language_error from error
             if "file" in error_message:
                 log_error_details(error_message, status=400)
                 msg = "The provided audio file could not be accessed."

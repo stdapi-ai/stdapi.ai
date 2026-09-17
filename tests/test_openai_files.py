@@ -75,11 +75,8 @@ _PART_B: bytes = b"B" * 1024
 #: Boundary of the hand-built multipart body used for filenames no SDK can send.
 _BOUNDARY: str = "stdapi-filename-boundary"
 
-#: Anthropic API version header value, required by the official endpoint.
-_ANTHROPIC_VERSION: str = "2023-06-01"
-
-#: Beta header the Anthropic Files API is served under.
-_ANTHROPIC_FILES_BETA: str = "files-api-2025-04-14"
+#: Query the Anthropic SDK sends on every Files API call to opt into its beta.
+_ANTHROPIC_BETA_QUERY: dict[str, str] = {"beta": "true"}
 
 
 def _multipart_body(filename: str, content: bytes, mime_type: str) -> bytes:
@@ -3707,23 +3704,30 @@ class TestUploadedFilenames:
 
         The body is hand-built because no SDK can send this: an empty name makes
         httpx drop the ``filename`` parameter altogether, which turns the part
-        into a plain form field rather than a file.
+        into a plain form field rather than a file.  The beta is opted into by
+        query rather than by header because that is what the SDK itself sends,
+        and the two are not equivalent upstream: the header surface refuses the
+        name instead of naming the file after its media type.
 
         Ref: https://platform.claude.com/docs/en/api/files/upload
+             anthropic/resources/beta/files.py (``/v1/files?beta=true``)
              stdapi/files/_core.py:upload_file
         """
         if is_bedrock_direct:
             pytest.skip("Files API not available on Bedrock")
         http_client = anthropic_client._client  # noqa: SLF001
+        # Auth, API version and workspace scoping, minus the headers set to Omit.
+        headers = {
+            name: value
+            for name, value in anthropic_client.default_headers.items()
+            if isinstance(value, str)
+        }
+        headers["Content-Type"] = f"multipart/form-data; boundary={_BOUNDARY}"
         response = http_client.post(
-            f"{anthropic_client.base_url}v1/files",
+            anthropic_client.base_url.join("v1/files"),
+            params=_ANTHROPIC_BETA_QUERY,
             content=_multipart_body("", _MINIMAL_PDF, "application/pdf"),
-            headers={
-                **anthropic_client.auth_headers,
-                "anthropic-version": _ANTHROPIC_VERSION,
-                "anthropic-beta": _ANTHROPIC_FILES_BETA,
-                "content-type": f"multipart/form-data; boundary={_BOUNDARY}",
-            },
+            headers=headers,
         )
 
         assert response.status_code == 200, response.text

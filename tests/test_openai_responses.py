@@ -1561,17 +1561,17 @@ class TestResponses:
         assert completed_event.response.usage.output_tokens > 0
 
     def test_streaming_function_call_events(
-        self, openai_client: OpenAI, responses_model: str, use_official_api: bool
+        self, openai_client: OpenAI, responses_model: str
     ) -> None:
         """Streamed tool arguments arrive as deltas closed by a matching ``done`` event.
 
         The gateway joins the streamed argument fragments for the ``done`` event
         and substitutes ``"{}"`` when a tool block produced no fragment at all,
-        so the done payload is fully determined by the deltas.  It also fills
-        ``name``, which the published event schema declares as required; the
-        live OpenAI API leaves that field out of
-        ``response.function_call_arguments.done``, so the SDK model reads it
-        back as ``None`` there.
+        so the done payload is fully determined by the deltas.  The published
+        ``ResponseFunctionCallArgumentsDoneEvent`` schema declares exactly
+        ``arguments``, ``item_id``, ``output_index``, ``sequence_number`` and
+        ``type``: any further field — the function name among them — lands in
+        the SDK model's ``model_extra`` and must be absent on both targets.
 
         Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
              https://developers.openai.com/api/docs/guides/function-calling#tool-choice
@@ -1612,11 +1612,10 @@ class TestResponses:
         assert args_done_event is not None, (
             "Expected response.function_call_arguments.done event"
         )
-        if use_official_api:
-            # The live API omits ``name`` despite declaring it required.
-            assert args_done_event.name is None
-        else:
-            assert args_done_event.name == "get_weather"
+        assert not args_done_event.model_extra, (
+            "done event carries fields the published schema does not declare: "
+            f"{args_done_event.model_extra}"
+        )
         assert args_done_event.arguments == (streamed_args or "{}"), (
             "done arguments must be the concatenation of the streamed deltas"
         )

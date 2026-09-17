@@ -417,8 +417,8 @@ class TestLanguageCodeFormatting:
     Amazon Transcribe and Amazon Polly are named a full locale, so a bare
     ``en`` is completed to ``en-US``. A code the caller already qualified must
     come through as itself: the value is a tag to be parsed, not a bare
-    language subtag, and anything that is no tag at all is the caller's
-    mistake rather than a request AWS is made to refuse.
+    language subtag, and anything that is no tag at all is refused here in the
+    words OpenAI refuses it with, rather than sent on for AWS to reject.
 
     Ref: https://www.rfc-editor.org/rfc/bcp/bcp47.txt
          https://docs.aws.amazon.com/transcribe/latest/dg/supported-languages.html
@@ -498,13 +498,15 @@ class TestLanguageCodeFormatting:
 
     @pytest.mark.parametrize("language", ["", "english", "12345"])
     def test_a_value_that_is_no_language_tag_is_refused(self, language: str) -> None:
-        """A 400 names the parameter, without echoing what the caller sent."""
+        """A 400 names the parameter and the value, word for word as OpenAI does."""
         with pytest.raises(ApiError) as exc_info:
             format_language_code(language)
 
         assert exc_info.value.status == 400
+        assert exc_info.value.param == "language"
         assert str(exc_info.value) == (
-            "Invalid language code: expected an IETF BCP 47 tag such as 'en-US'."
+            f"Invalid language '{language}'. "
+            "Language parameter must be specified in ISO-639-1 format."
         )
 
 
