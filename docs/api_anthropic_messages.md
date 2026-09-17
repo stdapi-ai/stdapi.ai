@@ -97,7 +97,7 @@ curl -X POST "$BASE/v1/messages" \
 | Refusal details (`stop_details`)      |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Policy category and explanation behind `stop_reason: "refusal"`, when the model reports them |
 | Metadata                              |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Converse path: logged only. Mantle path: `metadata.user_id` is forwarded upstream            |
 | `inference_geo`                       | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored: data residency is set by the deployment's configured Bedrock regions, not per request — see [Limits](#limits-and-behaviour-to-know) |
-| `container`                           | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored: no code-execution container is created or reused                       |
+| `container`                           | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored in both forms, the identifier and the object: no container is created or reused, and no Agent Skill is loaded — see [Limits](#limits-and-behaviour-to-know) |
 | Bedrock Guardrails                    | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Content safety policies                                                                      |
 | Service tiers                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Mapped to Bedrock service tiers and latency options                                          |
 
@@ -710,7 +710,7 @@ curl -X POST "$BASE/v1/messages" \
 
 **`inference_geo` is accepted and ignored.** The gateway routes to the Bedrock regions the deployment configures in [`AWS_BEDROCK_REGIONS`](operations_configuration_aws.md#aws-bedrock-regions), so a per-request geography cannot change where inference runs. A request that sets it is answered normally, from the configured regions; set the regions to pin data residency.
 
-**`container` is accepted and ignored.** No code-execution container is created, reused or returned, and the response carries no `container` object.
+**`container` is accepted and ignored, in both forms.** The identifier string and the object carrying `id` and `skills` — the form [Agent Skills](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/quickstart) requests use — both validate and both change nothing: no container is created, reused or returned, no skill is loaded, and the response carries no `container` object. A request naming skills is answered by the model on its own, so an answer that depends on a skill's instructions will differ from what the Anthropic API returns.
 
 **`max_tokens` is optional.** The Anthropic API requires it; here the model's own default output limit applies when the field is absent, so a client that relies on the `400` for a missing field gets an answer instead.
 

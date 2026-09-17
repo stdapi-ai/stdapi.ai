@@ -2458,8 +2458,12 @@ class MessageCreateParams(BaseModelRequestWithExtra):
     )
     inference_geo: str | None = Field(
         default=None,
-        description="Specifies the geographic region for inference processing.\n"
-        "UNSUPPORTED on this implementation. Data residency configuration is managed at server configuration level.",
+        # Never serialized: where inference runs is set by the deployment.
+        exclude=True,
+        description="Geographic region to run inference in.\n"
+        "UNSUPPORTED on this implementation: accepted and ignored, and the rest "
+        "of the request is served normally. Data residency is set by the "
+        "deployment, not per request.",
     )
     mcp_servers: list[MCPServerURLDefinitionParam] | None = Field(
         default=None,
@@ -2547,8 +2551,15 @@ class MessageCreateParams(BaseModelRequestWithExtra):
         "Advanced use only; prefer `temperature`.",
     )
 
-    container: str | None = Field(
-        default=None, description="Container identifier for reuse across requests."
+    container: ContainerParams | str | None = Field(
+        default=None,
+        # Never serialized: no container is created, reused or returned.
+        exclude=True,
+        description="Container to reuse across requests: its identifier, or an "
+        "object naming the identifier and the skills to load.\n"
+        "UNSUPPORTED on this implementation: accepted and ignored, and the rest "
+        "of the request is served normally. No container is created, reused or "
+        "returned, and no skill is loaded.",
     )
 
     @field_validator("messages", mode="before")
@@ -2638,6 +2649,38 @@ class ThinkingConfigEnabledParam(BaseModelRequestWithExtra):
 
 
 # Ref: anthropic.types.thinking_config_disabled_param.ThinkingConfigDisabledParam
+# Ref: anthropic.types.skill_params.SkillParams
+class SkillParams(BaseModelRequest):
+    """A skill to load in the container.
+
+    UNSUPPORTED on this implementation: accepted and ignored, and the rest of the
+    request is served normally. The skill is never loaded, so its instructions
+    never reach the model.
+    """
+
+    skill_id: str = Field(description="Identifier of the skill to load.")
+    type: Literal["anthropic", "custom"] = Field(
+        description="Skill origin: built-in, or one you published."
+    )
+    version: str | None = Field(
+        default=None, description="Skill version, or `latest` for the most recent one."
+    )
+
+
+# Ref: anthropic.types.container_params.ContainerParams
+class ContainerParams(BaseModelRequest):
+    """A container to reuse, and the skills to load in it.
+
+    UNSUPPORTED on this implementation: accepted and ignored, and the rest of the
+    request is served normally. No container is created or reused.
+    """
+
+    id: str | None = Field(default=None, description="Identifier of the container.")
+    skills: list[SkillParams] | None = Field(
+        default=None, description="Skills to load in the container."
+    )
+
+
 class ThinkingConfigDisabledParam(BaseModelRequest):
     """Disabled thinking configuration."""
 

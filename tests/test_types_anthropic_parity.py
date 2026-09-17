@@ -13,6 +13,8 @@ Ref: https://platform.claude.com/docs/en/api/messages
 from typing import Required, get_args, get_origin, get_type_hints
 
 import pytest
+from anthropic.types import ContainerParams as SdkContainerParams
+from anthropic.types import SkillParams as SdkSkillParams
 from anthropic.types import WebSearchToolResultError as SdkWebSearchToolResultError
 from anthropic.types.tool_result_block_param import (
     ToolResultBlockParam as SdkToolResultBlockParam,
@@ -20,7 +22,9 @@ from anthropic.types.tool_result_block_param import (
 from pydantic import ValidationError
 
 from stdapi.types.anthropic_messages import (
+    ContainerParams,
     MessageCreateParams,
+    SkillParams,
     ThinkingConfigAdaptiveParam,
     ThinkingConfigEnabledParam,
     ToolInputSchema,
@@ -32,8 +36,13 @@ from stdapi.types.anthropic_messages import (
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
 
-#: Minimal valid request body, extended per-test with a ``top_p`` value.
+#: Minimal valid request body, extended per-test with the field under test.
 _BASE_REQUEST = {"model": "claude-x", "messages": [{"role": "user", "content": "hi"}]}
+
+#: An Agent Skills request body, as the Agent Skills quickstart documents it.
+_SKILLS_CONTAINER = {
+    "skills": [{"type": "anthropic", "skill_id": "pptx", "version": "latest"}]
+}
 
 
 class TestToolInputSchemaParity:
@@ -279,3 +288,173 @@ class TestWebSearchToolResultErrorParity:
             "type": "web_search_tool_result_error",
             "error_code": "max_uses_exceeded",
         }
+
+
+class TestContainerParity:
+    """``container`` takes the object form Agent Skills requests are written with.
+
+    Upstream types the field as ``ContainerParams | str``, and the object form is
+    the only way to name Agent Skills.  No container runs here, so the value is
+    accepted and ignored — but a client sending the documented shape must be
+    answered, not refused on the whole request before anything else is read.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/agent-skills/quickstart
+         https://platform.claude.com/docs/en/api/messages
+         stdapi/types/anthropic_messages.py:ContainerParams
+    """
+
+    def test_a_skills_container_validates(self) -> None:
+        """The quickstart's ``container.skills`` body is read into the mirror.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/agent-skills/quickstart
+             stdapi/types/anthropic_messages.py:SkillParams
+        """
+        params = MessageCreateParams.model_validate(
+            {**_BASE_REQUEST, "container": _SKILLS_CONTAINER}
+        )
+
+        container = params.container
+        assert isinstance(container, ContainerParams), (
+            "the object form must resolve to the container model, not to the string arm"
+        )
+        assert container.skills is not None
+        (skill,) = container.skills
+        assert (skill.type, skill.skill_id, skill.version) == (
+            "anthropic",
+            "pptx",
+            "latest",
+        )
+
+    def test_an_identifier_only_container_validates(self) -> None:
+        """``{"container": {"id": …}}`` — the object form of a reused container.
+
+        Ref: https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/container_params.py
+             stdapi/types/anthropic_messages.py:ContainerParams
+        """
+        params = MessageCreateParams.model_validate(
+            {**_BASE_REQUEST, "container": {"id": "container_1"}}
+        )
+
+        container = params.container
+        assert isinstance(container, ContainerParams)
+        assert container.id == "container_1"
+        assert container.skills is None, "an omitted skill list stays absent"
+
+    def test_the_string_form_still_validates(self) -> None:
+        """The other arm of the union keeps working, unchanged and uncoerced.
+
+        Ref: https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/message_create_params_container_param.py
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        params = MessageCreateParams.model_validate(
+            {**_BASE_REQUEST, "container": "container_1"}
+        )
+
+        assert params.container == "container_1"
+
+    def test_container_fields_match_the_sdk(self) -> None:
+        """The mirror declares the SDK's container keys, all of them optional.
+
+        Ref: https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/container_params.py
+             stdapi/types/anthropic_messages.py:ContainerParams
+        """
+        sdk_fields = set(get_type_hints(SdkContainerParams))
+        assert sdk_fields, "the SDK annotations must state the container keys"
+        assert set(ContainerParams.model_fields) == sdk_fields
+        assert not [
+            name
+            for name, field in ContainerParams.model_fields.items()
+            if field.is_required()
+        ]
+
+    def test_skill_fields_and_required_keys_match_the_sdk(self) -> None:
+        """A skill entry carries the SDK's keys, required where the SDK requires them.
+
+        Ref: https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/skill_params.py
+             stdapi/types/anthropic_messages.py:SkillParams
+        """
+        hints = get_type_hints(SdkSkillParams, include_extras=True)
+        sdk_required = {
+            name for name, hint in hints.items() if get_origin(hint) is Required
+        }
+        assert sdk_required, "the SDK annotations must state which keys are required"
+        assert set(SkillParams.model_fields) == set(hints)
+        required = {
+            name
+            for name, field in SkillParams.model_fields.items()
+            if field.is_required()
+        }
+        assert required == sdk_required
+
+    def test_skill_type_matches_the_sdk_literals(self) -> None:
+        """``skills[].type`` publishes the SDK's enumeration, not an open string.
+
+        Ref: https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/skill_params.py
+             stdapi/types/anthropic_messages.py:SkillParams
+        """
+        (sdk_type,) = get_args(
+            get_type_hints(SdkSkillParams, include_extras=True)["type"]
+        )
+
+        assert get_args(SkillParams.model_fields["type"].annotation) == get_args(
+            sdk_type
+        )
+
+    @pytest.mark.parametrize(
+        "container", [_SKILLS_CONTAINER, {"id": "container_1"}, "container_1"]
+    )
+    def test_a_container_never_reaches_a_backend(self, container: object) -> None:
+        """No serialization of the request carries ``container``, in either form.
+
+        The Anthropic-shaped passthrough payload is built by dumping the validated
+        request, so a container left in the dump would be forwarded — asking a
+        backend for skills the gateway states it does not run.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/agent-skills/quickstart
+             stdapi/models/chat/_mantle/_convert.py:messages_payload
+        """
+        params = MessageCreateParams.model_validate(
+            {**_BASE_REQUEST, "container": container}
+        )
+
+        dumped = params.model_dump(mode="json", by_alias=True, exclude_unset=True)
+        assert "container" not in dumped
+        assert "container" not in params.model_dump(mode="json")
+
+
+class TestInferenceGeoIsNeverForwarded:
+    """``inference_geo`` is read off the request and goes no further.
+
+    Where inference runs is the deployment's choice, so the documented behaviour is
+    that a per-request geography is accepted and ignored.  A serialization that
+    still carried it would let a caller move inference on the very path the
+    documentation promises it cannot.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/types/anthropic_messages.py:MessageCreateParams
+    """
+
+    def test_an_inference_geo_validates(self) -> None:
+        """A request naming a geography is answered rather than refused.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        params = MessageCreateParams.model_validate(
+            {**_BASE_REQUEST, "inference_geo": "us"}
+        )
+
+        assert params.inference_geo == "us"
+
+    def test_an_inference_geo_never_reaches_a_backend(self) -> None:
+        """No serialization of the request carries ``inference_geo``.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:messages_payload
+        """
+        params = MessageCreateParams.model_validate(
+            {**_BASE_REQUEST, "inference_geo": "us"}
+        )
+
+        dumped = params.model_dump(mode="json", by_alias=True, exclude_unset=True)
+        assert "inference_geo" not in dumped
+        assert "inference_geo" not in params.model_dump(mode="json")
