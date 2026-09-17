@@ -782,15 +782,16 @@ Grouped by what you see. The two `401` entries live under [Authentication & Iden
 
 ### AWS error → HTTP status mapping { #aws-error-http-status-mapping }
 
-stdapi.ai translates upstream AWS error codes into standard HTTP responses with an OpenAI/Anthropic-style error type. Use this table to map a status code back to its likely AWS cause. HTTP status and error type are as returned on OpenAI-compatible routes (`/v1/...`); Anthropic-compatible routes (`/anthropic/...`) diverge on the two footnoted rows.
+stdapi.ai translates upstream AWS error codes into standard HTTP responses with an OpenAI/Anthropic-style error type. Use this table to map a status code back to its likely AWS cause. HTTP status and error type are as returned on OpenAI-compatible routes (`/v1/...`); Anthropic-compatible routes (`/anthropic/...`) diverge on the footnoted rows.
 
 | HTTP  | Error type                  | AWS error codes                                                                                         | Typical cause                                 |
 |-------|------------------------------|---------------------------------------------------------------------------------------------------------|-----------------------------------------------|
-| `400` | `invalid_request_error`     | `ValidationException`, `BadRequestException`                                                            | Unsupported/invalid request parameters        |
+| `400` | `invalid_request_error`     | `ValidationException`, `BadRequestException`, `EntityTooSmall`, `InvalidPart`                           | Unsupported/invalid request parameters; the last two when completing an [upload](api_openai_files.md#uploads-api) |
 | `400` | `invalid_request_error`     | `AccessDenied` — on the object an `s3://` input named                                                   | The caller's own object cannot be read[^4]    |
 | `401` | `authentication_error`      | `UnrecognizedClientException`, `InvalidSignatureException`, `ExpiredTokenException`                     | stdapi.ai's AWS credentials missing/expired   |
 | `403` | `permission_error`          | `AccessDeniedException` — on a model call an end user's own role signed                                 | That end user is not allowed that model[^3]   |
-| `404` | `invalid_request_error`[^1] | `ResourceNotFoundException`                                                                             | Model or resource not available in the region |
+| `404` | `invalid_request_error`[^1] | `ResourceNotFoundException`, `NotFoundException`                                                        | Model or resource not available in the region |
+| `409` | `conflict_error`[^5]        | `ConflictException`                                                                                     | Another request is changing the same resource — retry |
 | `429` | `rate_limit_error`          | `ThrottlingException`, `TooManyRequestsException`, `ServiceQuotaExceededException`                      | Bedrock quota / throttling                    |
 | `503` | `service_unavailable_error`<br>(code `feature_unavailable`) | `AccessDeniedException`, `AccessDenied` — every other denial                            | IAM task role lacks permission / model access |
 | `503` | `service_unavailable_error`[^2] | `ServiceUnavailableException`, `InternalServerException`, `ServiceFailureException`, `ReadTimeoutError` | Transient AWS-side error — retry          |
@@ -799,6 +800,7 @@ stdapi.ai translates upstream AWS error codes into standard HTTP responses with 
 [^2]: Anthropic-compatible routes return HTTP `529` with error type `overloaded_error` instead.
 [^3]: Only when [per-user cost attribution](operations_cost_management.md#per-user-attribution) is enabled: the call then carries the end user's identity, and AWS evaluated a policy written about them.
 [^4]: Only for a bucket declared in [`AWS_S3_ACCEPTED_BUCKETS`](operations_configuration_storage.md#aws-s3-accepted-buckets), which the deployment reads but does not own — so the refused object is the one the request named. The message names that input, and nothing else. A denial on the deployment's own buckets stays `feature_unavailable`.
+[^5]: Anthropic-compatible routes return `invalid_request_error` instead. The gateway also answers `409` itself when concurrent requests update the same vector store.
 
 !!! note "Where to find the detail"
     For security, `401`, `403` and `feature_unavailable` responses returned to clients contain only a generic message — the same one whatever is missing, so that the difference between "no permission" and "not configured" is not disclosed. The full diagnostic detail is captured in the server logs under `error_detail` and can be correlated via the `x-request-id` response header (`request-id` on Anthropic-compatible `/anthropic/...` routes) — see [Logging & Monitoring](operations_logging_monitoring.md).

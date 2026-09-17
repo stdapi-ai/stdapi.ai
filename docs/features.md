@@ -461,9 +461,9 @@ An agent that has only the base URL can work out the rest for itself, through st
 
 ### MCP (Model Context Protocol)
 
-stdapi.ai exposes its API surface as MCP tools, letting AI agents and orchestrators call an endpoint directly through the Model Context Protocol — no HTTP client code required. Every operation is published except the ones a gateway cannot serve as a tool: the Realtime socket, and the Ollama model-store verbs that always refuse.
+stdapi.ai exposes its API surface as MCP tools, letting AI agents and orchestrators call an endpoint directly through the Model Context Protocol — no HTTP client code required. Every operation is published except the ones an agent could not use: the Realtime WebRTC call verbs, which need a peer connection it has no way to hold, and the Ollama model-store verbs that always refuse. The organization usage and costs tools appear only where the settings behind them — the usage API, CloudWatch metrics and cost tracking — are enabled, since they would otherwise answer `503`. Naming any of them in the include list publishes it anyway.
 
-- **90+ tools, no integration code** — Every API operation (chat, images, audio, embeddings, files, model search) is a named MCP tool with generated documentation, over Streamable HTTP at `/mcp` or SSE at `/sse` for older clients
+- **90+ tools, no integration code** — Each published API operation (chat, images, audio, embeddings, files, model search) is a named MCP tool with generated documentation, over Streamable HTTP at `/mcp` or SSE at `/sse` for older clients
 - **A tool surface you choose** — [Tools are included or excluded by name](operations_configuration_server.md#mcp-exclude-tools), so an agent is handed exactly the capabilities it should have and no more — a read-only deployment, or one without file deletion, is a list away
 - **Written for an agent's context window, not a human's** — Schemas hide parameters an MCP client cannot use and results come back as compact JSON, so each call costs the calling agent fewer tokens
 - **Media-aware results** — An endpoint answering with bytes returns an image or audio result the agent can use directly, falling back to a download reference for what the protocol cannot carry, such as a generated video

@@ -750,7 +750,7 @@ curl -X POST "$BASE/v1/messages" \
 
 **`max_tokens: 0` warms the prompt cache, and comes back with one token.** The Anthropic API answers a zero budget with an empty completion. Here the request is accepted and the prompt is processed and written to the cache the same way, but the reply carries a single token instead of none, with `stop_reason` `max_tokens`. Budget the pre-warm call for that one output token; a negative budget is still rejected with `400`. [Bedrock Mantle](#bedrock-mantle) models vary — the Claude passthrough honors the zero exactly, and answers with nothing. A pre-warm asks for no output, so what would describe output is refused with `400` — the same refusal, and the same message, the Anthropic API gives: `"stream": true`, a `tool_choice` of `"tool"` or `"any"` (`"auto"` is served), and `output_config.format`.
 
-**Token counting is refused for Marketplace model endpoints.** Those endpoints expose no token-counting API, so `POST /v1/messages/count_tokens` answers `400` for a model served by one. Every Converse- and Mantle-served model is counted.
+**Token counting is refused for models served by an endpoint you run.** A Marketplace or SageMaker AI model endpoint exposes no token-counting API, so `POST /v1/messages/count_tokens` answers `400` for a model served by one, and the route is not listed for it in [`search_models`](api_search_models.md). Every foundation model served through Converse or Mantle is counted.
 
 **The official SDK no longer sends the sampling parameters.** `anthropic` ≥ 1.0 removed `temperature`, `top_p` and `top_k` from `messages.create()`. The gateway still accepts all three on the wire and older clients keep working; with the current SDK, pass them as `extra_body={"temperature": …}`.
 
@@ -916,7 +916,7 @@ curl -X POST "$BASE/v1/messages/count_tokens" \
 !!! info "Counted Request"
     The count is computed on the exact request `anthropic_message` would send for the same body: `thinking`/`output_config.effort`, server tools in their model-native form, `cache_control` breakpoints, and mid-conversation system message placement are all taken into account.
 
-Models served by a Marketplace model endpoint have no token-counting API and answer `400`; every Converse- and Mantle-served model is counted.
+Models served by a Marketplace or SageMaker AI model endpoint have no token-counting API and answer `400`; every Converse- and Mantle-served foundation model is counted.
 
 ## Next steps
 

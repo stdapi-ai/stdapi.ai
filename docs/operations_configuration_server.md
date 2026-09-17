@@ -689,10 +689,10 @@ export ENABLE_MCP_SSE=true
 :   Comma-separated list of tool names (duplicates are automatically removed)
 
 :octicons-gear-24: **Default**
-:   None (all tools exposed)
+:   None — every publishable tool is exposed; see [API Overview → MCP Tools](api_overview.md#mcp-model-context-protocol) for the nine operations always held back and the usage tools that need the Usage API
 
 ```bash
-# All tools exposed by default
+# All publishable tools exposed by default
 # No environment variable needed
 
 # Expose only specific tools
@@ -740,7 +740,7 @@ stdapi.ai exposes a fixed set of tools derived from its API surface — you can 
 
 **Start from the minimum, not the maximum**
 
-By default all tools are exposed. It is safer and more effective to begin with a narrow `MCP_INCLUDE_TOOLS` list covering only what the workflow needs, then expand it deliberately. LLMs perform better with fewer choices, and many AI providers cap the number of active tools per session.
+By default every publishable tool is exposed. It is safer and more effective to begin with a narrow `MCP_INCLUDE_TOOLS` list covering only what the workflow needs, then expand it deliberately. LLMs perform better with fewer choices, and many AI providers cap the number of active tools per session.
 
 **Always include `search_models` for agent model discovery**
 

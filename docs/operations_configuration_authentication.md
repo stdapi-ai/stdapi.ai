@@ -284,10 +284,10 @@ export TENANT_API_KEYS=true
 :   `false` — tenant-shaped credentials are only compared against the deployment API key, like any other value
 
 :octicons-alert-24: **Requirement**
-:   [`AWS_DYNAMODB_TABLE`](operations_configuration_storage.md#aws-dynamodb-table) must be set, or startup fails. [`TENANT_KEY_SSM_PARAMETER_PREFIX`](#tenant-key-ssm-parameter-prefix) has a default and needs no configuration of its own — override it if this deployment shares an AWS account with another
+:   [`AWS_DYNAMODB_TABLE`](operations_configuration_storage.md#aws-dynamodb-table) must be set, or startup fails. [`TENANT_KEY_SSM_PARAMETER_PREFIX`](#tenant-key-ssm-parameter-prefix) has a default and needs no configuration of its own — override it if this deployment shares an AWS account with another, or ignore it entirely if keys are stored in Secrets Manager
 
 :octicons-lock-24: **IAM Permissions Required**
-:   The [shared table permissions](operations_iam_permissions.md#shared-table), plus `ssm:PutParameter` and `ssm:GetParameter` on the delivery prefix — see [Tenant API Key Delivery](operations_iam_permissions.md#tenant-key-delivery). Rate-limited tenants also need the [counter permission](operations_iam_permissions.md#shared-table) (`dynamodb:UpdateItem` on the `LIMIT#*` items)
+:   The [shared table permissions](operations_iam_permissions.md#shared-table), plus — unless [`TENANT_KEY_SECRETSMANAGER_PREFIX`](#tenant-key-secretsmanager-prefix) is set — `ssm:PutParameter` and `ssm:GetParameter` on the delivery prefix, see [Tenant API Key Delivery](operations_iam_permissions.md#tenant-key-delivery). With that prefix set, the [Secrets Manager permissions](operations_iam_permissions.md#tenant-key-rotation) replace them and no `ssm:*` action is called. Rate-limited tenants also need the [counter permission](operations_iam_permissions.md#shared-table) (`dynamodb:UpdateItem` on the `LIMIT#*` items)
 
 #### `TENANT_KEY_CACHE_SECONDS` { #tenant-key-cache-seconds }
 
@@ -303,7 +303,7 @@ export TENANT_API_KEYS=true
 #### `TENANT_KEY_SSM_PARAMETER_PREFIX` { #tenant-key-ssm-parameter-prefix }
 
 :octicons-package-24: **Purpose**
-:   SSM Parameter Store prefix minted tenant keys are delivered under, one `SecureString` parameter named `<prefix>/<key id>` per tenant
+:   SSM Parameter Store prefix minted tenant keys are delivered under, one `SecureString` parameter named `<prefix>/<key id>` per tenant. Unused once [`TENANT_KEY_SECRETSMANAGER_PREFIX`](#tenant-key-secretsmanager-prefix) is set: keys are then stored in Secrets Manager and no parameter is written
 
 :octicons-gear-24: **Default**
 :   `/stdapi-ai/tenant-keys`
@@ -348,7 +348,7 @@ export TENANT_KEY_SSM_KMS_KEY_ID=alias/stdapi-ai
 :   None — minted keys are delivered once under [`TENANT_KEY_SSM_PARAMETER_PREFIX`](#tenant-key-ssm-parameter-prefix) and are never rotated
 
 :octicons-list-unordered-24: **Values**
-:   Segments of letters, digits and `_+=.@-` joined by `/`, without a leading slash
+:   Segments of letters, digits and `_+=.@-` joined by `/`, without a leading slash, and at most 495 characters — the room left for `/<key id>` under the 512-character secret name limit. A trailing `/` is dropped; anything else is refused at startup
 
 :octicons-alert-24: **Requirement**
 :   Requires [`TENANT_API_KEYS`](#tenant-api-keys). Use a prefix private to this deployment: any principal allowed to read under it can read every tenant's key. The server creates a secret that does not exist yet and writes its versions, but never deletes one — a destroyed tenant's secret is yours (or the Terraform module's) to remove

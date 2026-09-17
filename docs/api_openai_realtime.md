@@ -263,7 +263,7 @@ Pass the returned model ID as `model` on the WebSocket URL, or in the `session.m
 
 ## Authentication
 
-Open the WebSocket with one of three credentials, carried in whichever channel the client can use:
+Open the WebSocket with a credential, carried in whichever of three channels the client can use:
 
 | Client                                    | Credential carrier                                                   |
 |--------------------------------------------|------------------------------------------------------------------------|
@@ -271,7 +271,7 @@ Open the WebSocket with one of three credentials, carried in whichever channel t
 | Other gateway clients                      | `x-api-key: <api key or ephemeral secret>` header                      |
 | Browser (cannot set custom WebSocket headers) | `Sec-WebSocket-Protocol` list entry `openai-insecure-api-key.<credential>` |
 
-Either the deployment's own API key or an [ephemeral client secret](#ephemeral-client-secrets) (`ek_...`) works as the credential. The `model` query parameter (`/v1/realtime?model=<model id>`) selects the model serving the session; it may be omitted when the credential is an ephemeral secret whose session configuration already names one. See [Authentication & Security](operations_authentication_security.md) for how the API key itself is configured.
+Any credential the deployment accepts on its HTTP routes works here — its own API key, a [tenant API key](operations_authentication_security.md#tenant-api-keys) where tenants are configured, an [Amazon Cognito user pool access token](operations_authentication_security.md#amazon-cognito-user-pool-tokens) where a pool is — and so does an [ephemeral client secret](#ephemeral-client-secrets) (`ek_...`). A handshake made with a tenant key counts as one request against that tenant's rate limits, and the tenant's endpoint and model restrictions apply to `/v1/realtime` as to any other route. The `model` query parameter (`/v1/realtime?model=<model id>`) selects the model serving the session; it may be omitted when the credential is an ephemeral secret whose session configuration already names one. See [Authentication & Security](operations_authentication_security.md) for how the API key itself is configured.
 
 !!! warning "A refused credential is not an HTTP status"
     The WebSocket upgrade always completes first, so a rejected or expired credential is **not** answered with `401`/`403`. The connection opens, the first and only event is a terminal `error` with `code: "invalid_api_key"`, and the socket is then closed with close code `3000` and reason `invalid_request_error.invalid_api_key` — the same shape the upstream API uses. Instrument the `error` event and the close code, not the handshake status.
