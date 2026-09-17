@@ -747,7 +747,12 @@ class TestStreamToolCallIndex:
         assert chunks[0]["choices"][0]["delta"] == {"role": "assistant"}
         assert chunks[1]["choices"][0]["delta"]["reasoning_content"] == "think"
         assert chunks[2]["choices"][0]["delta"]["tool_calls"] == [
-            {"index": 0, "id": "t1", "type": "function", "function": {"name": "f1"}}
+            {
+                "index": 0,
+                "id": "t1",
+                "type": "function",
+                "function": {"name": "f1", "arguments": ""},
+            }
         ]
         assert chunks[3]["choices"][0]["delta"]["tool_calls"] == [
             {"index": 0, "type": "function", "function": {"arguments": '{"a":'}}
@@ -792,10 +797,20 @@ class TestStreamToolCallIndex:
         assert len(chunks) == 6
         assert chunks[1]["choices"][0]["delta"]["content"] == "hi"
         assert chunks[2]["choices"][0]["delta"]["tool_calls"] == [
-            {"index": 0, "id": "t1", "type": "function", "function": {"name": "f1"}}
+            {
+                "index": 0,
+                "id": "t1",
+                "type": "function",
+                "function": {"name": "f1", "arguments": ""},
+            }
         ]
         assert chunks[3]["choices"][0]["delta"]["tool_calls"] == [
-            {"index": 1, "id": "t2", "type": "function", "function": {"name": "f2"}}
+            {
+                "index": 1,
+                "id": "t2",
+                "type": "function",
+                "function": {"name": "f2", "arguments": ""},
+            }
         ]
         assert chunks[4]["choices"][0]["delta"]["tool_calls"] == [
             {"index": 1, "type": "function", "function": {"arguments": "{}"}}

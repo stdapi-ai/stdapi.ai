@@ -329,6 +329,95 @@ class TestHostedToolItemsParseAndDrop:
         assert system == []
 
 
+class TestUpstreamHostedCallShapes:
+    """Hosted-call items accept every shape upstream itself emits.
+
+    A client replaying its own history sends back exactly what upstream
+    produced: a web search that never finished carries ``status="incomplete"``,
+    and a failed MCP tool call carries a structured ``error`` object rather
+    than a string. The items are dropped during mapping, but the union has to
+    accept them first — rejecting one 400s the whole request.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         openai.types.responses.response_function_web_search.ResponseFunctionWebSearch
+         openai.types.responses.mcp_tool_call_error.McpToolCallError
+         stdapi/types/openai_responses.py:WebSearchCallInput
+         stdapi/types/openai_responses.py:McpCallInput
+    """
+
+    async def test_web_search_call_accepts_an_incomplete_status(self) -> None:
+        """An unfinished web search replays with upstream's `incomplete` status."""
+        item = _parse(
+            {
+                "id": "ws_1",
+                "type": "web_search_call",
+                "status": "incomplete",
+                "action": {"type": "search", "query": "cats"},
+            }
+        )
+        assert isinstance(item, WebSearchCallInput)
+        assert item.status == "incomplete"
+        messages, system = await map_input(
+            cast("list[ResponseInputItem]", [item]), None
+        )
+        assert messages == []
+        assert system == []
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            {"type": "mcp_protocol_error", "code": 2600, "message": "bad request"},
+            {"type": "mcp_tool_execution_error", "content": {"detail": "boom"}},
+            {"type": "http_error", "code": 500, "message": "server error"},
+        ],
+    )
+    def test_mcp_call_accepts_a_structured_error(
+        self, error: dict[str, object]
+    ) -> None:
+        """Each upstream MCP error member replays as an object, not a string."""
+        item = _parse(
+            {
+                "type": "mcp_call",
+                "id": "mcp_1",
+                "arguments": "{}",
+                "name": "tool",
+                "server_label": "srv",
+                "error": error,
+            }
+        )
+        assert isinstance(item, McpCallInput)
+        assert item.error is not None
+        assert not isinstance(item.error, str), "the error must stay an object"
+        assert item.error.type == error["type"]
+
+    def test_create_params_accept_a_failed_mcp_call(self) -> None:
+        """A whole request body carrying a failed mcp_call item validates."""
+        params = ResponseCreateParams.model_validate(
+            {
+                "model": "m",
+                "input": [
+                    {
+                        "type": "mcp_call",
+                        "id": "mcp_1",
+                        "arguments": "{}",
+                        "name": "tool",
+                        "server_label": "srv",
+                        "error": {
+                            "type": "mcp_tool_execution_error",
+                            "content": {"detail": "boom"},
+                        },
+                    }
+                ],
+            }
+        )
+        assert isinstance(params.input, list)
+        item = params.input[0]
+        assert isinstance(item, McpCallInput)
+        assert item.error is not None
+        assert not isinstance(item.error, str), "the error must stay an object"
+        assert item.error.type == "mcp_tool_execution_error"
+
+
 class TestFileSearchCallItems:
     """A replayed ``file_search_call`` carries its passages back to the model.
 

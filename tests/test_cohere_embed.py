@@ -17,6 +17,7 @@ import httpx
 import pytest
 from cohere.errors import BadRequestError
 from cohere.types import (
+    EmbeddingsFloatsEmbedResponse,
     EmbedImageUrl,
     EmbedInput,
     ImageUrlEmbedContent,
@@ -1492,8 +1493,13 @@ class TestCohereEmbedV1Route:
     ) -> None:
         """Image data URIs are parsed into file inputs and billed as images.
 
-        An image-only v1 request still uses the floats envelope and omits
-        `texts` entirely.
+        An image-only v1 request still uses the floats envelope, whose `texts`
+        member Cohere declares required: it is an empty list, never absent, so a
+        client validating against the published schema can parse the response.
+
+        Ref: https://docs.cohere.com/reference/embed
+             cohere.types.embed_response.EmbeddingsFloatsEmbedResponse
+             stdapi/routes/cohere_embed_v1.py:embed_v1
         """
         response = app_client.post(
             "/cohere/v1/embed",
@@ -1507,7 +1513,8 @@ class TestCohereEmbedV1Route:
         assert body["response_type"] == "embeddings_floats"
         assert body["embeddings"] == [[0.1, 0.2]]
         assert body["meta"]["billed_units"] == {"input_tokens": 7, "images": 1}
-        assert "texts" not in body
+        assert body["texts"] == []
+        assert EmbeddingsFloatsEmbedResponse.model_validate(body).texts == []
         (call,) = embed_backend.calls
         assert len(call["inputs"]) == 1
         assert isinstance(call["inputs"][0], InputFile)

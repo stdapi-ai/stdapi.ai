@@ -1265,8 +1265,6 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     prompt_cache_key: str | None = Field(
         default=None,
-        min_length=1,
-        max_length=255,
         description="Cache key for similar requests. Use dot-separated 'system', 'messages', 'tools' for section-specific caching. "
         "Custom hash keys are UNSUPPORTED.",
     )
@@ -1291,13 +1289,10 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     safety_identifier: str | None = Field(
         default=None,
-        min_length=1,
-        max_length=255,
         description="Stable user identifier for usage policy detection. Recommend hashing username/email.",
     )
     seed: int | None = Field(
         default=None,
-        ge=0,
         description="Seed for deterministic sampling. Not guaranteed. Only supported on some models.",
     )
     service_tier: ServiceTiers | None = Field(
@@ -1354,8 +1349,6 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     user: str | None = Field(
         default=None,
-        min_length=1,
-        max_length=255,
         description="Deprecated. Use `safety_identifier` or `prompt_cache_key` instead. End-user identifier.",
         deprecated=True,
     )

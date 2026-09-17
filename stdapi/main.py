@@ -6,9 +6,11 @@ and AWS service integrations for providing OpenAI-compatible endpoints.
 
 from asyncio import gather
 from contextlib import asynccontextmanager
+from functools import cache
 from re import compile as compile_regex
 from time import time_ns
 from traceback import format_exception
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final
 
 from botocore.exceptions import BotoCoreError, ClientError, HTTPClientError
@@ -24,6 +26,7 @@ from starlette.routing import Match
 from stdapi import server
 from stdapi.api_errors import ApiError, denied_feature_unavailable
 from stdapi.api_providers import (
+    FORMATTER_BY_TAG,
     format_http_error,
     get_request_id_header,
     set_log_fields,
@@ -582,6 +585,78 @@ if SETTINGS.enable_proxy_headers:
     )
 
 
+def _shared_base_path(left: str, right: str) -> str:
+    """Return the leading path segments two paths share.
+
+    Args:
+        left: First path.
+        right: Second path.
+
+    Returns:
+        The shared prefix, cut on a segment boundary and empty when the paths
+        share no leading segment.
+    """
+    shared: list[str] = []
+    for left_segment, right_segment in zip(
+        left.split("/"), right.split("/"), strict=False
+    ):
+        if left_segment != right_segment:
+            break
+        shared.append(left_segment)
+    return "/".join(shared)
+
+
+@cache
+def _dialect_surfaces() -> tuple[tuple[str, SimpleNamespace], ...]:
+    """Map the base path of each mounted dialect to a tag-only stand-in route.
+
+    The base path is the deepest parent every route of that dialect sits under,
+    so it follows the configured routes prefixes without restating them, and a
+    path mounted outside all of them (health, metrics, discovery, the MCP
+    mount) matches none. The stand-in carries the dialect tag alone: a request
+    reaching it matched no route, so it has no path template, and only the tag
+    selects an error envelope and the dialect's response headers.
+
+    Returns:
+        ``(base path, stand-in route)`` pairs, longest base path first.
+    """
+    bases: dict[str, str] = {}
+    for context in iter_route_contexts(app.routes):
+        parent = (context.path or "").rsplit("/", 1)[0]
+        for tag in getattr(context.original_route, "tags", None) or ():
+            if tag in FORMATTER_BY_TAG:
+                base = bases.get(tag)
+                bases[tag] = parent if base is None else _shared_base_path(base, parent)
+    return tuple(
+        (base, SimpleNamespace(tags=(tag,)))
+        for tag, base in sorted(
+            bases.items(), key=lambda item: len(item[1]), reverse=True
+        )
+        if base
+    )
+
+
+def _resolve_unrouted(request: Request) -> None:
+    """Record which route, or at least which dialect, a request was aimed at.
+
+    Answers a request that reached no route in the envelope and headers of the
+    API the client called: the route it would have reached when one matches its
+    path, the dialect of the surface the path is under otherwise.
+
+    Args:
+        request: The current request, whose scope holds no matched route.
+    """
+    for context in iter_route_contexts(app.routes):
+        if context.matches(request.scope)[0] is not Match.NONE:
+            request.scope["route"] = context.original_route
+            return
+    path = request.url.path
+    for base, route in _dialect_surfaces():
+        if path == base or path.startswith(f"{base}/"):
+            request.scope["route"] = route
+            return
+
+
 @app.exception_handler(HTTPException)
 async def handle_http_exception(request: Request, exc: HTTPException) -> JSONResponse:
     """Convert HTTPException to the correct API error envelope.
@@ -597,6 +672,8 @@ async def handle_http_exception(request: Request, exc: HTTPException) -> JSONRes
     Returns:
         JSONResponse formatted in the appropriate error schema.
     """
+    if "route" not in request.scope:
+        _resolve_unrouted(request)
     status_code = exc.status_code
     message = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
     log_error_details(message, status=status_code)
@@ -648,10 +725,7 @@ async def _handle_request_setup_error(request: Request, exc: ApiError) -> JSONRe
         JSONResponse formatted in the appropriate error schema.
     """
     if "route" not in request.scope:
-        for context in iter_route_contexts(app.routes):
-            if context.matches(request.scope)[0] is not Match.NONE:
-                request.scope["route"] = context.original_route
-                break
+        _resolve_unrouted(request)
     return await handle_api_error(request, exc)
 
 
@@ -798,10 +872,7 @@ async def handle_botocore_connection_error(
     log_error_details(str(exc), status=503)
     return JSONResponse(
         *format_http_error(
-            request,
-            503,
-            "The service is temporarily unavailable. Retry the request.",
-            "server_error",
+            request, 503, "The service is temporarily unavailable. Retry the request."
         )
     )
 

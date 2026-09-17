@@ -137,7 +137,7 @@ async def embed_v1(
             EmbedV1FloatsResponse(
                 id=REQUEST_ID.get(),
                 embeddings=response.embeddings,
-                texts=request.texts,
+                texts=request.texts or [],
                 images=images,
                 meta=meta,
             ),

@@ -512,6 +512,29 @@ class TestAudioTranslationsResponseFormatBugs:
         assert response.headers["content-type"].startswith("text/plain")
         assert response.text == "hello world"
 
+    @pytest.mark.usefixtures("request_log")
+    async def test_verbose_json_reports_the_translate_task(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``verbose_json`` carries ``task="translate"``, as upstream always does.
+
+        ``task`` is the first key of the upstream payload and is the documented
+        discriminator between a translation and a transcription result, so it
+        must also survive the route's ``response_model_exclude_none=True``
+        serialisation.
+
+        Ref: https://developers.openai.com/api/reference/resources/audio/subresources/translations/methods/create
+             stdapi/types/openai_audio.py:TranslationVerbose
+        """
+        _stub_transcribe(monkeypatch)
+
+        response = await AudioModel("amazon.transcribe").stt_translate(
+            InputFile("data:audio/wav;base64,AAAA"), "verbose_json", prompt=None
+        )
+
+        assert not isinstance(response, str | Response)
+        assert response.model_dump(exclude_none=True)["task"] == "translate"
+
 
 @pytest.mark.local
 class TestAudioTranslationsWithoutAFile:

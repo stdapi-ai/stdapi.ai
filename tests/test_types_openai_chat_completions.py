@@ -413,3 +413,28 @@ class TestReasoningFieldSetting:
         )
 
         assert dumped == {"role": "assistant", "content": "45"}
+
+
+@pytest.mark.local
+class TestSeedRange:
+    """``seed`` accepts the whole signed integer range, as upstream does.
+
+    ``-1`` is the ecosystem-wide "pick a random seed" convention (llama.cpp,
+    vLLM, Ollama and the UIs built on them), and a caller drawing a seed from a
+    signed range produces negatives half the time. OpenAI answers 200 for every
+    one of them, so rejecting them at schema level is non-compliant.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         stdapi/types/openai_chat_completions.py:CompletionCreateParams
+    """
+
+    @pytest.mark.parametrize("seed", [-1, -5, -9999999, -(2**31), 0, 42])
+    def test_a_signed_seed_is_accepted(self, seed: int) -> None:
+        """Each seed validates onto the declared field rather than being refused.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+        """
+        request = CompletionCreateParams.model_validate(_BASE_REQUEST | {"seed": seed})
+
+        assert request.seed == seed
+        assert not request.model_extra, "`seed` must land on the declared field"

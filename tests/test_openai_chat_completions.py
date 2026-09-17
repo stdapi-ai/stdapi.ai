@@ -4335,14 +4335,18 @@ class TestOutputShapingHintsAreAcceptedAndIgnored:
 
 
 class TestIdentifierFieldLengthBounds:
-    """``prompt_cache_key``/``safety_identifier``/``user`` are bounded to 1..255 chars.
+    """``prompt_cache_key``/``safety_identifier``/``user`` take a value of any length.
 
-    These values flow into Bedrock ``requestMetadata`` and into the request log, so
-    the gateway bounds them itself; the ceiling is deliberately higher than
-    upstream's 64-character ``safety_identifier`` limit.
+    OpenAI answers 200 for an empty value and for a 300-character one on all
+    three, and its own guidance to hash a username or e-mail is what produces
+    long values, so bounding them here would reject requests upstream accepts.
+    The sibling Completions and Responses surfaces impose no constraint either,
+    and the value is sanitized and truncated to 256 characters where it becomes
+    Bedrock ``requestMetadata``, not at the schema.
 
     Ref: https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers
          stdapi/types/openai_chat_completions.py:CompletionCreateParams
+         stdapi/monitoring.py:build_metadata
     """
 
     pytestmark = pytest.mark.local
@@ -4367,24 +4371,22 @@ class TestIdentifierFieldLengthBounds:
         )
 
     @pytest.mark.parametrize("field", ["prompt_cache_key", "safety_identifier", "user"])
-    def test_empty_identifier_is_rejected(self, field: str) -> None:
-        """An empty identifier fails validation instead of reaching Bedrock."""
-        with pytest.raises(ValidationError) as exc_info:
-            self._validate(field, "")
-        assert exc_info.value.errors()[0]["type"] == "string_too_short"
+    def test_empty_identifier_is_accepted(self, field: str) -> None:
+        """An empty identifier validates, as it does upstream.
+
+        A caller forwarding a possibly-absent session identifier
+        (``user=session.get("user_id", "")``) must not be 400-ed on every
+        request; an empty value is equivalent to omission downstream.
+        """
+        request = self._validate(field, "")
+        assert getattr(request, field) == ""
 
     @pytest.mark.parametrize("field", ["prompt_cache_key", "safety_identifier", "user"])
-    def test_over_long_identifier_is_rejected(self, field: str) -> None:
-        """256 characters exceeds the bound, so the value never reaches metadata."""
-        with pytest.raises(ValidationError) as exc_info:
-            self._validate(field, "x" * 256)
-        assert exc_info.value.errors()[0]["type"] == "string_too_long"
-
-    @pytest.mark.parametrize("field", ["prompt_cache_key", "safety_identifier", "user"])
-    def test_maximum_length_identifier_is_accepted(self, field: str) -> None:
-        """255 characters is the largest accepted value."""
-        request = self._validate(field, "x" * 255)
-        assert getattr(request, field) == "x" * 255
+    @pytest.mark.parametrize("length", [255, 256, 300])
+    def test_a_long_identifier_is_accepted(self, field: str, length: int) -> None:
+        """A JWT subject, a URL-shaped identifier or a hash digest validates too."""
+        request = self._validate(field, "x" * length)
+        assert getattr(request, field) == "x" * length
 
 
 class TestStreamObfuscationOption:

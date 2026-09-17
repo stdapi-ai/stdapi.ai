@@ -1263,7 +1263,11 @@ def _stream_delta_chunk(
                 return None, end
             start_tool_use = start["toolUse"]
             tool_id = start_tool_use["toolUseId"]
-            function = ChoiceDeltaFunctionCall(name=start_tool_use["name"])
+            # OpenAI opens a streamed call with an empty `arguments`, which the
+            # universal `buffer += delta.function.arguments` idiom concatenates.
+            function = ChoiceDeltaFunctionCall(
+                name=start_tool_use["name"], arguments=""
+            )
             if legacy_function:
                 choice_delta.function_call = function
             else:
@@ -1337,6 +1341,24 @@ def _suppress_system_tool_event(
     return False
 
 
+def _dump_chunk(chunk: ChatCompletionChunk) -> dict[str, Any]:
+    """Serialize a streamed chunk the way OpenAI sends it.
+
+    Args:
+        chunk: Chunk to serialize.
+
+    Returns:
+        The JSON-ready chunk, with the keys OpenAI always sends per choice
+        (``finish_reason`` and ``logprobs``, null until the terminal chunk)
+        restored after ``exclude_none`` dropped them.
+    """
+    data = chunk.model_dump(mode="json", exclude_none=True)
+    for choice in data["choices"]:
+        choice.setdefault("finish_reason", None)
+        choice.setdefault("logprobs", None)
+    return data
+
+
 async def format_stream(
     completion_id: str,
     created: int,
@@ -1372,14 +1394,16 @@ async def format_stream(
     """
     yield JSONServerSentEvent(
         data=log_response_params(
-            ChatCompletionChunk(
-                id=completion_id,
-                choices=[ChunkChoice(index=0, delta=ChoiceDelta(role="assistant"))],
-                created=created,
-                model=model_id,
-                object="chat.completion.chunk",
-                service_tier=service_tier,
-            ).model_dump(mode="json", exclude_none=True)
+            _dump_chunk(
+                ChatCompletionChunk(
+                    id=completion_id,
+                    choices=[ChunkChoice(index=0, delta=ChoiceDelta(role="assistant"))],
+                    created=created,
+                    model=model_id,
+                    object="chat.completion.chunk",
+                    service_tier=service_tier,
+                )
+            )
         )
     )
 
@@ -1397,15 +1421,17 @@ async def format_stream(
             # Past the finish chunk: only a trailing usage-only chunk remains to emit.
             if include_usage and (usage := _openai_common.extract_stream_usage(event)):
                 yield JSONServerSentEvent(
-                    data=ChatCompletionChunk(
-                        id=completion_id,
-                        choices=[],
-                        created=created,
-                        model=model_id,
-                        object="chat.completion.chunk",
-                        service_tier=service_tier,
-                        usage=usage,
-                    ).model_dump(mode="json", exclude_none=True)
+                    data=_dump_chunk(
+                        ChatCompletionChunk(
+                            id=completion_id,
+                            choices=[],
+                            created=created,
+                            model=model_id,
+                            object="chat.completion.chunk",
+                            service_tier=service_tier,
+                            usage=usage,
+                        )
+                    )
                 )
             continue
         chunk, end = _stream_delta_chunk(
@@ -1420,9 +1446,7 @@ async def format_stream(
         )
         end_state |= end
         if chunk:
-            yield JSONServerSentEvent(
-                data=chunk.model_dump(mode="json", exclude_none=True)
-            )
+            yield JSONServerSentEvent(data=_dump_chunk(chunk))
     if not end_state:
         # The stream ran to completion without a messageStop event, so nothing
         # carried a finish reason. Amazon Bedrock Marketplace model endpoints do
@@ -1434,15 +1458,17 @@ async def format_stream(
         # rather than one of them being silent. A backend that does send
         # messageStop is untouched: end_state is already set.
         yield JSONServerSentEvent(
-            data=ChatCompletionChunk(
-                id=completion_id,
-                choices=[
-                    ChunkChoice(index=0, delta=ChoiceDelta(), finish_reason="stop")
-                ],
-                created=created,
-                model=model_id,
-                object="chat.completion.chunk",
-                service_tier=service_tier,
-            ).model_dump(mode="json", exclude_none=True)
+            data=_dump_chunk(
+                ChatCompletionChunk(
+                    id=completion_id,
+                    choices=[
+                        ChunkChoice(index=0, delta=ChoiceDelta(), finish_reason="stop")
+                    ],
+                    created=created,
+                    model=model_id,
+                    object="chat.completion.chunk",
+                    service_tier=service_tier,
+                )
+            )
         )
     yield ServerSentEvent(data="[DONE]", event=None)

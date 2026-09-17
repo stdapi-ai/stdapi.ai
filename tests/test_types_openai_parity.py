@@ -10,11 +10,14 @@ Ref: https://github.com/openai/openai-python
      stdapi/types/openai_responses.py
 """
 
+import openai.types.responses as openai_responses
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from stdapi.api_errors import UnsupportedParameterError
+from stdapi.aws_bedrock_mantle import validate_pruning_extras
 from stdapi.types import BaseModelRequestWithFormExtra
+from stdapi.types import openai_responses as gateway_responses
 from stdapi.types.openai_chat_completions import (
     ChatCompletionList,
     ChatCompletionStoreMessageList,
@@ -28,7 +31,10 @@ from stdapi.types.openai_responses import (
     FunctionTool,
     InputTokenCountParams,
     Mcp,
+    McpCall,
+    McpListTools,
     Reasoning,
+    Response,
     ResponseApplyPatchToolCall,
     ResponseApplyPatchToolCallOutput,
     ResponseCreateParams,
@@ -40,6 +46,7 @@ from stdapi.types.openai_responses import (
     ResponseFunctionShellToolCallOutput,
     ResponseFunctionToolCall,
     ResponseFunctionToolCallOutputItem,
+    ResponseFunctionWebSearch,
     ResponseItemList,
     ResponseOutputItem,
 )
@@ -47,6 +54,23 @@ from stdapi.types.openai_videos import Video, VideoList
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
+
+#: Every streaming event model the installed OpenAI SDK declares, by class name.
+SDK_STREAM_EVENTS: dict[str, type[BaseModel]] = {
+    name: candidate
+    for name in dir(openai_responses)
+    if name.startswith("Response")
+    and name.endswith("Event")
+    and isinstance(candidate := getattr(openai_responses, name), type)
+    and issubclass(candidate, BaseModel)
+}
+
+#: Gateway streaming-event fields that deliberately diverge from the SDK model.
+STREAM_EVENT_DIVERGENCES: dict[tuple[str, str], str] = {
+    ("ResponseOutputTextAnnotationAddedEvent", "annotation"): (
+        "the gateway always emits the annotation the event announces"
+    )
+}
 
 
 class TestInputTokenCountParity:
@@ -614,6 +638,152 @@ class TestVideoParity:
         )
         assert video.remixed_from_video_id is None
         assert "remixed_from_video_id" not in video.model_dump(exclude_none=True)
+
+
+class TestHostedCallOutputParity:
+    """Hosted-call output items carry the shapes upstream emits for them.
+
+    A stored or Mantle-passthrough response is re-validated against these
+    models before it reaches the client, so a literal upstream uses and a
+    field shape upstream sends have to validate here or the response 502s.
+
+    Ref: openai.types.responses.response_function_web_search.ResponseFunctionWebSearch
+         openai.types.responses.mcp_tool_call_error.McpToolCallError
+         stdapi/types/openai_responses.py:ResponseFunctionWebSearch
+         stdapi/types/openai_responses.py:McpCall
+    """
+
+    def test_web_search_call_accepts_an_incomplete_status(self) -> None:
+        """An unfinished web search validates with upstream's `incomplete` status."""
+        item = ResponseFunctionWebSearch.model_validate(
+            {
+                "id": "ws_1",
+                "action": {"type": "search", "query": "cats"},
+                "status": "incomplete",
+                "type": "web_search_call",
+            }
+        )
+        assert item.status == "incomplete"
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            {"type": "mcp_protocol_error", "code": 2600, "message": "bad request"},
+            {"type": "mcp_tool_execution_error", "content": {"detail": "boom"}},
+            {"type": "http_error", "code": 500, "message": "server error"},
+        ],
+    )
+    def test_mcp_call_error_is_a_structured_object(
+        self, error: dict[str, object]
+    ) -> None:
+        """A failed mcp_call passes through with its discriminated error object."""
+        response = validate_pruning_extras(
+            Response,
+            {
+                "id": "resp_1",
+                "created_at": 1,
+                "model": "m",
+                "object": "response",
+                "parallel_tool_calls": False,
+                "tool_choice": "auto",
+                "tools": [],
+                "output": [
+                    {
+                        "type": "mcp_call",
+                        "id": "mcp_1",
+                        "arguments": "{}",
+                        "name": "tool",
+                        "server_label": "srv",
+                        "error": error,
+                    }
+                ],
+            },
+        )
+        item = response.output[0]
+        assert isinstance(item, McpCall)
+        assert not isinstance(item.error, str), (
+            "a structured error must not fall back to the string leg"
+        )
+        assert item.error is not None
+        assert item.error.type == error["type"]
+
+    def test_mcp_list_tools_error_stays_a_string(self) -> None:
+        """mcp_list_tools carries a plain string error, as upstream types it."""
+        item = McpListTools.model_validate(
+            {
+                "id": "mlt_1",
+                "server_label": "srv",
+                "tools": [],
+                "type": "mcp_list_tools",
+                "error": "connection refused",
+            }
+        )
+        assert item.error == "connection refused"
+
+
+class TestStreamEventFieldParity:
+    """No streaming event invents a field, and none requires an SDK-optional one.
+
+    Driven by reflection over the installed SDK so it keeps holding as the SDK
+    moves. An invented field is what broke every streamed function call once
+    (a required ``name`` on ``response.function_call_arguments.done``), and a
+    field the SDK marks optional but the gateway requires is the same defect
+    seen from the emitting side: the event cannot be constructed without it.
+    Deliberate divergences live in ``STREAM_EVENT_DIVERGENCES`` so a new one
+    still fails.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/streaming
+         openai.types.responses.response_stream_event.ResponseStreamEvent
+         stdapi/types/openai_responses.py:ResponseStreamEvent
+    """
+
+    def test_reflection_finds_the_sdk_events(self) -> None:
+        """The SDK walk resolves events, so the parametrized checks are not empty.
+
+        A renamed SDK module would otherwise silence every assertion below.
+        """
+        assert len(SDK_STREAM_EVENTS) > 40
+        assert "ResponseFunctionCallArgumentsDoneEvent" in SDK_STREAM_EVENTS
+        covered = [
+            name for name in SDK_STREAM_EVENTS if hasattr(gateway_responses, name)
+        ]
+        assert len(covered) > 40
+
+    @pytest.mark.parametrize("name", sorted(SDK_STREAM_EVENTS))
+    def test_event_declares_no_field_the_sdk_lacks(self, name: str) -> None:
+        """Every gateway event field exists on its SDK counterpart."""
+        gateway_model = getattr(gateway_responses, name, None)
+        if gateway_model is None:
+            pytest.skip(f"{name} has no gateway counterpart")
+        invented = {
+            field
+            for field in gateway_model.model_fields
+            if field not in SDK_STREAM_EVENTS[name].model_fields
+            and (name, field) not in STREAM_EVENT_DIVERGENCES
+        }
+        assert not invented, (
+            f"{name} declares fields the OpenAI SDK does not: {sorted(invented)}"
+        )
+
+    @pytest.mark.parametrize("name", sorted(SDK_STREAM_EVENTS))
+    def test_event_requires_no_sdk_optional_field(self, name: str) -> None:
+        """No gateway event field is required where the SDK marks it optional."""
+        gateway_model = getattr(gateway_responses, name, None)
+        if gateway_model is None:
+            pytest.skip(f"{name} has no gateway counterpart")
+        sdk_fields = SDK_STREAM_EVENTS[name].model_fields
+        over_required = {
+            field
+            for field, info in gateway_model.model_fields.items()
+            if field in sdk_fields
+            and info.is_required()
+            and not sdk_fields[field].is_required()
+            and (name, field) not in STREAM_EVENT_DIVERGENCES
+        }
+        assert not over_required, (
+            f"{name} requires fields the OpenAI SDK makes optional: "
+            f"{sorted(over_required)}"
+        )
 
 
 class _FormParams(BaseModelRequestWithFormExtra):

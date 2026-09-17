@@ -247,6 +247,9 @@ class TranscriptionVerbose(BaseModelResponse):
 
     duration: float = Field(description="Duration of the input audio.")
     language: str = Field(description="Language of the input audio.")
+    task: Literal["transcribe"] = Field(
+        default="transcribe", description="Task type. Always `transcribe`."
+    )
     text: str = Field(description="Transcribed text.")
     segments: list[TranscriptionSegment] | None = Field(
         default=None,
@@ -349,6 +352,9 @@ class TranslationVerbose(BaseModelResponse):
     duration: float = Field(description="Duration of the input audio.")
     language: str = Field(
         default="english", description="Output translation language (always `english`)."
+    )
+    task: Literal["translate"] = Field(
+        default="translate", description="Task type. Always `translate`."
     )
     text: str = Field(description="Translated text.")
     segments: list[TranscriptionSegment] | None = Field(

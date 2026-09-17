@@ -1566,6 +1566,45 @@ class McpApprovalResponse(BaseModelRequest):
     )
 
 
+# Ref: openai.types.responses.mcp_tool_call_error_param.McpProtocolError (input variant)
+class McpProtocolErrorInput(BaseModelRequest):
+    """An MCP protocol error returned by the server (as input item)."""
+
+    code: int = Field(description="The MCP protocol error code.")
+    message: str = Field(description="The error message.")
+    type: Literal["mcp_protocol_error"] = Field(
+        description="The error type. Always `mcp_protocol_error`."
+    )
+
+
+# Ref: openai.types.responses.mcp_tool_call_error_param.McpToolExecutionError (input variant)
+class McpToolExecutionErrorInput(BaseModelRequest):
+    """An error raised while the MCP tool was executing (as input item)."""
+
+    content: object = Field(description="The error content returned by the tool.")
+    type: Literal["mcp_tool_execution_error"] = Field(
+        description="The error type. Always `mcp_tool_execution_error`."
+    )
+
+
+# Ref: openai.types.responses.mcp_tool_call_error_param.HTTPError (input variant)
+class McpHTTPErrorInput(BaseModelRequest):
+    """An HTTP error returned by the MCP server (as input item)."""
+
+    code: int = Field(description="The HTTP status code.")
+    message: str = Field(description="The error message.")
+    type: Literal["http_error"] = Field(
+        description="The error type. Always `http_error`."
+    )
+
+
+# Ref: openai.types.responses.mcp_tool_call_error_param.McpToolCallError (input variant)
+McpToolCallErrorInput = Annotated[
+    McpProtocolErrorInput | McpToolExecutionErrorInput | McpHTTPErrorInput,
+    Field(discriminator="type"),
+]
+
+
 # Ref: openai.types.responses.response_input_item.McpCall (input variant)
 class McpCallInput(BaseModelRequest):
     """An invocation of a tool on an MCP server (as input item)."""
@@ -1578,7 +1617,10 @@ class McpCallInput(BaseModelRequest):
     approval_request_id: str | None = Field(
         default=None, description="Approval request ID."
     )
-    error: str | None = Field(default=None, description="Tool call error.")
+    error: McpToolCallErrorInput | str | None = Field(
+        default=None,
+        description="Tool call error; an object upstream, a string from older clients.",
+    )
     output: str | None = Field(default=None, description="Tool call output.")
     status: (
         Literal["in_progress", "completed", "incomplete", "calling", "failed"] | None
@@ -1624,8 +1666,8 @@ class WebSearchCallInput(BaseModelRequest):
     action: JsonMapping = Field(
         description="The action taken in this web search call (search, open_page, or find_in_page)."
     )
-    status: Literal["in_progress", "searching", "completed", "failed"] = Field(
-        description="The status of the web search tool call."
+    status: Literal["in_progress", "searching", "completed", "incomplete", "failed"] = (
+        Field(description="The status of the web search tool call.")
     )
     type: Literal["web_search_call"] = Field(
         description="The type of the web search tool call. Always `web_search_call`."
@@ -2071,8 +2113,8 @@ class ResponseFunctionWebSearch(BaseModelResponse):
 
     id: str = Field(description="Web search tool call ID.")
     action: WebSearchAction = Field(description="Web search action taken.")
-    status: Literal["in_progress", "searching", "completed", "failed"] = Field(
-        description="Web search status."
+    status: Literal["in_progress", "searching", "completed", "incomplete", "failed"] = (
+        Field(description="Web search status.")
     )
     type: Literal["web_search_call"] = Field(description="Web search call type.")
 
@@ -2895,6 +2937,44 @@ class McpApprovalResponseOutput(BaseModelResponse):
     reason: str | None = Field(default=None, description="Decision reason.")
 
 
+# Ref: openai.types.responses.mcp_tool_call_error.McpProtocolError
+class McpProtocolError(BaseModelResponse):
+    """An MCP protocol error returned by the server."""
+
+    code: int = Field(description="The MCP protocol error code.")
+    message: str = Field(description="The error message.")
+    type: Literal["mcp_protocol_error"] = Field(
+        description="The error type. Always `mcp_protocol_error`."
+    )
+
+
+# Ref: openai.types.responses.mcp_tool_call_error.McpToolExecutionError
+class McpToolExecutionError(BaseModelResponse):
+    """An error raised while the MCP tool was executing."""
+
+    content: object = Field(description="The error content returned by the tool.")
+    type: Literal["mcp_tool_execution_error"] = Field(
+        description="The error type. Always `mcp_tool_execution_error`."
+    )
+
+
+# Ref: openai.types.responses.mcp_tool_call_error.HTTPError
+class McpHTTPError(BaseModelResponse):
+    """An HTTP error returned by the MCP server."""
+
+    code: int = Field(description="The HTTP status code.")
+    message: str = Field(description="The error message.")
+    type: Literal["http_error"] = Field(
+        description="The error type. Always `http_error`."
+    )
+
+
+# Ref: openai.types.responses.mcp_tool_call_error.McpToolCallError
+McpToolCallError = Annotated[
+    McpProtocolError | McpToolExecutionError | McpHTTPError, Field(discriminator="type")
+]
+
+
 # Ref: openai.types.responses.response_output_item.McpCall
 class McpCall(BaseModelResponse):
     """An invocation of a tool on an MCP server."""
@@ -2907,7 +2987,11 @@ class McpCall(BaseModelResponse):
     approval_request_id: str | None = Field(
         default=None, description="Approval request ID."
     )
-    error: str | None = Field(default=None, description="Tool call error.")
+    # A string as well as the structured union: the input side accepts one, and
+    # an item that can be stored has to be readable back.
+    error: McpToolCallError | str | None = Field(
+        default=None, description="Tool call error."
+    )
     output: str | None = Field(default=None, description="Tool call output.")
     status: (
         Literal["in_progress", "completed", "incomplete", "calling", "failed"] | None

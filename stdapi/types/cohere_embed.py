@@ -417,8 +417,9 @@ class EmbedV1FloatsResponse(BaseModelResponse):
     embeddings: list[list[float]] = Field(
         description="Float embedding vectors, one per input."
     )
-    texts: list[str] | None = Field(
-        default=None, description="The text entries for which embeddings were returned."
+    texts: list[str] = Field(
+        default_factory=list,
+        description="The text entries for which embeddings were returned.",
     )
     images: list[ImageDescription] | None = Field(
         default=None,

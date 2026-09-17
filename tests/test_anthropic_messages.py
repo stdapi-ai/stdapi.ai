@@ -3575,6 +3575,70 @@ class TestAnthropicMessagesUnknownModel:
         assert "nonexistent-model-xyz" in body["error"]["message"]
 
 
+class TestAnthropicMessagesReplayedWebFetchError:
+    """Offline test pinning that every ``web_fetch`` error code passes validation.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool
+         stdapi/types/anthropic_messages.py:WebFetchToolResultErrorCode
+    """
+
+    pytestmark = pytest.mark.local
+
+    @pytest.mark.parametrize(
+        "error_code", ["url_not_in_prior_context", "content_too_large"]
+    )
+    def test_error_code_is_not_a_request_validation_failure(
+        self,
+        anthropic_app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        error_code: str,
+    ) -> None:
+        """A replayed ``web_fetch`` error block never refuses the whole request.
+
+        The gateway never runs ``web_fetch`` itself, so the block can only be
+        history; an unmirrored code fails every arm of the content union and takes
+        the conversation down with a 400. Model resolution is what must decide the
+        outcome here, hence the 404.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool
+             stdapi/types/anthropic_messages.py:WebFetchToolResultErrorBlockParam
+        """
+        monkeypatch.setattr(
+            _models_mod, "_refresh_bedrock_models", AsyncMock(return_value=False)
+        )
+
+        response = anthropic_app_client.post(
+            "/anthropic/v1/messages",
+            json={
+                "model": "nonexistent-model-xyz",
+                "max_tokens": 16,
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "server_tool_use",
+                                "id": "srvtoolu_1",
+                                "name": "web_fetch",
+                                "input": {"url": "https://example.com/alpha"},
+                            },
+                            {
+                                "type": "web_fetch_tool_result",
+                                "tool_use_id": "srvtoolu_1",
+                                "content": {
+                                    "type": "web_fetch_tool_result_error",
+                                    "error_code": error_code,
+                                },
+                            },
+                        ],
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 404, response.text
+        assert response.json()["error"]["type"] == "not_found_error"
+
+
 class TestAnthropicMessagesMaxTokensOptional:
     """Offline unit test pinning that ``max_tokens`` stays optional on /v1/messages.
 

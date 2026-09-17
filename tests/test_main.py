@@ -17,6 +17,7 @@ from json import loads
 from os import environ
 from subprocess import run
 from sys import executable
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Self
 
 import pytest
@@ -29,6 +30,7 @@ from starlette.responses import StreamingResponse
 
 from stdapi import main as stdapi_main
 from stdapi import metering, monitoring
+from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.cleanup import (
     _DETACHED_TASKS,
     CLEANUPS,
@@ -92,6 +94,23 @@ def _request() -> Request:
     """
     return Request(
         {"type": "http", "method": "GET", "path": "/v1/models", "headers": []}
+    )
+
+
+def _openai_request() -> Request:
+    """Return a request whose matched route carries the OpenAI tag.
+
+    Returns:
+        Starlette request an exception handler formats with the OpenAI envelope.
+    """
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/v1/models",
+            "headers": [],
+            "route": SimpleNamespace(tags=[TAG_OPENAI]),
+        }
     )
 
 
@@ -267,6 +286,130 @@ class TestBotocoreConnectionErrorHandler:
         assert endpoint not in body
         assert "Bedrock" not in body
         assert any(endpoint in entry for entry in logged)
+
+    async def test_no_param_names_a_field_the_request_never_sent(self) -> None:
+        """The 503 envelope names no request parameter.
+
+        ``param`` is the name of the offending request field: upstream sends it
+        null on every server-side error, so a client telling a client mistake
+        from a transient outage by ``param is None`` keeps retrying. The error
+        type belongs in ``type``, which the 503 status already yields.
+
+        Ref: https://platform.openai.com/docs/guides/error-codes
+             openai/types/shared/error_object.py:ErrorObject
+             stdapi/main.py:handle_botocore_connection_error
+        """
+        from botocore.exceptions import EndpointConnectionError  # noqa: PLC0415
+
+        from stdapi import main  # noqa: PLC0415
+
+        response = await main.handle_botocore_connection_error(
+            _openai_request(),
+            EndpointConnectionError(endpoint_url="https://bedrock-runtime.invalid"),
+        )
+
+        assert response.status_code == 503
+        error = loads(bytes(response.body))["error"]
+        assert error["type"] == "server_error"
+        assert error["param"] is None
+        assert error["code"] is None
+
+
+class TestUnmatchedPathEnvelopes:
+    """A path matching no route answers in the dialect of the surface it is under.
+
+    An unknown path is what a typo, an endpoint this deployment does not mount
+    and an unimplemented SDK method all reach, so its envelope must still be the
+    one the calling SDK parses. Live upstream 404s on an unknown path:
+    ``api.openai.com`` answers the nested ``error`` object,
+    ``api.anthropic.com`` ``{"type": "error", "error": {...}, "request_id": ...}``
+    with a ``request-id`` header, and ``api.cohere.com`` ``{"id", "message"}``.
+
+    Ref: https://platform.openai.com/docs/guides/error-codes
+         https://docs.claude.com/en/api/errors
+         stdapi/main.py:handle_http_exception
+    """
+
+    def test_openai_surface_answers_the_nested_error_object(
+        self, app_client: TestClient
+    ) -> None:
+        """An unknown ``/v1`` path returns the OpenAI error object, not a string.
+
+        ``resp.json()["error"]["message"]`` is what every OpenAI client reads,
+        and the response carries the OpenAI headers of the surface.
+        """
+        resp = app_client.get("/v1/nonexistent-endpoint")
+
+        assert resp.status_code == 404
+        body = resp.json()
+        assert "detail" not in body
+        assert set(body["error"]) == {"message", "type", "param", "code"}
+        assert "Not Found" in body["error"]["message"]
+        assert body["error"]["type"] == "invalid_request_error"
+        assert body["error"]["param"] is None
+        assert body["error"]["code"] is None
+        assert resp.headers["openai-version"] == "2020-10-01"
+        assert resp.headers["x-request-id"]
+
+    def test_anthropic_surface_answers_the_anthropic_envelope(
+        self, app_client: TestClient
+    ) -> None:
+        """An unknown ``/anthropic`` path returns the Anthropic error envelope.
+
+        The identifier an operator quotes is reachable from the caught
+        exception, which reads the ``request-id`` header the SDK expects.
+        """
+        resp = app_client.get("/anthropic/v1/nonexistent-endpoint")
+
+        assert resp.status_code == 404
+        body = resp.json()
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "not_found_error"
+        assert "Not Found" in body["error"]["message"]
+        assert resp.headers["request-id"] == body["request_id"]
+
+    def test_cohere_surface_answers_the_cohere_envelope(
+        self, app_client: TestClient
+    ) -> None:
+        """An unknown ``/cohere`` path returns Cohere's ``id``/``message`` body."""
+        resp = app_client.get("/cohere/v2/nonexistent-endpoint")
+
+        assert resp.status_code == 404
+        body = resp.json()
+        assert set(body) == {"id", "message"}
+        assert "Not Found" in body["message"]
+
+    def test_ollama_surface_answers_the_ollama_envelope(
+        self, app_client: TestClient
+    ) -> None:
+        """An unknown ``/ollama`` path returns Ollama's ``{"error": <string>}``."""
+        resp = app_client.get("/ollama/api/nonexistent-endpoint")
+
+        assert resp.status_code == 404
+        body = resp.json()
+        assert set(body) == {"error"}
+        assert "Not Found" in body["error"]
+
+    @pytest.mark.parametrize(
+        "path", ["/nonexistent-endpoint", "/.well-known/nonexistent-endpoint"]
+    )
+    def test_dialect_less_paths_keep_the_default_envelope(
+        self, app_client: TestClient, path: str
+    ) -> None:
+        """A path under no dialect surface keeps the minimal envelope.
+
+        The health, metrics, discovery and MCP paths are deliberately
+        dialect-less, so an unknown path beside them must not be dressed as one
+        provider's error rather than another's.
+
+        Ref: stdapi/api_providers/__init__.py:_default_formatter
+        """
+        resp = app_client.get(path)
+
+        assert resp.status_code == 404
+        body = resp.json()
+        assert set(body) == {"error"}
+        assert "Not Found" in body["error"]
 
 
 class TestSharedPrefixRouterOptOut:
