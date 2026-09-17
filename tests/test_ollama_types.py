@@ -222,6 +222,167 @@ def test_negative_num_predict_leaves_the_limit_unset() -> None:
     assert params.max_completion_tokens is None
 
 
+def test_the_default_option_block_leaves_every_parameter_unset() -> None:
+    """The options an Ollama server starts from must not constrain the request.
+
+    `DefaultOptions()` ships `Seed: -1` and `NumPredict: -1`, so a client
+    forwarding its own defaults sends both on every call.
+
+    Ref: https://github.com/ollama/ollama/blob/main/api/types.go (DefaultOptions)
+         stdapi/models/chat/_adapters/_ollama.py:_apply_options
+    """
+    params = adapter.to_chat_completion_params(
+        ChatRequest.model_validate(
+            {
+                "model": "m",
+                "messages": [{"role": "user", "content": "hi"}],
+                "options": {"seed": -1, "num_predict": -1},
+            }
+        ),
+        "amazon.nova-micro-v1:0",
+    )
+    assert params.seed is None
+    assert params.max_completion_tokens is None
+
+
+@pytest.mark.parametrize("seed", [-1, -42])
+def test_a_negative_seed_asks_for_an_unseeded_answer(seed: int) -> None:
+    """A negative seed means "not seeded", which is the default here.
+
+    Ref: https://github.com/ollama/ollama/blob/main/mlxrunner/sample/sample.go
+         (`if o.Seed < 0 { o.UseSeed = false }`)
+         stdapi/models/chat/_adapters/_ollama.py:_apply_options
+    """
+    params = adapter.to_chat_completion_params(
+        ChatRequest.model_validate(
+            {
+                "model": "m",
+                "messages": [{"role": "user", "content": "hi"}],
+                "options": {"seed": seed},
+            }
+        ),
+        "amazon.nova-micro-v1:0",
+    )
+    assert params.seed is None
+
+
+def test_a_zero_seed_is_forwarded_as_a_seed() -> None:
+    """Zero is a seed like any other: only a negative one means "not seeded".
+
+    The only value where this option parts company with the other sentinels,
+    which are all off at zero; Ollama turns the seed off below zero, not at it.
+
+    Ref: https://github.com/ollama/ollama/blob/main/mlxrunner/sample/sample.go
+         (`if o.Seed < 0 { o.UseSeed = false }`)
+         stdapi/models/chat/_adapters/_ollama.py:_SENTINEL_OPTIONS
+    """
+    params = adapter.to_chat_completion_params(
+        ChatRequest.model_validate(
+            {
+                "model": "m",
+                "messages": [{"role": "user", "content": "hi"}],
+                "options": {"seed": 0},
+            }
+        ),
+        "amazon.nova-micro-v1:0",
+    )
+    assert params.seed == 0
+
+
+@pytest.mark.parametrize("top_k", [0, -1])
+def test_a_non_positive_top_k_disables_it(top_k: int) -> None:
+    """Top-K only narrows the candidate set above zero; at or below, it is off.
+
+    Ref: https://github.com/ollama/ollama/blob/main/mlxrunner/sample/sample.go
+         (`if slot.opts.TopK > 0 && slot.opts.TopK < vocab`)
+         stdapi/models/chat/_adapters/_ollama.py:_apply_options
+    """
+    params = adapter.to_chat_completion_params(
+        ChatRequest.model_validate(
+            {
+                "model": "m",
+                "messages": [{"role": "user", "content": "hi"}],
+                "options": {"top_k": top_k},
+            }
+        ),
+        "amazon.nova-micro-v1:0",
+    )
+    assert params.top_k is None
+
+
+@pytest.mark.parametrize("top_p", [0.0, -0.1])
+def test_a_non_positive_top_p_disables_it(top_p: float) -> None:
+    """Nucleus sampling is off at or below zero, not an error.
+
+    Ref: https://github.com/ollama/ollama/blob/main/mlxrunner/sample/sample.go
+         (`if topP <= 0 || topP >= 1`)
+         stdapi/models/chat/_adapters/_ollama.py:_apply_options
+    """
+    params = adapter.to_chat_completion_params(
+        ChatRequest.model_validate(
+            {
+                "model": "m",
+                "messages": [{"role": "user", "content": "hi"}],
+                "options": {"top_p": top_p},
+            }
+        ),
+        "amazon.nova-micro-v1:0",
+    )
+    assert params.top_p is None
+
+
+@pytest.mark.parametrize("temperature", [0.0, -0.5, -10.0])
+def test_a_non_positive_temperature_asks_for_the_most_likely_token(
+    temperature: float,
+) -> None:
+    """At or below zero the answer is the most likely token, not a refusal.
+
+    Ref: https://github.com/ollama/ollama/blob/main/mlxrunner/sample/sample.go
+         (`if slot.opts.Temperature <= 0` takes the argmax)
+         stdapi/models/chat/_adapters/_ollama.py:_apply_options
+    """
+    params = adapter.to_chat_completion_params(
+        ChatRequest.model_validate(
+            {
+                "model": "m",
+                "messages": [{"role": "user", "content": "hi"}],
+                "options": {"temperature": temperature},
+            }
+        ),
+        "amazon.nova-micro-v1:0",
+    )
+    assert params.temperature == 0.0
+
+
+def test_a_generate_request_reads_the_option_sentinels_too() -> None:
+    """Both Ollama text routes share the option block and its sentinels.
+
+    Ref: https://docs.ollama.com/openapi.yaml (ModelOptions)
+         stdapi/models/chat/_adapters/_ollama.py:_apply_options
+    """
+    params = adapter.to_chat_completion_params(
+        GenerateRequest.model_validate(
+            {
+                "model": "m",
+                "prompt": "hi",
+                "options": {
+                    "seed": -1,
+                    "top_k": 0,
+                    "top_p": -0.1,
+                    "temperature": -0.5,
+                    "num_predict": -1,
+                },
+            }
+        ),
+        "amazon.nova-micro-v1:0",
+    )
+    assert params.seed is None
+    assert params.top_k is None
+    assert params.top_p is None
+    assert params.temperature == 0.0
+    assert params.max_completion_tokens is None
+
+
 @pytest.mark.parametrize(
     ("think", "enable_thinking", "effort"),
     [

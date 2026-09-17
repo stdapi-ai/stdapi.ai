@@ -86,6 +86,14 @@ _SCHEMA_NAME: str = "response"
 #: Fallback for an upstream error event whose payload is not an object.
 _STREAM_FAILED: str = "The request could not be completed. Retry the request."
 
+#: Option, OpenAI name, and the value at or below which Ollama reads it as off.
+_SENTINEL_OPTIONS: tuple[tuple[str, str, float], ...] = (
+    ("top_k", "top_k", 0),
+    ("top_p", "top_p", 0),
+    ("seed", "seed", -1),
+    ("num_predict", "max_completion_tokens", 0),
+)
+
 #: A ``keep_alive`` of zero, in the duration spellings Ollama parses.
 _ZERO_KEEP_ALIVE = compile_regex(r"-?0+(\.0*)?(ns|us|\u00b5s|ms|s|m|h)?")
 
@@ -327,6 +335,9 @@ def _apply_options(
     """Fold the Ollama option block and output format into OpenAI parameters.
 
     Options that tune a local runner have no hosted equivalent and are ignored.
+    Each sentinel option has its own value at or below which Ollama reads it as
+    "off" rather than as out of range -- ``seed`` turns off below zero, not at
+    it -- so each is applied as the request it expresses.
 
     Args:
         params: OpenAI parameters under construction, modified in place.
@@ -346,19 +357,21 @@ def _apply_options(
     if options is None:
         return
     for source, target in (
-        ("temperature", "temperature"),
-        ("top_p", "top_p"),
-        ("top_k", "top_k"),
-        ("seed", "seed"),
         ("stop", "stop"),
         ("presence_penalty", "presence_penalty"),
         ("frequency_penalty", "frequency_penalty"),
     ):
         if (value := getattr(options, source)) is not None:
             params[target] = value
-    # Ollama's negative values mean "unbounded", which is the default here.
-    if options.num_predict is not None and options.num_predict > 0:
-        params["max_completion_tokens"] = options.num_predict
+    for source, target, off in _SENTINEL_OPTIONS:
+        # Each sentinel asks for a default the request already has, so sending
+        # it on would give the backend a value it has no meaning for.
+        if (value := getattr(options, source)) is not None and value > off:
+            params[target] = value
+    if options.temperature is not None:
+        # At or below zero Ollama answers with its most likely token; zero is
+        # how the same answer is asked for here.
+        params["temperature"] = max(options.temperature, 0.0)
 
 
 def _apply_think(params: dict[str, Any], *, think: bool | ThinkLevel | None) -> None:

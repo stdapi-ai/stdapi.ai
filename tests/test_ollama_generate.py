@@ -14,16 +14,38 @@ Ref: https://docs.ollama.com/api/generate
      stdapi/models/chat/_adapters/_ollama.py:generate_stream
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock
 
 import ollama
 import pytest
+
+from stdapi.models.chat._adapters import _ollama as ollama_adapter
+from stdapi.routes import ollama_generate as generate_route
+from stdapi.types.openai_chat_completions import (
+    ChatCompletionUserMessageParam,
+    CompletionCreateParams,
+)
+from tests._helpers import make_model_details, ollama_route
+
+if TYPE_CHECKING:
+    from starlette.testclient import TestClient
 
 # Keeps the shared answer below on one worker, so it is requested once.
 pytestmark = pytest.mark.xdist_group("ollama_generate")
 
 #: Prompt short enough to keep a live answer cheap, long enough to stream.
 _PROMPT = "Count from 1 to 5."
+
+#: Option values Ollama reads as "off": an unseeded answer, no candidate limit.
+_OPTION_SENTINELS: dict[str, Any] = {"seed": -1, "top_k": 0}
+
+#: The same kind of value, on the three options Ollama Cloud alone refuses.
+_CLOUD_REFUSED_SENTINELS: list[tuple[str, float, str]] = [
+    ("num_predict", -1, "max_tokens must be positive"),
+    ("top_p", 0, "Input should be greater than 0"),
+    ("temperature", -0.5, "Input should be greater than or equal to 0"),
+]
 
 #: The four fields that need the model's own prompt template and tokenizer.
 PROMPT_LEVEL_FIELDS: list[tuple[str, object]] = [
@@ -183,6 +205,112 @@ def test_generate_refuses_the_prompt_level_fields(
     assert raised.value.status_code == 400
     assert field in raised.value.error
     assert "/api/chat" in raised.value.error
+
+
+def test_generate_answers_the_option_values_that_mean_off(
+    ollama_client: ollama.Client, ollama_chat_model: str
+) -> None:
+    """The sentinel option values Ollama defines are answered, never refused.
+
+    An Ollama server starts from ``seed: -1``, and reads a non-positive
+    ``top_k`` as "off" rather than as an out-of-range value, so a client
+    forwarding its own defaults expects an answer. Both targets answer them.
+
+    Ref: https://github.com/ollama/ollama/blob/main/api/types.go (DefaultOptions)
+         https://github.com/ollama/ollama/blob/main/mlxrunner/sample/sample.go
+    """
+    answer = ollama_client.generate(
+        model=ollama_chat_model,
+        prompt="Say hello.",
+        stream=False,
+        options=_OPTION_SENTINELS,
+    )
+    assert answer.response
+    assert answer.done is True
+
+
+@pytest.mark.parametrize(("option", "value", "refusal"), _CLOUD_REFUSED_SENTINELS)
+def test_generate_answers_the_sentinels_ollama_cloud_refuses(
+    ollama_client: ollama.Client,
+    ollama_chat_model: str,
+    use_official_api: bool,
+    option: str,
+    value: float,
+    refusal: str,
+) -> None:
+    """Three more sentinels are answered here, and refused by Ollama Cloud.
+
+    A deliberate divergence, asserted on both targets so it stays one. An
+    Ollama server defaults ``num_predict`` to -1 and reads a non-positive
+    ``top_p`` or ``temperature`` as "off"; Ollama Cloud answers 400 for each.
+    Its wording, measured per option, names the bound rather than the option
+    -- only ``num_predict`` is named, and then as the ``max_tokens`` it is
+    forwarded to. A client sending its own defaults has to be answered, so
+    this gateway follows the server.
+
+    Ref: https://github.com/ollama/ollama/blob/main/api/types.go (DefaultOptions)
+         https://github.com/ollama/ollama/blob/main/mlxrunner/sample/sample.go
+    """
+
+    def call() -> ollama.GenerateResponse:
+        """Send the sentinel on its own, so only it can be refused."""
+        return ollama_client.generate(
+            model=ollama_chat_model,
+            prompt="Say hello.",
+            stream=False,
+            options={option: value},
+        )
+
+    if use_official_api:
+        with pytest.raises(ollama.ResponseError) as raised:
+            call()
+        assert raised.value.status_code == 400
+        assert refusal in raised.value.error, (
+            "the refusal must be the one this option really draws, so that a "
+            "vendor that starts accepting it shows up here"
+        )
+        return
+    answer = call()
+    assert answer.response
+    assert answer.done is True
+
+
+@pytest.mark.local
+def test_generate_reports_an_untranslatable_option_as_a_bad_request(
+    app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An option value the completion parameters refuse answers 400, not 500.
+
+    The sentinels above are handled, so the failure is injected: any option
+    bound the translation stops matching has to reach the caller as a bad
+    request naming the field, in Ollama's own single-field envelope.
+
+    Ref: https://docs.ollama.com/openapi.yaml (ErrorResponse)
+         stdapi/routes/ollama_generate.py:generate
+    """
+
+    def out_of_range(*_args: object, **_kwargs: object) -> CompletionCreateParams:
+        """Fail the way an unsanitised option value would."""
+        return CompletionCreateParams(
+            model="m",
+            messages=[ChatCompletionUserMessageParam(role="user", content="hi")],
+            top_p=-1.0,
+        )
+
+    monkeypatch.setattr(
+        generate_route,
+        "validate_model",
+        AsyncMock(return_value=make_model_details("m")),
+    )
+    monkeypatch.setattr(ollama_adapter, "to_chat_completion_params", out_of_range)
+    response = app_client.post(
+        ollama_route("/api/generate"),
+        json={"model": "m", "prompt": "hi", "stream": False},
+    )
+    assert response.status_code == 400
+    envelope = response.json()
+    assert list(envelope) == ["error"]
+    assert "top_p" in envelope["error"]
 
 
 @pytest.mark.parametrize(("keep_alive", "reason"), [(None, "load"), (0, "unload")])

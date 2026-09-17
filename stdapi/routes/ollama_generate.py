@@ -21,6 +21,7 @@ from stdapi.monitoring import (
     log_response_params,
 )
 from stdapi.types.ollama import GenerateRequest, GenerateResponse
+from stdapi.utils import validation_error_handler
 
 if TYPE_CHECKING:
     from stdapi.types.openai_chat_completions import ChatCompletion
@@ -106,10 +107,14 @@ async def generate(
         # An empty prompt is Ollama's load, and with `keep_alive` at zero its
         # unload: the model is named and answered for, never generated with.
         return log_response_params(ollama_adapter.load_generate_response(request))
+    # An option value no equivalent parameter accepts is the caller's mistake,
+    # reported as one rather than raised from inside the translation.
+    with validation_error_handler():
+        completion_params = ollama_adapter.to_chat_completion_params(request, model_id)
     result: ChatCompletion | EventSourceResponse = await get_chat_model(
         model_id
     ).create_completion(
-        ollama_adapter.to_chat_completion_params(request, model_id),
+        completion_params,
         f"chatcmpl-{REQUEST_ID.get()}",
         int(REQUEST_TIME.get().timestamp()),
     )
