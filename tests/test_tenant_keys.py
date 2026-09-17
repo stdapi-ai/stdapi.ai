@@ -1728,6 +1728,40 @@ class TestReconciliationLifecycle:
         finally:
             await close_tenant_key_reconciliation()
 
+    async def test_the_loop_survives_a_failure_it_does_not_expect(
+        self, tenant_backend: SSMClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Anything a pass raises pauses minting rather than ending it.
+
+        Only the AWS failures were absorbed, so a record this build cannot
+        read ended the task silently and left every later key unminted and
+        unrotated for the life of the process.
+
+        Ref: stdapi/tenant_keys.py:_reconcile_loop
+        """
+        del tenant_backend
+        passes = 0
+        second = Event()
+
+        async def _failing() -> None:
+            nonlocal passes
+            passes += 1
+            if passes >= 2:
+                second.set()
+            attribute = "secret_hash"
+            raise KeyError(attribute)
+
+        monkeypatch.setattr(tenant_keys, "_RECONCILE_INTERVAL", 0.0)
+        monkeypatch.setattr(tenant_keys, "reconcile_tenant_keys", _failing)
+        open_tenant_key_reconciliation()
+        try:
+            await wait_for(second.wait(), 5.0)
+            task = tenant_keys._RECONCILE_TASK  # noqa: SLF001
+            assert task is not None
+            assert not task.done()
+        finally:
+            await close_tenant_key_reconciliation()
+
     async def test_a_refused_delivery_is_reported_and_never_raised(
         self, tenant_backend: SSMClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:

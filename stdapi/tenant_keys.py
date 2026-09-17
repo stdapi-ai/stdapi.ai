@@ -1698,3 +1698,11 @@ async def _reconcile_loop() -> None:
                     else f"Tenant keys could not be reconciled: {type(error).__name__}",
                     level="warning",
                 )
+        except Exception as error:  # noqa: BLE001 -- the loop is what keeps minting and rotation alive
+            # A record this build cannot read would otherwise end the task
+            # silently, leaving every later key unminted and unrotated forever.
+            with log_background_event("tenant_keys_reconcile", webuuid()):
+                log_error_details(
+                    f"Tenant keys could not be reconciled: {type(error).__name__}",
+                    level="error",
+                )
