@@ -15,10 +15,11 @@ routes. Conversations live in the primary Bedrock region.
 
 from contextlib import suppress
 from re import compile as regex_compile
-from typing import TYPE_CHECKING, Any, Never
+from typing import TYPE_CHECKING, Any, Never, get_args
 from uuid import uuid4
 
 from botocore.exceptions import ClientError
+from pydantic import TypeAdapter, ValidationError
 
 from stdapi.api_errors import ApiError, feature_unavailable_guard
 from stdapi.aws import get_client
@@ -31,8 +32,9 @@ from stdapi.aws_bedrock_sessions import (
     put_document,
 )
 from stdapi.config import SETTINGS
-from stdapi.monitoring import build_metadata
+from stdapi.monitoring import build_metadata, log_error_details
 from stdapi.responses_store import KIND_TAG
+from stdapi.types.openai_responses import ResponseItem
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -251,6 +253,100 @@ def is_item_reference(payload: Mapping[str, Any]) -> bool:
         True for an ``item_reference`` item.
     """
     return payload.get("type") == _REFERENCE_TYPE
+
+
+#: Adapter validating one stored item against the union a listing answers with.
+ITEM_ADAPTER: TypeAdapter[ResponseItem] = TypeAdapter[ResponseItem](ResponseItem)
+
+#: Safe default backfilled onto a stored item missing this field, keyed by field name.
+# `execution` is `client` because this server runs no tool search: whoever ran the
+# call a client replays, it was not this one.
+_ITEM_FIELD_DEFAULTS: dict[str, Any] = {
+    "status": "completed",
+    "summary": [],
+    "execution": "client",
+}
+
+
+def _listable_item_defaults() -> dict[str, dict[str, Any]]:
+    """Map each item type a listing can express to its coercible defaults.
+
+    Derived from the item union members: a field is coercible for a given item
+    type when it is required (no default) on the matching member and has a
+    known safe default in ``_ITEM_FIELD_DEFAULTS``. This lets canonical shapes
+    clients legitimately send (e.g. a ``function_call`` without ``status``)
+    survive strict validation instead of being dropped. A type with nothing to
+    backfill maps to an empty mapping, so the keys are every listable type.
+
+    Returns:
+        Item type literal to the ``{field: default}`` pairs safe to backfill.
+    """
+    defaults_by_type: dict[str, dict[str, Any]] = {}
+    for member in get_args(ResponseItem):
+        type_field = member.model_fields.get("type")
+        if type_field is None:
+            continue
+        type_args = get_args(type_field.annotation)
+        if len(type_args) != 1:
+            continue
+        defaults = {
+            name: default
+            for name, default in _ITEM_FIELD_DEFAULTS.items()
+            if (field := member.model_fields.get(name)) is not None
+            and field.is_required()
+        }
+        defaults_by_type.setdefault(type_args[0], {}).update(defaults)
+    return defaults_by_type
+
+
+#: Listable item type to its required-field defaults, derived from the item union.
+_LISTABLE_ITEM_DEFAULTS: dict[str, dict[str, Any]] = _listable_item_defaults()
+
+
+def listable_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the stored items a listing can answer with, dropping the rest.
+
+    An item type a request accepts but no listed item type can express — a
+    ``compaction_trigger``, an ``item_reference`` — is absent from a listing
+    rather than fatal to it. Storage is append-only, so a listing that refused
+    itself over one such item would take the whole conversation with it for
+    good. Items missing a required field with a known safe default (e.g. a
+    ``function_call`` without ``status``) are backfilled before validation, so
+    a canonical shape a client sent is not dropped. A dropped item whose type
+    the listing does express is reported: it was accepted on write and is now
+    unreadable, which an operator has to be able to see.
+
+    Args:
+        items: Stored items, in listing order.
+
+    Returns:
+        The items, backfilled where applicable, that a listing can answer with.
+    """
+    listable = []
+    for item in items:
+        candidate = item
+        item_type = item.get("type")
+        defaults = (
+            _LISTABLE_ITEM_DEFAULTS.get(item_type)
+            if isinstance(item_type, str)
+            else None
+        )
+        if defaults and (
+            missing := {k: v for k, v in defaults.items() if k not in item}
+        ):
+            candidate = {**item, **missing}
+        try:
+            ITEM_ADAPTER.validate_python(candidate)
+        except ValidationError:
+            if item_type in _LISTABLE_ITEM_DEFAULTS:
+                log_error_details(
+                    f"Dropping unreadable stored item '{item.get('id')}' of "
+                    f"type '{item_type}' from the listing.",
+                    level="warning",
+                )
+            continue
+        listable.append(candidate)
+    return listable
 
 
 def _client() -> AgentsforBedrockRuntimeClient:

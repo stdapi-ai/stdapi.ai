@@ -21,6 +21,7 @@ Ref: https://developers.openai.com/api/reference/resources/conversations.md
 
 import contextlib
 from datetime import UTC, datetime
+from json import loads
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -266,6 +267,40 @@ def _error(response: Any) -> dict[str, Any]:  # noqa: ANN401
     """Return the error envelope of a failed response."""
     payload: dict[str, Any] = response.json()["error"]
     return payload
+
+
+#: An ``additional_tools`` item, the shape a client replays from a prior transcript.
+_ADDITIONAL_TOOLS_ITEM: dict[str, Any] = {
+    "type": "additional_tools",
+    # Upstream's stored item type allows eight roles, but the live API accepts only
+    # this one on a write: `role: "assistant"` answers 400 `invalid_value`.
+    "role": "developer",
+    "tools": [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "parameters": {"type": "object"},
+            "strict": True,
+        }
+    ],
+}
+
+
+def _stored_item_ids(store: _FakeSessionClient, conversation_id: str) -> list[str]:
+    """Return the ID of every item written to a conversation, listable or not.
+
+    Args:
+        store: The in-memory session backend the conversation was written to.
+        conversation_id: Public conversation identifier.
+
+    Returns:
+        The identifiers in write order.
+    """
+    return [
+        item["id"]
+        for step in store.steps[conversation_id.split("-", 1)[-1]]
+        for item in loads(step["text"])["conversation"].get("items") or ()
+    ]
 
 
 @pytest.mark.local
@@ -824,6 +859,164 @@ class TestConversationItems:
         )
         assert response.status_code == 400, response.text
 
+    def test_an_additional_tools_item_round_trips(self, app_client: TestClient) -> None:
+        """An ``additional_tools`` item is stored, listed and retrieved.
+
+        Upstream carries this item in the conversation item union as well as in
+        the input one, so a client replaying a prior transcript reads it back
+        rather than losing the conversation.
+
+        Ref: https://developers.openai.com/api/reference/resources/conversations.md
+             openai.types.conversations.conversation_item.ConversationItem
+             openai.types.responses.response_item.ResponseItem
+        """
+        conversation = _create(app_client, items=[_ADDITIONAL_TOOLS_ITEM])
+        url = f"/v1/conversations/{conversation['id']}/items"
+
+        listed = app_client.get(url)
+
+        assert listed.status_code == 200, listed.text
+        (stored,) = listed.json()["data"]
+        assert stored["type"] == "additional_tools"
+        assert stored["role"] == "developer"
+        assert stored["tools"][0]["name"] == "get_weather"
+        retrieved = app_client.get(f"{url}/{stored['id']}")
+        assert retrieved.status_code == 200, retrieved.text
+        assert retrieved.json()["id"] == stored["id"]
+
+    def test_an_assistant_turn_replayed_as_input_content_round_trips(
+        self, app_client: TestClient
+    ) -> None:
+        """An assistant message whose parts were relabelled reads back.
+
+        A client replaying a prior assistant turn may send its text as
+        ``input_text`` rather than ``output_text`` -- Codex does. The input union
+        accepts that, the store keeps it and the model is replayed with it, so a
+        listing that cannot express it would hand back a conversation missing a
+        turn the caller is still being billed for.
+
+        Ref: https://developers.openai.com/api/reference/resources/conversations.md
+             stdapi/types/openai_responses.py:ResponseOutputMessageInput
+        """
+        item = {"role": "assistant", "content": [{"type": "input_text", "text": "hi"}]}
+        conversation = _create(app_client, items=[item])
+        url = f"/v1/conversations/{conversation['id']}/items"
+
+        listed = app_client.get(url)
+
+        assert listed.status_code == 200, listed.text
+        (stored,) = listed.json()["data"]
+        assert stored["role"] == "assistant"
+        assert stored["content"][0]["text"] == "hi"
+        retrieved = app_client.get(f"{url}/{stored['id']}")
+        assert retrieved.status_code == 200, retrieved.text
+
+    def test_a_function_call_without_a_status_round_trips(
+        self, app_client: TestClient
+    ) -> None:
+        """A tool call sent without ``status`` reads back as completed.
+
+        ``status`` is optional on a sent item and always present on a listed
+        one, so the canonical shape a client sends has to survive both reads.
+
+        Ref: https://developers.openai.com/api/reference/resources/conversations.md
+             openai.types.responses.response_item.ResponseFunctionToolCallItem
+        """
+        conversation = _create(
+            app_client,
+            items=[
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                    "arguments": "{}",
+                }
+            ],
+        )
+        url = f"/v1/conversations/{conversation['id']}/items"
+
+        listed = app_client.get(url)
+
+        assert listed.status_code == 200, listed.text
+        (stored,) = listed.json()["data"]
+        assert stored["type"] == "function_call"
+        assert stored["call_id"] == "call_1"
+        assert stored["status"] == "completed"
+        retrieved = app_client.get(f"{url}/{stored['id']}")
+        assert retrieved.status_code == 200, retrieved.text
+        assert retrieved.json()["status"] == "completed"
+
+    def test_an_input_only_item_is_accepted_and_left_out_of_the_conversation(
+        self, app_client: TestClient
+    ) -> None:
+        """A ``compaction_trigger`` is accepted, and never becomes an item.
+
+        It instructs the request it travels with; no conversation item type can
+        express it, so it is dropped from the answer the way an item the
+        conversation cannot hold has always been, while the rest of the batch
+        is stored.
+
+        Ref: https://developers.openai.com/api/reference/resources/conversations.md
+             openai.types.conversations.conversation_item.ConversationItem
+        """
+        conversation = _create(app_client)
+        url = f"/v1/conversations/{conversation['id']}/items"
+
+        added = app_client.post(
+            url,
+            json={
+                "items": [
+                    {"role": "user", "content": "summarise this"},
+                    {"type": "compaction_trigger"},
+                ]
+            },
+        )
+
+        assert added.status_code == 200, added.text
+        assert [item["type"] for item in added.json()["data"]] == ["message"]
+        listed = app_client.get(url)
+        assert listed.status_code == 200, listed.text
+        assert [item["type"] for item in listed.json()["data"]] == ["message"]
+
+    def test_a_dropped_item_is_absent_from_the_cursors_and_from_a_retrieval(
+        self, app_client: TestClient, store: _FakeSessionClient
+    ) -> None:
+        """An item that cannot be listed counts for no page and no retrieval.
+
+        The store is append-only, so a page that refused itself over one item
+        it cannot express would lock the client out of the conversation for
+        good: the listing skips it, the page bounds ignore it, and its
+        identifier -- which the client was never given -- answers 404.
+
+        Ref: stdapi/conversations.py:listable_items
+             stdapi/routes/openai_conversations.py:_item_list
+        """
+        conversation = _create(app_client)
+        url = f"/v1/conversations/{conversation['id']}/items"
+        app_client.post(
+            url,
+            json={
+                "items": [
+                    {"type": "compaction_trigger"},
+                    *({"role": "user", "content": str(index)} for index in range(2)),
+                ]
+            },
+        )
+
+        page = app_client.get(url, params={"order": "asc", "limit": 2})
+
+        assert page.status_code == 200, page.text
+        payload = page.json()
+        assert [item["content"][0]["text"] for item in payload["data"]] == ["0", "1"]
+        assert payload["has_more"] is False
+        dropped = [
+            item_id
+            for item_id in _stored_item_ids(store, conversation["id"])
+            if item_id not in {item["id"] for item in payload["data"]}
+        ]
+        assert dropped, "the trigger must still be in the store to be filtered out"
+        assert app_client.get(f"{url}/{dropped[0]}").status_code == 404
+
 
 @pytest.mark.local
 @pytest.mark.usefixtures("store", "chat_backend")
@@ -1015,6 +1208,45 @@ class TestResponsesConversationParameter:
         assert streamed.status_code == 200, streamed.text
         items = app_client.get(f"/v1/conversations/{conversation['id']}/items").json()
         assert items["data"] == []
+
+    def test_a_turn_carrying_an_input_only_item_stays_readable(
+        self, app_client: TestClient
+    ) -> None:
+        """An input-only item replayed in ``input`` never costs the conversation.
+
+        Replaying a prior transcript into ``input`` is ordinary client
+        behaviour, and every item of that turn is appended to the conversation,
+        so an item no conversation item type can express must leave the rest of
+        the turn readable instead of taking the conversation with it.
+
+        Ref: stdapi/routes/openai_responses.py:_turn_input_items
+             stdapi/conversations.py:listable_items
+        """
+        conversation = _create(app_client)
+
+        response = app_client.post(
+            "/v1/responses",
+            json={
+                "model": "m",
+                "input": [
+                    {"role": "user", "content": "hello"},
+                    _ADDITIONAL_TOOLS_ITEM,
+                    {"type": "compaction_trigger"},
+                ],
+                "conversation": conversation["id"],
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        listed = app_client.get(
+            f"/v1/conversations/{conversation['id']}/items", params={"order": "asc"}
+        )
+        assert listed.status_code == 200, listed.text
+        assert [item["type"] for item in listed.json()["data"]] == [
+            "message",
+            "additional_tools",
+            "message",
+        ]
 
     def test_input_tokens_rejects_both_chaining_parameters(
         self, app_client: TestClient
@@ -1245,6 +1477,39 @@ class TestConversationsLive:
             assert refused.value.status_code == 400
             assert refused.value.code == "item_already_in_conversation"
             assert refused.value.param == "items"
+        finally:
+            with contextlib.suppress(Exception):
+                openai_client.conversations.delete(conversation.id)
+
+    def test_an_additional_tools_item_round_trips(self, openai_client: OpenAI) -> None:
+        """An ``additional_tools`` item survives a write and reads back whole.
+
+        The item union a listing validates against is wider than the one a
+        stub exercises, and a written item cannot be taken back, so the only
+        proof that a stored item is readable is storing one and reading it.
+
+        Ref: https://developers.openai.com/api/reference/resources/conversations.md
+             openai.types.conversations.conversation_item.ConversationItem
+        """
+        conversation = openai_client.conversations.create()
+        try:
+            added = openai_client.conversations.items.create(
+                conversation.id,
+                items=[_ADDITIONAL_TOOLS_ITEM],  # type: ignore[list-item]
+            )
+            assert [item.type for item in added.data] == ["additional_tools"]
+
+            listed = openai_client.conversations.items.list(conversation.id, limit=10)
+
+            (stored,) = [
+                item for item in listed.data if item.type == "additional_tools"
+            ]
+            assert stored.role == "developer"
+            assert [tool.name for tool in stored.tools] == ["get_weather"]  # type: ignore[union-attr]
+            retrieved = openai_client.conversations.items.retrieve(
+                _item_id(stored), conversation_id=conversation.id
+            )
+            assert retrieved.type == "additional_tools"
         finally:
             with contextlib.suppress(Exception):
                 openai_client.conversations.delete(conversation.id)

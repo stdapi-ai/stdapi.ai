@@ -861,7 +861,7 @@ class TestStoredResponseRoutes:
         without ``summary``; those fields are required by the listable item
         union, so a known safe default is backfilled before validation.
 
-        Ref: stdapi/routes/openai_responses.py:_listable_input_items
+        Ref: stdapi/conversations.py:listable_items
         """
         store.documents["resp-sess-1"] = {
             "input": [
@@ -895,7 +895,7 @@ class TestStoredResponseRoutes:
         remaining items still list.
 
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
-             stdapi/routes/openai_responses.py:_listable_input_items
+             stdapi/conversations.py:listable_items
         """
         store.documents["resp-sess-1"] = {
             "input": [

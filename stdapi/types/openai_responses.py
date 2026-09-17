@@ -3050,7 +3050,11 @@ class McpCall(BaseModelResponse):
 
 # Ref: openai.types.responses.response_output_item.AdditionalTools
 class AdditionalTools(BaseModelResponse):
-    """An output item advertising additional tools (never emitted by this backend)."""
+    """An item advertising additional tools.
+
+    No model generates one here: it is returned by a listing when a client
+    stored one in a conversation, so a replayed transcript reads back whole.
+    """
 
     id: str = Field(description="Item ID.")
     role: Literal[
@@ -4135,6 +4139,20 @@ class ResponseInputMessageItem(BaseModelResponse):
     )
 
 
+class ResponseInputMessageItemPhased(ResponseInputMessageItem):
+    """A returned message input item that also carries the `phase` a client sent.
+
+    ``EasyInputMessage`` accepts ``phase`` under every role, so the store keeps it
+    on a user, system or developer message, while the item above -- like its
+    upstream counterpart -- declares it only on the assistant message.
+    """
+
+    phase: Literal["commentary", "final_answer"] | None = Field(
+        default=None,
+        description="Labels assistant message as commentary or final answer.",
+    )
+
+
 # ResponseItem union  (items returned via /v1/responses/{id}/input_items)
 
 # Ref: openai.types.responses.response_item.ResponseItem
@@ -4143,21 +4161,52 @@ class ResponseInputMessageItem(BaseModelResponse):
 ResponseItem = (
     ResponseInputMessageItem
     | ResponseOutputMessage
+    # An assistant turn whose parts a client relabelled as input content is a
+    # shape the input union accepts and the store keeps, so the read side has to
+    # be able to express it or the item is written and never readable back.
+    | ResponseOutputMessageInput
+    # Same reason, for a non-assistant message carrying `phase`: the input union
+    # accepts it under every role, the listed input message item declares it on none.
+    | ResponseInputMessageItemPhased
     | ResponseFileSearchToolCall
+    # Same reason, for a replayed `results` entry carrying a key the strict result
+    # model does not declare.
+    | FileSearchCallInput
     | ResponseComputerToolCall
+    # Same reason, for a replayed `action`, `actions` or pending safety check the
+    # strict computer action shapes cannot express.
+    | ComputerCallInput
     | ResponseComputerToolCallOutputItem
     | ResponseFunctionWebSearch
+    # Same reason, for a replayed `action` the strict web search action union
+    # cannot express.
+    | WebSearchCallInput
     | ResponseFunctionToolCallItem
     | ResponseFunctionToolCallOutputItem
     | ResponseToolSearchCall
+    # Same reason, for replayed `arguments` that are not a JSON object.
+    | ToolSearchCallInput
     | ResponseToolSearchOutputItem
+    # Same reason, for a replayed `tools` entry the strict tool union cannot express.
+    | ToolSearchOutputInput
+    | AdditionalTools
+    | ResponseConfigurationUpdateItem
     | ResponseReasoningItem
+    # Same reason, for a reasoning content part typed anything but `reasoning_text`
+    # -- Codex replays one as the first input item of every following turn.
+    | ResponseReasoningItemInput
     | ResponseCompactionItem
     | ImageGenerationCall
     | ResponseCodeInterpreterToolCall
+    # Same reason, for a replayed `outputs` entry the strict output union cannot
+    # express.
+    | CodeInterpreterCallInput
     | LocalShellCall
     | LocalShellCallOutput
     | ResponseFunctionShellToolCall
+    # Same reason, for a replayed `environment` carrying a field the strict one
+    # does not declare, such as the local environment's `skills`.
+    | ShellCall
     | ResponseFunctionShellToolCallOutput
     | ResponseApplyPatchToolCall
     | ResponseApplyPatchToolCallOutput

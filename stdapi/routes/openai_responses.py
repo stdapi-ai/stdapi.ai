@@ -11,7 +11,7 @@
 
 from functools import partial
 from re import fullmatch
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Never, get_args
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Never
 
 from fastapi import APIRouter, Depends, Path, Query
 from pydantic import TypeAdapter, ValidationError
@@ -35,6 +35,7 @@ from stdapi.cleanup import schedule_cleanup
 from stdapi.config import SETTINGS
 from stdapi.conversations import (
     append_items,
+    listable_items,
     load_items,
     stored_item,
     validate_conversation_id,
@@ -88,7 +89,6 @@ from stdapi.types.openai_responses import (
     ResponseDeleted,
     ResponseIncludable,
     ResponseInputItem,
-    ResponseItem,
     ResponseItemList,
     ResponseOutputMessage,
     ResponseOutputText,
@@ -617,88 +617,6 @@ def _normalized_input_items(stored_input: Any) -> list[dict[str, Any]]:  # noqa:
         item.setdefault("id", f"msg-{index}")
         items.append(item)
     return items
-
-
-#: Adapter validating a normalized input item against the listable ResponseItem union.
-_RESPONSE_ITEM_ADAPTER: TypeAdapter[ResponseItem] = TypeAdapter[ResponseItem](
-    ResponseItem
-)
-
-#: Safe default backfilled onto a stored item missing this field, keyed by field name.
-_ITEM_FIELD_DEFAULTS: dict[str, Any] = {"status": "completed", "summary": []}
-
-
-def _coercible_field_defaults() -> dict[str, dict[str, Any]]:
-    """Map each ResponseItem type literal to its coercible required-field defaults.
-
-    Derived from the ResponseItem union members: a field is coercible for a
-    given item type when it is required (no default) on the matching member
-    and has a known safe default in ``_ITEM_FIELD_DEFAULTS``. This lets
-    canonical shapes clients legitimately store (e.g. a ``function_call``
-    without ``status``) survive strict validation instead of being dropped.
-
-    Returns:
-        Item type literal to the ``{field: default}`` pairs safe to backfill.
-    """
-    defaults_by_type: dict[str, dict[str, Any]] = {}
-    for member in get_args(ResponseItem):
-        type_field = member.model_fields.get("type")
-        if type_field is None:
-            continue
-        type_args = get_args(type_field.annotation)
-        if len(type_args) != 1:
-            continue
-        defaults = {
-            name: default
-            for name, default in _ITEM_FIELD_DEFAULTS.items()
-            if (field := member.model_fields.get(name)) is not None
-            and field.is_required()
-        }
-        if defaults:
-            defaults_by_type.setdefault(type_args[0], {}).update(defaults)
-    return defaults_by_type
-
-
-#: Item type literal to required-field defaults, derived from the ResponseItem union.
-_COERCIBLE_FIELD_DEFAULTS: dict[str, dict[str, Any]] = _coercible_field_defaults()
-
-
-def _listable_input_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop stored input items whose type is not part of the ResponseItem union.
-
-    Mirrors the input's accepted-and-dropped semantics: an item type that
-    request creation accepts but never turns into conversation history
-    (e.g. ``item_reference``) is silently absent from the listing too.
-    Items missing a required field with a known safe default (e.g. a
-    ``function_call_output`` without ``status``) are backfilled before
-    validation so canonical stored shapes are not dropped.
-
-    Args:
-        items: Normalized input items, in listing order.
-
-    Returns:
-        The items (backfilled where applicable) that validate against the
-        ResponseItem union.
-    """
-    listable = []
-    for item in items:
-        candidate = item
-        item_type = item.get("type")
-        defaults = (
-            _COERCIBLE_FIELD_DEFAULTS.get(item_type)
-            if isinstance(item_type, str)
-            else None
-        )
-        if defaults and (
-            missing := {k: v for k, v in defaults.items() if k not in item}
-        ):
-            candidate = {**item, **missing}
-        try:
-            _RESPONSE_ITEM_ADAPTER.validate_python(candidate)
-        except ValidationError:
-            continue
-        listable.append(candidate)
-    return listable
 
 
 def _with_public_mantle_ids(
@@ -1441,7 +1359,7 @@ async def list_response_input_items(
     if not isinstance(stored.get("response"), dict):
         _malformed_stored_document(response_id, "'response' is not a JSON object")
     try:
-        items = _listable_input_items(_normalized_input_items(stored.get("input")))
+        items = listable_items(_normalized_input_items(stored.get("input")))
     except (KeyError, TypeError, ValueError) as error:
         _malformed_stored_document(response_id, str(error))
     if order == "desc":

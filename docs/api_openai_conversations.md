@@ -57,7 +57,8 @@ when honoring it is the request.
 | Retrieve, update, delete                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `metadata` is the only field an update takes; a delete removes the conversation and every item it holds |
 | **Items**                                 |                                          |                                                                             |
 | `items` on an add                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 to 20 per request; the response is a `list` envelope of the items added, in that order, not the whole conversation |
-| Item shapes                               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | The [Responses](api_openai_responses.md) `input` and `output` items: messages, reasoning items, tool calls and their outputs |
+| Item shapes                               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | The [Responses](api_openai_responses.md) `input` and `output` items: messages, reasoning items, tool calls and their outputs, and the `additional_tools` items a client replays from a prior transcript |
+| Items that configure a request rather than record history |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | A `compaction_trigger` instructs the request it is sent with, and no conversation item type can express it, so it is accepted and left out of the conversation. The rest of the batch is stored |
 | A message `content` sent as a string      |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Expanded into an `input_text` or `output_text` part according to the message's `role` |
 | An `id` sent on a new item                |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepted and ignored — the server mints the identifier, prefixed by the item's type |
 | `item_reference` items                    |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | One naming an item the conversation already holds is refused with `400 item_already_in_conversation`, as upstream. Upstream also copies in an item held by another conversation or a stored response; here an item is reachable only through the conversation holding it, so such a reference answers `404` |
@@ -120,6 +121,11 @@ reasoning items, function calls and their outputs.
   refused with `400 item_already_in_conversation`; send the item itself to add a
   second copy. An item held by another conversation or by a stored response
   cannot be reached here and returns `404`.
+- **An item that configures a request rather than recording history** — a
+  `compaction_trigger` — is accepted and left out of the conversation: no
+  conversation item type can express it, so it never appears in a listing, in a
+  retrieval, or in the page counts. Every other item of the same request is
+  stored.
 - **Deleting an item returns the conversation**, and the item disappears from
   the listing.
 - `include=reasoning.encrypted_content` returns the encrypted content of

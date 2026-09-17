@@ -13,13 +13,13 @@
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Path, Query
-from pydantic import TypeAdapter
 
 from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
 from stdapi.conversations import (
+    ITEM_ADAPTER,
     append_items,
     create_conversation,
     delete_conversation,
@@ -28,6 +28,7 @@ from stdapi.conversations import (
     is_item_reference,
     item_already_in_conversation,
     item_not_found,
+    listable_items,
     load_items,
     stored_item,
     update_conversation,
@@ -84,9 +85,6 @@ _ENCRYPTED_CONTENT_FIELD = "encrypted_content"
 #: Item type whose encrypted content the ``include`` value above gates.
 _REASONING_TYPE = "reasoning"
 
-#: Adapter validating one stored item against the conversation item union.
-_ITEM_ADAPTER: TypeAdapter[ResponseItem] = TypeAdapter[ResponseItem](ResponseItem)
-
 #: Default number of items returned by the item listing.
 _DEFAULT_LIMIT = 20
 
@@ -139,7 +137,8 @@ def _item_list(
     Raises:
         ApiError: 404 when ``after`` names no item of this conversation.
     """
-    ordered = list(reversed(items)) if order == "desc" else items
+    listable = listable_items(items)
+    ordered = list(reversed(listable)) if order == "desc" else listable
     if after is not None:
         index = next((i for i, item in enumerate(ordered) if item["id"] == after), None)
         if index is None:
@@ -376,7 +375,9 @@ async def delete(
         "the order they were sent (OpenAI Conversations API). Item IDs are "
         "assigned by the server. An `item_reference` naming an item the "
         "conversation already holds is refused with `item_already_in_"
-        "conversation`; send the item itself to add one."
+        "conversation`; send the item itself to add one. An item that "
+        "configures a request rather than recording history, such as "
+        "`compaction_trigger`, is accepted and left out of the conversation."
     ),
     response_description="The items that were added, in the order they were sent.",
     responses={404: {"description": "Conversation not found."}},
@@ -523,13 +524,13 @@ async def retrieve_item(
     )
     validate_conversation_id(conversation_id, "conversation_id")
     validate_item_id(item_id)
-    items = [
-        item for item in await load_items(conversation_id) if item["id"] == item_id
-    ]
+    items = listable_items(
+        [item for item in await load_items(conversation_id) if item["id"] == item_id]
+    )
     if not items:
         item_not_found(item_id)
     return log_response_params(
-        _ITEM_ADAPTER.validate_python(_visible_items(items, include)[0])
+        ITEM_ADAPTER.validate_python(_visible_items(items, include)[0])
     )
 
 
