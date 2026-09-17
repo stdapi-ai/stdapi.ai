@@ -56,7 +56,7 @@ for bucket in page.data:
 | `GET /v1/organization/usage/web_search_calls` | Searches run by the built-in web search tool |
 | `GET /v1/organization/usage/file_search_calls` | Vector store searches run |
 | `GET /v1/organization/usage/vector_stores` | Nothing: vector store storage is not measured |
-| `GET /v1/organization/usage/code_interpreter_sessions` | Nothing: no code interpreter is served |
+| `GET /v1/organization/usage/code_interpreter_sessions` | Nothing: the [code interpreter](api_openai_responses.md#openai-integrated-tools) runs inside Amazon Bedrock with no session to open, so none is measured — each run is reported on its response, not here |
 | `GET /v1/organization/costs` | What AWS bills this deployment for serving the requests |
 
 The two endpoints that report nothing answer a well-formed page of empty

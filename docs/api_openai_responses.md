@@ -642,6 +642,37 @@ curl -X POST "$BASE/v1/responses" \
   }'
 ```
 
+!!! note "What a run reports"
+    Each run the model performs is reported as its own `code_interpreter_call`
+    output item, ahead of the answer written from it:
+
+    - `code` — the snippet that was executed.
+    - `outputs` — a single `logs` entry holding what the run printed. Standard
+      output and standard error share that one entry, error last, and a run
+      that printed nothing reports an empty `logs`. Nova produces no image
+      output, so an `image` entry never appears. `outputs` is `null` when the
+      run reported nothing back at all.
+    - `status` — `completed`, or `failed` when the code itself raised. A
+      failure is not an error of the request: the model reads the traceback
+      and usually answers from it, so the response is still a `200`.
+    - `container_id` — the same value for every run of one response, and
+      different for every response. It cannot be chosen, and a value from an
+      earlier response is not valid in a later one.
+
+    When streaming, the item opens with
+    `response.code_interpreter_call.in_progress`, the snippet arrives as a
+    single `response.code_interpreter_call_code.delta` followed by
+    `…_code.done`, and the item closes with
+    `response.code_interpreter_call.interpreting` then `.completed`.
+
+!!! warning "Container selection"
+    The `container` field of the tool is **accepted and ignored**: runs are not
+    addressable, so a container ID cannot be chosen, reused across responses, or
+    preloaded with `file_ids`. The code still runs and the result is still
+    returned. Replaying a `code_interpreter_call` item back as input is likewise
+    accepted and dropped — the model continues from the answer it wrote, not
+    from the run's session.
+
 !!! note "Citations: sources and annotations"
     Web-search citations surface in two places:
 

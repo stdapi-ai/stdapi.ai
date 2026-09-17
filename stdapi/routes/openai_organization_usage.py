@@ -1467,9 +1467,10 @@ async def usage_vector_stores(
     operation_id="openai_organization_usage_code_interpreter_sessions",
     description=(
         "Reports code interpreter sessions in time buckets (OpenAI Usage API). "
-        "This server runs no code interpreter, so the buckets carry no "
-        "results.\n\nAdministrator endpoint: it reports the whole deployment, "
-        "not the calling client."
+        "A model that runs code runs it inside the turn rather than in a "
+        "session of its own, so there is nothing to count and the buckets "
+        "carry no results.\n\nAdministrator endpoint: it reports the whole "
+        "deployment, not the calling client."
     ),
     response_description="A page of empty time buckets.",
     response_model_exclude_none=True,
@@ -1484,7 +1485,7 @@ async def usage_code_interpreter_sessions(
     page: _Page = None,
     _: Annotated[None, Depends(authenticate)] = None,
 ) -> UsagePage:
-    """Report code interpreter sessions, which this server does not run.
+    """Report code interpreter sessions, of which this server opens none.
 
     Args:
         start_time: Range start, in Unix seconds.

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock
 
 import pytest
 from pybase64 import b64decode
@@ -45,6 +46,7 @@ from stdapi.types.openai import (
 )
 from stdapi.types.openai_chat_completions import (
     Audio,
+    ChatCompletion,
     ChatCompletionAssistantMessageParam,
     ChatCompletionAudioParam,
     ChatCompletionContentPartRefusalParam,
@@ -1517,3 +1519,110 @@ class TestStreamEventsCarryingNothingForTheClient:
             ({"content": "hi"}, None),
             ({}, "stop"),
         ]
+
+
+#: The content blocks of a turn that ran code for itself, as Bedrock returns them.
+# Probed against amazon.nova-2-lite-v1:0 (us-east-1), 2026-09-17.
+_SELF_SERVED_CODE_CONTENT: list[dict[str, Any]] = [
+    {
+        "toolUse": {
+            "toolUseId": "tooluse_1",
+            "name": "nova_code_interpreter",
+            "input": {"snippet": "print(17 * 23)"},
+            "type": "server_tool_use",
+        }
+    },
+    {
+        "toolResult": {
+            "toolUseId": "tooluse_1",
+            "content": [{"json": {"stdOut": "391", "exitCode": 0, "isError": False}}],
+            "status": "success",
+            "type": "nova_code_interpreter_result",
+        }
+    },
+    {"text": "391"},
+]
+
+
+class TestSelfServedToolsStayOutOfToolCalls:
+    """Code a model ran for itself is never offered back as a tool call.
+
+    Chat Completions has no output item for a server-side run, so the only
+    honest report is the answer the model wrote from it.  Surfacing the
+    invocation as a ``tool_call`` would ask the client to execute code that has
+    already run and to post a result the model never waited for.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat.md
+         https://docs.aws.amazon.com/nova/latest/nova2-userguide/using-tools.html
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:format_response
+    """
+
+    async def test_the_answer_is_the_whole_message(self) -> None:
+        """The completion carries the text alone, with no tool call.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
+        """
+        response: dict[str, Any] = {
+            "output": {
+                "message": {"role": "assistant", "content": _SELF_SERVED_CODE_CONTENT}
+            },
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+        }
+        completion = await format_response(
+            completion_id="chatcmpl-1",
+            created=0,
+            model_id="amazon.nova-2-lite-v1:0",
+            responses=[response],  # type: ignore[list-item]
+            service_tier=None,
+            audio_params=None,
+            modalities=["text"],
+            suppress_tool_names=frozenset({"nova_code_interpreter"}),
+        )
+
+        message = completion.choices[0].message
+        assert message.content == "391"
+        assert not message.tool_calls
+
+    async def test_the_model_suppresses_every_system_tool_it_declares(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The suppression set comes from the model, code execution included.
+
+        The Responses surface now renders a code-execution run as an output
+        item, and this route has no item to render it into: exempting the same
+        name here would turn a run that already happened into a ``tool_call``
+        the client is asked to execute.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
+             stdapi/models/chat/_default.py:ChatModel.create_completion
+        """
+        from stdapi.models.chat.amazon_nova_2 import (  # noqa: PLC0415
+            ChatModel as NovaChatModel,
+        )
+
+        converse_response = {
+            "output": {
+                "message": {"role": "assistant", "content": _SELF_SERVED_CODE_CONTENT}
+            },
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+        }
+        monkeypatch.setattr(
+            NovaChatModel, "converse", AsyncMock(return_value=converse_response)
+        )
+        request = CompletionCreateParams.model_validate(
+            {
+                "model": "amazon.nova-2-lite-v1:0",
+                "messages": [{"role": "user", "content": "Compute 17 * 23."}],
+            }
+        )
+
+        completion = await NovaChatModel("amazon.nova-2-lite-v1:0").create_completion(
+            request, "chatcmpl-1", 0
+        )
+
+        assert isinstance(completion, ChatCompletion)
+        message = completion.choices[0].message
+        assert message.content == "391"
+        assert not message.tool_calls

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from itertools import pairwise
 from typing import TYPE_CHECKING, Any, Literal, cast, get_args
+from unittest.mock import AsyncMock
 
 import pytest
 from botocore.exceptions import ClientError
@@ -83,6 +84,7 @@ if TYPE_CHECKING:
         ResponseStreamEvent,
     )
     from starlette.testclient import TestClient as TestClientType
+    from types_aiobotocore_bedrock_runtime.type_defs import ContentBlockOutputTypeDef
 
     from stdapi.models import ModelDetails
     from stdapi.types.openai_vector_stores import SearchFilter
@@ -2575,11 +2577,10 @@ class TestServerToolsUnservedOnRuntime:
 class TestCodeInterpreterTool:
     """code_interpreter integrated tool tests via the Responses API.
 
-    Only Nova 2 exposes an autonomous code-execution system tool
-    (``nova_code_interpreter``), so ``code_interpreter`` is supported there and
-    on the official API but on no other Bedrock model.  Upstream returns a
-    ``code_interpreter_call`` output item; locally the invocation is suppressed
-    and only its result reaches ``output_text``.
+    Only Amazon Nova 2 exposes an autonomous code-execution system tool, so
+    ``code_interpreter`` is supported there and on the official API but on no
+    other Bedrock model.  Both report the run as a ``code_interpreter_call``
+    output item carrying the code and its output.
 
     Ref: https://developers.openai.com/api/docs/guides/tools-code-interpreter
          https://docs.aws.amazon.com/nova/latest/nova2-userguide/using-tools.html
@@ -2595,12 +2596,12 @@ class TestCodeInterpreterTool:
         use_official_api: bool,
         chat_model: str,
     ) -> None:
-        """``code_interpreter`` executes the code and returns its result in the text.
+        """``code_interpreter`` runs the code and reports the run it performed.
 
-        Locally the tool maps to the ``nova_code_interpreter`` Bedrock system
-        tool, which runs the code within a single Converse call; the gateway
-        suppresses that invocation, so the arithmetic result is the only visible
-        evidence it ran and no ``function_call`` may leak.
+        The arithmetic answer proves the code ran; the ``code_interpreter_call``
+        item is how a client learns it did, and what it cost.  A server tool
+        must never surface as a ``function_call``, which a client would try to
+        answer itself.
 
         Ref: https://developers.openai.com/api/docs/guides/tools-code-interpreter
              stdapi/models/chat/_adapters/_openai_responses.py:_extract_output_items
@@ -2626,15 +2627,17 @@ class TestCodeInterpreterTool:
             f"Expected '391' in output; got: {resp.output_text!r}"
         )
         assert not [item for item in resp.output if item.type == "function_call"], (
-            "the suppressed code-execution tool must not surface as a function_call"
+            "the code-execution server tool must not surface as a function_call"
         )
-        if use_official_api:
-            code_calls = [
-                item for item in resp.output if item.type == "code_interpreter_call"
-            ]
-            assert len(code_calls) >= 1, (
-                "Expected at least one code_interpreter_call output item from official API"
-            )
+        code_calls = [
+            item for item in resp.output if item.type == "code_interpreter_call"
+        ]
+        assert len(code_calls) >= 1, (
+            f"Expected a code_interpreter_call output item; got: "
+            f"{[item.type for item in resp.output]}"
+        )
+        assert code_calls[0].container_id
+        assert code_calls[0].code, "the executed snippet must be reported"
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("chat_model", _CODE_INTERP_MODELS)
@@ -2645,11 +2648,11 @@ class TestCodeInterpreterTool:
         use_official_api: bool,
         chat_model: str,
     ) -> None:
-        """Streaming ``code_interpreter`` yields text deltas and no tool-call events.
+        """Streaming ``code_interpreter`` closes the call before the answer.
 
-        The suppressed ``nova_code_interpreter`` invocation must not surface as
-        ``response.function_call_arguments.*`` events; only the resulting text is
-        streamed before the terminal event.
+        The run must reach the client as its own item, never as
+        ``response.function_call_arguments.*`` events, which announce a call the
+        client is expected to answer itself.
 
         Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
              stdapi/models/chat/_adapters/_openai_responses.py:format_stream
@@ -2660,6 +2663,7 @@ class TestCodeInterpreterTool:
 
         text_delta_count = 0
         code_interp_done_count = 0
+        code_done_events = 0
         func_event_count = 0
         completed = False
 
@@ -2680,6 +2684,9 @@ class TestCodeInterpreterTool:
             elif event.type == "response.output_item.done":
                 if getattr(event.item, "type", None) == "code_interpreter_call":
                     code_interp_done_count += 1
+            elif event.type == "response.code_interpreter_call_code.done":
+                assert event.code, "the finalised snippet must not be empty"
+                code_done_events += 1
             elif event.type.startswith("response.function_call_arguments."):
                 func_event_count += 1
             elif event.type == "response.completed":
@@ -2690,13 +2697,91 @@ class TestCodeInterpreterTool:
             f"function_call_arguments events must not leak: {func_event_count}"
         )
         assert completed, "Expected response.completed event"
-        if use_official_api:
-            assert code_interp_done_count >= 1, (
-                "Expected at least one code_interpreter_call output_item.done from official API"
-            )
+        assert code_interp_done_count >= 1, (
+            "Expected a code_interpreter_call output_item.done event"
+        )
+        assert code_done_events >= 1, (
+            "Expected the executed snippet in a code_interpreter_call_code.done event"
+        )
 
+
+#: Bedrock tool names Amazon Nova 2 runs code under, as the model class declares them.
+_CODE_EXECUTION_NAMES = frozenset({"nova_code_interpreter"})
+
+#: The snippet the probed turn ran.
+_PROBED_SNIPPET = "print(17 * 23)"
+
+#: What the probed run printed, which is also the answer the model wrote from it.
+_PROBED_STDOUT = "391"
+
+#: The content blocks of a Nova 2 turn that ran code for itself, as Bedrock returns them.
+# Probed against amazon.nova-2-lite-v1:0 (us-east-1), 2026-09-17.
+_CODE_EXECUTION_CONTENT: list[dict[str, Any]] = [
+    {
+        "toolUse": {
+            "toolUseId": "tooluse_1",
+            "name": "nova_code_interpreter",
+            "input": {"snippet": _PROBED_SNIPPET},
+            "type": "server_tool_use",
+        }
+    },
+    {
+        "toolResult": {
+            "toolUseId": "tooluse_1",
+            "content": [
+                {
+                    "json": {
+                        "stdOut": _PROBED_STDOUT,
+                        "stdErr": "",
+                        "exitCode": 0,
+                        "isError": False,
+                    }
+                }
+            ],
+            "status": "success",
+            "type": "nova_code_interpreter_result",
+        }
+    },
+    {"text": _PROBED_STDOUT},
+]
+
+#: The stack trace the probed failing snippet wrote to standard error.
+_PROBED_STDERR = "ZeroDivisionError: division by zero"
+
+#: The same turn when the snippet raised: the tool still succeeded, the code did not.
+# Probed against amazon.nova-2-lite-v1:0 (us-east-1), 2026-09-17.
+_FAILED_CODE_EXECUTION_CONTENT: list[dict[str, Any]] = [
+    {
+        "toolUse": {
+            "toolUseId": "tooluse_1",
+            "name": "nova_code_interpreter",
+            "input": {"snippet": "print(1/0)"},
+            "type": "server_tool_use",
+        }
+    },
+    {
+        "toolResult": {
+            "toolUseId": "tooluse_1",
+            "content": [
+                {
+                    "json": {
+                        "stdOut": "",
+                        "stdErr": _PROBED_STDERR,
+                        "exitCode": 1,
+                        "isError": True,
+                    }
+                }
+            ],
+            "status": "success",
+            "type": "nova_code_interpreter_result",
+        }
+    },
+    {"text": "It raised."},
+]
 
 #: The raw stream of a model running a tool for itself, block for block.
+# Probed against amazon.nova-2-lite-v1:0 (us-east-1), 2026-09-17; the empty text
+# preamble is the one Nova sends ahead of block 0 on some turns.
 # Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_process_stream_events
 _SELF_SERVED_TOOL_STREAM: list[dict[str, Any]] = [
     {"contentBlockDelta": {"delta": {"text": ""}, "contentBlockIndex": 0}},
@@ -2704,14 +2789,18 @@ _SELF_SERVED_TOOL_STREAM: list[dict[str, Any]] = [
     {
         "contentBlockStart": {
             "start": {
-                "toolUse": {"toolUseId": "tooluse_1", "name": "nova_code_interpreter"}
+                "toolUse": {
+                    "toolUseId": "tooluse_1",
+                    "name": "nova_code_interpreter",
+                    "type": "server_tool_use",
+                }
             },
             "contentBlockIndex": 1,
         }
     },
     {
         "contentBlockDelta": {
-            "delta": {"toolUse": {"input": '{"code": "print(27)"}'}},
+            "delta": {"toolUse": {"input": '{"snippet":"print(17 * 23)"}'}},
             "contentBlockIndex": 1,
         }
     },
@@ -2722,6 +2811,7 @@ _SELF_SERVED_TOOL_STREAM: list[dict[str, Any]] = [
                 "toolResult": {
                     "toolUseId": "tooluse_1",
                     "type": "nova_code_interpreter_result",
+                    "status": "success",
                 }
             },
             "contentBlockIndex": 2,
@@ -2729,23 +2819,41 @@ _SELF_SERVED_TOOL_STREAM: list[dict[str, Any]] = [
     },
     {
         "contentBlockDelta": {
-            "delta": {"toolResult": [{"json": {"stdOut": "27\n", "exitCode": 0}}]},
+            "delta": {
+                "toolResult": [
+                    {
+                        "json": {
+                            "stdOut": _PROBED_STDOUT,
+                            "stdErr": "",
+                            "exitCode": 0,
+                            "isError": False,
+                        }
+                    }
+                ]
+            },
             "contentBlockIndex": 2,
         }
     },
     {"contentBlockStop": {"contentBlockIndex": 2}},
-    {"contentBlockDelta": {"delta": {"text": "27."}, "contentBlockIndex": 3}},
+    {"contentBlockDelta": {"delta": {"text": _PROBED_STDOUT}, "contentBlockIndex": 3}},
     {"contentBlockStop": {"contentBlockIndex": 3}},
     {"messageStop": {"stopReason": "end_turn"}},
     {"metadata": {"usage": {"inputTokens": 10, "outputTokens": 5}}},
 ]
 
 
-async def _stream_payloads(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+async def _stream_payloads(
+    events: list[dict[str, Any]],
+    *,
+    suppress_tool_names: frozenset[str] | None = frozenset({"nova_code_interpreter"}),
+    code_execution_tool_names: frozenset[str] | None = None,
+) -> list[dict[str, Any]]:
     """Run a Bedrock stream through the Responses adapter and decode its events.
 
     Args:
         events: Raw Bedrock ConverseStream events, in order.
+        suppress_tool_names: Tool names whose items are filtered out.
+        code_execution_tool_names: Tool names rendered as ``code_interpreter_call``.
 
     Returns:
         The JSON payload of every emitted SSE event.
@@ -2766,7 +2874,8 @@ async def _stream_payloads(events: list[dict[str, Any]]) -> list[dict[str, Any]]
             "amazon.nova-2-lite-v1:0",
             _events(),
             request,
-            suppress_tool_names=frozenset({"nova_code_interpreter"}),
+            suppress_tool_names=suppress_tool_names,
+            code_execution_tool_names=code_execution_tool_names,
         )
     ]
 
@@ -2774,13 +2883,15 @@ async def _stream_payloads(events: list[dict[str, Any]]) -> list[dict[str, Any]]
 @pytest.mark.local
 @pytest.mark.usefixtures("request_log")
 class TestSelfServedToolResultsAddNoOutputItem:
-    """A tool the model ran for itself contributes no item to the streamed output.
+    """A suppressed tool the model ran for itself adds no item to the streamed output.
 
-    Its result arrives as a content block of its own, carrying nothing a client
-    can render: the non-streamed path skips it, and the streamed one has to agree.
-    An extra empty ``message`` item would answer the same request differently on
-    the two paths, shift the identifier of the real answer, and come back as a
-    blank assistant turn when the response is continued.
+    This is the configuration a response built from a stored prompt runs under,
+    where every system tool is suppressed.  The result then arrives as a content
+    block of its own, carrying nothing a client can render: the non-streamed path
+    skips it, and the streamed one has to agree.  An extra empty ``message`` item
+    would answer the same request differently on the two paths, shift the
+    identifier of the real answer, and come back as a blank assistant turn when
+    the response is continued.
 
     Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
          stdapi/models/chat/_adapters/_openai_responses.py:_handle_block_start
@@ -2798,7 +2909,7 @@ class TestSelfServedToolResultsAddNoOutputItem:
         output = completed[0]["response"]["output"]
         assert [item["type"] for item in output] == ["message"]
         assert output[0]["id"] == "resp_1-msg-0"
-        assert [part["text"] for part in output[0]["content"]] == ["27."]
+        assert [part["text"] for part in output[0]["content"]] == [_PROBED_STDOUT]
 
     async def test_the_result_block_opens_no_item_and_no_content_part(self) -> None:
         """No lifecycle event announces the result block to the client.
@@ -2827,27 +2938,406 @@ class TestSelfServedToolResultsAddNoOutputItem:
         streamed = completed["response"]["output"]
 
         items = responses_adapter._extract_output_items(  # noqa: SLF001
-            [
-                {
-                    "toolUse": {
-                        "toolUseId": "tooluse_1",
-                        "name": "nova_code_interpreter",
-                        "input": {"code": "print(27)"},
-                    }
-                },
-                {
-                    "toolResult": {
-                        "toolUseId": "tooluse_1",
-                        "content": [{"json": {"stdOut": "27\n", "exitCode": 0}}],
-                    }
-                },
-                {"text": "27."},
-            ],
+            cast("list[ContentBlockOutputTypeDef]", _CODE_EXECUTION_CONTENT),
             "resp_1",
-            frozenset({"nova_code_interpreter"}),
+            _CODE_EXECUTION_NAMES,
         )
 
         assert [item.id for item in items] == [item["id"] for item in streamed]
+
+
+@pytest.mark.local
+@pytest.mark.usefixtures("request_log")
+class TestCodeExecutionOutputItem:
+    """Code a model runs for itself is reported as a ``code_interpreter_call`` item.
+
+    The run is executed and billed on the model's side, so dropping the call
+    leaves the caller paying for work it never sees and unable to tell an
+    answer that was computed from one that was guessed.  The item carries the
+    snippet that ran and the log lines it produced, on the streamed and the
+    non-streamed path alike.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         https://docs.aws.amazon.com/nova/latest/nova2-userguide/using-tools.html
+         stdapi/models/chat/_adapters/_openai_responses.py:_extract_output_items
+    """
+
+    @staticmethod
+    def _items(content: list[dict[str, Any]]) -> list[Any]:
+        """Extract the output items of a code-executing turn.
+
+        Args:
+            content: Bedrock response content blocks.
+
+        Returns:
+            The output items the Responses API reports for them.
+        """
+        return responses_adapter._extract_output_items(  # noqa: SLF001
+            cast("list[ContentBlockOutputTypeDef]", content),
+            "resp-1",
+            None,
+            code_execution_tool_names=_CODE_EXECUTION_NAMES,
+        )
+
+    def test_the_executed_snippet_and_its_logs_reach_the_response(self) -> None:
+        """The call precedes the answer and carries the code and its output.
+
+        Ref: https://developers.openai.com/api/docs/guides/tools-code-interpreter
+        """
+        items = self._items(_CODE_EXECUTION_CONTENT)
+
+        assert [item.type for item in items] == ["code_interpreter_call", "message"]
+        call = items[0]
+        assert call.code == _PROBED_SNIPPET
+        assert call.status == "completed"
+        assert call.container_id
+        assert [(out.type, out.logs) for out in call.outputs] == [
+            ("logs", _PROBED_STDOUT)
+        ]
+
+    def test_a_snippet_that_raised_is_reported_as_failed_with_its_error(self) -> None:
+        """A run the code failed is ``failed``, and its error text is the log.
+
+        The backend reports the *tool* as having succeeded in that case, so the
+        outcome of the code itself is the only thing that can set the status.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/models/chat/_adapters/_openai_responses.py:_code_interpreter_result
+        """
+        call = self._items(_FAILED_CODE_EXECUTION_CONTENT)[0]
+
+        assert call.status == "failed"
+        assert call.outputs is not None
+        assert _PROBED_STDERR in call.outputs[0].logs
+
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [
+            ({"stdOut": "", "stdErr": "boom", "exitCode": 1}, "completed"),
+            ({"stdOut": "", "stdErr": "boom", "isError": True}, "failed"),
+        ],
+        ids=["exit-code-alone", "is-error-alone"],
+    )
+    def test_the_status_follows_is_error_and_not_the_exit_code(
+        self, payload: dict[str, Any], expected: str
+    ) -> None:
+        """``isError`` decides the status; ``exitCode`` on its own never does.
+
+        Bedrock reports the outcome of a ``nova_code_interpreter`` run through
+        ``isError``, which the Anthropic surface already reads the same way, so
+        an exit code arriving without it must not flip the two surfaces apart.
+
+        Ref: stdapi/models/chat/amazon_nova_2.py:ChatModel._build_code_execution_result
+             stdapi/models/chat/_adapters/_openai_responses.py:_code_interpreter_result
+        """
+        content: list[dict[str, Any]] = [
+            _CODE_EXECUTION_CONTENT[0],
+            {"toolResult": {"toolUseId": "tooluse_1", "content": [{"json": payload}]}},
+        ]
+
+        assert self._items(content)[0].status == expected
+
+    def test_every_call_of_one_response_shares_its_container(self) -> None:
+        """Two runs of the same response report the same container.
+
+        Upstream requires a container on every call, and two calls of one
+        response run in one place, so reporting two identifiers would describe
+        a topology the response does not have.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/models/chat/_adapters/_openai_responses.py:_code_interpreter_call
+        """
+        second: list[dict[str, Any]] = [
+            {
+                "toolUse": {
+                    "toolUseId": "tooluse_2",
+                    "name": "nova_code_interpreter",
+                    "input": {"snippet": "print(2)"},
+                }
+            },
+            {
+                "toolResult": {
+                    "toolUseId": "tooluse_2",
+                    "content": [
+                        {"json": {"stdOut": "2", "exitCode": 0, "isError": False}}
+                    ],
+                }
+            },
+        ]
+        items = self._items([*_CODE_EXECUTION_CONTENT, *second])
+
+        calls = [item for item in items if item.type == "code_interpreter_call"]
+        assert len(calls) == 2
+        assert calls[0].id != calls[1].id
+        assert calls[0].container_id == calls[1].container_id
+
+    def test_a_call_whose_result_never_came_reports_no_output(self) -> None:
+        """A run with no result block is still reported, with a null ``outputs``.
+
+        Upstream types ``outputs`` as nullable for exactly this: the call
+        happened, and nothing is known about what it produced.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/models/chat/_adapters/_openai_responses.py:_attach_code_execution_result
+        """
+        call = self._items(_CODE_EXECUTION_CONTENT[:1])[0]
+
+        assert call.code == _PROBED_SNIPPET
+        assert call.status == "completed"
+        assert call.outputs is None
+
+    async def test_the_streamed_events_open_and_close_the_call(self) -> None:
+        """The streamed sequence is the one upstream documents for the tool.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+        """
+        payloads = await _stream_payloads(
+            _SELF_SERVED_TOOL_STREAM,
+            suppress_tool_names=None,
+            code_execution_tool_names=_CODE_EXECUTION_NAMES,
+        )
+        types = [payload["type"] for payload in payloads]
+
+        expected = [
+            "response.output_item.added",
+            "response.code_interpreter_call.in_progress",
+            "response.code_interpreter_call_code.delta",
+            "response.code_interpreter_call_code.done",
+            "response.code_interpreter_call.interpreting",
+            "response.code_interpreter_call.completed",
+            "response.output_item.done",
+        ]
+        start = types.index("response.output_item.added")
+        assert types[start : start + len(expected)] == expected
+        code_done = next(
+            p
+            for p in payloads
+            if p["type"] == "response.code_interpreter_call_code.done"
+        )
+        assert code_done["code"] == _PROBED_SNIPPET
+        assert not [
+            t for t in types if t.startswith("response.function_call_arguments")
+        ]
+
+    async def test_the_streamed_call_reaches_the_terminal_event(self) -> None:
+        """``response.completed`` carries the call and the answer, in that order.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/models/chat/_adapters/_openai_responses.py:_emit_code_call_done
+        """
+        payloads = await _stream_payloads(
+            _SELF_SERVED_TOOL_STREAM,
+            suppress_tool_names=None,
+            code_execution_tool_names=_CODE_EXECUTION_NAMES,
+        )
+
+        completed = next(p for p in payloads if p["type"] == "response.completed")
+        output = completed["response"]["output"]
+        assert [item["type"] for item in output] == ["code_interpreter_call", "message"]
+        assert output[0]["code"] == _PROBED_SNIPPET
+        assert output[0]["outputs"] == [{"logs": _PROBED_STDOUT, "type": "logs"}]
+        assert [part["text"] for part in output[1]["content"]] == [_PROBED_STDOUT]
+
+    async def test_the_streamed_and_non_streamed_items_agree(self) -> None:
+        """The two paths report the same items, with the same identifiers.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_extract_output_items
+        """
+        payloads = await _stream_payloads(
+            _SELF_SERVED_TOOL_STREAM,
+            suppress_tool_names=None,
+            code_execution_tool_names=_CODE_EXECUTION_NAMES,
+        )
+        completed = next(p for p in payloads if p["type"] == "response.completed")
+        streamed = completed["response"]["output"]
+
+        items = responses_adapter._extract_output_items(  # noqa: SLF001
+            cast("list[ContentBlockOutputTypeDef]", _CODE_EXECUTION_CONTENT),
+            "resp_1",
+            None,
+            code_execution_tool_names=_CODE_EXECUTION_NAMES,
+        )
+
+        assert [item.id for item in items] == [item["id"] for item in streamed]
+        assert [item.type for item in items] == [item["type"] for item in streamed]
+
+    def test_a_reported_run_replays_as_input_without_being_refused(self) -> None:
+        """The item a response reports is accepted back in the next request.
+
+        A client continuing a conversation echoes the whole previous output,
+        so an item the gateway emits but its own request model rejects would
+        turn every follow-up turn into a ``400``.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+        """
+        reported = [
+            item.model_dump(mode="json", exclude_none=True)
+            for item in self._items(_CODE_EXECUTION_CONTENT)
+        ]
+
+        request = ResponseCreateParams.model_validate(
+            {"model": "amazon.nova-2-lite-v1:0", "input": reported}
+        )
+
+        assert request.input is not None
+        assert [type(item).__name__ for item in request.input] == [
+            "CodeInterpreterCallInput",
+            "ResponseOutputMessageInput",
+        ]
+
+    async def test_each_run_of_a_streamed_turn_gets_its_own_item(self) -> None:
+        """Two runs in one turn are two items, at two consecutive indices.
+
+        The first item stays open across its result block, so a second run
+        starting right after is where an index would be reused and the two
+        runs would overwrite each other in the client's item list.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/models/chat/_adapters/_openai_responses.py:_handle_block_start
+        """
+
+        def blocks(index: int, tool_id: str, snippet: str, stdout: str) -> list[Any]:
+            """Build the Bedrock blocks of one code-execution run."""
+            return [
+                {
+                    "contentBlockStart": {
+                        "start": {
+                            "toolUse": {
+                                "toolUseId": tool_id,
+                                "name": "nova_code_interpreter",
+                            }
+                        },
+                        "contentBlockIndex": index,
+                    }
+                },
+                {
+                    "contentBlockDelta": {
+                        "delta": {"toolUse": {"input": f'{{"snippet":"{snippet}"}}'}},
+                        "contentBlockIndex": index,
+                    }
+                },
+                {"contentBlockStop": {"contentBlockIndex": index}},
+                {
+                    "contentBlockStart": {
+                        "start": {
+                            "toolResult": {
+                                "toolUseId": tool_id,
+                                "type": "nova_code_interpreter_result",
+                            }
+                        },
+                        "contentBlockIndex": index + 1,
+                    }
+                },
+                {
+                    "contentBlockDelta": {
+                        "delta": {
+                            "toolResult": [
+                                {
+                                    "json": {
+                                        "stdOut": stdout,
+                                        "exitCode": 0,
+                                        "isError": False,
+                                    }
+                                }
+                            ]
+                        },
+                        "contentBlockIndex": index + 1,
+                    }
+                },
+                {"contentBlockStop": {"contentBlockIndex": index + 1}},
+            ]
+
+        payloads = await _stream_payloads(
+            [
+                *blocks(0, "tooluse_1", "print(1)", "1"),
+                *blocks(2, "tooluse_2", "print(2)", "2"),
+                {"contentBlockDelta": {"delta": {"text": "1 and 2"}}},
+                {"contentBlockStop": {"contentBlockIndex": 4}},
+                {"messageStop": {"stopReason": "end_turn"}},
+            ],
+            suppress_tool_names=None,
+            code_execution_tool_names=_CODE_EXECUTION_NAMES,
+        )
+
+        completed = next(p for p in payloads if p["type"] == "response.completed")
+        output = completed["response"]["output"]
+        assert [item["type"] for item in output] == [
+            "code_interpreter_call",
+            "code_interpreter_call",
+            "message",
+        ]
+        assert [item["code"] for item in output[:2]] == ["print(1)", "print(2)"]
+        assert [item["outputs"][0]["logs"] for item in output[:2]] == ["1", "2"]
+        done = [
+            payload
+            for payload in payloads
+            if payload["type"] == "response.output_item.done"
+        ]
+        assert [payload["output_index"] for payload in done] == [0, 1, 2]
+
+    async def test_a_stream_cut_after_the_code_still_closes_the_call(self) -> None:
+        """A stream that ends before the result block leaves no item open.
+
+        A ``code_interpreter_call`` still ``in_progress`` in a terminal response
+        describes a run the client can never learn the outcome of.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/models/chat/_adapters/_openai_responses.py:_emit_code_call_done
+        """
+        truncated = [*_SELF_SERVED_TOOL_STREAM[2:4], *_SELF_SERVED_TOOL_STREAM[-2:]]
+        payloads = await _stream_payloads(
+            truncated,
+            suppress_tool_names=None,
+            code_execution_tool_names=_CODE_EXECUTION_NAMES,
+        )
+
+        completed = next(p for p in payloads if p["type"] == "response.completed")
+        output = completed["response"]["output"]
+        assert [item["type"] for item in output] == ["code_interpreter_call"]
+        assert output[0]["status"] == "completed"
+        assert output[0].get("outputs") is None
+
+    async def test_a_model_serving_the_tool_renders_its_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The model that runs code wires its own tool name through to the item.
+
+        Every other system tool stays filtered out: only the one a client asked
+        for by name, and can read the result of, becomes an output item.
+
+        Ref: stdapi/models/chat/_default.py:ChatModel.create_response
+        """
+        from stdapi.models.chat.amazon_nova_2 import (  # noqa: PLC0415
+            ChatModel as NovaChatModel,
+        )
+
+        converse_response = {
+            "output": {
+                "message": {"role": "assistant", "content": _CODE_EXECUTION_CONTENT}
+            },
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+        }
+        monkeypatch.setattr(
+            NovaChatModel, "converse", AsyncMock(return_value=converse_response)
+        )
+        request = ResponseCreateParams.model_validate(
+            {
+                "model": "amazon.nova-2-lite-v1:0",
+                "input": "Compute 17 * 23.",
+                "tools": [{"type": "code_interpreter"}],
+            }
+        )
+
+        response = await NovaChatModel("amazon.nova-2-lite-v1:0").create_response(
+            request, "resp-1", 0.0
+        )
+
+        assert isinstance(response, Response)
+        assert [item.type for item in response.output] == [
+            "code_interpreter_call",
+            "message",
+        ]
 
 
 class TestUsageLogging:

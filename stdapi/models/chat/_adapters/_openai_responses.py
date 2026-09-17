@@ -46,6 +46,8 @@ from stdapi.types.openai_responses import (
     AnnotationFileCitation,
     AnnotationURLCitation,
     CodeInterpreter,
+    CodeInterpreterOutput,
+    CodeInterpreterOutputLogs,
     CompactionItemParam,
     ContentPartReasoningText,
     CustomToolCallInput,
@@ -68,6 +70,12 @@ from stdapi.types.openai_responses import (
     PromptVariables,
     ReasoningItemContent,
     Response,
+    ResponseCodeInterpreterCallCodeDeltaEvent,
+    ResponseCodeInterpreterCallCodeDoneEvent,
+    ResponseCodeInterpreterCallCompletedEvent,
+    ResponseCodeInterpreterCallInProgressEvent,
+    ResponseCodeInterpreterCallInterpretingEvent,
+    ResponseCodeInterpreterToolCall,
     ResponseCompletedEvent,
     ResponseContentPartAddedEvent,
     ResponseContentPartDoneEvent,
@@ -166,6 +174,9 @@ if TYPE_CHECKING:
         SystemContentBlockTypeDef,
         ToolChoiceTypeDef,
         ToolConfigurationTypeDef,
+        ToolResultBlockDeltaTypeDef,
+        ToolResultBlockOutputTypeDef,
+        ToolResultContentBlockOutputTypeDef,
         ToolResultContentBlockUnionTypeDef,
         ToolTypeDef,
         ToolUseBlockOutputTypeDef,
@@ -213,6 +224,9 @@ type PromptCachingScopes = frozenset[PromptCaching]
 
 #: Status values produced for a generated ``ImageGenerationCall`` item.
 type _ImageStatus = Literal["completed", "failed"]
+
+#: Status values produced for a ``code_interpreter_call`` item.
+type _CodeStatus = Literal["in_progress", "completed", "failed"]
 
 
 #: Mapping from OpenAI integrated tool classes to canonical server tool names (translated to Bedrock names via tool_name_map in ``_build_tool_config``).
@@ -2212,11 +2226,80 @@ def _citation_annotations(
             )
 
 
+#: Key of the code a code-execution tool ran, in its call arguments.
+_CODE_SNIPPET_KEY: Final = "snippet"
+
+
+def _code_interpreter_call(
+    tool_use_id: str,
+    response_id: str,
+    code: str,
+    status: _CodeStatus,
+    outputs: list[CodeInterpreterOutput] | None = None,
+) -> ResponseCodeInterpreterToolCall:
+    """Build a ``code_interpreter_call`` item for one code-execution run.
+
+    The container identifier is derived from the response, so every run of a
+    response reports the same one and the value is stable for its lifetime.
+
+    Args:
+        tool_use_id: Identifier of the run, unique within the response.
+        response_id: The response identifier for generating item IDs.
+        code: The code that ran, empty while it is still being streamed.
+        status: Status of the run.
+        outputs: Outputs of the run, or ``None`` while they are unknown.
+
+    Returns:
+        The output item.
+    """
+    return ResponseCodeInterpreterToolCall(
+        id=f"{response_id}-ci-{tool_use_id}",
+        container_id=f"cntr_{response_id.removeprefix('resp-')}",
+        status=status,
+        type="code_interpreter_call",
+        code=code,
+        outputs=outputs,
+    )
+
+
+def _code_interpreter_result(
+    content_items: Iterable[
+        ToolResultContentBlockOutputTypeDef | ToolResultBlockDeltaTypeDef
+    ],
+) -> tuple[list[CodeInterpreterOutput], _CodeStatus]:
+    """Fold a code-execution result payload into Responses outputs.
+
+    The Responses API has a single log channel, so both output streams of the
+    run are concatenated into one ``logs`` entry.
+
+    Args:
+        content_items: Content of the result, whole or accumulated from deltas.
+
+    Returns:
+        Tuple of ``(outputs, status)``; the status is ``"failed"`` when the
+        code itself raised, which the backend reports separately from whether
+        the run took place.
+    """
+    payload: Mapping[str, Any] = next(
+        (item["json"] for item in content_items if "json" in item), {}
+    )
+    logs = "\n".join(
+        stream
+        for key in ("stdOut", "stdErr")
+        if (stream := payload.get(key) or "").strip()
+    )
+    return (
+        [CodeInterpreterOutputLogs(logs=logs, type="logs")],
+        "failed" if payload.get("isError") else "completed",
+    )
+
+
 def _tool_use_output_item(
     tool_use: ToolUseBlockOutputTypeDef,
     response_id: str,
     suppress_tool_names: frozenset[str] | None,
     web_search_tool_names: frozenset[str] | None,
+    code_execution_tool_names: frozenset[str] | None = None,
 ) -> ResponseOutputItem | None:
     """Map a Bedrock ``toolUse`` block to an output item.
 
@@ -2225,13 +2308,25 @@ def _tool_use_output_item(
         response_id: The response identifier for generating item IDs.
         suppress_tool_names: Tool names whose items should be filtered out.
         web_search_tool_names: Tool names emitted as ``web_search_call`` items.
+        code_execution_tool_names: Tool names emitted as ``code_interpreter_call``
+            items; their result block carries the outputs.
 
     Returns:
-        ``web_search_call`` or ``function_call`` item, or ``None`` when the
-        tool is suppressed.  Web-search sources are attributed afterwards by
-        ``_attach_web_search_sources``.
+        ``web_search_call``, ``code_interpreter_call`` or ``function_call``
+        item, or ``None`` when the tool is suppressed.  Web-search sources are
+        attributed afterwards by ``_attach_web_search_sources``.
     """
     name: str = tool_use["name"]
+    if code_execution_tool_names and name in code_execution_tool_names:
+        input_data = tool_use["input"]
+        return _code_interpreter_call(
+            tool_use["toolUseId"],
+            response_id,
+            input_data.get(_CODE_SNIPPET_KEY, "")
+            if isinstance(input_data, dict)
+            else "",
+            "completed",
+        )
     if web_search_tool_names and name in web_search_tool_names:
         input_data = tool_use["input"]
         query = input_data.get("query", "") if isinstance(input_data, dict) else ""
@@ -2418,11 +2513,71 @@ def _patch_message_annotations(
             return
 
 
+def _attach_code_execution_result(
+    output_items: list[ResponseOutputItem],
+    tool_result: ToolResultBlockOutputTypeDef,
+    response_id: str,
+) -> None:
+    """Fold a code-execution result into the call it belongs to, in place.
+
+    Args:
+        output_items: Mutable output items list to patch in place.
+        tool_result: The Bedrock ``toolResult`` block carrying the run output.
+        response_id: The response identifier for generating item IDs.
+    """
+    if not output_items:
+        return
+    item = output_items[-1]
+    if (
+        not isinstance(item, ResponseCodeInterpreterToolCall)
+        or item.id != f"{response_id}-ci-{tool_result['toolUseId']}"
+    ):
+        return
+    outputs, status = _code_interpreter_result(tool_result.get("content", ()))
+    output_items[-1] = item.model_copy(update={"outputs": outputs, "status": status})
+
+
+def _append_tool_use_item(
+    output_items: list[ResponseOutputItem],
+    tool_use: ToolUseBlockOutputTypeDef,
+    response_id: str,
+    suppress_tool_names: frozenset[str] | None,
+    web_search_tool_names: frozenset[str] | None,
+    code_execution_tool_names: frozenset[str] | None,
+) -> str | None:
+    """Append the output item of a ``toolUse`` block, when it has one.
+
+    Args:
+        output_items: Mutable output items list to append to.
+        tool_use: The Bedrock ``toolUse`` block.
+        response_id: The response identifier for generating item IDs.
+        suppress_tool_names: Tool names whose items should be filtered out.
+        web_search_tool_names: Tool names emitted as ``web_search_call`` items.
+        code_execution_tool_names: Tool names emitted as ``code_interpreter_call``
+            items.
+
+    Returns:
+        The id of the ``web_search_call`` item just opened, or ``None``.
+    """
+    item = _tool_use_output_item(
+        tool_use,
+        response_id,
+        suppress_tool_names,
+        web_search_tool_names,
+        code_execution_tool_names,
+    )
+    if item is None:
+        return None
+    output_items.append(item)
+    return item.id if isinstance(item, ResponseFunctionWebSearch) else None
+
+
 def _extract_output_items(
     contents: list[ContentBlockOutputTypeDef],
     response_id: str,
     suppress_tool_names: frozenset[str] | None,
     web_search_tool_names: frozenset[str] | None = None,
+    code_execution_tool_names: frozenset[str] | None = None,
     *,
     include_encrypted_reasoning: bool = False,
 ) -> list[ResponseOutputItem]:
@@ -2432,7 +2587,7 @@ def _extract_output_items(
     streaming path: each ``reasoningContent`` block becomes its own
     ``reasoning`` item, each contiguous run of text blocks becomes a
     ``message`` item at its block position, and ``toolUse`` blocks become
-    ``web_search_call`` or ``function_call`` items.
+    ``web_search_call``, ``code_interpreter_call`` or ``function_call`` items.
 
     Args:
         contents: Bedrock response content blocks.
@@ -2443,6 +2598,9 @@ def _extract_output_items(
             ``web_search_call`` output items instead of being suppressed
             (e.g. ``{"nova_grounding"}``).  Sources are populated from
             ``citationsContent`` blocks in the response.
+        code_execution_tool_names: Tool names that should be emitted as
+            ``code_interpreter_call`` output items instead of being suppressed;
+            the ``toolResult`` block that follows carries their outputs.
         include_encrypted_reasoning: Whether the request's ``include`` asked
             for ``reasoning.encrypted_content`` (adds the round-trip envelope
             to reasoning items).
@@ -2475,12 +2633,20 @@ def _extract_output_items(
                 reasoning_count += 1
         elif tool_use := block.get("toolUse"):
             _flush_message_item(output_items, text_parts, annotations, response_id)
-            if tool_item := _tool_use_output_item(
-                tool_use, response_id, suppress_tool_names, web_search_tool_names
-            ):
-                output_items.append(tool_item)
-                if isinstance(tool_item, ResponseFunctionWebSearch):
-                    last_ws_id = tool_item.id
+            last_ws_id = (
+                _append_tool_use_item(
+                    output_items,
+                    tool_use,
+                    response_id,
+                    suppress_tool_names,
+                    web_search_tool_names,
+                    code_execution_tool_names,
+                )
+                or last_ws_id
+            )
+        elif tool_result := block.get("toolResult"):
+            # Only a code-execution run has an item to carry its result.
+            _attach_code_execution_result(output_items, tool_result, response_id)
         elif text := block.get("text"):
             text_parts.append(text)
         elif citations_block := block.get("citationsContent"):
@@ -2648,6 +2814,7 @@ async def format_response(
     request: ResponseCreateParams,
     suppress_tool_names: frozenset[str] | None = None,
     web_search_tool_names: frozenset[str] | None = None,
+    code_execution_tool_names: frozenset[str] | None = None,
 ) -> Response:
     """Build a Response from a Bedrock Converse response.
 
@@ -2660,6 +2827,8 @@ async def format_response(
         suppress_tool_names: Tool names to filter from output items.
         web_search_tool_names: Tool names to emit as ``web_search_call`` output
             items (populated with query and ``citationsContent`` sources).
+        code_execution_tool_names: Tool names to emit as ``code_interpreter_call``
+            output items (populated with the code and its logs).
 
     Returns:
         Completed Response object.
@@ -2685,6 +2854,7 @@ async def format_response(
                 response_id,
                 suppress_tool_names,
                 web_search_tool_names,
+                code_execution_tool_names,
                 include_encrypted_reasoning=_includes_encrypted_reasoning(request),
             ),
             *_map_stop_reason(bedrock_response.get("stopReason")),
@@ -2710,6 +2880,8 @@ class _BlockKind(Enum):
     TOOL = "tool"
     SUPPRESSED = "suppressed"
     WEB_SEARCH = "web_search"
+    CODE_EXECUTION = "code_execution"
+    CODE_RESULT = "code_result"
     REASONING = "reasoning"
 
 
@@ -2751,6 +2923,10 @@ class _StreamState:
     reasoning_redacted: list[bytes] = field(default_factory=list)
     #: Completed suppressed tool calls as ``(tool_id, tool_name, args_json)``.
     suppressed_tool_calls: list[tuple[str, str, str]] = field(default_factory=list)
+    #: Code-execution run awaiting its result block, as ``(item_id, tool_id, code)``.
+    pending_code_call: tuple[str, str, str] | None = None
+    #: Result content accumulated for the pending code-execution run.
+    pending_code_result: list[ToolResultBlockDeltaTypeDef] = field(default_factory=list)
     #: Web-search sources keyed by ``item_id`` (see class docstring).
     pending_web_search_sources: dict[str | None, list[WebSearchActionSource]] = field(
         default_factory=dict
@@ -2788,29 +2964,46 @@ def _handle_block_start(
     start_block: ContentBlockStartEventTypeDef,
     suppress_tool_names: frozenset[str] | None,
     web_search_tool_names: frozenset[str] | None = None,
+    code_execution_tool_names: frozenset[str] | None = None,
 ) -> Generator[JSONServerSentEvent]:
     """Emit SSE events for a Bedrock ``contentBlockStart`` event.
 
     Initialises per-block state and emits ``response.output_item.added``
-    plus (for text blocks) ``response.content_part.added``.  A block starting a
-    ``toolResult`` or an ``image`` opens nothing and emits nothing.
+    plus (for text blocks) ``response.content_part.added``.  A block starting an
+    ``image``, or a ``toolResult`` of anything but a code-execution run, opens
+    nothing and emits nothing.
 
     For web-search system tools (``nova_grounding``), emits a
     ``web_search_call`` output item with ``in_progress`` status followed by
     ``response.web_search_call.in_progress`` and ``.searching`` events
-    instead of a ``function_call`` item.
+    instead of a ``function_call`` item.  A code-execution tool opens a
+    ``code_interpreter_call`` item that stays open until its result block
+    closes it.
 
     Args:
         state: Mutable stream state.
         start_block: The ``contentBlockStart`` event from Bedrock.
         suppress_tool_names: Tool names whose output should be fully suppressed.
         web_search_tool_names: Tool names to emit as ``web_search_call`` items.
+        code_execution_tool_names: Tool names to emit as ``code_interpreter_call``
+            items.
 
     Yields:
         ``JSONServerSentEvent`` objects for the block start.
     """
-    yield from _close_reasoning_block(state)
     start = start_block["start"]
+    if (
+        (tool_result := start.get("toolResult"))
+        and state.pending_code_call is not None
+        and tool_result["toolUseId"] == state.pending_code_call[1]
+    ):
+        state.reset_block()
+        state.block_kind = _BlockKind.CODE_RESULT
+        state.pending_code_result = []
+        return
+
+    yield from _close_reasoning_block(state)
+    yield from _emit_code_call_done(state, None, "completed")
     state.current_text_parts = []
     state.current_args_parts = []
     state.current_text_len = 0
@@ -2819,6 +3012,34 @@ def _handle_block_start(
         state.current_tool_name = tool_use["name"]
         state.current_tool_id = tool_use["toolUseId"]
         state.block_kind = _BlockKind.TOOL
+
+        if (
+            code_execution_tool_names
+            and state.current_tool_name in code_execution_tool_names
+        ):
+            state.block_kind = _BlockKind.CODE_EXECUTION
+            state.current_item_id = f"{state.response_id}-ci-{state.current_tool_id}"
+            yield json_sse(
+                "response.output_item.added",
+                ResponseOutputItemAddedEvent(
+                    item=_code_interpreter_call(
+                        state.current_tool_id, state.response_id, "", "in_progress"
+                    ),
+                    output_index=state.output_index,
+                    sequence_number=state.next_seq(),
+                    type="response.output_item.added",
+                ),
+            )
+            yield json_sse(
+                "response.code_interpreter_call.in_progress",
+                ResponseCodeInterpreterCallInProgressEvent(
+                    item_id=state.current_item_id,
+                    output_index=state.output_index,
+                    sequence_number=state.next_seq(),
+                    type="response.code_interpreter_call.in_progress",
+                ),
+            )
+            return
 
         if web_search_tool_names and state.current_tool_name in web_search_tool_names:
             state.block_kind = _BlockKind.WEB_SEARCH
@@ -2948,6 +3169,7 @@ def _emit_text_delta(
     yield from _close_reasoning_block(state)
     if state.block_kind is _BlockKind.NONE:
         # Synthesise a text block start if contentBlockStart was never received.
+        yield from _emit_code_call_done(state, None, "completed")
         state.current_text_parts = []
         state.current_text_len = 0
         state.current_item_id = f"{state.response_id}-msg-{state.output_index}"
@@ -2990,6 +3212,7 @@ def _handle_reasoning_delta(
         ``JSONServerSentEvent`` objects for the reasoning delta.
     """
     if state.block_kind is not _BlockKind.REASONING:
+        yield from _emit_code_call_done(state, None, "completed")
         state.current_text_parts = []
         state.current_item_id = f"{state.response_id}-rs-{state.output_index}"
         state.block_kind = _BlockKind.REASONING
@@ -3115,7 +3338,15 @@ def _handle_block_delta(
     """
     delta = delta_block["delta"]
 
-    if state.block_kind in (_BlockKind.SUPPRESSED, _BlockKind.WEB_SEARCH):
+    if state.block_kind is _BlockKind.CODE_RESULT:
+        state.pending_code_result.extend(delta.get("toolResult", ()))
+        return
+
+    if state.block_kind in (
+        _BlockKind.SUPPRESSED,
+        _BlockKind.WEB_SEARCH,
+        _BlockKind.CODE_EXECUTION,
+    ):
         if tool_delta := delta.get("toolUse"):
             state.current_args_parts.append(tool_delta["input"])
         return
@@ -3210,6 +3441,102 @@ def _record_citation(
     )
 
 
+def _emit_code_call_done(
+    state: _StreamState,
+    outputs: list[CodeInterpreterOutput] | None,
+    status: _CodeStatus,
+) -> Generator[JSONServerSentEvent]:
+    """Close the open ``code_interpreter_call`` item, if any.
+
+    Called with no outputs when the stream moves on without a result block: the
+    run happened, and nothing is known about what it produced.
+
+    Args:
+        state: Mutable stream state.
+        outputs: Outputs of the run, or ``None`` when its result never arrived.
+        status: Final status of the run.
+
+    Yields:
+        SSE events closing the code-execution item.
+    """
+    if (pending := state.pending_code_call) is None:
+        return
+    item_id, tool_use_id, code = pending
+    state.pending_code_call = None
+    state.pending_code_result = []
+    item = _code_interpreter_call(tool_use_id, state.response_id, code, status, outputs)
+    yield json_sse(
+        "response.code_interpreter_call.completed",
+        ResponseCodeInterpreterCallCompletedEvent(
+            item_id=item_id,
+            output_index=state.output_index,
+            sequence_number=state.next_seq(),
+            type="response.code_interpreter_call.completed",
+        ),
+    )
+    yield json_sse(
+        "response.output_item.done",
+        ResponseOutputItemDoneEvent(
+            item=item,
+            output_index=state.output_index,
+            sequence_number=state.next_seq(),
+            type="response.output_item.done",
+        ),
+    )
+    state.output_items.append(item)
+    state.output_index += 1
+
+
+def _emit_code_block_done(state: _StreamState) -> Generator[JSONServerSentEvent]:
+    """Finalise the code of a code-execution block and leave its item open.
+
+    The backend streams the call arguments as JSON fragments rather than as
+    code, so the snippet is only known once the block closes and reaches the
+    client as a single delta followed by its ``done`` event.
+
+    Args:
+        state: Mutable stream state, on a code-execution block.
+
+    Yields:
+        The code lifecycle events of the run, up to ``interpreting``.
+    """
+    if state.current_item_id is None or state.current_tool_id is None:
+        return  # pragma: no cover — caller guarantees these are set
+    item_id = state.current_item_id
+    code = _str_args("".join(state.current_args_parts)).get(_CODE_SNIPPET_KEY, "")
+    if code:
+        yield json_sse(
+            "response.code_interpreter_call_code.delta",
+            ResponseCodeInterpreterCallCodeDeltaEvent(
+                item_id=item_id,
+                output_index=state.output_index,
+                delta=code,
+                sequence_number=state.next_seq(),
+                type="response.code_interpreter_call_code.delta",
+            ),
+        )
+    yield json_sse(
+        "response.code_interpreter_call_code.done",
+        ResponseCodeInterpreterCallCodeDoneEvent(
+            item_id=item_id,
+            output_index=state.output_index,
+            code=code,
+            sequence_number=state.next_seq(),
+            type="response.code_interpreter_call_code.done",
+        ),
+    )
+    yield json_sse(
+        "response.code_interpreter_call.interpreting",
+        ResponseCodeInterpreterCallInterpretingEvent(
+            item_id=item_id,
+            output_index=state.output_index,
+            sequence_number=state.next_seq(),
+            type="response.code_interpreter_call.interpreting",
+        ),
+    )
+    state.pending_code_call = (item_id, state.current_tool_id, code)
+
+
 def _emit_tool_done(state: _StreamState) -> Generator[JSONServerSentEvent]:
     """Emit ``function_call_arguments.done`` and ``output_item.done`` for a tool block.
 
@@ -3266,9 +3593,11 @@ def _handle_block_stop(state: _StreamState) -> Generator[JSONServerSentEvent]:
     ``output_item.done``; reasoning blocks emit ``reasoning_text.done`` +
     ``output_item.done``; non-suppressed tool blocks emit
     ``function_call_arguments.done`` + ``output_item.done``; web-search blocks
-    emit ``web_search_call.completed`` + ``output_item.done``; a suppressed tool
-    call is only recorded in ``state.suppressed_tool_calls``, and a suppressed
-    block that is not one -- a tool result, an image -- records nothing.
+    emit ``web_search_call.completed`` + ``output_item.done``; a code-execution
+    block emits its code events and stays open until its result block closes
+    it; a suppressed tool call is only recorded in
+    ``state.suppressed_tool_calls``, and a suppressed block that is not one --
+    a tool result, an image -- records nothing.
 
     Args:
         state: Mutable stream state.
@@ -3277,6 +3606,16 @@ def _handle_block_stop(state: _StreamState) -> Generator[JSONServerSentEvent]:
         ``JSONServerSentEvent`` objects for the block stop.
     """
     yield from _close_reasoning_block(state)
+    if state.block_kind is _BlockKind.CODE_EXECUTION:
+        yield from _emit_code_block_done(state)
+        state.reset_block()
+        return
+    if state.block_kind is _BlockKind.CODE_RESULT:
+        yield from _emit_code_call_done(
+            state, *_code_interpreter_result(state.pending_code_result)
+        )
+        state.reset_block()
+        return
     if state.block_kind is _BlockKind.TEXT and state.current_item_id:
         text = "".join(state.current_text_parts)
         text_part = ResponseOutputText(
@@ -3382,6 +3721,7 @@ def _process_stream_event(
     event: ConverseStreamOutputTypeDef,
     suppress_tool_names: frozenset[str] | None,
     web_search_tool_names: frozenset[str] | None = None,
+    code_execution_tool_names: frozenset[str] | None = None,
 ) -> Generator[JSONServerSentEvent]:
     """Dispatch a single Bedrock stream event to the appropriate handler.
 
@@ -3394,6 +3734,8 @@ def _process_stream_event(
         event: A single Bedrock ConverseStream event.
         suppress_tool_names: Tool names whose output items should be filtered.
         web_search_tool_names: Tool names to emit as ``web_search_call`` items.
+        code_execution_tool_names: Tool names to emit as ``code_interpreter_call``
+            items.
 
     Yields:
         ``JSONServerSentEvent`` objects produced by the event handler, if any.
@@ -3401,7 +3743,11 @@ def _process_stream_event(
     match event:
         case {"contentBlockStart": start}:
             yield from _handle_block_start(
-                state, start, suppress_tool_names, web_search_tool_names
+                state,
+                start,
+                suppress_tool_names,
+                web_search_tool_names,
+                code_execution_tool_names,
             )
         case {"contentBlockDelta": delta}:
             yield from _handle_block_delta(state, delta)
@@ -3978,6 +4324,7 @@ async def format_stream(
     post_suppress_handler: Callable[[_StreamState], AsyncGenerator[JSONServerSentEvent]]
     | None = None,
     web_search_tool_names: frozenset[str] | None = None,
+    code_execution_tool_names: frozenset[str] | None = None,
     moderation_builder: Callable[[], ResponseModeration | None] | None = None,
 ) -> AsyncGenerator[JSONServerSentEvent]:
     """Stream Bedrock Converse events as OpenAI Responses API SSE events.
@@ -4005,6 +4352,8 @@ async def format_stream(
             suppressed, answered from the vector stores, and the turn continues.
         web_search_tool_names: Tool names to emit as ``web_search_call`` output
             items with query and completion events.
+        code_execution_tool_names: Tool names to emit as ``code_interpreter_call``
+            output items with their code and result events.
         moderation_builder: Optional callable building the response ``moderation``
             field from the guardrail trace, invoked at stream end so the
             terminal event carries the complete trace.
@@ -4056,12 +4405,19 @@ async def format_stream(
 
         async for event in stream:
             for sse in _process_stream_event(
-                state, event, suppress_tool_names, web_search_tool_names
+                state,
+                event,
+                suppress_tool_names,
+                web_search_tool_names,
+                code_execution_tool_names,
             ):
                 yield sse  # `yield from` is not permitted inside async generators.
 
         # Defensive: close any block left open by a stream without contentBlockStop.
         for sse in _handle_block_stop(state):
+            yield sse
+        # A code-execution run whose result block never arrived stays open here.
+        for sse in _emit_code_call_done(state, None, "completed"):
             yield sse
 
         async for sse in _post_stream_events(

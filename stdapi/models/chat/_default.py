@@ -666,8 +666,16 @@ class ChatModel(ChatModelBase[Any, Any]):
             if (ws_name := self.CANONICAL_TO_BEDROCK_TOOL_MAP.get("web_search"))
             else None
         )
+        # Rendered, not suppressed: the run is billed, so the caller is told it happened.
+        code_exec_names: frozenset[str] | None = (
+            frozenset({ce_name})
+            if (ce_name := self.CANONICAL_TO_BEDROCK_TOOL_MAP.get("code_execution"))
+            else None
+        )
         suppress_names = (
-            self.SUPPORTED_SYSTEM_TOOLS - (web_search_names or frozenset())
+            self.SUPPORTED_SYSTEM_TOOLS
+            - (web_search_names or frozenset())
+            - (code_exec_names or frozenset())
         ) or None
         image_gen_tool = responses_adapter.get_image_generation_tool(request)
 
@@ -703,6 +711,7 @@ class ChatModel(ChatModelBase[Any, Any]):
                         suppress_with_img,
                         post_handler,
                         web_search_names,
+                        code_exec_names,
                         moderation_builder,
                     )
                 )
@@ -718,6 +727,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             request,
             suppress_names,
             web_search_names,
+            code_exec_names,
         )
         if image_gen_tool:
             response.output = await responses_adapter.execute_image_generation_calls(
@@ -779,6 +789,7 @@ class ChatModel(ChatModelBase[Any, Any]):
                         (await self.converse_stream(bedrock_request))["stream"],
                         request,
                         suppress_names,
+                        None,
                         None,
                         None,
                         moderation_builder,
