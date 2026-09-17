@@ -354,6 +354,9 @@ A format outside the model's native set is produced by re-encoding the returned 
   to Bedrock — see [Provider-Specific Parameters](#provider-specific-parameters).
 - **OpenAI image model names resolve only once you map them**, as described in the
   [Models](#model-support) section.
+- **An optional parameter sent as `null` counts as unset**, and the request is served with
+  that parameter's default, exactly as leaving the key out would be. `model` is the exception:
+  it is required here, so a `null` one is refused like a missing one.
 
 ## Request headers { #available-request-headers }
 

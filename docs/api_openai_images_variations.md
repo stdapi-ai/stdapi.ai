@@ -345,6 +345,9 @@ curl -X POST "$BASE/v1/images/variations" \
   [Working with the variations endpoint](#advanced-features).
 - **OpenAI image model names resolve only once you map them**, as described in the
   [Models](#model-support) section.
+- **An optional parameter sent as `null` in a JSON body counts as unset**, and the request is
+  served with that parameter's default, exactly as leaving the key out would be. `model` is the
+  exception: it is required here, so a `null` one is refused like a missing one.
 
 ## Request headers { #available-request-headers }
 

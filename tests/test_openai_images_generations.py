@@ -1957,6 +1957,106 @@ class TestAStreamedImageIsAlwaysInline:
         assert [job["is_url"] for job in image_jobs] == [True]
 
 
+#: Every field each endpoint declares nullable, as an explicit null, `model` apart.
+_NULL_BODIES: dict[str, dict[str, None]] = {
+    "/v1/images/generations": dict.fromkeys(
+        (
+            "background",
+            "moderation",
+            "n",
+            "output_compression",
+            "output_format",
+            "partial_images",
+            "quality",
+            "response_format",
+            "size",
+            "stream",
+            "style",
+        )
+    ),
+    "/v1/images/edits": dict.fromkeys(
+        (
+            "background",
+            "input_fidelity",
+            "n",
+            "output_compression",
+            "output_format",
+            "partial_images",
+            "quality",
+            "response_format",
+            "size",
+            "stream",
+        )
+    ),
+    "/v1/images/variations": dict.fromkeys(("n", "response_format", "size")),
+}
+
+
+@pytest.mark.local
+class TestNullableFieldsSentAsNull:
+    """A nullable field sent as JSON ``null`` asks for the same image as an omission.
+
+    The OpenAI image schemas mark most optional fields ``nullable: true``, and
+    a client that serialises a structure of optional fields sends ``null``
+    rather than leaving the key out. Every endpoint is covered here because
+    they share the request model the behaviour belongs to.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         https://stdapi.ai/api_openai_images_generations/
+         stdapi/types/openai_images.py:_ImageBaseParams
+    """
+
+    @pytest.fixture
+    def image_jobs(self, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+        """Serve the three image routes from a deployment that can host URL responses.
+
+        Returns:
+            The list the stub records each requested job into.
+        """
+        return _stub_image_jobs(monkeypatch, "test-bucket")
+
+    @_IMAGE_PATHS
+    def test_a_body_of_nulls_requests_what_an_omission_requests(
+        self, app_client: TestClientType, image_jobs: list[dict[str, Any]], path: str
+    ) -> None:
+        """The nulls reach the model as the defaults, not as a refusal or a value.
+
+        The two requests are compared as the jobs they produce, so a null read
+        as a value -- an unset size, a quality of ``None``, an extra parameter
+        forwarded to the model -- fails here as well as an outright refusal.
+        """
+        body = _IMAGE_BODIES[path]
+
+        nulled = app_client.post(path, json={**body, **_NULL_BODIES[path]})
+        omitted = app_client.post(path, json=body)
+
+        assert nulled.status_code == omitted.status_code == 400, nulled.text
+        assert len(image_jobs) == 2, "a null must not fail validation"
+        assert image_jobs[0] == image_jobs[1]
+
+    @_IMAGE_PATHS
+    def test_a_null_model_is_refused_as_a_missing_one(
+        self, app_client: TestClientType, image_jobs: list[dict[str, Any]], path: str
+    ) -> None:
+        """``model`` has no default to fall back to, so its null is still refused.
+
+        The refusal is the one an omitted model gets, naming the field the
+        caller has to send rather than the type it got wrong, and nothing is
+        generated for a request that never resolved a model.
+        """
+        body = _IMAGE_BODIES[path]
+
+        nulled = app_client.post(path, json={**body, "model": None})
+        omitted = app_client.post(
+            path, json={k: v for k, v in body.items() if k != "model"}
+        )
+
+        assert nulled.status_code == 400, nulled.text
+        assert nulled.json() == omitted.json()
+        assert "model" in nulled.json()["error"]["message"]
+        assert not image_jobs
+
+
 def _logged_request_user_id(captured_stdout: str) -> str | None:
     """Read the end-user identifier back out of the captured request log.
 

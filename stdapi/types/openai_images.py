@@ -1,6 +1,6 @@
 """Local OpenAI-compatible image generation types."""
 
-from typing import TYPE_CHECKING, Literal, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 
@@ -54,6 +54,19 @@ ImageInputFidelity = Literal["low", "high"]
 
 #: Default image size used when `size="auto"` is requested
 _DEFAULT_SIZE = "1024x1024"
+
+#: Fields every image request accepts as an explicit null meaning "not set"
+_BASE_NULLABLE_FIELDS = frozenset({"model", "n", "response_format", "size"})
+
+#: The same, plus the fields only a prompted request (generation, edit) carries
+_PROMPTED_NULLABLE_FIELDS = _BASE_NULLABLE_FIELDS | {
+    "background",
+    "output_compression",
+    "output_format",
+    "partial_images",
+    "quality",
+    "stream",
+}
 
 
 # Ref: openai.types.image_input_reference_param.ImageInputReferenceParam
@@ -263,6 +276,9 @@ class ImageEditPartialImageEvent(ImageGenPartialImageEvent):
 class _ImageBaseParams(BaseModelRequestWithExtra):
     """Request body for generating images."""
 
+    #: Fields whose explicit null is read as an omission, per the OpenAI schema
+    _NULLABLE_FIELDS: ClassVar[frozenset[str]] = _BASE_NULLABLE_FIELDS
+
     model: str = Field(
         description="Model for image generation. "
         "Wildcard patterns are accepted and select the most recent matching model.",
@@ -285,6 +301,28 @@ class _ImageBaseParams(BaseModelRequestWithExtra):
         default=None, description="User identifier for monitoring and abuse detection."
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _null_means_unset(cls, data: Any) -> Any:  # noqa: ANN401
+        """Drop the nullable fields sent as an explicit null, so their default applies.
+
+        The OpenAI image schemas mark these fields nullable, where a null means
+        the field is not set. Clients that serialize a structure of optional
+        fields send one rather than leaving the key out.
+
+        Args:
+            data: Raw request body.
+
+        Returns:
+            The body, without the nullable fields that carry a null.
+        """
+        if not isinstance(data, dict):
+            return data
+        unset = cls._NULLABLE_FIELDS.intersection(
+            key for key, value in data.items() if value is None
+        )
+        return {k: v for k, v in data.items() if k not in unset} if unset else data
+
     @field_validator("size", mode="after")
     @classmethod
     def _resolve_auto_size(cls, value: str) -> str:
@@ -302,6 +340,12 @@ class _ImageBaseParams(BaseModelRequestWithExtra):
 # Ref: openai.types.image_generate_params.ImageGenerateParams
 class ImageGenerateParams(_ImageBaseParams):
     """Request body for generating images."""
+
+    #: The same, plus the generation-only `moderation` and `style`
+    _NULLABLE_FIELDS: ClassVar[frozenset[str]] = _PROMPTED_NULLABLE_FIELDS | {
+        "moderation",
+        "style",
+    }
 
     prompt: str = Field(
         ..., description="A text description of the desired image(s).", min_length=1
@@ -374,6 +418,11 @@ class ImageGenerateParams(_ImageBaseParams):
 # Ref: openai.types.image_edit_params.ImageEditParams
 class _ImageEditCommonParams(_ImageBaseParams):
     """Shared parameters for image-editing requests (form and JSON body)."""
+
+    #: The same, plus the edit-only `input_fidelity`
+    _NULLABLE_FIELDS: ClassVar[frozenset[str]] = _PROMPTED_NULLABLE_FIELDS | {
+        "input_fidelity"
+    }
 
     # image/mask handled in route
     prompt: str = Field(
