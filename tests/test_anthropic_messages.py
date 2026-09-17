@@ -1273,6 +1273,60 @@ class TestAnthropicMessages:
         assert response.usage.output_tokens <= 10  # Allow small margin
         assert response.stop_reason == "max_tokens"
 
+    def test_max_tokens_zero_is_answered(
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
+    ) -> None:
+        """``max_tokens: 0`` -- the prompt-cache pre-warm call -- is served, not refused.
+
+        Anthropic documents a budget of zero as the way to populate the prompt
+        cache without generating a response. The prompt is processed and billed
+        as input either way; this gateway answers with at most one token, so the
+        turn ends on ``max_tokens`` rather than on the model's own decision.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+             https://platform.claude.com/docs/en/api/messages
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        response = anthropic_client.messages.create(
+            model=anthropic_chat_basic_model,
+            max_tokens=0,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Write a very long essay about the history of computing.",
+                }
+            ],
+        )
+
+        assert response.type == "message"
+        assert response.role == "assistant"
+        assert response.usage.input_tokens > 0
+        assert response.usage.output_tokens <= 1
+        assert response.stop_reason == "max_tokens"
+
+    def test_max_tokens_zero_cannot_be_streamed(
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
+    ) -> None:
+        """A streamed pre-warm call is refused, as the Anthropic API refuses it.
+
+        A pre-warm generates nothing, so there is no stream to open. Measured
+        against the vendor: `max_tokens=0` with `stream=True` answers
+        ``400 invalid_request_error`` with this exact message, while the same
+        request unstreamed is answered normally.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching#pre-warming-the-cache
+             anthropic.types.message_create_params.MessageCreateParamsBase.max_tokens
+        """
+        with pytest.raises(BadRequestError) as error:
+            anthropic_client.messages.create(
+                model=anthropic_chat_basic_model,
+                max_tokens=0,
+                messages=[{"role": "user", "content": "Hello"}],
+                stream=True,
+            )
+
+        assert "stream cannot be true when max_tokens is 0" in str(error.value)
+
     # --- Metadata ---
 
     def test_metadata_user_id(
@@ -2090,6 +2144,39 @@ class TestAnthropicMessages:
             "a prompt below the model minimum must not be cached"
         )
         assert response.usage.cache_read_input_tokens in (None, 0)
+
+    def test_max_tokens_zero_writes_the_cache(
+        self, anthropic_client: Anthropic, anthropic_chat_model: str
+    ) -> None:
+        """A pre-warm call populates the cache while generating next to nothing.
+
+        This is the whole point of a ``max_tokens: 0`` request: the prefix is
+        processed and written to the prompt cache, so a later call reusing it
+        reads instead of re-processing. The prefix is unique per run, so the
+        counter that moves is the write one.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+             stdapi/models/chat/_adapters/_anthropic_message.py:_build_cache_point
+        """
+        prefix = f"Reference note {uuid4()}. " + (
+            "Cached context that the assistant may consult when answering. " * 400
+        )
+
+        response = anthropic_client.messages.create(
+            model=anthropic_chat_model,
+            max_tokens=0,
+            system=[
+                {"type": "text", "text": prefix, "cache_control": {"type": "ephemeral"}}
+            ],
+            messages=[{"role": "user", "content": "Summarize the note."}],
+        )
+
+        assert response.type == "message"
+        assert response.usage.cache_creation_input_tokens, (
+            "a pre-warm call must write the marked prefix to the cache"
+        )
+        assert response.usage.output_tokens <= 1
+        assert response.stop_reason == "max_tokens"
 
     def test_cache_control_on_system_prompt_block(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
@@ -3989,6 +4076,91 @@ class TestTranslateRequestParameters:
         assert "container" not in extras
         assert "inference_geo" not in config
         assert "container" not in config
+
+
+class TestReasoningBudgetAgainstTheOutputLimit:
+    """A derived thinking budget never contradicts the output limit it came from.
+
+    Converse refuses a Claude request whose ``reasoning_config.budget_tokens`` is
+    not smaller than ``inferenceConfig.maxTokens``, and refuses any budget under
+    the 1024-token minimum. An output limit at or below that minimum -- with
+    ``max_tokens: 0``, the prompt-cache pre-warm, as the extreme case -- admits
+    no valid budget at all, so an effort level must derive none rather than
+    compose a request the backend rejects.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-extended-thinking.html
+         https://platform.claude.com/docs/en/build-with-claude/prompt-caching#pre-warming-the-cache
+         stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel._req_configure_reasoning
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    async def _converse_fields(
+        max_tokens: int,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Translate a low-effort request the way the model layer composes it.
+
+        Args:
+            max_tokens: Output limit the request asks for.
+
+        Returns:
+            The Converse inference configuration and the additional model
+            request fields the reasoning configuration lands in.
+        """
+        model_id = "anthropic.claude-haiku-4-5-20251001-v1:0"
+        request = MessageCreateParams.model_validate(
+            {
+                "model": model_id,
+                "max_tokens": max_tokens,
+                "messages": [{"role": "user", "content": "hi"}],
+                "output_config": {"effort": "low"},
+            }
+        )
+        (
+            _messages,
+            _system,
+            inference_config,
+            extras,
+            *_rest,
+        ) = await translate_request(
+            request,
+            model_id,
+            prompt_caching_supported=False,
+            prompt_caching_tool_supported=False,
+        )
+        reasoning = extract_reasoning(request)
+        assert reasoning is not None, "an effort level must ask for reasoning"
+        cast("ChatModel", get_chat_model(model_id))._req_configure_reasoning(  # noqa: SLF001
+            additional_request_fields=extras, **reasoning
+        )
+        return dict(inference_config), dict(extras)
+
+    @pytest.mark.parametrize("max_tokens", [0, 1, 5, 1024])
+    async def test_an_output_limit_with_no_room_derives_no_budget(
+        self, max_tokens: int
+    ) -> None:
+        """An effort level asks for nothing where no budget could be valid.
+
+        Ref: stdapi/models/chat/anthropic_claude_37_to_45.py:_REASONING_BUDGET_MINIMAL
+        """
+        config, extras = await self._converse_fields(max_tokens)
+
+        assert "reasoning_config" not in extras, (
+            f"maxTokens {config['maxTokens']} leaves no room for a thinking budget"
+        )
+
+    @pytest.mark.parametrize("max_tokens", [1025, 4096, 64000])
+    async def test_a_derived_budget_stays_under_the_output_limit(
+        self, max_tokens: int
+    ) -> None:
+        """Where a budget fits, it is smaller than the limit Converse is given.
+
+        Ref: stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel._req_configure_reasoning
+        """
+        config, extras = await self._converse_fields(max_tokens)
+
+        assert extras["reasoning_config"]["budget_tokens"] < config["maxTokens"]
 
 
 class TestCountTokensViaMantlePayload:

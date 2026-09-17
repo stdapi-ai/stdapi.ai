@@ -321,6 +321,41 @@ class TestSetInferenceConfiguration:
 
         assert config["temperature"] == 0.7
 
+    def test_a_zero_token_budget_is_raised_to_the_smallest_accepted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cache pre-warm budget of 0 is served, not turned into a 500.
+
+        ``inferenceConfig.maxTokens`` is declared with a minimum of 1, so a
+        literal 0 fails client-side parameter validation before the request is
+        sent; raising it keeps the pre-warm request answerable at the cost of a
+        single generated token.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InferenceConfiguration.html
+             stdapi/aws_bedrock.py:set_inference_configuration
+        """
+        monkeypatch.setattr(SETTINGS, "default_model_params", {})
+
+        config = set_inference_configuration("model-a", {}, max_tokens=0)
+
+        assert config["maxTokens"] == 1
+
+    def test_a_zero_token_budget_overrides_a_configured_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A requested 0 is a budget, not "unset", so the model default loses.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InferenceConfiguration.html
+             stdapi/aws_bedrock.py:set_inference_configuration
+        """
+        monkeypatch.setattr(
+            SETTINGS, "default_model_params", {"model-a": {"max_tokens": 4096}}
+        )
+
+        config = set_inference_configuration("model-a", {}, max_tokens=0)
+
+        assert config["maxTokens"] == 1
+
 
 @pytest.fixture
 def _guardrail_config_var_isolated() -> Iterator[None]:

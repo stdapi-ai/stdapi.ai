@@ -135,6 +135,9 @@ BEDROCK_BODY_SIZE_LIMIT = 24_990_000
 #: Highest temperature the Bedrock inference configuration accepts.
 _MAX_TEMPERATURE = 1.0
 
+#: Smallest token budget the Bedrock inference configuration accepts.
+_MIN_MAX_TOKENS = 1
+
 #: Bedrock error codes on model error
 _BEDROCK_MODEL_ERROR_CODES: frozenset[str] = frozenset(
     ("ModelErrorException", "ModelStreamErrorException", "ModelTimeoutException")
@@ -948,7 +951,8 @@ def set_inference_configuration(
         additional_request_fields: Mutable dict updated with provider-specific extras.
         temperature: Sampling temperature; capped at the highest value Bedrock takes.
         top_p: Nucleus sampling threshold (0-1).
-        max_tokens: Maximum tokens to generate.
+        max_tokens: Maximum tokens to generate; raised to the smallest budget
+            Bedrock accepts.
         stop_sequences: Sequences that halt generation.
         **extra_params: Additional provider-specific fields.
 
@@ -970,7 +974,9 @@ def set_inference_configuration(
 
     max_tokens = max_tokens if max_tokens is not None else default.max_tokens
     if max_tokens is not None:
-        config["maxTokens"] = max_tokens
+        # A mirrored API documents 0 as "warm the cache, answer nothing"; Bedrock
+        # refuses it, so raise it instead of failing a request they call valid.
+        config["maxTokens"] = max(max_tokens, _MIN_MAX_TOKENS)
 
     stop_sequences = (
         stop_sequences if stop_sequences is not None else default.stop_sequences

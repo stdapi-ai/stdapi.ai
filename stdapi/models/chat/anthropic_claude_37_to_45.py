@@ -9,6 +9,7 @@ from stdapi.models.chat._anthropic_claude import (
     _BETA_CONTEXT_MANAGEMENT_2025,
     AnthropicClaudeChatModel,
 )
+from stdapi.monitoring import log_error_details
 
 if TYPE_CHECKING:
     from stdapi.models.chat import Effort
@@ -69,7 +70,8 @@ class ChatModel(AnthropicClaudeChatModel):
         """Configure reasoning parameters for Claude 3.7-4.5.
 
         Uses budget-based reasoning configuration. If ``budget_tokens`` is not
-        provided, it is calculated from ``reasoning_effort``.
+        provided, it is calculated from ``reasoning_effort``, and left unset when
+        ``max_tokens`` leaves no room for the smallest budget Bedrock accepts.
         When ``enabled`` is ``False``, reasoning is explicitly disabled.
 
         Args:
@@ -84,13 +86,26 @@ class ChatModel(AnthropicClaudeChatModel):
             return
 
         if budget_tokens is None:
+            # A requested budget of 0 is a value, not an omission.
+            ceiling = _REASONING_BUDGET_MAXIMAL if max_tokens is None else max_tokens
+            if ceiling <= _REASONING_BUDGET_MINIMAL:
+                # Bedrock takes no budget under the minimal one and none that is
+                # not smaller than `maxTokens`, so this output limit leaves room
+                # for neither: deriving one would build a request it refuses.
+                log_error_details(
+                    "The requested output limit leaves no room for the smallest "
+                    "reasoning budget this model takes: reasoning is not enabled "
+                    "for this request",
+                    level="warning",
+                )
+                return
             budget_tokens = (
                 _REASONING_BUDGET_MINIMAL
                 if reasoning_effort == "minimal"
                 else max(
                     _REASONING_BUDGET_MINIMAL,
                     int(
-                        ((max_tokens or _REASONING_BUDGET_MAXIMAL) - 1)
+                        (ceiling - 1)
                         * _REASONING_EFFORT_BUDGET_FACTOR.get(
                             reasoning_effort or "high", 1.0
                         )

@@ -17,6 +17,7 @@ from stdapi.config import SETTINGS
 from stdapi.models.chat import get_chat_model
 from stdapi.models.chat._anthropic_claude import _STUB_INPUT_SCHEMAS
 from stdapi.models.chat._default import ChatModel
+from stdapi.models.chat.anthropic_claude_37_to_45 import _REASONING_BUDGET_MINIMAL
 from stdapi.monitoring import REQUEST
 from stdapi.types.anthropic_messages import (
     CacheControlEphemeralParam,
@@ -290,6 +291,56 @@ class TestReasoningSignatureRequirement:
         """Families accepting an unsigned replay keep receiving it."""
         model = cast("ChatModel", get_chat_model(model_id))
         assert model.REASONING_SIGNATURE_REQUIRED is False
+
+
+class TestReasoningBudgetFromMaxTokens:
+    """The derived thinking budget reads ``max_tokens`` as a value, not as a flag.
+
+    On Claude 3.7-4.5 an effort level becomes a token budget scaled off the
+    request's own output limit. A limit of 0 -- the prompt-cache pre-warm request
+    -- is the smallest limit there is, so it must not be read as "no limit given"
+    and yield the largest budget the gateway will ask for. Thinking tokens are
+    spent out of that same limit, so below Bedrock's floor there is no budget to
+    derive at all.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+         stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel._req_configure_reasoning
+    """
+
+    def test_a_zero_limit_does_not_read_as_no_limit(self) -> None:
+        """A limit of 0 yields no budget, where an absent limit yields one.
+
+        Read as a flag, 0 would be an omission and buy the largest budget the
+        gateway asks for -- the opposite of what the caller wrote.
+        """
+        floor: JsonMapping = {}
+        unset: JsonMapping = {}
+        model = _claude_model("anthropic.claude-haiku-4-5-20251001-v1:0")
+
+        model._req_configure_reasoning(floor, enabled=True, max_tokens=0)  # noqa: SLF001
+        model._req_configure_reasoning(unset, enabled=True, max_tokens=None)  # noqa: SLF001
+
+        assert "reasoning_config" not in floor
+        assert cast("dict[str, int]", unset["reasoning_config"])["budget_tokens"] > 0
+
+    def test_an_output_limit_under_the_floor_asks_for_no_reasoning(self) -> None:
+        """Bedrock takes no budget below its floor, nor one that is not smaller.
+
+        Deriving one anyway would build a request Bedrock refuses, turning a
+        served combination into a validation error.
+        """
+        model = _claude_model("anthropic.claude-haiku-4-5-20251001-v1:0")
+
+        for max_tokens in (1, _REASONING_BUDGET_MINIMAL):
+            fields: JsonMapping = {}
+
+            model._req_configure_reasoning(  # noqa: SLF001
+                fields, enabled=True, reasoning_effort="high", max_tokens=max_tokens
+            )
+
+            assert "reasoning_config" not in fields, (
+                f"an output limit of {max_tokens} leaves no room for a budget"
+            )
 
 
 class TestReasoningDisabled:

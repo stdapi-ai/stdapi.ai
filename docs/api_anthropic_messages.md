@@ -14,7 +14,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 - :material-image-multiple: **Multi-modal input** — text, images, video and PDF documents in one conversation, from HTTP URLs, data URIs, `s3://` URLs and [Files API](api_anthropic_files.md) `file-id:` references.
 - :material-lightning-bolt: **Streaming, tool use, extended thinking, prompt caching** — model permitting; see [Feature compatibility](#feature-compatibility).
 - :material-shield-check: **Bedrock Guardrails and service tiers** — content filtering and `priority` / `flex` latency selection per request, through [request headers](#available-request-headers).
-- :material-swap-horizontal: **Differs from the Anthropic API:** `max_tokens` is optional, `inference_geo` and `container` are accepted and ignored, and `mcp_servers` never opens a connection — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
+- :material-swap-horizontal: **Differs from the Anthropic API:** `max_tokens` is optional and a `0` budget still returns one token, `inference_geo` and `container` (Agent Skills included) are accepted and ignored, and `mcp_servers` never opens a connection — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
 - :material-swap-horizontal: **Differs from the official SDK:** `anthropic` ≥ 1.0 removed `temperature`, `top_p` and `top_k` from `messages.create()`; the gateway still accepts them on the wire, so send them through `extra_body`.
 
 !!! info "Base URL and route prefix"
@@ -74,7 +74,7 @@ curl -X POST "$BASE/v1/messages" \
 | MCP block replay (`mcp_tool_use`, `mcp_tool_result`) |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepted in conversation history and treated as an ordinary tool use and result; a repeated call comes back as `tool_use`, for you to run |
 | Server tool result replay (`web_search_tool_result`, `code_execution_tool_result`, …) |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Accepted in conversation history: send the assistant turn back unchanged and the recorded result is replayed to the model with the call it answered |
 | **Generation Control**                |                                          |                                                                                              |
-| `max_tokens`                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output length limits. Optional on this gateway (divergence from the Anthropic API, which requires it): the model's default output limit applies when omitted |
+| `max_tokens`                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output length limits. Optional on this gateway (divergence from the Anthropic API, which requires it): the model's default output limit applies when omitted, except on a [Bedrock Mantle](#bedrock-mantle)-served model, whose API requires the field and is sent 4096. `0` — the prompt-cache pre-warm budget — is accepted and answered with one token rather than with nothing. Amazon Nova 2 drops the limit entirely under high reasoning effort and answers in full |
 | `temperature`                         |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Mapped to Bedrock inference params                                                           |
 | `top_p`                               |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Nucleus sampling control                                                                     |
 | `top_k`                               |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Top-k sampling control                                                                       |
@@ -136,7 +136,7 @@ Mantle-only Claude models are passed through to the upstream Anthropic Messages 
 | `top_k` | Forwarded | Dropped |
 | `cache_control` markers | Forwarded (prompt caching preserved) | Dropped |
 | `stop_sequences` | Forwarded | Dropped when served via the Responses API |
-| `max_tokens` | Forwarded | Below 16, raised to 16 when served via the Responses API (its minimum; a budget of 1, sent as a cheap model probe by some clients, would otherwise be rejected with `400`) — where the classic endpoint also serves the model (the GPT-5.6 family, by default), clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) moves it there, where it is honored as sent; forwarded unchanged when served via Chat Completions |
+| `max_tokens` | Forwarded as sent, `0` included — a pre-warm call answers with an empty completion; omitted, a gateway default of 4096 is sent, because the upstream API requires the field | Below 16, raised to 16 when served via the Responses API (its minimum; a budget of 0 or 1, sent as a cache pre-warm or a cheap model probe by some clients, would otherwise be rejected with `400`) — where the classic endpoint also serves the model (the GPT-5.6 family, by default), clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) moves it there, where any budget down to 1 is honored as sent; forwarded unchanged when served via Chat Completions, except `0`, which is raised to 1 |
 | `metadata.user_id` | Forwarded | Forwarded, SHA-256-hashed when over 64 characters |
 | `service_tier` | Forwarded | Only `auto` is forwarded |
 
@@ -658,6 +658,9 @@ curl -X POST "$BASE/v1/messages" \
 
 On models whose reasoning depth is an effort level rather than a token budget (Amazon Nova 2, DeepSeek V3), `budget_tokens` turns reasoning on and the depth follows that model's own scale. Set `output_config.effort` to choose it.
 
+!!! note "A small `max_tokens` turns reasoning off on Converse-served Claude 3.7–4.5"
+    Thinking tokens are spent out of the output limit, and Converse takes no budget below 1,024 tokens nor one that is not smaller than `max_tokens`. An effort level asked for alongside a `max_tokens` of 1,024 or less therefore leaves no budget to derive, and the request is served **without** reasoning rather than refused — a warning is logged. Raise `max_tokens` above 1,024 to get reasoning back.
+
 !!! note "`display` Not Honored"
     The `display` field (`summarized`/`omitted`) is accepted but has no effect: Bedrock's reasoning configuration has no equivalent, so full thinking text is always returned.
 
@@ -742,6 +745,8 @@ curl -X POST "$BASE/v1/messages" \
 **`container` is accepted and ignored, in both forms.** The identifier string and the object carrying `id` and `skills` — the form [Agent Skills](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/quickstart) requests use — both validate and both change nothing: no container is created, reused or returned, no skill is loaded, and the response carries no `container` object. A request naming skills is answered by the model on its own, so an answer that depends on a skill's instructions will differ from what the Anthropic API returns.
 
 **`max_tokens` is optional.** The Anthropic API requires it; here the model's own default output limit applies when the field is absent, so a client that relies on the `400` for a missing field gets an answer instead.
+
+**`max_tokens: 0` warms the prompt cache, and comes back with one token.** The Anthropic API answers a zero budget with an empty completion. Here the request is accepted and the prompt is processed and written to the cache the same way, but the reply carries a single token instead of none, with `stop_reason` `max_tokens`. Budget the pre-warm call for that one output token; a negative budget is still rejected with `400`. [Bedrock Mantle](#bedrock-mantle) models vary — the Claude passthrough honors the zero exactly, and answers with nothing. A pre-warm asks for no output, so what would describe output is refused with `400` — the same refusal, and the same message, the Anthropic API gives: `"stream": true`, a `tool_choice` of `"tool"` or `"any"` (`"auto"` is served), and `output_config.format`.
 
 **Token counting is refused for Marketplace model endpoints.** Those endpoints expose no token-counting API, so `POST /v1/messages/count_tokens` answers `400` for a model served by one. Every Converse- and Mantle-served model is counted.
 

@@ -2825,6 +2825,28 @@ class TestMessagesPayloadBuilder:
         schema = payload["tools"][0]["input_schema"]
         assert "propertyNames" not in schema["properties"]["a"]
 
+    async def test_a_zero_budget_is_passed_through_as_sent(self) -> None:
+        """A prompt-cache pre-warm request keeps its zero on the passthrough path.
+
+        Anthropic's own API is what serves this payload, so the budget it
+        documents is honored exactly rather than replaced by the default the
+        gateway injects for a request that named none.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+             stdapi/models/chat/_mantle/_convert.py:messages_payload
+        """
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "max_tokens": 0,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        )
+
+        payload = await mantle_convert.messages_payload(request, "model-id")
+
+        assert payload["max_tokens"] == 0
+
     async def test_external_web_access_is_gated_and_never_passed_through(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -4090,12 +4112,17 @@ class TestChatToResponsesTokenBudget:
 
     @pytest.mark.parametrize("field", ["max_completion_tokens", "max_tokens"])
     @pytest.mark.parametrize(
-        ("asked", "sent"), [(1, 16), (15, 16), (16, 16), (17, 17), (4096, 4096)]
+        ("asked", "sent"),
+        [(0, 16), (1, 16), (15, 16), (16, 16), (17, 17), (4096, 4096)],
     )
     def test_the_budget_reaches_the_transport_usable(
         self, field: str, asked: int, sent: int
     ) -> None:
-        """Only a value the Responses API would refuse is moved."""
+        """Only a value the Responses API would refuse is moved.
+
+        A budget of 0 -- the Anthropic prompt-cache pre-warm request -- is raised
+        the same way rather than refused, so the cache is still populated.
+        """
         out = mantle_convert._chat_to_responses_request(  # noqa: SLF001
             {"model": "m", "messages": [], field: asked}
         )
@@ -4109,6 +4136,78 @@ class TestChatToResponsesTokenBudget:
         )
 
         assert "max_output_tokens" not in out
+
+
+class TestMessagesToChatTokenBudget:
+    """An Anthropic budget of zero still bounds the Chat Completions conversion.
+
+    ``max_tokens: 0`` is Anthropic's documented way to populate the prompt cache
+    without generating a response. Reading it as "unset" would drop the budget
+    entirely and turn a pre-warm call into a full, billed generation; the Chat
+    Completions shape cannot express "generate nothing", so the budget is raised
+    to the smallest one it accepts instead.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+         https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         stdapi/models/chat/_mantle/_convert.py:_messages_to_chat_request
+         stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+    """
+
+    @pytest.mark.parametrize(("asked", "sent"), [(0, 1), (1, 1), (4096, 4096)])
+    def test_the_anthropic_budget_reaches_the_transport_usable(
+        self, asked: int, sent: int
+    ) -> None:
+        """Every budget still caps the generation; only the unexpressible 0 moves."""
+        out = mantle_convert._messages_to_chat_request(  # noqa: SLF001
+            {"model": "m", "messages": [], "max_tokens": asked}
+        )
+
+        assert out["max_completion_tokens"] == sent
+
+    def test_no_anthropic_budget_stays_unset(self) -> None:
+        """Nothing is invented for a request that named no budget."""
+        out = mantle_convert._messages_to_chat_request(  # noqa: SLF001
+            {"model": "m", "messages": []}
+        )
+
+        assert "max_completion_tokens" not in out
+
+    @pytest.mark.parametrize("field", ["max_completion_tokens", "max_tokens"])
+    def test_a_zero_budget_is_not_replaced_by_the_default(self, field: str) -> None:
+        """Converting back to the Anthropic shape keeps the zero.
+
+        The default budget is injected only when no budget was asked for.
+        """
+        out = mantle_convert._chat_to_messages_request(  # noqa: SLF001
+            {"model": "m", "messages": [], field: 0}
+        )
+
+        assert out["max_tokens"] == 0
+
+    def test_a_missing_budget_takes_the_default(self) -> None:
+        """A request naming no budget still gets one: Anthropic requires it."""
+        out = mantle_convert._chat_to_messages_request(  # noqa: SLF001
+            {"model": "m", "messages": []}
+        )
+
+        assert out["max_tokens"] == mantle_convert._DEFAULT_MAX_TOKENS  # noqa: SLF001
+
+    def test_the_composed_conversion_to_responses_keeps_the_budget(self) -> None:
+        """A pre-warm served over the Responses API is bounded, not unbounded.
+
+        The conversion composes through the Chat Completions shape, so the zero
+        has to survive both halves: dropped by either one, the Responses payload
+        would name no limit at all and a request that asked for nothing would be
+        billed a full generation.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching#pre-warming-the-cache
+             stdapi/models/chat/_mantle/_convert.py:convert_payload
+        """
+        out = mantle_convert.convert_payload(
+            "messages", "responses", {"model": "m", "messages": [], "max_tokens": 0}
+        )
+
+        assert out["max_output_tokens"] == 16
 
 
 class TestChatToMessagesDropList:

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 
+from stdapi.api_errors import ApiError
 from stdapi.input_file import FileIdInputFile, InputFile
 from stdapi.types import (
     BaseModelRequest,
@@ -425,13 +426,13 @@ class ToolUseBlock(BaseModelResponse):
     name: str = Field(description="Name of the tool being used.")
     input: JsonMapping = Field(description="Tool input parameters as a JSON object.")
     caller: Caller | None = Field(default=None, description="Caller.")
-
     toolset_name: str | None = Field(
         default=None,
         description="For a member of a tool family declared as a toolset, the "
         "`tools` entry type of that family. Send it back on the matching "
         "`tool_result`.",
     )
+
 
 # Ref: anthropic.types.tool_use_block_param.ToolUseBlockParam
 class ToolUseBlockParam(BaseModelRequest):
@@ -447,12 +448,12 @@ class ToolUseBlockParam(BaseModelRequest):
         default=None, description="Cache control for this content block."
     )
     caller: Caller | None = Field(default=None, description="Caller.")
-
     toolset_name: str | None = Field(
         default=None,
         description="For a member of a tool family declared as a toolset, the "
         "`tools` entry type of that family.",
     )
+
 
 # Ref: anthropic.types.thinking_block.ThinkingBlock
 class ThinkingBlock(BaseModelResponse):
@@ -1307,7 +1308,6 @@ class ToolSearchToolResultBlockParam(BaseModelRequest):
     )
 
 
-# Ref: anthropic.types.tool_result_block_param.ToolResultBlockParam
 # Ref: anthropic.types.browser_state_tab_entry_param.BrowserStateTabEntryParam
 class BrowserStateTabEntryParam(BaseModelRequest):
     """One open browser tab reported in a `browser_state` inventory."""
@@ -1431,6 +1431,7 @@ class BrowserStateBlockParam(BaseModelRequest):
     )
 
 
+# Ref: anthropic.types.tool_result_block_param.ToolResultBlockParam
 class ToolResultBlockParam(BaseModelRequest):
     """Tool result content block parameter."""
 
@@ -1465,12 +1466,12 @@ class ToolResultBlockParam(BaseModelRequest):
     cache_control: CacheControlEphemeralParam | None = Field(
         default=None, description="Cache control for this content block."
     )
-
     toolset_name: str | None = Field(
         default=None,
         description="For a result answering a member of a tool family declared "
         "as a toolset, the `tools` entry type of that family.",
     )
+
 
 # Ref: anthropic.types.container_upload_block_param.ContainerUploadBlockParam
 class ContainerUploadBlockParam(BaseModelRequest):
@@ -2075,7 +2076,6 @@ class MCPToolsetParam(BaseModelRequest):
     )
 
 
-#: Tools run for the model instead of by the client, each identified by its name.
 # Ref: anthropic.types.browser_screenshot_config_param.BrowserScreenshotConfigParam
 # Ref: anthropic.types.computer_zoom_config_param.ComputerZoomConfigParam
 # Every member config of both toolsets carries these two fields and no other, so
@@ -2144,6 +2144,7 @@ class ComputerToolsetParam(BaseModelRequest):
     )
 
 
+#: Tools run for the model instead of by the client, each identified by its name.
 ServerToolUnionParam = (
     ToolBashParam
     | ToolTextEditorParam
@@ -2156,10 +2157,10 @@ ServerToolUnionParam = (
     | ToolSearchToolRegexParam
 )
 
-# Ref: anthropic.types.tool_union_param.ToolUnionParam
 #: A whole tool family declared as one entry, with no name and no schema of its own.
 ToolsetParam = BrowserToolsetParam | ComputerToolsetParam
 
+# Ref: anthropic.types.tool_union_param.ToolUnionParam
 # Ref: anthropic.types.message_count_tokens_tool_param.MessageCountTokensToolParam
 ToolUnionParam = ToolParam | ServerToolUnionParam | MCPToolsetParam | ToolsetParam
 
@@ -2637,6 +2638,38 @@ MessageStreamEvent = Annotated[
 ]
 
 
+# Ref: anthropic.types.skill_params.SkillParams
+class SkillParams(BaseModelRequest):
+    """A skill to load in the container.
+
+    UNSUPPORTED on this implementation: accepted and ignored, and the rest of the
+    request is served normally. The skill is never loaded, so its instructions
+    never reach the model.
+    """
+
+    skill_id: str = Field(description="Identifier of the skill to load.")
+    type: Literal["anthropic", "custom"] = Field(
+        description="Skill origin: built-in, or one you published."
+    )
+    version: str | None = Field(
+        default=None, description="Skill version, or `latest` for the most recent one."
+    )
+
+
+# Ref: anthropic.types.container_params.ContainerParams
+class ContainerParams(BaseModelRequest):
+    """A container to reuse, and the skills to load in it.
+
+    UNSUPPORTED on this implementation: accepted and ignored, and the rest of the
+    request is served normally. No container is created or reused.
+    """
+
+    id: str | None = Field(default=None, description="Identifier of the container.")
+    skills: list[SkillParams] | None = Field(
+        default=None, description="Skills to load in the container."
+    )
+
+
 # Ref: anthropic.types.message_create_params.MessageCreateParamsBase
 class MessageCreateParams(BaseModelRequestWithExtra):
     """Create message request following the Messages API specification."""
@@ -2662,10 +2695,14 @@ class MessageCreateParams(BaseModelRequestWithExtra):
     )
     max_tokens: int | None = Field(
         default=None,
-        ge=1,
+        ge=0,
         validation_alias=AliasChoices("max_tokens", "maxTokens"),
         description="Maximum tokens to generate before stopping; the model may "
-        "stop earlier. Maximum value varies by model.",
+        "stop earlier. Maximum value varies by model. Optional here, unlike the "
+        "Anthropic API: the model's own default output limit applies when "
+        "omitted, except on a Bedrock Mantle Claude model, whose API requires a "
+        "limit and is given 4096. Set it to 0 to populate the prompt cache "
+        "without asking for an answer.",
     )
     inference_geo: str | None = Field(
         default=None,
@@ -2814,6 +2851,36 @@ class MessageCreateParams(BaseModelRequestWithExtra):
         """
         return _without_orphaned_tool_choice(values)
 
+    @model_validator(mode="after")
+    def _refuse_an_unservable_pre_warm(self) -> MessageCreateParams:
+        """Refuse what the Anthropic API refuses alongside a ``max_tokens`` of 0.
+
+        A pre-warm generates nothing, so anything that asks for generated output
+        contradicts it. Each message below is the vendor's own, measured against
+        the Anthropic API rather than written here.
+
+        Returns:
+            The validated request.
+
+        Raises:
+            ApiError: The zero budget is combined with streaming, with a forcing
+                ``tool_choice``, or with an output format.
+        """
+        if self.max_tokens != 0:
+            return self
+        if self.stream:
+            msg = "stream cannot be true when max_tokens is 0"
+            raise ApiError(msg)
+        if isinstance(self.tool_choice, ToolChoiceToolParam | ToolChoiceAnyParam):
+            msg = (
+                'tool_choice: type "tool" or "any" cannot be used when max_tokens is 0'
+            )
+            raise ApiError(msg)
+        if self.output_config is not None and self.output_config.format is not None:
+            msg = "output_config.format cannot be set when max_tokens is 0"
+            raise ApiError(msg)
+        return self
+
 
 # Ref: anthropic.types.json_output_format_param.JSONOutputFormatParam
 class JSONOutputFormatParam(BaseModelRequest):
@@ -2860,38 +2927,6 @@ class ThinkingConfigEnabledParam(BaseModelRequestWithExtra):
 
 
 # Ref: anthropic.types.thinking_config_disabled_param.ThinkingConfigDisabledParam
-# Ref: anthropic.types.skill_params.SkillParams
-class SkillParams(BaseModelRequest):
-    """A skill to load in the container.
-
-    UNSUPPORTED on this implementation: accepted and ignored, and the rest of the
-    request is served normally. The skill is never loaded, so its instructions
-    never reach the model.
-    """
-
-    skill_id: str = Field(description="Identifier of the skill to load.")
-    type: Literal["anthropic", "custom"] = Field(
-        description="Skill origin: built-in, or one you published."
-    )
-    version: str | None = Field(
-        default=None, description="Skill version, or `latest` for the most recent one."
-    )
-
-
-# Ref: anthropic.types.container_params.ContainerParams
-class ContainerParams(BaseModelRequest):
-    """A container to reuse, and the skills to load in it.
-
-    UNSUPPORTED on this implementation: accepted and ignored, and the rest of the
-    request is served normally. No container is created or reused.
-    """
-
-    id: str | None = Field(default=None, description="Identifier of the container.")
-    skills: list[SkillParams] | None = Field(
-        default=None, description="Skills to load in the container."
-    )
-
-
 class ThinkingConfigDisabledParam(BaseModelRequest):
     """Disabled thinking configuration."""
 

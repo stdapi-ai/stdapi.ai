@@ -10,15 +10,15 @@ they answer with: they discriminate a union arm rather than add a field, so a sh
 the mirror does not model rejects the entire request instead of the entry.
 
 Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool
+     https://platform.claude.com/docs/en/api/messages
      https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/web_fetch_tool_result_error_code.py
      stdapi/types/anthropic_messages.py:WebFetchToolResultErrorCode
 """
 
-from typing import get_args
+import re
+from typing import Any, get_args, get_type_hints
 
 import pytest
-from anthropic.types import (
-    WebFetchToolResultErrorCode as SdkWebFetchToolResultErrorCode,
 from anthropic.types import BrowserStateChangeParam as SdkBrowserStateChangeParam
 from anthropic.types import BrowserToolset20260801Param as SdkBrowserToolsetParam
 from anthropic.types import BrowserToolsetConfigsParam as SdkBrowserToolsetConfigsParam
@@ -26,21 +26,25 @@ from anthropic.types import ComputerToolset20260801Param as SdkComputerToolsetPa
 from anthropic.types import (
     ComputerToolsetConfigsParam as SdkComputerToolsetConfigsParam,
 )
+from anthropic.types import (
+    WebFetchToolResultErrorCode as SdkWebFetchToolResultErrorCode,
 )
+from pydantic import ValidationError
 
+from stdapi.api_errors import ApiError
 from stdapi.types.anthropic_messages import (
-    MessageCreateParams,
-    WebFetchToolResultErrorBlock,
-    WebFetchToolResultErrorCode,
-)
     BrowserStateBlockParam,
     BrowserToolsetParam,
     ComputerToolsetParam,
     MessageCountTokensParams,
-
+    MessageCreateParams,
     ToolResultBlockParam,
     ToolUseBlock,
     ToolUseBlockParam,
+    WebFetchToolResultErrorBlock,
+    WebFetchToolResultErrorCode,
+)
+
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
 
@@ -48,10 +52,6 @@ pytestmark = pytest.mark.local
 SDK_WEB_FETCH_ERROR_CODES = get_args(SdkWebFetchToolResultErrorCode)
 
 
-class TestWebFetchToolResultErrorCode:
-    """The ``web_fetch_tool_result_error`` code enumeration.
-
-    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool
 def _sdk_type_literal(typed_dict: Any) -> str:  # noqa: ANN401 (a TypedDict class)
     """Return the single ``type`` literal an SDK ``TypedDict`` declares.
 
@@ -131,6 +131,130 @@ def _create_params(**fields: object) -> MessageCreateParams:
     )
 
 
+class TestMaxTokensPreWarmBudget:
+    """``max_tokens: 0`` is the vendor's prompt-cache pre-warm request.
+
+    Anthropic documents a budget of zero as the way to populate the prompt cache
+    without generating a response, so refusing it at parse time would reject a
+    request every Anthropic client considers valid. Negative budgets stay
+    refused: they mean nothing upstream.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+         https://platform.claude.com/docs/en/api/messages
+         stdapi/types/anthropic_messages.py:MessageCreateParams
+    """
+
+    def test_a_zero_budget_validates(self) -> None:
+        """A pre-warm request parses, and keeps the zero it was sent.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        assert _create_params(max_tokens=0).max_tokens == 0
+
+    def test_a_zero_budget_survives_serialization(self) -> None:
+        """The zero reaches the payload builders instead of being dropped as falsy.
+
+        Every backend conversion reads the dumped payload, so a zero lost here
+        would silently become an unbounded generation downstream.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        dumped = _create_params(max_tokens=0).model_dump(
+            mode="json", by_alias=True, exclude_unset=True
+        )
+
+        assert dumped["max_tokens"] == 0
+
+    def test_a_negative_budget_is_refused(self) -> None:
+        """Only zero and above are budgets; a negative one is still a 422.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        with pytest.raises(ValidationError):
+            _create_params(max_tokens=-1)
+
+    def test_a_streamed_pre_warm_is_refused(self) -> None:
+        """A zero budget cannot be streamed, because the vendor refuses it.
+
+        Measured against the Anthropic API: `max_tokens=0` with `stream=True`
+        answers `400 invalid_request_error` carrying this message, so accepting
+        it here would invent a transport the vendor does not offer.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        with pytest.raises(
+            ApiError, match="stream cannot be true when max_tokens is 0"
+        ):
+            _create_params(max_tokens=0, stream=True)
+
+    @pytest.mark.parametrize("choice", [{"type": "tool", "name": "f"}, {"type": "any"}])
+    def test_a_forcing_tool_choice_is_refused_with_a_zero_budget(
+        self, choice: dict[str, str]
+    ) -> None:
+        """Forcing a tool call asks for output a pre-warm does not generate.
+
+        Measured against the Anthropic API: `tool_choice` of `tool` or `any`
+        with `max_tokens=0` answers `400 invalid_request_error` carrying this
+        message. `auto` is answered normally and must stay accepted.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        with pytest.raises(ApiError, match="cannot be used when max_tokens is 0"):
+            _create_params(
+                max_tokens=0,
+                tool_choice=choice,
+                tools=[{"name": "f", "description": "d", "input_schema": {}}],
+            )
+
+    def test_an_automatic_tool_choice_is_kept_with_a_zero_budget(self) -> None:
+        """Only the forcing choices are refused; `auto` is served upstream.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        request = _create_params(
+            max_tokens=0,
+            tool_choice={"type": "auto"},
+            tools=[{"name": "f", "description": "d", "input_schema": {}}],
+        )
+
+        assert request.max_tokens == 0
+
+    def test_an_output_format_is_refused_with_a_zero_budget(self) -> None:
+        """A format describes output a pre-warm does not produce.
+
+        Measured against the Anthropic API: `output_config.format` with
+        `max_tokens=0` answers `400 invalid_request_error` carrying this
+        message, while the same format with a positive budget is served.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        fmt = {"format": {"type": "json_schema", "schema": {"type": "object"}}}
+
+        with pytest.raises(
+            ApiError,
+            match=re.escape("output_config.format cannot be set when max_tokens is 0"),
+        ):
+            _create_params(max_tokens=0, output_config=fmt)
+
+    def test_a_streamed_positive_budget_is_untouched(self) -> None:
+        """The refusal reads the budget, not the stream flag alone.
+
+        Ref: stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        assert _create_params(max_tokens=16, stream=True).stream is True
+
+
+class TestWebFetchToolResultErrorCode:
+    """The ``web_fetch_tool_result_error`` code enumeration.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool
          stdapi/types/anthropic_messages.py:WebFetchToolResultErrorCode
     """
 

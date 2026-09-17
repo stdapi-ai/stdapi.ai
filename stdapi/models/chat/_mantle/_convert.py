@@ -72,6 +72,9 @@ _DEFAULT_MAX_TOKENS = 4096
 #: Smallest ``max_output_tokens`` the Responses API accepts, below what the other surfaces do.
 _MIN_MAX_OUTPUT_TOKENS = 16
 
+#: Smallest ``max_completion_tokens`` the Chat Completions API accepts.
+_MIN_MAX_COMPLETION_TOKENS = 1
+
 #: Assistant field carrying a reasoning model's thinking text upstream.
 _REASONING_KEY = "reasoning"
 
@@ -161,10 +164,10 @@ _ANTHROPIC_SERVER_TOOL_PREFIXES = (
     "computer_",
     "memory_",
     "web_fetch_",
+    "browser_",
 )
 
 
-    "browser_",
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -283,9 +286,6 @@ def _anthropic_text(content: object) -> str:
     return ""
 
 
-def _responses_text(content: object) -> str:
-    """Extract plain text from Responses input or output content.
-
 def _refuse_browser_state(content: object) -> None:
     """Refuse a ``tool_result`` whose payload is a browser state.
 
@@ -310,6 +310,9 @@ def _refuse_browser_state(content: object) -> None:
         )
         raise ApiError(msg, status=400)
 
+
+def _responses_text(content: object) -> str:
+    """Extract plain text from Responses input or output content.
 
     Args:
         content: Responses content value (string or list of parts).
@@ -1095,6 +1098,22 @@ def enable_stream_usage(api: MantleApi, payload: dict[str, Any]) -> dict[str, An
 # ---------------------------------------------------------------------------
 
 
+def _requested_token_budget(payload: dict[str, Any]) -> int | None:
+    """Read the output-token budget a Chat Completions payload asks for.
+
+    A budget of 0 -- Anthropic's prompt-cache pre-warm request -- is a value,
+    not an omission, so it is returned rather than read as "unset".
+
+    Args:
+        payload: Chat Completions request payload.
+
+    Returns:
+        The requested budget, or ``None`` when the payload names none.
+    """
+    tokens = payload.get("max_completion_tokens")
+    return payload.get("max_tokens") if tokens is None else tokens
+
+
 def _chat_to_responses_request(payload: dict[str, Any]) -> dict[str, Any]:
     """Convert a Chat Completions request payload to the Responses shape.
 
@@ -1113,7 +1132,7 @@ def _chat_to_responses_request(payload: dict[str, Any]) -> dict[str, Any]:
     if instructions:
         out["instructions"] = instructions
     out.update(_optional_fields(payload, _OPENAI_COMMON_FIELDS))
-    if tokens := payload.get("max_completion_tokens") or payload.get("max_tokens"):
+    if (tokens := _requested_token_budget(payload)) is not None:
         # Anthropic and Chat Completions accept a budget the Responses API refuses,
         # so it is raised to what the transport takes rather than turned into a 400.
         out["max_output_tokens"] = max(tokens, _MIN_MAX_OUTPUT_TOKENS)
@@ -1537,11 +1556,10 @@ def _chat_to_messages_request(payload: dict[str, Any]) -> dict[str, Any]:
     """
     _ensure_single_choice(payload)
     system, turns = _anthropic_messages_from_chat(payload.get("messages") or [])
+    tokens = _requested_token_budget(payload)
     out: dict[str, Any] = {
         "model": payload.get("model"),
-        "max_tokens": payload.get("max_completion_tokens")
-        or payload.get("max_tokens")
-        or _DEFAULT_MAX_TOKENS,
+        "max_tokens": _DEFAULT_MAX_TOKENS if tokens is None else tokens,
         "messages": turns,
     }
     if system:
@@ -1803,7 +1821,8 @@ def _anthropic_tool_choice_from_chat(
 def _messages_to_chat_request(payload: dict[str, Any]) -> dict[str, Any]:
     """Convert an Anthropic request payload to the Chat Completions shape.
 
-    Thinking configuration, ``top_k`` and cache controls are dropped.
+    Thinking configuration, ``top_k`` and cache controls are dropped, and a
+    ``max_tokens`` of 0 is raised to the smallest budget this shape accepts.
 
     Args:
         payload: Anthropic Messages request payload.
@@ -1817,8 +1836,10 @@ def _messages_to_chat_request(payload: dict[str, Any]) -> dict[str, Any]:
     for turn in payload.get("messages") or []:
         messages += _chat_messages_from_anthropic_turn(turn)
     out: dict[str, Any] = {"model": payload.get("model"), "messages": messages}
-    if tokens := payload.get("max_tokens"):
-        out["max_completion_tokens"] = tokens
+    if (tokens := payload.get("max_tokens")) is not None:
+        # Anthropic's pre-warm budget of 0 has no equivalent here, so it is raised
+        # to what this shape takes rather than dropped into an unbounded generation.
+        out["max_completion_tokens"] = max(tokens, _MIN_MAX_COMPLETION_TOKENS)
     out.update(_optional_fields(payload, ("temperature", "top_p", "stream")))
     if tier := _map_service_tier(payload.get("service_tier")):
         out["service_tier"] = tier
@@ -1904,6 +1925,7 @@ def _chat_messages_from_anthropic_turn(turn: dict[str, Any]) -> list[dict[str, A
                     }
                 )
             case "tool_result":
+                _refuse_browser_state(block.get("content"))
                 tool_messages.append(
                     {
                         "role": "tool",
@@ -1925,7 +1947,6 @@ def _assemble_chat_message(
         role: Message role.
         parts: Converted content parts.
         tool_calls: Converted tool calls.
-                _refuse_browser_state(block.get("content"))
 
     Returns:
         A single-message list, or an empty list when there is no content.
