@@ -1339,6 +1339,85 @@ class TestAnthropicMessages:
 
         assert "stream cannot be true when max_tokens is 0" in str(error.value)
 
+    @pytest.mark.parametrize(
+        "tool_choice",
+        [{"type": "tool", "name": "get_weather"}, {"type": "any"}],
+        ids=["tool", "any"],
+    )
+    def test_max_tokens_zero_cannot_force_a_tool_call(
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_vision_model: str,
+        tool_choice: dict[str, str],
+    ) -> None:
+        """A pre-warm call that forces a tool call is refused, as the vendor refuses it.
+
+        ``tool_choice`` of ``tool`` or ``any`` demands a ``tool_use`` block, which
+        a zero budget cannot generate, so both targets answer
+        ``400 invalid_request_error``. The request is refused before inference, so
+        nothing is generated or billed.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use#forcing-tool-use
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        with pytest.raises(BadRequestError) as excinfo:
+            anthropic_client.messages.create(  # type: ignore[call-overload]
+                model=anthropic_chat_vision_model,
+                max_tokens=0,
+                messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+                tools=[_WEATHER_TOOL],
+                tool_choice=tool_choice,
+            )
+
+        body = excinfo.value.body
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.type == "invalid_request_error"
+        assert isinstance(body, dict)
+        assert body["error"]["type"] == "invalid_request_error"
+        assert "cannot be used when max_tokens is 0" in body["error"]["message"]
+
+    def test_max_tokens_zero_cannot_set_an_output_format(
+        self, anthropic_client: Anthropic, anthropic_chat_model: str
+    ) -> None:
+        """A pre-warm call carrying an output format is refused, as the vendor refuses it.
+
+        ``output_config.format`` describes generated output, which a zero budget
+        produces none of, so both targets answer ``400 invalid_request_error``.
+        The request is refused before inference, so nothing is generated or billed.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        with pytest.raises(BadRequestError) as excinfo:
+            anthropic_client.messages.create(
+                model=anthropic_chat_model,
+                max_tokens=0,
+                messages=[{"role": "user", "content": "Describe Alice, aged 30."}],
+                output_config={
+                    "format": {
+                        "type": "json_schema",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"name": {"type": "string"}},
+                            "required": ["name"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+            )
+
+        body = excinfo.value.body
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.type == "invalid_request_error"
+        assert isinstance(body, dict)
+        assert body["error"]["type"] == "invalid_request_error"
+        assert (
+            "output_config.format cannot be set when max_tokens is 0"
+            in body["error"]["message"]
+        )
+
     # --- Metadata ---
 
     def test_metadata_user_id(
@@ -1444,32 +1523,6 @@ class TestAnthropicMessages:
         assert "temperature" in str(excinfo.value).lower()
         if not use_official_api:
             assert excinfo.value.type == "invalid_request_error"
-
-    @pytest.mark.gateway("the AWS-hosted official endpoint accepts max_tokens=0")
-    def test_invalid_max_tokens_error(
-        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
-    ) -> None:
-        """``max_tokens: 0`` is rejected by this gateway with HTTP 400.
-
-        A deliberate divergence: Anthropic documents ``max_tokens: 0`` as valid
-        (it pre-warms the prompt cache without generating), but the gateway's
-        request model constrains the field to ``>= 1``, so Pydantic validation
-        turns it into an ``invalid_request_error``.
-
-        Ref: https://platform.claude.com/docs/en/api/messages
-             stdapi/types/anthropic_messages.py:MessageCreateParams
-             stdapi/main.py:handle_validation_exception
-        """
-        with pytest.raises(BadRequestError) as excinfo:
-            anthropic_client.messages.create(
-                model=anthropic_chat_basic_model,
-                max_tokens=0,
-                messages=[{"role": "user", "content": "Hello"}],
-            )
-
-        assert excinfo.value.status_code == 400
-        assert excinfo.value.type == "invalid_request_error"
-        assert "max_tokens" in str(excinfo.value)
 
     def test_invalid_top_p_error(
         self,

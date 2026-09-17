@@ -3137,6 +3137,117 @@ class TestChatCompletions:
             assert chunk.id.startswith("chatcmpl-")
             break  # Only need to check first chunk
 
+    def test_streaming_raw_chunk_keys_and_tool_call_opening_delta(
+        self, openai_client: OpenAI, chat_legacy_model: str
+    ) -> None:
+        """Raw streamed chunks open a tool call with empty arguments and always key finish_reason and logprobs.
+
+        Two properties of the wire format, asserted on the undecoded SSE payloads
+        because the SDK models set ``extra="allow"`` and default every absent
+        field to ``None``: a key that was never sent is indistinguishable from a
+        null one once validated.
+
+        The opening delta of a tool call carries the function ``name`` together
+        with ``arguments`` set to the empty string, and the argument JSON arrives
+        in the following deltas, so a client can start a call before it knows the
+        arguments. Independently, every streamed choice carries both
+        ``finish_reason`` and ``logprobs`` as keys, null until the chunk that
+        terminates the choice, which is what lets a client read them
+        unconditionally.
+
+        ``chat_legacy_model`` rather than ``chat_model``: upstream the
+        ``logprobs`` key is emitted by the GPT-4 generation and dropped by the
+        GPT-5 one, which ``chat_model`` maps to, so only the former can show
+        that the gateway sending it always is compliant rather than inventive.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+             https://developers.openai.com/api/docs/guides/function-calling#streaming
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
+        """
+        raw = openai_client.chat.completions.with_raw_response.create(
+            model=chat_legacy_model,
+            messages=[{"role": "user", "content": "Ping the tool. Say nothing else."}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "ping",
+                        "description": "Ping a host.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"host": {"type": "string"}},
+                            "required": ["host"],
+                        },
+                    },
+                }
+            ],
+            tool_choice="required",
+            stream=True,
+        )
+        chunks = [
+            _json.loads(line.removeprefix("data:").strip())
+            for line in raw.http_response.iter_lines()
+            if line.startswith("data:")
+            and line.removeprefix("data:").strip() != "[DONE]"
+        ]
+        assert chunks, "the stream carried no data event"
+
+        # Claim 1: the opening tool-call delta names the function and leaves
+        # its arguments empty.
+        opening = next(
+            (
+                choice["delta"]["tool_calls"][0]["function"]
+                for chunk in chunks
+                for choice in chunk.get("choices", ())
+                if choice.get("delta", {}).get("tool_calls")
+            ),
+            None,
+        )
+        assert opening is not None, "tool_choice='required' must stream a tool call"
+        assert "name" in opening, f"the opening delta must name the function: {opening}"
+        assert opening["name"], "the function name must not be empty"
+        assert "arguments" in opening, (
+            f"the opening delta must carry the arguments key: {opening}"
+        )
+        assert opening["arguments"] == "", (
+            f"the opening delta must leave arguments empty: {opening['arguments']!r}"
+        )
+        later_arguments = "".join(
+            call.get("function", {}).get("arguments", "")
+            for chunk in chunks
+            for choice in chunk.get("choices", ())
+            for call in choice.get("delta", {}).get("tool_calls", ())
+        )
+        assert later_arguments, "the argument JSON must arrive in the following deltas"
+        assert isinstance(_json.loads(later_arguments), dict), (
+            f"the concatenated argument deltas must be a JSON object: {later_arguments!r}"
+        )
+
+        # Claim 2: both keys are present on every choice, null before the end.
+        choices = [
+            (index, choice)
+            for index, chunk in enumerate(chunks)
+            for choice in chunk.get("choices", ())
+        ]
+        assert choices, "the stream carried no choice"
+        for index, choice in choices:
+            assert "finish_reason" in choice, (
+                f"chunk {index} omits the finish_reason key: {choice}"
+            )
+            assert "logprobs" in choice, (
+                f"chunk {index} omits the logprobs key: {choice}"
+            )
+            assert choice["logprobs"] is None, (
+                f"logprobs must be null when none were requested: {choice['logprobs']}"
+            )
+        terminal = [index for index, choice in choices if choice["finish_reason"]]
+        assert terminal, "no chunk reported a finish_reason"
+        assert all(
+            choice["finish_reason"] is None
+            for index, choice in choices
+            if index < terminal[0]
+        ), "finish_reason must stay null until the terminating chunk"
+
     def test_streaming_with_stop_sequences(
         self, openai_client: OpenAI, chat_legacy_model: str, use_official_api: bool
     ) -> None:

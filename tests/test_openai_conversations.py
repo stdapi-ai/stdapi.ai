@@ -48,10 +48,10 @@ from stdapi.utils import json_sse
 from tests._helpers import make_model_details
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Iterator
 
     from openai import OpenAI
-    from openai.types.conversations import ConversationItem
+    from openai.types.conversations import Conversation, ConversationItem
     from starlette.testclient import TestClient
 
     from stdapi.models import ModelDetails
@@ -1358,6 +1358,174 @@ def _item_id(item: ConversationItem) -> str:
     return item.id
 
 
+@contextlib.contextmanager
+def _live_conversation(client: OpenAI) -> Iterator[Conversation]:
+    """Yield a freshly created conversation and delete it however the test ends.
+
+    Args:
+        client: The OpenAI SDK client bound to the selected target.
+
+    Yields:
+        The created conversation.
+    """
+    conversation = client.conversations.create()
+    try:
+        yield conversation
+    finally:
+        with contextlib.suppress(Exception):
+            client.conversations.delete(conversation.id)
+
+
+def _field(item: object, path: str) -> Any:  # noqa: ANN401
+    """Read a dotted path out of a listed item.
+
+    A segment is a list index when it is a digit, a mapping key when the value
+    reached is a ``dict`` -- which is what a field the SDK model does not declare
+    comes back as, kept only by its ``extra="allow"`` -- and an attribute
+    otherwise.
+
+    Args:
+        item: A listed or retrieved conversation item.
+        path: Segments separated by dots.
+
+    Returns:
+        The value at that path.
+    """
+    value: Any = item
+    for name in path.split("."):
+        if name.isdigit():
+            value = value[int(name)]
+        elif isinstance(value, dict):
+            value = value[name]
+        else:
+            value = getattr(value, name)
+    return value
+
+
+#: The replayed detail each round-trip item carries, distinctive enough to trace.
+_REPLAYED_DETAIL = "conversation item round trip"
+
+#: Replayed tool-call items a write accepts, with the path proving they read back.
+_REPLAYED_TOOL_CALL_ITEMS = [
+    pytest.param(
+        {
+            "type": "computer_call",
+            "id": "cu_replayed",
+            "call_id": "call_replayed_computer",
+            "action": {"type": "screenshot"},
+            "pending_safety_checks": [],
+            "status": "completed",
+        },
+        "call_id",
+        "call_replayed_computer",
+        id="computer_call",
+    ),
+    pytest.param(
+        {
+            "type": "web_search_call",
+            "id": "ws_replayed",
+            "action": {"type": "search", "query": _REPLAYED_DETAIL},
+            "status": "completed",
+        },
+        "action.query",
+        _REPLAYED_DETAIL,
+        id="web_search_call",
+    ),
+    pytest.param(
+        {
+            # Upstream mints the ID but still validates the one sent: a
+            # `tool_search_call` whose ID does not start with `tsc` answers 400.
+            "type": "tool_search_call",
+            "id": "tsc_replayed",
+            "call_id": "call_replayed_tool_search",
+            "arguments": {"query": _REPLAYED_DETAIL},
+            "status": "completed",
+        },
+        "arguments",
+        {"query": _REPLAYED_DETAIL},
+        id="tool_search_call",
+    ),
+    pytest.param(
+        {
+            "type": "tool_search_output",
+            "id": "tso_replayed",
+            "call_id": "call_replayed_tool_search",
+            "status": "completed",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "parameters": {"type": "object"},
+                    "strict": True,
+                }
+            ],
+        },
+        "tools.0.name",
+        "get_weather",
+        id="tool_search_output",
+    ),
+]
+
+#: Replayed tool-call items whose detail the official API stores as null.
+_DISCARDED_TOOL_CALL_DETAILS = [
+    pytest.param(
+        {
+            "type": "file_search_call",
+            "id": "fs_replayed",
+            "queries": [_REPLAYED_DETAIL],
+            "status": "completed",
+            "results": [
+                {
+                    "file_id": "file-replayed",
+                    "filename": "replayed.txt",
+                    "score": 0.5,
+                    "text": _REPLAYED_DETAIL,
+                    "attributes": {"origin": "replay"},
+                }
+            ],
+        },
+        "results.0.text",
+        _REPLAYED_DETAIL,
+        id="file_search_call_results",
+    ),
+    pytest.param(
+        {
+            "type": "code_interpreter_call",
+            "id": "ci_replayed",
+            "code": "print('replayed')",
+            "container_id": "cntr_replayed",
+            "status": "completed",
+            "outputs": [{"type": "logs", "logs": _REPLAYED_DETAIL}],
+        },
+        "outputs.0.logs",
+        _REPLAYED_DETAIL,
+        id="code_interpreter_call_outputs",
+    ),
+    pytest.param(
+        {
+            "type": "shell_call",
+            "id": "sh_replayed",
+            "call_id": "call_replayed_shell",
+            "action": {"commands": ["ls"]},
+            "status": "completed",
+            "environment": {
+                "type": "local",
+                "skills": [
+                    {
+                        "name": "round_trip",
+                        "description": _REPLAYED_DETAIL,
+                        "path": "/tmp/round_trip",  # noqa: S108
+                    }
+                ],
+            },
+        },
+        "environment.skills.0.description",
+        _REPLAYED_DETAIL,
+        id="shell_call_environment",
+    ),
+]
+
+
 #: One account-wide store and cursor reads spanning requests: pin to one worker.
 @pytest.mark.xdist_group("openai_conversations")
 class TestConversationsLive:
@@ -1576,3 +1744,182 @@ class TestConversationsLive:
         finally:
             with contextlib.suppress(Exception):
                 openai_client.conversations.delete(conversation.id)
+
+    @staticmethod
+    def _write_and_read_back(
+        client: OpenAI, conversation_id: str, item: dict[str, Any], item_type: str
+    ) -> tuple[ConversationItem, ConversationItem]:
+        """Write one item to a conversation and read it back both ways.
+
+        Args:
+            client: The OpenAI SDK client bound to the selected target.
+            conversation_id: The conversation to write into.
+            item: The item to write, in its request shape.
+            item_type: The ``type`` the stored item is expected to carry.
+
+        Returns:
+            The item as listed and as retrieved, in that order.
+        """
+        added = client.conversations.items.create(
+            conversation_id,
+            items=[item],  # type: ignore[list-item]
+        )
+        assert [stored.type for stored in added.data] == [item_type]
+
+        listed = client.conversations.items.list(conversation_id, order="asc", limit=10)
+        (stored,) = [entry for entry in listed.data if entry.type == item_type]
+        retrieved = client.conversations.items.retrieve(
+            _item_id(stored), conversation_id=conversation_id
+        )
+        assert retrieved.id == stored.id
+        assert retrieved.type == item_type
+        return stored, retrieved
+
+    @pytest.mark.parametrize(("item", "path", "expected"), _REPLAYED_TOOL_CALL_ITEMS)
+    def test_a_replayed_tool_call_item_round_trips(
+        self,
+        openai_client: OpenAI,
+        item: dict[str, Any],
+        path: str,
+        expected: Any,  # noqa: ANN401
+    ) -> None:
+        """A tool-call item a client replays reads back with its detail intact.
+
+        A client rebuilding a transcript posts the tool calls of the previous
+        turn, so a listing union narrower than the write side would hand the
+        conversation back missing them -- which no stub can catch, because the
+        item has to reach real storage to be dropped by it.
+
+        These four are the tool-call shapes the official API genuinely accepts
+        on a write. It refuses the rest of the family outright: a ``reasoning``
+        item answers 400 ``invalid_item`` in every form (``content`` is capped at
+        length zero), and so does any item carrying an action, an output, an
+        argument or a result the strict shapes cannot express -- an unknown
+        ``computer_call`` or ``web_search_call`` action, a ``code_interpreter_call``
+        output type outside ``logs``/``image``, ``tool_search_call`` arguments that
+        are not an object, and a file-search result with an undeclared key.
+
+        Ref: https://developers.openai.com/api/reference/resources/conversations.md
+             openai.types.conversations.conversation_item.ConversationItem
+             stdapi/types/openai_responses.py:ResponseItem
+        """
+        with _live_conversation(openai_client) as conversation:
+            stored, retrieved = self._write_and_read_back(
+                openai_client, conversation.id, item, str(item["type"])
+            )
+
+            assert _field(stored, path) == expected
+            assert _field(retrieved, path) == expected
+
+    @pytest.mark.parametrize(("item", "path", "expected"), _DISCARDED_TOOL_CALL_DETAILS)
+    def test_a_replayed_tool_call_detail_reads_back_per_target(
+        self,
+        openai_client: OpenAI,
+        use_official_api: bool,
+        item: dict[str, Any],
+        path: str,
+        expected: Any,  # noqa: ANN401
+    ) -> None:
+        """A replayed file-search, code-interpreter or shell detail is target-specific.
+
+        The three items are accepted on a write by both targets, and the two
+        disagree on the detail: the official API stores ``results``, ``outputs``
+        and ``environment`` as ``null`` and never hands them back, while this
+        gateway keeps what was written and lists it. Keeping is the friendlier
+        answer and the one the read union was widened for, but it is a
+        divergence from the API being mirrored, so both halves are asserted
+        rather than either being accepted quietly.
+
+        The shell call goes one step further: upstream's own stored-item model
+        does not declare ``skills`` on a local environment, so what the gateway
+        returns survives the SDK only as an undeclared extra.
+
+        Ref: https://developers.openai.com/api/reference/resources/conversations.md
+             stdapi/types/openai_responses.py:ResponseItem
+        """
+        container = path.split(".", 1)[0]
+        with _live_conversation(openai_client) as conversation:
+            stored, retrieved = self._write_and_read_back(
+                openai_client, conversation.id, item, str(item["type"])
+            )
+
+            if use_official_api:
+                assert _field(stored, container) is None
+                assert _field(retrieved, container) is None
+            else:
+                assert _field(stored, path) == expected
+                assert _field(retrieved, path) == expected
+
+    def test_an_assistant_message_phase_reads_back_per_target(
+        self, openai_client: OpenAI, use_official_api: bool
+    ) -> None:
+        """An assistant message's ``phase`` is kept here and dropped upstream.
+
+        ``EasyInputMessage`` declares ``phase``, the reference tells a client to
+        "preserve and resend phase on all assistant messages" because dropping
+        it degrades a Codex-family model, and the stored message model declares
+        it too -- so a client has every reason to expect it back. The official
+        API nonetheless accepts the write and stores the message without it,
+        while this gateway hands it back, which is a divergence in the gateway's
+        favour and a probable upstream defect.
+
+        Ref: https://developers.openai.com/api/reference/resources/conversations.md
+             openai.types.conversations.message.Message
+             stdapi/types/openai_responses.py:ResponseInputMessageItemPhased
+        """
+        item = {
+            "type": "message",
+            "role": "assistant",
+            "phase": "final_answer",
+            "content": _REPLAYED_DETAIL,
+        }
+        with _live_conversation(openai_client) as conversation:
+            stored, retrieved = self._write_and_read_back(
+                openai_client, conversation.id, item, "message"
+            )
+
+            assert _item_text(stored) == _REPLAYED_DETAIL
+            expected = None if use_official_api else "final_answer"
+            assert _field(stored, "phase") == expected
+            assert _field(retrieved, "phase") == expected
+
+    def test_a_user_message_phase_reads_back_per_target(
+        self, openai_client: OpenAI, use_official_api: bool
+    ) -> None:
+        """A ``phase`` on a user message is refused upstream and kept here.
+
+        ``phase`` is declared on ``EasyInputMessage`` independently of ``role``
+        and the reference only says it is "not used for user messages", so the
+        write side here accepts it under every role and the listing union grew a
+        member to express it. The official API is stricter than its own schema:
+        it answers 400 ``unknown_parameter`` on ``items[0].phase`` for a user
+        message, whatever ``type`` the item declares. The extra read-union member
+        therefore mirrors nothing upstream, and this lane is the only place that
+        says so.
+
+        Ref: https://developers.openai.com/api/reference/resources/conversations.md
+             stdapi/types/openai_responses.py:ResponseInputMessageItemPhased
+        """
+        item = {
+            "type": "message",
+            "role": "user",
+            "phase": "commentary",
+            "content": _REPLAYED_DETAIL,
+        }
+        with _live_conversation(openai_client) as conversation:
+            if use_official_api:
+                with pytest.raises(BadRequestError) as refused:
+                    openai_client.conversations.items.create(
+                        conversation.id,
+                        items=[item],  # type: ignore[list-item]
+                    )
+                assert refused.value.status_code == 400
+                assert refused.value.code == "unknown_parameter"
+                assert refused.value.param == "items[0].phase"
+                return
+
+            stored, retrieved = self._write_and_read_back(
+                openai_client, conversation.id, item, "message"
+            )
+            assert _field(stored, "phase") == "commentary"
+            assert _field(retrieved, "phase") == "commentary"

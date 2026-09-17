@@ -183,7 +183,14 @@ class TestChunkChoiceAlwaysPresentKeys:
     and middleware detecting the end of a turn with ``"finish_reason" in choice``
     never fires.
 
+    ``finish_reason`` holds across the fleet; ``logprobs`` does not. Measured on
+    the vendor lane, ``gpt-4o-mini`` sends it on every choice and ``gpt-5-nano``
+    never sends it at all, so emitting it always is a superset of the newer
+    generation rather than a mirror of it. The upstream half of this is proved
+    against ``gpt-4o-mini``, the one mapping that can still show it.
+
     Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+         tests/test_openai_chat_completions.py:test_streaming_raw_chunk_keys_and_tool_call_opening_delta
          stdapi/models/chat/_adapters/_openai_chat_completion.py:_dump_chunk
     """
 
