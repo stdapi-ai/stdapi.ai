@@ -25,10 +25,10 @@ from pathlib import Path
 from urllib.request import urlopen
 
 #: Exact ``swagger-ui-dist`` release the Swagger UI page loads, under Apache-2.0.
-SWAGGER_UI_VERSION = "5.32.15"
+SWAGGER_UI_VERSION = "5.33.0"
 
 #: Exact ``redoc`` release the ReDoc page loads, under the MIT licence.
-REDOC_VERSION = "2.5.3"
+REDOC_VERSION = "2.5.4"
 
 #: Licence each package is published under, checked against npm by the drift lane.
 UPSTREAM_LICENSES = {"swagger-ui-dist": "Apache-2.0", "redoc": "MIT"}
@@ -108,21 +108,21 @@ BROWSER_ASSETS: dict[str, Asset] = {
             "swagger-ui-dist",
             SWAGGER_UI_VERSION,
             "swagger-ui-bundle.js",
-            "a7e344f2770b2f07527ce828e0951626983b8f2dcdb7a826689c0232023f995b",
+            "62df541529080464a7660adc793eab7128c6193ce3be24ddc1e0e0a4a63edc2f",
             "text/javascript",
         ),
         Asset(
             "swagger-ui-dist",
             SWAGGER_UI_VERSION,
             "swagger-ui.css",
-            "d7f39f764aa18c7b47dd05b9af5613e373e4ac0f3557c2693d52d0abc2464d76",
+            "1ac324f7dcd27e4b9386b4bd6421271ec147e922a22c05ba24b11515e9aa6321",
             "text/css",
         ),
         Asset(
             "redoc",
             REDOC_VERSION,
             "bundles/redoc.standalone.js",
-            "1320f442151c57c447d3b70c7ffc6c4f86d08464020fe34c8cc5d3164e9944f0",
+            "dcaf76612bc4a3fbcc923a8966dee2f6146a5f32e5ce1b6f02dd60cbbf89500b",
             "text/javascript",
         ),
     )
@@ -158,7 +158,7 @@ LICENSE_ASSETS: tuple[Asset, ...] = (
         "redoc",
         REDOC_VERSION,
         "bundles/redoc.standalone.js.LICENSE.txt",
-        "469cc94b600aac09643f70e167cd1f66f24301ebb546532fad5db7c60f7b30d0",
+        "eed602ec32e00b2b9df1984fbcc26a687b1b3193ec01961389c4b8439e6edf73",
     ),
 )
 
