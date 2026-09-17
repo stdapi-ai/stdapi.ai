@@ -65,7 +65,7 @@ curl -OJ -X POST "$BASE/v1/audio/speech" \
 | WAV                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Encoded from PCM                                                |
 | OGG (Vorbis)                | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Native Polly format                                             |
 | **Control**                 |                                          |                                                                 |
-| `speed` parameter           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 0.2x to 2.0x playback speed; rejected with SSML input (set the speed in SSML instead) |
+| `speed` parameter           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 0.2x to 4.0x playback speed, covering OpenAI's full range; generative voices speak no faster than 2.0x; rejected with SSML input (set the speed in SSML instead) |
 | `instructions` parameter    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted for OpenAI API compatibility and ignored (no Amazon Polly equivalent) |
 | Extra model-specific params | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra model-specific parameters via JSON body                   |
 | **Streaming**               |                                          |                                                                 |
@@ -114,7 +114,7 @@ Each engine supports a different subset of voices and languages — see the [Pol
 - **SSML Support** :material-star-circle:{ .highlight }: Fine-grained control over pronunciation, emphasis, pauses, and prosody — [SSML docs](https://docs.aws.amazon.com/polly/latest/dg/ssml.html)
 - **Flexible Formats**: mp3, ogg, wav, flac, aac, opus, pcm
 - **Streaming Options**: Raw bytes (default) or SSE events with `stream_format: "sse"`
-- **Speed Control**: Adjust playback from 0.2x to 2.0x
+- **Speed Control**: Adjust playback from 0.2x to 4.0x — generative voices speak no faster than 2.0x
 - **Speech Marks**: Word, sentence, viseme, and SSML timing metadata with `SpeechMarkTypes` (returned as JSON instead of audio)
 
 !!! tip "Performance Tips: Optimize Speed & Cost"
@@ -284,6 +284,10 @@ The following parameters from the Amazon Polly [SynthesizeSpeech API](https://do
 - `speed` is rejected with SSML input, because SSML carries a speaking rate of
   its own: set it with `<prosody>` instead.
 - Usage is counted in characters, the native billing unit of Amazon Polly and
+- `speed` runs from `0.2` to `4.0`. Above `2.0` a generative voice
+  (`amazon.polly-generative`) speaks no faster: the request succeeds and the
+  audio is simply no shorter. Every other voice speeds up across the whole
+  range.
   Amazon Comprehend, rather than in OpenAI-style tokens. No output token count
   is reported.
 - Once an SSE stream is accepted, a synthesis failure can no longer be an HTTP

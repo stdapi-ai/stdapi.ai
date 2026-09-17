@@ -195,7 +195,7 @@ This is a hand-picked sample, not the full roster — the [Models](models.md) pa
 **Text-to-speech (Amazon Polly)**
 
 - 60+ voices across 30+ languages, on the Standard, Neural, Long-Form and Generative engines, with the language detected automatically
-- SSML control over pronunciation, emphasis, pauses and prosody, at 0.2× to 2.0× speed; MP3, PCM, Opus, AAC, FLAC and OGG Vorbis output
+- SSML control over pronunciation, emphasis, pauses and prosody, at [0.2× to 4.0× speed](api_openai_audio_speech.md#limits-and-behaviour-to-know); MP3, PCM, Opus, AAC, FLAC and OGG Vorbis output
 - Long input — up to 100,000 characters per request, 24× OpenAI's limit ([20,000 with a generative voice, which speaks it as the audio is delivered](api_openai_audio_speech.md#long-input))
 
 **Speech-to-text (Amazon Transcribe)**

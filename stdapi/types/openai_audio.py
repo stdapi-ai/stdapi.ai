@@ -428,8 +428,9 @@ class SpeechCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=True):
     speed: float = Field(
         default=1.0,
         ge=0.2,
-        le=2.0,
-        description="Audio speed. Range: `0.2` to `2.0`. Default: `1.0`.",
+        le=4.0,
+        description="Audio speed. Range: `0.2` to `4.0`. Default: `1.0`. "
+        "`amazon.polly-generative` speaks no faster than `2.0`, whatever higher value is set.",
     )
     stream_format: Literal["audio", "sse"] = Field(
         default="audio",

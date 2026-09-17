@@ -424,19 +424,21 @@ class TestAudioSpeech:
         _assert_is_mp3(response.content)
 
     # 1.0 is the no-op default, already covered by test_basic_speech_generation.
-    @pytest.mark.parametrize("speed", [0.25, 2.0])
+    @pytest.mark.parametrize("speed", [0.25, 2.0, 3.0, 4.0])
     def test_speed_parameter_validation(
         self, openai_client: OpenAI, speech_standard_model: str, speed: float
     ) -> None:
         """In-range ``speed`` values are accepted and still yield valid mp3 audio.
 
-        Polly has no speed parameter: any value other than 1.0 is applied by
-        wrapping the text in ``<speak><prosody rate="N%">``, so a malformed
-        rate would come back as Polly's InvalidSsmlException instead of audio.
-        The gateway accepts 0.2 to 2.0, narrower than OpenAI's 0.25 to 4.0,
-        because ``<prosody rate>`` is only partially supported per engine.
+        OpenAI documents 0.25 to 4.0, so the whole of that range has to be
+        served: a client exposing a speed slider over the documented range
+        sends 3.0 as readily as 1.5. Polly has no speed parameter -- any value
+        other than 1.0 is applied by wrapping the text in
+        ``<speak><prosody rate="N%">`` -- so a rate the service refused would
+        come back as an error instead of audio.
 
-        Ref: https://docs.aws.amazon.com/polly/latest/dg/supportedtags.html
+        Ref: https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create
+             https://docs.aws.amazon.com/polly/latest/dg/supportedtags.html
              stdapi/models/audio/amazon_polly.py:_prepare_text_for_speech
         """
         response = openai_client.audio.speech.create(
@@ -448,6 +450,51 @@ class TestAudioSpeech:
         assert len(audio_data) > 0
         assert response.response.headers.get("content-type") == "audio/mpeg"
         _assert_is_mp3(audio_data)
+
+    @pytest.mark.gateway(
+        "word timing marks are an Amazon Polly extra with no OpenAI equivalent, "
+        "and they are the only way to time the speech without decoding the audio"
+    )
+    def test_a_speed_above_two_is_genuinely_applied(
+        self, openai_client: OpenAI, speech_standard_model: str
+    ) -> None:
+        """4.0 speaks faster than 2.0 rather than being served 2.0's audio.
+
+        The top half of the documented range only means something if the audio
+        comes back shorter, so the same sentence is timed at both ends of it --
+        the last word mark is where the speech stops. Audio capped at 2.0 would
+        pass every format assertion this file makes and still have ignored what
+        the caller asked for.
+
+        Ref: https://docs.aws.amazon.com/polly/latest/dg/speechmarks.html
+             stdapi/models/audio/amazon_polly.py:_prosody_document
+        """
+        sentence = "The quick brown fox jumps over the lazy dog this afternoon."
+
+        def last_word_mark_ms(speed: float) -> int:
+            response = openai_client.audio.speech.create(
+                model=speech_standard_model,
+                # A named voice, so both timings come from the same one.
+                voice="Joanna",
+                input=sentence,
+                speed=speed,
+                extra_body={"SpeechMarkTypes": ["word"]},
+            )
+            marks = [
+                json.loads(line)
+                for line in response.content.decode().splitlines()
+                if line
+            ]
+            assert marks, "a word-marks request must return the marks it asked for"
+            return int(marks[-1]["time"])
+
+        double = last_word_mark_ms(2.0)
+        quadruple = last_word_mark_ms(4.0)
+
+        assert quadruple < double * 0.9, (
+            f"4.0 must speak faster than 2.0 does, not be capped at it "
+            f"({quadruple} ms against {double} ms)"
+        )
 
     def test_speed_accepts_the_characters_markup_reserves(
         self, openai_client: OpenAI, speech_standard_model: str
@@ -665,8 +712,9 @@ class TestAudioSpeech:
     ) -> None:
         """Out-of-range ``speed`` values are rejected as ``invalid_request_error``.
 
-        The gateway bounds ``speed`` to 0.2 to 2.0, so all three values fail
-        request validation before any Polly call and carry no error ``code``.
+        All three values sit outside the range OpenAI documents on either side
+        of it, so they fail request validation before any synthesis and carry
+        no error ``code``.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/types/openai_audio.py:SpeechCreateParams
@@ -1313,6 +1361,102 @@ class TestSpeechCreateParamsPollyAliases:
     """
 
     def test_polly_field_names_populate_the_openai_fields(self) -> None:
+@pytest.mark.local
+class TestSpeechCreateParamsSpeedBounds:
+    """``speed`` covers the range OpenAI documents, and refuses either side of it.
+
+    OpenAI documents 0.25 to 4.0. The floor is lower here because a slower
+    delivery is served down to 0.2, and every request the upstream API accepts
+    has to be accepted: a narrower ceiling would 422 the top half of a vendor
+    speed slider before anything was ever synthesized.
+
+    Ref: https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create
+         stdapi/types/openai_audio.py:SpeechCreateParams
+    """
+
+    @pytest.mark.parametrize("speed", [0.2, 0.25, 1.0, 2.0, 2.5, 4.0])
+    def test_the_documented_range_is_accepted(self, speed: float) -> None:
+        """Every value from the floor to OpenAI's maximum parses."""
+        params = SpeechCreateParams(
+            model="amazon.polly-neural", voice="Joanna", input="Hello", speed=speed
+        )
+
+        assert params.speed == speed
+
+    @pytest.mark.parametrize(
+        ("speed", "error_type"),
+        [(0.19, "greater_than_equal"), (4.01, "less_than_equal")],
+    )
+    def test_either_side_of_the_range_is_refused(
+        self, speed: float, error_type: str
+    ) -> None:
+        """Just outside the bounds fails validation, naming the field."""
+        with pytest.raises(ValidationError) as exc_info:
+            SpeechCreateParams(
+                model="amazon.polly-neural", voice="Joanna", input="Hello", speed=speed
+            )
+
+        (error,) = exc_info.value.errors()
+        assert error["type"] == error_type
+        assert error["loc"] == ("speed",)
+
+
+@pytest.mark.local
+class TestSpeechCreateParamsVoiceBounds:
+    """``voice`` is free-form, and bounded like every other forwarded string.
+
+    A name matching no known voice is sent to SynthesizeSpeech as ``VoiceId``
+    exactly as the caller wrote it, so a blank name asks Amazon Polly for a
+    voice with no name and an unbounded one ships the caller's bytes to AWS to
+    be refused there. Both are answered in request validation instead, on the
+    plain name and on the ``{"id": ...}`` object alike.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
+         stdapi/types/openai.py:VoiceName
+    """
+
+    @staticmethod
+    def _validate(voice: object) -> SpeechCreateParams:
+        """Validate a speech request body naming *voice*.
+
+        Args:
+            voice: The value sent as ``voice``.
+
+        Returns:
+            The validated request body.
+        """
+        return SpeechCreateParams.model_validate(
+            {"model": "amazon.polly-neural", "input": "Hello", "voice": voice}
+        )
+
+    @pytest.mark.parametrize("voice", ["", "   ", {"id": ""}, {"id": "   "}])
+    def test_a_voice_naming_nothing_is_refused(self, voice: object) -> None:
+        """A blank name never reaches Polly as an empty ``VoiceId``."""
+        with pytest.raises(ValidationError) as exc_info:
+            self._validate(voice)
+
+        (error,) = exc_info.value.errors()
+        assert error["type"] == "string_too_short"
+        assert error["loc"] == ("voice",)
+
+    @pytest.mark.parametrize("voice", ["A" * 256, {"id": "A" * 256}])
+    def test_a_voice_name_beyond_the_bound_is_refused(self, voice: object) -> None:
+        """An oversized name is refused here, not carried to AWS to be refused."""
+        with pytest.raises(ValidationError) as exc_info:
+            self._validate(voice)
+
+        (error,) = exc_info.value.errors()
+        assert error["type"] == "string_too_long"
+        assert error["loc"] == ("voice",)
+
+    @pytest.mark.parametrize("voice", ["Joanna", "A" * 255, {"id": "Joanna"}])
+    def test_a_name_within_the_bound_is_accepted(self, voice: object) -> None:
+        """The bound matches ``model``'s, and leaves every usable name alone."""
+        assert self._validate(voice).voice == (
+            voice["id"] if isinstance(voice, dict) else voice
+        )
+
+
         """Every Polly alias maps onto its OpenAI counterpart, leaving no extras."""
         params = SpeechCreateParams.model_validate(
             {
