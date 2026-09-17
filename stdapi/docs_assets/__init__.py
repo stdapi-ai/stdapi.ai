@@ -48,6 +48,19 @@ ASSETS_DIR = Path(__file__).parent
 #: Directory holding the upstream licence texts, one subdirectory per package.
 LICENSES_DIR = ASSETS_DIR / "licenses"
 
+#: Outbound references removed when serving an asset, as `find: replace` byte pairs.
+# ReDoc renders its publisher's badge from a CDN image. The element already hides
+# itself when the image fails, so an air-gapped page looked right while every load
+# still tried to reach that host -- which the documentation says it does not, and a
+# strict `img-src 'self'` policy refuses. Pointing it at a path the gateway does not
+# serve keeps the badge hidden by the same route, without an outbound request.
+_REWRITES: dict[str, tuple[bytes, bytes]] = {
+    "redoc.standalone.js": (
+        b"https://cdn.redoc.ly/redoc/logo-mini.svg",
+        f"{ASSETS_PATH}/redocly-logo-mini.svg".encode(),
+    )
+}
+
 #: Seconds one publisher gets to serve one file.
 _FETCH_TIMEOUT = 60.0
 
@@ -220,6 +233,26 @@ def fetch(asset: Asset) -> bytes:
             return data
     msg = f"{asset.name} could not be fetched: {'; '.join(problems)}"
     raise RuntimeError(msg)
+
+
+def served(name: str, data: bytes) -> bytes:
+    """Return what a browser is given for *name*, with outbound references gone.
+
+    Applied when serving rather than when fetching, so the file on disk stays
+    byte-identical to what the publisher released and still verifies against the
+    recorded digest.
+
+    Args:
+        name: File name, as the gateway serves it.
+        data: The fetched bytes.
+
+    Returns:
+        The bytes to answer with.
+    """
+    if (pair := _REWRITES.get(name)) is None:
+        return data
+    find, replace = pair
+    return data.replace(find, replace)
 
 
 def fetch_all() -> list[Path]:

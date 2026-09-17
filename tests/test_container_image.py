@@ -212,6 +212,8 @@ _DOCUMENTATION_PAGES = {
 #: Hosts FastAPI's own pages reach, and which no page the image serves may name.
 _THIRD_PARTY_HOSTS = (
     "cdn.jsdelivr.net",
+    "unpkg.com",
+    "cdn.redoc.ly",
     "fonts.googleapis.com",
     "fastapi.tiangolo.com",
 )

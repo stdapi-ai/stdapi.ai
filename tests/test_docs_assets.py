@@ -24,7 +24,15 @@ from typing import TYPE_CHECKING, Final
 import pytest
 
 import stdapi.docs_assets
-from stdapi.docs_assets import BROWSER_ASSETS, LICENSE_ASSETS, Asset, digest, fetch
+from stdapi.docs_assets import (
+    _REWRITES,
+    BROWSER_ASSETS,
+    LICENSE_ASSETS,
+    Asset,
+    digest,
+    fetch,
+    served,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -147,6 +155,7 @@ class TestFetching:
         """
         monkeypatch.setattr(stdapi.docs_assets, "ASSETS_DIR", tmp_path)
         monkeypatch.setattr(stdapi.docs_assets, "LICENSES_DIR", tmp_path / "licenses")
+
         monkeypatch.setattr(
             stdapi.docs_assets, "fetch", lambda asset: asset.name.encode()
         )
@@ -159,3 +168,84 @@ class TestFetching:
         }
         for path in written:
             assert path.read_bytes() == path.name.encode()
+
+
+#: Hosts a page must never reach: a shipped asset naming one defeats the whole point.
+_THIRD_PARTY_HOSTS: Final[tuple[str, ...]] = (
+    "cdn.jsdelivr.net",
+    "unpkg.com",
+    "cdn.redoc.ly",
+    "fonts.googleapis.com",
+    "fonts.gstatic.com",
+)
+
+
+class TestShippedAssetsReachNoThirdParty:
+    """What the browser loads must come from the gateway and nowhere else.
+
+    The pages are documented as working in an air-gapped VPC, behind an egress
+    allow-list and under a strict content security policy. The container suite
+    checks the page HTML, which is written here and so was never the risk; the
+    outbound reference that shipped for real was inside a fetched bundle, where
+    nothing looked.
+
+    The fetched file stays exactly what its publisher released -- that is what
+    the recorded digest proves -- so the reference is removed on the way out,
+    and it is the served bytes these assert on.
+
+    Ref: https://github.com/stdapi-ai/stdapi.ai/issues/185
+         stdapi/docs_assets/__init__.py:served
+    """
+
+    @pytest.mark.parametrize("name", sorted(BROWSER_ASSETS))
+    def test_what_is_served_names_no_third_party_host(self, name: str) -> None:
+        """No asset reaches a browser carrying a URL off this deployment.
+
+        Ref: stdapi/docs_assets/__init__.py:served
+        """
+        target = BROWSER_ASSETS[name].target
+        if not target.exists():
+            pytest.skip(f"'{name}' has not been fetched into this checkout")
+
+        body = served(name, target.read_bytes())
+
+        for host in _THIRD_PARTY_HOSTS:
+            assert host.encode() not in body, (
+                f"'{name}' still reaches '{host}'; a browser loading the "
+                "documentation would leave the deployment to fetch it"
+            )
+
+    @pytest.mark.parametrize("name", sorted(_REWRITES))
+    def test_the_fetched_copy_still_carries_what_is_rewritten(self, name: str) -> None:
+        """A release that moved a reference is caught, not silently shipped.
+
+        The removal is a literal replacement, so a renamed reference would
+        simply stop matching and the outbound request would come back with
+        every digest still verifying.
+
+        Ref: stdapi/docs_assets/__init__.py:_REWRITES
+        """
+        target = BROWSER_ASSETS[name].target
+        if not target.exists():
+            pytest.skip(f"'{name}' has not been fetched into this checkout")
+
+        find, _ = _REWRITES[name]
+
+        assert find in target.read_bytes(), (
+            f"'{name}' no longer contains {find.decode()}: re-check what the "
+            "release references before shipping it"
+        )
+
+    def test_the_fetched_copy_is_left_as_published(self) -> None:
+        """The rewrite happens on the way out, never on disk.
+
+        The file is redistributed in a paid image and its digest is what proves
+        it is the publisher's; a modified copy could not be checked against it.
+
+        Ref: stdapi/docs_assets/__init__.py:fetch_all
+        """
+        for name in _REWRITES:
+            target = BROWSER_ASSETS[name].target
+            if not target.exists():
+                pytest.skip(f"'{name}' has not been fetched into this checkout")
+            assert digest(target.read_bytes()) == BROWSER_ASSETS[name].sha256

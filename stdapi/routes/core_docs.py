@@ -29,7 +29,7 @@ from fastapi.openapi.docs import (
 from fastapi.responses import HTMLResponse, Response
 
 from stdapi.config import SETTINGS
-from stdapi.docs_assets import ASSETS_PATH, BROWSER_ASSETS, LOCAL_ASSETS
+from stdapi.docs_assets import ASSETS_PATH, BROWSER_ASSETS, LOCAL_ASSETS, served
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -103,7 +103,9 @@ def _asset_body(path: Path) -> bytes:
     """Return the bytes of a fetched asset, read from disk once.
 
     Keyed on the file rather than on its served name: a megabyte and a half is
-    read on the first request for it and referenced by every later one.
+    read on the first request for it and referenced by every later one. The copy
+    on disk is what its publisher released, so any outbound reference it carries
+    is removed here rather than there.
 
     Args:
         path: The fetched file.
@@ -111,7 +113,7 @@ def _asset_body(path: Path) -> bytes:
     Returns:
         Its bytes, shared by every response that serves it.
     """
-    return path.read_bytes()
+    return served(path.name, path.read_bytes())
 
 
 @router.get(FAVICON_PATH)
