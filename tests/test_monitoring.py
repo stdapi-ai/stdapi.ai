@@ -30,6 +30,7 @@ from starlette.requests import Request as StarletteRequest
 import stdapi.auth
 from stdapi import monitoring, usage
 from stdapi.api_errors import ApiError
+from stdapi.api_providers.anthropic import TAG_ANTHROPIC
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import AuthenticationHandler, authenticate
 from stdapi.config import SETTINGS
@@ -93,19 +94,19 @@ def _make_request(method: str = "GET", path: str = "/test") -> StarletteRequest:
     return StarletteRequest(scope)
 
 
-def _openai_tagged_request() -> StarletteRequest:
-    """Build a request whose matched route is tagged OpenAI.
+def _tagged_request(tag: str, path: str) -> StarletteRequest:
+    """Build a request whose matched route carries *tag* and serves *path*.
 
     The error envelope is picked from the resolved route's tags, so a terminal
-    SSE error event only takes the OpenAI shape when a tagged route is active.
+    SSE error event only takes a provider's shape when a tagged route is active.
     """
     scope = {
         "type": "http",
         "method": "POST",
-        "path": "/v1/chat/completions",
+        "path": path,
         "query_string": b"",
         "headers": [],
-        "route": SimpleNamespace(tags=[TAG_OPENAI]),
+        "route": SimpleNamespace(tags=[tag]),
     }
     return StarletteRequest(scope)
 
@@ -937,13 +938,17 @@ class TestMidStreamTerminalErrorEvent:
 
     @staticmethod
     async def _run(
-        monkeypatch: pytest.MonkeyPatch, exc: BaseException
+        monkeypatch: pytest.MonkeyPatch,
+        exc: BaseException,
+        request: StarletteRequest | None = None,
     ) -> tuple[list[ServerSentEvent], EventLog]:
         """Fail a one-chunk SSE stream with *exc* and return its events and stream log.
 
         Args:
             monkeypatch: Fixture used to capture the written log events.
             exc: Exception raised after the first chunk was produced.
+            request: Request whose matched route decides the error envelope;
+                defaults to an OpenAI-tagged Chat Completions route.
 
         Returns:
             Every event the consumer saw, and the ``request_stream`` log entry.
@@ -956,7 +961,14 @@ class TestMidStreamTerminalErrorEvent:
             raise exc
 
         id_token = REQUEST_ID.set("test-request-id")
-        request_token = REQUEST.set(cast("Any", _openai_tagged_request()))
+        request_token = REQUEST.set(
+            cast(
+                "Any",
+                request
+                if request is not None
+                else _tagged_request(TAG_OPENAI, "/v1/chat/completions"),
+            )
+        )
         try:
             events = [
                 chunk
@@ -1068,7 +1080,7 @@ class TestMidStreamTerminalErrorEvent:
         assert (
             body["message"] == "The request could not be completed. Retry the request."
         )
-        assert body["type"] == "server_error"
+        assert body["type"] == "service_unavailable_error"
         assert "backend pool" not in str(events[-1].data)
         assert any("backend pool" in str(d) for d in stream_log["error_detail"])
         assert request_log["level"] == "error"
@@ -1108,10 +1120,64 @@ class TestMidStreamTerminalErrorEvent:
 
         body = loads(str(events[-1].data))["error"]
         assert body["message"] == "Internal Server Error"
-        assert body["type"] == "service_unavailable_error"
+        assert body["type"] == "server_error"
         assert "arn:aws" not in str(events[-1].data)
         assert request_log["level"] == "critical"
         assert any("RuntimeError" in str(d) for d in request_log["error_detail"])
+
+    @pytest.mark.parametrize(
+        ("aws_code", "aws_message", "error_type", "client_message"),
+        [
+            (
+                "ThrottlingException",
+                "Too many requests, please wait before trying again.",
+                "rate_limit_error",
+                "Too many requests, please wait before trying again.",
+            ),
+            (
+                "ServiceUnavailableException",
+                "Model provider is unavailable.",
+                "overloaded_error",
+                "The request could not be completed. Retry the request.",
+            ),
+        ],
+    )
+    @pytest.mark.usefixtures("request_log")
+    async def test_an_anthropic_route_closes_with_the_anthropic_error_envelope(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        aws_code: str,
+        aws_message: str,
+        error_type: str,
+        client_message: str,
+    ) -> None:
+        """A failed Anthropic stream ends with Anthropic's own ``error`` event.
+
+        Anthropic documents the terminal frame as ``event: error`` carrying
+        ``{"type": "error", "error": {"type": ..., "message": ...}}``, with its
+        own vocabulary of error types -- an OpenAI-shaped ``{"error": {...}}``
+        body would reach a client that has no branch for it. The envelope comes
+        from the matched route's tag, so only a request on an Anthropic route
+        gets it.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             https://platform.claude.com/docs/en/api/errors
+             stdapi/api_providers/anthropic.py:_format_error
+        """
+        events, _ = await self._run(
+            monkeypatch,
+            ClientError(
+                {"Error": {"Code": aws_code, "Message": aws_message}}, "Converse"
+            ),
+            _tagged_request(TAG_ANTHROPIC, "/anthropic/v1/messages"),
+        )
+
+        assert [event.event for event in events] == [None, "error"]
+        assert loads(str(events[-1].data)) == {
+            "type": "error",
+            "error": {"type": error_type, "message": client_message},
+            "request_id": "test-request-id",
+        }
 
 
 class TestBackgroundEventLog:

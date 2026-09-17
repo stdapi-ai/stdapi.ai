@@ -7,11 +7,13 @@ Ref: https://platform.claude.com/docs/en/api/messages
 
 from __future__ import annotations
 
+from base64 import b64encode
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 from stdapi.models.chat._adapters._anthropic_message import (
+    _map_messages,
     _map_stop_reason,
     format_response,
 )
@@ -22,8 +24,12 @@ from stdapi.types.anthropic_messages import (
     CitationsSearchResultLocation,
     CitationsWebSearchResultLocation,
     Message,
+    MessageParam,
+    RedactedThinkingBlock,
+    RedactedThinkingBlockParam,
     ServerToolUseBlock,
     TextBlock,
+    TextBlockParam,
     ToolUseBlock,
     Usage,
     WebSearchToolResultBlock,
@@ -361,6 +367,82 @@ async def test_usage_cache_tokens_read_from_bedrock_keys() -> None:
     assert message.usage.output_tokens == 5
     assert message.usage.cache_read_input_tokens == 3
     assert message.usage.cache_creation_input_tokens == 7
+
+
+async def test_a_web_search_turn_reports_no_server_tool_use_counter() -> None:
+    """``usage.server_tool_use`` stays absent after a web-search turn.
+
+    The counter is a documented gap: the backend reports token counts only, so a
+    synthesised search count would be a number the gateway invented rather than
+    one it measured. Clients that need the figure count the ``server_tool_use``
+    blocks in ``content`` themselves, which the documentation says.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         docs/api_anthropic_messages.md#web-grounding
+         stdapi/models/chat/_adapters/_anthropic_message.py:format_response
+    """
+    message = await format_response(
+        contents=_search_result_contents(),
+        stop_reason="end_turn",
+        usage=_NO_USAGE,
+        message_id="msg_1",
+        model_id="model-x",
+        forced_tool=None,
+        resp_map_tool_result=lambda *_args: None,
+    )
+    assert any(block.type == "web_search_tool_result" for block in message.content)
+    assert message.usage.server_tool_use is None
+
+
+async def test_redacted_thinking_survives_a_response_to_request_round_trip() -> None:
+    """A ``redacted_thinking`` block replays to Bedrock as the exact bytes it came from.
+
+    The response side base64-encodes the opaque payload and the request side
+    decodes it again; Bedrock validates the reasoning it previously emitted, so
+    a single byte lost between the two rejects every turn that replays it.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:format_response
+    """
+    payload = b"\x00\x01sec\xff"
+
+    message = await format_response(
+        contents=cast(
+            "list[ContentBlockOutputTypeDef]",
+            [{"reasoningContent": {"redactedContent": payload}}, {"text": "hi"}],
+        ),
+        stop_reason="end_turn",
+        usage=_NO_USAGE,
+        message_id="msg_1",
+        model_id="model-x",
+        forced_tool=None,
+        resp_map_tool_result=lambda *_args: None,
+    )
+
+    assert [block.type for block in message.content] == ["redacted_thinking", "text"]
+    redacted = message.content[0]
+    assert isinstance(redacted, RedactedThinkingBlock)
+    assert redacted.data == b64encode(payload).decode("ascii")
+
+    replayed = await _map_messages(
+        [
+            MessageParam(role="user", content="Q"),
+            MessageParam(
+                role="assistant",
+                content=[
+                    RedactedThinkingBlockParam(
+                        type="redacted_thinking", data=redacted.data
+                    ),
+                    TextBlockParam(type="text", text="hi"),
+                ],
+            ),
+        ]
+    )
+    assert replayed[1]["content"] == [
+        {"reasoningContent": {"redactedContent": payload}},
+        {"text": "hi"},
+    ]
 
 
 async def _citation_block(location: dict[str, Any]) -> TextBlock:

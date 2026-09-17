@@ -230,6 +230,73 @@ async def test_message_start_always_carries_stop_reason_and_sequence_keys() -> N
     assert message["model"] == "model-x"
 
 
+async def test_signature_delta_closes_the_thinking_block_it_belongs_to() -> None:
+    """The signature is the thinking block's last delta, on that block's own index.
+
+    Anthropic specifies ``signature_delta`` as sent "just before the
+    ``content_block_stop`` event" of the thinking block, and the SDK attaches it
+    to ``content[index].signature``: emitted on a later index, or buffered past
+    the stop frame the way ``redactedContent`` is, the replayed block would be
+    unsigned and the next turn would be refused.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlockDelta.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_delta
+    """
+    pairs = await _collect(
+        [
+            {
+                "contentBlockDelta": {
+                    "contentBlockIndex": 0,
+                    "delta": {"reasoningContent": {"text": "step one "}},
+                }
+            },
+            {
+                "contentBlockDelta": {
+                    "contentBlockIndex": 0,
+                    "delta": {"reasoningContent": {"text": "step two"}},
+                }
+            },
+            {
+                "contentBlockDelta": {
+                    "contentBlockIndex": 0,
+                    "delta": {"reasoningContent": {"signature": "sig-abc"}},
+                }
+            },
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+            {"contentBlockDelta": {"contentBlockIndex": 1, "delta": {"text": "hi"}}},
+            {"contentBlockStop": {"contentBlockIndex": 1}},
+            {"messageStop": {"stopReason": "end_turn"}},
+        ]
+    )
+    thinking = [
+        (event, data)
+        for event, data in pairs
+        if event.startswith("content_block") and data["index"] == 0
+    ]
+    assert [event for event, _data in thinking] == [
+        "content_block_start",
+        "content_block_delta",
+        "content_block_delta",
+        "content_block_delta",
+        "content_block_stop",
+    ]
+    assert thinking[0][1]["content_block"] == {
+        "type": "thinking",
+        "thinking": "",
+        "signature": "",
+    }
+    assert [data["delta"] for _event, data in thinking[1:-1]] == [
+        {"type": "thinking_delta", "thinking": "step one "},
+        {"type": "thinking_delta", "thinking": "step two"},
+        {"type": "signature_delta", "signature": "sig-abc"},
+    ], "the signature must follow every thinking delta and close the block"
+    # The text that follows opens a block of its own rather than reusing index 0.
+    assert [
+        data["index"] for event, data in pairs if event == "content_block_start"
+    ] == [0, 1]
+
+
 async def test_redacted_thinking_delta_is_not_dropped() -> None:
     """A ``reasoningContent.redactedContent`` delta yields a ``redacted_thinking`` block.
 

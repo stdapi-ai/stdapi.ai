@@ -672,6 +672,26 @@ class TestMapMessagesRoleMerging:
         )
         assert result == []
 
+    async def test_a_trailing_assistant_turn_stays_the_last_message(self) -> None:
+        """An assistant prefill is forwarded as the final turn, not folded away.
+
+        Anthropic lets a request end on an ``assistant`` message so the model
+        continues that text instead of starting an answer of its own. The turn
+        therefore has to reach the backend last and keep its role: merged into
+        the user turn, or dropped, the constraint the caller paid for disappears
+        and the answer restates the prefill instead of continuing it.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+        """
+        result = await _map_messages(
+            [_text_msg("user", "Q"), _text_msg("assistant", "The best answer is (")],
+            allow_explicit_caching=False,
+            allow_tool_caching=False,
+        )
+        assert [m["role"] for m in result] == ["user", "assistant"]
+        assert result[-1]["content"] == [{"text": "The best answer is ("}]
+
 
 class TestReplayedMCPBlocks:
     """``mcp_tool_use`` / ``mcp_tool_result`` replayed from an MCP-connector turn.

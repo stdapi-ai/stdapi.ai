@@ -27,6 +27,11 @@ from anthropic import (
     BadRequestError,
     NotFoundError,
 )
+from anthropic.types import (
+    RawContentBlockDeltaEvent,
+    RawContentBlockStartEvent,
+    RawContentBlockStopEvent,
+)
 
 import stdapi.models as _models_mod
 import stdapi.models.chat._adapters._anthropic_message as _anthropic_message_adapter
@@ -106,6 +111,13 @@ _TOOLSETS: tuple[dict[str, object], ...] = (
 
 #: Claude model whose Converse token count is built the same way a message is.
 _COUNT_TOKENS_MODEL = "anthropic.claude-opus-5"
+
+#: The streamed event types carrying a content block ``index``.
+_BLOCK_EVENTS = (
+    RawContentBlockStartEvent,
+    RawContentBlockDeltaEvent,
+    RawContentBlockStopEvent,
+)
 
 #: A recorded browser toolset result, as a client replays it on the next turn.
 _BROWSER_STATE_TURN: dict[str, object] = {
@@ -1540,16 +1552,24 @@ class TestAnthropicMessages:
     # --- Streaming message_start event ---
 
     def test_streaming_message_start_has_usage(
-        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_basic_model: str,
+        use_official_api: bool,
     ) -> None:
         """``message_start`` carries an empty-content ``Message`` shell with a usage object.
 
-        Bedrock reports token usage only in its trailing metadata event, so the
-        gateway opens the stream with zeroed counters and fills them in on
-        ``message_delta``; the shell itself must already be a valid ``Message``.
+        The shell itself must already be a valid ``Message``. Its counters are a
+        documented divergence: the Anthropic API reports the prompt size here,
+        while this gateway's backend reveals usage only in its trailing event,
+        so the gateway opens at ``0``/``0`` and fills the totals in on
+        ``message_delta``. A client reading the input size off ``message_start``
+        gets nothing here, which is why the documentation sends it to
+        ``message_delta`` instead.
 
         Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStreamMetadataEvent.html
+             docs/api_anthropic_messages.md#feature-compatibility
              stdapi/models/chat/_adapters/_anthropic_message.py:_make_message_start_event
         """
         message_start_event = None
@@ -1569,13 +1589,56 @@ class TestAnthropicMessages:
         assert message_start_event is not None
         assert hasattr(message_start_event, "message")
         assert hasattr(message_start_event.message, "usage")
-        assert message_start_event.message.usage.input_tokens >= 0
         message = message_start_event.message
+        if use_official_api:
+            assert message.usage.input_tokens > 0, (
+                "the Anthropic API reports the prompt size in message_start"
+            )
+        else:
+            assert message.usage.input_tokens == 0, (
+                "this gateway zeroes message_start usage; the totals arrive in "
+                "message_delta"
+            )
+            assert message.usage.output_tokens == 0
         assert message.type == "message"
         assert message.role == "assistant"
         assert message.content == [], "message_start must open with empty content"
         assert message.stop_reason is None
         assert message.id.startswith("msg_")
+
+    def test_streamed_and_non_streamed_usage_agree_on_the_same_prompt(
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
+    ) -> None:
+        """The assembled stream reports the same input token count as one whole answer.
+
+        Streaming changes when the counters arrive, never what they say: the
+        totals are what the caller is billed on, so a streamed request that
+        under-reports its prompt would bill differently from the identical
+        non-streamed one.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:_make_message_delta_event
+        """
+        prompt = "Reply with exactly the word TEAL and nothing else."
+
+        with anthropic_client.messages.stream(
+            model=anthropic_chat_basic_model,
+            max_tokens=50,
+            messages=[{"role": "user", "content": prompt}],
+        ) as stream:
+            streamed = stream.get_final_message()
+
+        whole = anthropic_client.messages.create(
+            model=anthropic_chat_basic_model,
+            max_tokens=50,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        assert streamed.usage.input_tokens > 0, (
+            "the assembled message must carry the prompt size, not the zeroed shell"
+        )
+        assert streamed.usage.input_tokens == whole.usage.input_tokens
+        assert streamed.usage.output_tokens > 0
 
     def test_streaming_message_delta_has_usage(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
@@ -2104,6 +2167,64 @@ class TestAnthropicMessages:
         assert hasattr(response.content[0], "text")
         assert "Bob" in response.content[0].text
 
+    # --- Assistant prefill ---
+
+    def test_trailing_assistant_message_is_continued_not_restated(
+        self, anthropic_client: Anthropic, anthropic_chat_model: str
+    ) -> None:
+        """A request ending on an assistant turn continues that text.
+
+        Anthropic lets the final message be an ``assistant`` one so the caller
+        can constrain the opening of the answer; the model resumes from it
+        instead of writing its own. Dropping that turn, or folding it into the
+        user message, silently returns a full sentence that repeats the words
+        the caller had already committed to.
+
+        The prefill opens a JSON object mid-string, which no model writes as
+        the *first* thing it says: the prefill plus the answer parses only if
+        the prefill really reached the backend and the model resumed from it.
+        Dropped or folded into the user turn, the model writes its own object
+        and the concatenation is malformed -- so the assertion turns on the
+        structure the code produces, not on the words the model chooses.
+
+        The prefill carries no trailing whitespace, which the backend refuses
+        with the same message the Anthropic API answers -- a difference in the
+        prompt, not in the gateway.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_messages
+        """
+        prefill = '{"city": "'
+
+        response = anthropic_client.messages.create(
+            model=anthropic_chat_model,
+            max_tokens=20,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Give the capital of France as JSON, one key `city`.",
+                },
+                {"role": "assistant", "content": prefill},
+            ],
+        )
+
+        assert response.type == "message"
+        assert response.role == "assistant"
+        answer = "".join(b.text for b in response.content if b.type == "text")
+        assert answer, "the continuation must not come back empty"
+
+        combined = prefill + answer
+        closing = combined.find("}")
+        assert closing != -1, f"the continuation never closed the object: {answer!r}"
+        try:
+            parsed = _json.loads(combined[: closing + 1])
+        except ValueError as error:  # pragma: no cover - only on a regression
+            pytest.fail(
+                f"the answer restarted the object instead of resuming the "
+                f"prefill, so the two do not join: {answer!r} ({error})"
+            )
+        assert parsed == {"city": "Paris"}
+
     # --- Prompt caching (cache_control) ---
 
     def test_cache_control_on_user_message_block(
@@ -2499,9 +2620,11 @@ class TestAnthropicMessages:
     ) -> None:
         """A streamed thinking block ends with a ``signature_delta`` before its stop frame.
 
-        Bedrock sends the reasoning signature as its own delta at the end of the
-        reasoning block; the gateway forwards it as Anthropic's ``signature_delta``,
-        which is what makes the block replayable in a later turn.
+        Anthropic specifies the signature as sent "just before the
+        ``content_block_stop`` event" of the thinking block, on that block's own
+        index -- the SDK stores it as ``content[index].signature``, and an
+        unsigned block cannot be replayed on the next turn. So the position is
+        part of the contract, not only the presence.
 
         Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html
@@ -2531,6 +2654,34 @@ class TestAnthropicMessages:
         assert "text_delta" in delta_types
         assert "signature_delta" in delta_types
         assert all(signatures), "signature_delta must carry a non-empty signature"
+
+        thinking_index = next(
+            e.index
+            for e in events
+            if isinstance(e, RawContentBlockStartEvent)
+            and e.content_block.type in {"thinking", "redacted_thinking"}
+        )
+        block_events = [
+            e
+            for e in events
+            if isinstance(e, _BLOCK_EVENTS) and e.index == thinking_index
+        ]
+        assert block_events[-1].type == "content_block_stop", (
+            "the thinking block must be closed, not left open"
+        )
+        block_delta_types = [
+            e.delta.type
+            for e in block_events
+            if isinstance(e, RawContentBlockDeltaEvent)
+        ]
+        assert block_delta_types.count("signature_delta") == 1
+        assert block_delta_types[-1] == "signature_delta", (
+            "the signature is the last delta of the thinking block: "
+            f"{block_delta_types}"
+        )
+        assert set(block_delta_types[:-1]) <= {"thinking_delta"}, (
+            f"the thinking block must carry thinking deltas only: {block_delta_types}"
+        )
 
     def test_tool_choice_any(
         self, anthropic_client: Anthropic, anthropic_chat_vision_model: str
