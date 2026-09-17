@@ -151,8 +151,11 @@ class TestOpenAIBatchValidation:
 
     Every case here is refused before any request runs, so the client learns of
     the problem in the create call instead of in a results file hours later.
+    Upstream reports the same problems through a batch that is created and then
+    reports `failed`, which is the documented divergence these tests pin: the
+    refusal, its message and the absence of any batch behind it.
 
-    Ref: https://developers.openai.com/api/docs/guides/batch.md
+    Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
          stdapi/batches.py:_read_input_file
     """
 
@@ -331,7 +334,8 @@ class TestOpenAIBatchValidation:
     ) -> None:
         """A file not uploaded for batching is refused, naming the purpose.
 
-        Ref: https://developers.openai.com/api/docs/guides/batch
+        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+             https://developers.openai.com/api/docs/guides/batch.md
              stdapi/batches.py:_open_input_file
         """
         _batches.install(monkeypatch)
@@ -349,7 +353,8 @@ class TestOpenAIBatchValidation:
     ) -> None:
         """A line whose 'body' is not an object is refused, naming its position.
 
-        Ref: https://developers.openai.com/api/docs/guides/batch
+        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+             https://developers.openai.com/api/docs/guides/batch.md
              stdapi/batches.py:_read_input_request
         """
         _batches.install(monkeypatch)
@@ -370,7 +375,8 @@ class TestOpenAIBatchValidation:
     ) -> None:
         """A line targeting another endpoint is refused, naming its position.
 
-        Ref: https://developers.openai.com/api/docs/guides/batch
+        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+             https://developers.openai.com/api/docs/guides/batch.md
              stdapi/batches.py:_read_input_request
         """
         _batches.install(monkeypatch)
@@ -383,12 +389,36 @@ class TestOpenAIBatchValidation:
         assert isinstance(error, dict)
         assert "Line 4" in error["message"]
 
+    def test_a_refused_file_leaves_no_batch_behind(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file refused at creation creates nothing: no job, no batch to poll.
+
+        Upstream answers a file problem through a batch that exists and later
+        reports `failed`; here the refusal is the whole answer, so a client that
+        fixes its file and retries creates its first batch rather than its
+        second.
+
+        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+             stdapi/batches.py:_read_input_file
+        """
+        _, bedrock = _batches.install(monkeypatch)
+        lines = chat_lines(100)
+        lines[3] = '{"custom_id": "req-3", "body": {'
+        file_id = _batches.install_input_file(monkeypatch, lines)
+
+        body = _create(app_client, file_id)
+
+        assert body["http_status"] == 400
+        assert not bedrock.created
+        assert app_client.get("/v1/batches?limit=10").json()["data"] == []
+
     def test_malformed_line_is_refused(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A line that is not a JSON object is refused, naming its position.
 
-        Ref: https://developers.openai.com/api/docs/guides/batch
+        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
              stdapi/batches.py:_iter_input_requests
         """
         _batches.install(monkeypatch)
@@ -409,7 +439,7 @@ class TestOpenAIBatchValidation:
         A file written by a crashed producer ends mid-object, and the decoder's
         own `ValueError` reaches no handler.
 
-        Ref: https://developers.openai.com/api/docs/guides/batch
+        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
              stdapi/batches.py:_iter_input_requests
         """
         _batches.install(monkeypatch)
@@ -466,7 +496,8 @@ class TestOpenAIBatchValidation:
     ) -> None:
         """A line asking for another HTTP method is refused, naming its position.
 
-        Ref: https://developers.openai.com/api/docs/guides/batch
+        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+             https://developers.openai.com/api/docs/guides/batch.md
              stdapi/batches.py:_read_input_request
         """
         _batches.install(monkeypatch)
@@ -518,7 +549,8 @@ class TestOpenAIBatchValidation:
     ) -> None:
         """A repeated custom_id is refused: it is the only join key results have.
 
-        Ref: https://developers.openai.com/api/docs/guides/batch
+        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+             https://developers.openai.com/api/docs/guides/batch.md
              stdapi/batches.py:_validate_custom_ids
         """
         _batches.install(monkeypatch)
@@ -2089,6 +2121,43 @@ class TestOpenAIBatchLifecycle:
         # No results were produced, so none are announced; the reason is.
         assert "output_file_id" not in body
         assert body["errors"]["data"][0]["code"] == "batch_failed"
+
+    def test_a_failed_batch_reports_an_error_about_the_batch(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The error of a `failed` batch is batch-level: it names no line.
+
+        A line is only ever refused when the batch is created, so the failure a
+        poll can still report is the batch itself. It parses as the error object
+        the official client expects, with the `line` and `param` an entry about
+        a single input line would carry left empty, and says what to do instead
+        of what happened behind the API.
+
+        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+             openai/types/batch_error.py
+             stdapi/routes/openai_batches.py:_to_batch
+        """
+        from openai.types import Batch as OpenAIBatch  # noqa: PLC0415
+
+        _, bedrock = _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        batch_id = _create(app_client, file_id)["id"]
+        bedrock.finish(status="Failed", succeeded=0)
+
+        batch = OpenAIBatch.model_validate(
+            app_client.get(f"/v1/batches/{batch_id}").json()
+        )
+
+        assert batch.status == "failed"
+        assert batch.errors is not None
+        (error,) = batch.errors.data or []
+        assert error.line is None
+        assert error.param is None
+        assert error.message is not None
+        assert "batching" in error.message
+        assert not any(
+            name in error.message.lower() for name in ("aws", "bedrock", "s3")
+        )
 
     def test_listing_returns_the_batch(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch

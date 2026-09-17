@@ -1,7 +1,7 @@
 ---
 title: Batch API - Asynchronous Bulk Inference (OpenAI Compatible)
 description: Run thousands of chat completion or embedding requests asynchronously at a discounted price with an OpenAI-compatible Batch API backed by Amazon Bedrock batch inference.
-keywords: OpenAI batch API, bulk inference AWS, batch processing LLM, batch embeddings, discounted inference, JSONL batch requests, Amazon Bedrock batch inference, asynchronous completions
+keywords: OpenAI batch API, bulk inference AWS, batch processing LLM, batch embeddings, discounted inference, JSONL batch requests, Amazon Bedrock batch inference, asynchronous completions, batch validation errors, batch failed status
 ---
 
 # Batch API
@@ -17,8 +17,9 @@ A batch is created from a file of requests, runs without a connection held open,
 - :material-tag-arrow-down: **The batch rate, roughly half the on-demand rate**
   — usage is recorded once, when the batch ends, see [Billing](#pricing).
 - :material-file-document-outline: **100 to 50,000 requests per batch, in up to
-  200 MB of JSONL** — a batch outside those bounds is refused when it is
-  created, see [Limits and behaviour to know](#limits).
+  200 MB of JSONL** — a batch outside those bounds, or holding a line that
+  cannot be run as it stands, is refused when it is created, see
+  [What the input file is checked for](#input-file-validation).
 - :material-server-off: **A 24-hour processing window, no connection held** —
   `completion_window` is `24h` as upstream, counted from `created_at` and
   reported as `expires_at`, see [Listing order](#listing-order).
@@ -77,6 +78,7 @@ curl -X POST "$BASE/v1/batches" \
 | `encoding_format` `base64`       | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Refused when the batch is created — batched vectors come back as numbers  |
 | **Lifecycle**                    |                                          |                                                                             |
 | Retrieve / poll                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `validating` → `in_progress` → `finalizing` → `completed`                    |
+| `failed` status and `errors`     |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Reported for a batch that was accepted and then could not run at all, with one batch-level entry in `errors.data[]`; a problem in the input file is refused when the batch is created instead — see [What the input file is checked for](#input-file-validation) |
 | Cancel                           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `cancelling` then `cancelled`; requests already answered stay in `output_file_id`, and a batch that has ended is unchanged |
 | List batches                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Newest first by `created_at`, with an `after` cursor — see [Listing order](#listing-order) |
 | `output_file_id` / `error_file_id` |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Readable through the [Files API](api_openai_files.md)                     |
@@ -190,6 +192,41 @@ A batch below the minimum, or past any of these caps, is refused when it is crea
 
 !!! note "The 100-request minimum is a quota default"
     100 is the default of the Amazon Bedrock quota *Minimum number of records per batch inference job*, which is set **per model** and adjustable for some of them — see [Amazon Bedrock quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html). The gateway checks against that default, not against your account's own value, so a raised quota is enforced by Amazon Bedrock rather than here — a batch of 150 clears this check and is then refused by the backend — and a lowered one is not usable: fewer than 100 requests is still refused here.
+
+### What the input file is checked for { #input-file-validation }
+
+The whole file is read and checked while `POST /v1/batches` is answered. A file
+that cannot be batched as it stands is refused there: the call returns `400`
+naming the line at fault, and **no batch is created** — no request runs, and
+there is nothing to poll or to cancel.
+
+| What the line carries                                    | Answer                                                                          |
+|----------------------------------------------------------|---------------------------------------------------------------------------------|
+| Not valid JSON, truncated, or a JSON value that is not an object | `Line 8: each line must be a JSON object.`                              |
+| A `url` other than the batch's own `endpoint`              | `Line 4: 'url' must be '/v1/chat/completions', the endpoint the batch targets.` |
+| A `method` other than `POST`                               | `Line 5: 'method' must be 'POST', not 'GET'.`                                   |
+| No `body`, or a `body` that is not an object               | `Line 9: 'body' must be a JSON object.`                                         |
+| An empty `custom_id`, or one past its [length cap](#caps-enforced-at-creation) | `Line 7: 'custom_id' must be between 1 and 64 characters.`                 |
+| A `custom_id` another line already used                    | `Line 6: 'custom_id' 'req-4' is used more than once.`                           |
+| A request the endpoint itself would refuse                 | That endpoint's own validation error, naming the field                          |
+
+The file as a whole is read the same way: one uploaded with a `purpose` other
+than `batch`, one holding no request at all, one past the
+[caps above](#caps-enforced-at-creation), and one naming
+[more than one model](#model-support) are each refused by the create call.
+
+!!! info "Coming from the OpenAI API: read the create call, not only the status"
+    Upstream, a file problem is reported after the batch exists: creation
+    returns a batch in `validating`, which then becomes `failed` carrying one
+    `errors.data[]` entry per offending line. Here the same problems are
+    answered by the create call itself, so an SDK raises on
+    `client.batches.create(...)` — a `BadRequestError` carrying the message
+    above — and the polling loop that follows it never runs. Catch that
+    exception; the rest of the workflow is unchanged.
+
+    `failed` is still reported, for a batch that was accepted and then could not
+    run at all. Its single `errors.data[]` entry describes the batch rather than
+    a line, so `line` is absent, and the batch names no result file.
 
 ### Deleting a batch
 
