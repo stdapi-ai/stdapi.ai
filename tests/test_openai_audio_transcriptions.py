@@ -700,9 +700,15 @@ class TestAudioTranscriptions:
         ``avg_logprob``, ``no_speech_prob`` and ``compression_ratio`` have no Amazon
         Transcribe equivalent and are synthesized by the gateway, so only their
         documented ranges are asserted (log-probabilities are never positive,
-        probabilities stay within 0..1) rather than specific values.
+        probabilities stay within 0..1) rather than specific values. ``seek`` and
+        ``tokens`` are asserted structurally for the same reason and on both
+        targets: upstream fills them with real decoder state, while this gateway
+        documents them as placeholders. The documented placeholder values
+        themselves are pinned offline, in
+        ``tests/test_models_transcribe.py::TestBuildTranscriptionSegment``.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             https://stdapi.ai/api_openai_audio_transcriptions/#limits-and-behaviour-to-know
              stdapi/models/audio/amazon_transcribe.py:_build_transcription_segment
         """
         response = openai_client.audio.transcriptions.create(

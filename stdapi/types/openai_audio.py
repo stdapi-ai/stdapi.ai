@@ -213,7 +213,9 @@ class TranscriptionSegment(BaseModelResponse):
 
     id: int = Field(ge=0, description="Unique segment identifier.")
     avg_logprob: float = Field(
-        description="Average logprob of the segment. Below -1 suggests logprobs failed."
+        description="Average logprob of the segment. Below -1 suggests logprobs failed. "
+        "Models reporting no token log probabilities answer `0`, or `-2` for a "
+        "segment carrying no speech."
     )
     compression_ratio: float = Field(
         ge=0, description="Compression ratio. Above 2.4 suggests compression failed."
@@ -221,15 +223,23 @@ class TranscriptionSegment(BaseModelResponse):
     end: float = Field(ge=0, description="End time of the segment in seconds.")
     no_speech_prob: float = Field(
         ge=0,
-        description="Probability of no speech. Above 1.0 with avg_logprob below -1 indicates silence.",
+        description="Probability of no speech. Above 1.0 with avg_logprob below -1 indicates silence. "
+        "Models reporting no token log probabilities answer `1` for a segment "
+        "carrying no speech and `0` otherwise.",
     )
-    seek: int = Field(ge=0, description="Seek offset of the segment.")
+    seek: int = Field(
+        ge=0,
+        description="Seek offset of the segment. `0` on models that report no seek offset.",
+    )
     start: float = Field(ge=0, description="Start time of the segment in seconds.")
     temperature: float = Field(
-        description="Temperature parameter used for generating the segment."
+        description="Temperature parameter used for generating the segment. "
+        "`0` on models that report no per-segment sampling temperature."
     )
     text: str = Field(description="Text content of the segment.")
-    tokens: list[int] = Field(description="Token IDs for the text content.")
+    tokens: list[int] = Field(
+        description="Token IDs for the text content. Empty on models that report no token IDs."
+    )
 
 
 # Ref: openai.types.audio.transcription_word.TranscriptionWord

@@ -197,6 +197,10 @@ Invalid `Settings` values (e.g. an unsupported `Formality`) are rejected with HT
   segment, so it costs roughly double the Amazon Translate characters of `text`
   or `json` for the same audio — see
   [Provider-Specific Parameters](#provider-specific-parameters).
+- `verbose_json` segments carry the translated text on the source cue's `start`
+  and `end`; their `seek`, `temperature`, `tokens`, `avg_logprob` and
+  `no_speech_prob` fields are the same placeholders as on
+  [`/v1/audio/transcriptions`](api_openai_audio_transcriptions.md#limits-and-behaviour-to-know).
 
 !!! warning "Source languages Amazon Translate does not cover"
     Amazon Transcribe recognises more languages than Amazon Translate can translate into English. When the detected source language is not one of [Amazon Translate's supported languages](https://docs.aws.amazon.com/translate/latest/dg/what-is-languages.html), the request returns HTTP 400 listing the supported language codes instead of a partial result. Transcribe the audio with [`/v1/audio/transcriptions`](api_openai_audio_transcriptions.md) to keep it in its original language.

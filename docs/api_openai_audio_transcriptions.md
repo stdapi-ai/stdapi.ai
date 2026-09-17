@@ -56,7 +56,7 @@ curl -X POST "$BASE/v1/audio/transcriptions" \
 | **Output Formats**         |                                          |                                                                  |
 | `json`                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Structured transcription                                         |
 | `text`                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Plain text output                                                |
-| `verbose_json`             |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | With timestamps and details (Amazon Transcribe; not Bedrock models) |
+| `verbose_json`             |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | With timestamps and details (Amazon Transcribe; not Bedrock models); each segment's `seek`, `temperature` and `tokens` are placeholders — see [Limits and behaviour to know](#limits-and-behaviour-to-know) |
 | `diarized_json`            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | With speaker identification (Amazon Transcribe; not Bedrock models); streams as `transcript.text.segment` events with `stream=true` |
 | `srt`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Subtitle format with timing (Amazon Transcribe; not Bedrock models); rejected with `stream=true` |
 | `vtt`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | WebVTT subtitle format (Amazon Transcribe; not Bedrock models); rejected with `stream=true` |
@@ -342,6 +342,14 @@ Streamed events carry no subtitle cues, which is why `srt` and `vtt` are rejecte
 - `include: ["logprobs"]` is accepted on Bedrock models but never populated —
   `logprobs` comes back `null` — because the Converse API returns no token log
   probabilities.
+- With `amazon.transcribe`, the decoder fields of a `verbose_json` segment are
+  placeholders: `seek` is always `0`, `temperature` always `0.0` and `tokens`
+  always empty, while `avg_logprob` and `no_speech_prob` report the documented
+  silence signal (`-2.0` and `1.0` on a segment carrying no speech, `0.0` and
+  `0.0` otherwise) rather than measured probabilities. The model reports no
+  per-segment decoder state, so `start`, `end` and `text` are the values that
+  carry information: a transcript cannot be re-aligned or re-decoded from the
+  rest.
 - `chunking_strategy` accepts `auto` only; any other value is rejected rather
   than silently applied.
 - The extra Amazon Transcribe parameters are reachable through the

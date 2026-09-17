@@ -12,6 +12,7 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 
 import io
 from base64 import b64encode
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -23,7 +24,8 @@ from stdapi import aws_translate
 from stdapi.api_errors import ApiError, UnsupportedParameterError
 from stdapi.config import SETTINGS
 from stdapi.input_file import InputFile
-from stdapi.models.audio.amazon_transcribe import AudioModel
+from stdapi.models.audio.amazon_transcribe import AudioModel, TranscribeJobData
+from stdapi.routes import openai_audio_translations
 from tests._helpers import make_client_error
 from tests.conftest import _sample_cache_file, logged_usage_entries
 from tests.test_openai_audio_transcriptions import _stub_transcribe
@@ -483,6 +485,73 @@ class TestAudioTranslationsJsonBody:
         )
 
 
+#: Stubbed non-English job result: every segment then needs a real translation.
+_STUB_FRENCH_TRANSCRIPT_DATA: TranscribeJobData = {
+    "transcripts": [{"transcript": "bonjour le monde"}],
+    "audio_segments": [
+        {"id": 0, "start_time": "0.0", "end_time": "1.5", "transcript": "bonjour"},
+        {"id": 1, "start_time": "1.5", "end_time": "3.25", "transcript": "le monde"},
+    ],
+    "language_code": "fr-FR",
+}
+
+#: English text the stubbed translation backend answers, per source string.
+_STUB_TRANSLATIONS = {
+    "bonjour le monde": "hello world",
+    "bonjour": "hello",
+    "le monde": "the world",
+}
+
+
+class _StubTranslateClient:
+    """Translate client answering ``TranslateText`` from ``_STUB_TRANSLATIONS``."""
+
+    def __init__(self) -> None:
+        self.translated_texts: list[str] = []
+
+    async def translate_text(self, **kwargs: object) -> dict[str, str]:
+        """Record the requested text and return its fixed translation.
+
+        Args:
+            **kwargs: ``TranslateText`` request fields.
+
+        Returns:
+            A ``TranslateText`` response holding the English text.
+        """
+        text = str(kwargs["Text"])
+        self.translated_texts.append(text)
+        return {"TranslatedText": _STUB_TRANSLATIONS[text]}
+
+
+def _stub_french_translation(monkeypatch: pytest.MonkeyPatch) -> _StubTranslateClient:
+    """Serve the route a French transcript and a fixed translation backend.
+
+    Args:
+        monkeypatch: The patching fixture.
+
+    Returns:
+        The translation client the route will call, for call inspection.
+    """
+
+    async def _fake_transcribe(
+        _self: AudioModel, *_args: object, **_kwargs: object
+    ) -> TranscribeJobData:
+        return _STUB_FRENCH_TRANSCRIPT_DATA
+
+    async def _fake_validate_model(
+        model_id: str, *_args: object, **_kwargs: object
+    ) -> SimpleNamespace:
+        return SimpleNamespace(id=model_id)
+
+    client = _StubTranslateClient()
+    monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+    monkeypatch.setattr(
+        openai_audio_translations, "validate_model", _fake_validate_model
+    )
+    monkeypatch.setattr(stdapi.aws, "get_client", lambda _service, _region=None: client)
+    return client
+
+
 @pytest.mark.local
 class TestAudioTranslationsResponseFormatBugs:
     """Local stub tests for response-format regressions (no AWS calls made).
@@ -534,6 +603,45 @@ class TestAudioTranslationsResponseFormatBugs:
 
         assert not isinstance(response, str | Response)
         assert response.model_dump(exclude_none=True)["task"] == "translate"
+
+    def test_verbose_json_reports_translated_cues_on_the_source_timings(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``verbose_json`` pairs each translated cue with the timings it was spoken at.
+
+        The timestamped shape is the only reason to ask for ``verbose_json``
+        rather than ``json`` here: the response reports the audio duration,
+        English as the output language, and one segment per spoken stretch whose
+        ``text`` is translated while ``start``/``end`` stay the source cue's. The
+        stubbed transcript is non-English, so every cue is genuinely translated
+        instead of being returned unchanged, and each is translated exactly once.
+
+        Ref: https://developers.openai.com/api/reference/resources/audio/subresources/translations/methods/create
+             stdapi/models/audio/amazon_transcribe.py:AudioModel._format_translation_response
+        """
+        client = _stub_french_translation(monkeypatch)
+
+        response = app_client.post(
+            "/v1/audio/translations",
+            files={"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")},
+            data={"model": "amazon.transcribe", "response_format": "verbose_json"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["task"] == "translate"
+        assert body["language"] == "english"
+        assert body["duration"] == 3.25
+        assert body["text"] == "hello world"
+        assert [
+            (segment["start"], segment["end"], segment["text"])
+            for segment in body["segments"]
+        ] == [(0.0, 1.5, "hello"), (1.5, 3.25, "the world")]
+        assert sorted(client.translated_texts) == [
+            "bonjour",
+            "bonjour le monde",
+            "le monde",
+        ]
 
 
 @pytest.mark.local

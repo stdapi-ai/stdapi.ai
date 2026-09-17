@@ -1475,6 +1475,29 @@ class TestBuildTranscriptionSegment:
         assert result.no_speech_prob == 1.0
         assert result.avg_logprob < -1.0
 
+    def test_decoder_fields_hold_the_documented_placeholders(self) -> None:
+        """``seek``, ``temperature`` and ``tokens`` hold the values the docs publish.
+
+        Transcribe publishes no per-segment decoder state, so the three fields
+        are constants a client must not re-align or re-decode from, and the API
+        documentation says exactly which constants. This pins the documented
+        values so behaviour and documentation cannot drift apart.
+
+        Ref: https://stdapi.ai/api_openai_audio_transcriptions/#limits-and-behaviour-to-know
+             stdapi/models/audio/amazon_transcribe.py:_build_transcription_segment
+        """
+        segment: dict[str, Any] = {
+            "id": 0,
+            "start_time": "0.0",
+            "end_time": "1.0",
+            "transcript": "hello",
+        }
+        result = _build_transcription_segment(segment, "hello")  # type: ignore[arg-type]
+
+        assert result.seek == 0
+        assert result.temperature == 0.0
+        assert result.tokens == []
+
 
 class TestTranscribeExtraParamsValueConstraints:
     """_TranscribeExtraParams: values are forwarded to AWS verbatim, not re-validated.
