@@ -68,6 +68,10 @@ _WELL_FORMED_SECRET = "s" * 43
 _DAY = 86400
 
 
+#: Every test here drives the in-process module against the stand-in backends.
+pytestmark = pytest.mark.local
+
+
 def _tenant_item(key_id: str, **attributes: ItemValue) -> Item:
     """Build the tenant record the Terraform module would write.
 

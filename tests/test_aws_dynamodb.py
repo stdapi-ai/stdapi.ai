@@ -59,6 +59,10 @@ _LEASE_CONDITION = (
 )
 
 
+#: Every test here drives the in-process client against the DynamoDB stand-in.
+pytestmark = pytest.mark.local
+
+
 def _client_error(
     code: str, operation: str = "GetItem", message: str = "denied"
 ) -> ClientError:

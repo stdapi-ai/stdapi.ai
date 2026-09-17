@@ -84,6 +84,10 @@ _WELL_FORMED_SECRET = "s" * 43
 _PREFIX = "/stdapi-test/tenant-keys"
 
 
+#: Every test here drives the in-process module against the DynamoDB stand-in.
+pytestmark = pytest.mark.local
+
+
 def _request_for(path: str | None) -> Request:
     """Build a request whose matched route reports *path*.
 
