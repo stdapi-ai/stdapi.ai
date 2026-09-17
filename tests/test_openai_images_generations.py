@@ -28,7 +28,11 @@ from stdapi.routes import (
 )
 from stdapi.routes._images_common import build_images_response, image_usage
 from stdapi.routes.openai_images_generations import stream_generator
-from stdapi.types.openai_images import ImageEditParams, ImageGenerateParams
+from stdapi.types.openai_images import (
+    ImageEditParams,
+    ImageGenerateParams,
+    ImageVariationParams,
+)
 from tests.conftest import (
     image_returns_base64_only,
     image_size_supported,
@@ -53,6 +57,10 @@ if TYPE_CHECKING:
     )
 
     type ImageParams = ImageGenerateParams | ImageEditParams
+
+    type ImageParamsWithUser = (
+        ImageGenerateParams | ImageEditParams | ImageVariationParams
+    )
 
 
 def validate_base64_image(b64_data: str) -> str:
@@ -1634,6 +1642,61 @@ _IMAGE_PATHS = pytest.mark.parametrize(
     "path", list(_IMAGE_BODIES), ids=["generations", "edits", "variations"]
 )
 
+#: The two image endpoints that have a streaming mode.
+_STREAMING_IMAGE_PATHS = pytest.mark.parametrize(
+    "path", ["/v1/images/generations", "/v1/images/edits"], ids=["generations", "edits"]
+)
+
+
+def _stub_image_jobs(
+    monkeypatch: pytest.MonkeyPatch, bucket: str | None
+) -> list[dict[str, Any]]:
+    """Serve the three image routes with no backend, on a deployment with *bucket*.
+
+    Model resolution and the image model are stubbed: the stub records the
+    parameters of every job asked of it and then fails the request with a 400,
+    so a request that got as far as generating is visible as a recorded job and
+    nothing reaches Bedrock.
+
+    Args:
+        monkeypatch: The patcher whose scope the stubbing lasts for.
+        bucket: The S3 bucket the deployment serves ``url`` responses from, or
+            ``None`` for a deployment that has none.
+
+    Returns:
+        The list the stub records each requested job into.
+    """
+    jobs: list[dict[str, Any]] = []
+
+    def _record_job(**kwargs: object) -> object:
+        """Record a requested job, then fail the request with a 400."""
+        jobs.append(kwargs)
+        model_id = "stub-model"
+        raise UnsupportedModelError(model_id, status=400)
+
+    class _StubModel:
+        """Image model recording every job asked of it instead of running one."""
+
+        get_image_generation_job = staticmethod(_record_job)
+        get_image_edit_job = staticmethod(_record_job)
+        get_image_variation_job = staticmethod(_record_job)
+
+    async def _validate_model(
+        model_id: str, *_args: object, **_kwargs: object
+    ) -> object:
+        """Accept any model ID without calling AWS."""
+        return SimpleNamespace(id=model_id)
+
+    monkeypatch.setattr(SETTINGS, "aws_s3_bucket", bucket)
+    for module in (
+        openai_images_generations,
+        openai_images_edits,
+        openai_images_variations,
+    ):
+        monkeypatch.setattr(module, "validate_model", _validate_model)
+        monkeypatch.setattr(module, "get_image_model", lambda _model_id: _StubModel())
+    return jobs
+
 
 @pytest.mark.local
 class TestResponseFormatUrlRequiresBucket:
@@ -1661,46 +1724,10 @@ class TestResponseFormatUrlRequiresBucket:
     def image_jobs(self, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
         """Serve the three image routes from a bucket-less deployment with no backend.
 
-        The bucket is unset, and model resolution and the image model are
-        stubbed: the stub records the parameters of every job asked of it and
-        then fails the request with a 400, so a request that got as far as
-        generating is visible as a recorded job and nothing reaches Bedrock.
-
         Returns:
             The list the stub records each requested job into.
         """
-        jobs: list[dict[str, Any]] = []
-
-        def _record_job(**kwargs: object) -> object:
-            """Record a requested job, then fail the request with a 400."""
-            jobs.append(kwargs)
-            model_id = "stub-model"
-            raise UnsupportedModelError(model_id, status=400)
-
-        class _StubModel:
-            """Image model recording every job asked of it instead of running one."""
-
-            get_image_generation_job = staticmethod(_record_job)
-            get_image_edit_job = staticmethod(_record_job)
-            get_image_variation_job = staticmethod(_record_job)
-
-        async def _validate_model(
-            model_id: str, *_args: object, **_kwargs: object
-        ) -> object:
-            """Accept any model ID without calling AWS."""
-            return SimpleNamespace(id=model_id)
-
-        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
-        for module in (
-            openai_images_generations,
-            openai_images_edits,
-            openai_images_variations,
-        ):
-            monkeypatch.setattr(module, "validate_model", _validate_model)
-            monkeypatch.setattr(
-                module, "get_image_model", lambda _model_id: _StubModel()
-            )
-        return jobs
+        return _stub_image_jobs(monkeypatch, None)
 
     @_IMAGE_PATHS
     @pytest.mark.parametrize("response_format", [None, "url"])
@@ -1853,6 +1880,198 @@ class TestResponseFormatUrlRequiresBucket:
 
         assert response.status_code == 400, response.text
         assert response.json()["error"]["code"] == "model_not_found"
+
+
+@pytest.mark.local
+class TestAStreamedImageIsAlwaysInline:
+    """A streamed image is returned as base64 data, never as a link to one.
+
+    Every streaming event carries its image in ``b64_json`` and has no field
+    for a link at all, so a client decodes whatever it receives. ``url`` is the
+    default response format on these endpoints, which makes the plain
+    ``stream=true`` request the one at risk: served as a link, it would hand
+    the client's base64 decoder a web address to decode, with nothing in the
+    event shape to signal it.
+
+    The deployment here *has* a bucket, so serving a link is possible and the
+    inline answer is a choice the route makes rather than one it falls back to.
+
+    Ref: https://developers.openai.com/api/reference/resources/images.md
+         stdapi/routes/openai_images_generations.py:create_images
+         stdapi/routes/openai_images_edits.py:edit_images
+    """
+
+    @pytest.fixture
+    def image_jobs(self, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+        """Serve the image routes from a deployment that can host URL responses.
+
+        Returns:
+            The list the stub records each requested job into.
+        """
+        return _stub_image_jobs(monkeypatch, "test-bucket")
+
+    @_STREAMING_IMAGE_PATHS
+    @pytest.mark.parametrize("response_format", [None, "url", "b64_json"])
+    def test_a_streamed_request_asks_for_inline_images(
+        self,
+        app_client: TestClientType,
+        image_jobs: list[dict[str, Any]],
+        path: str,
+        response_format: str | None,
+    ) -> None:
+        """Streaming produces inline images whatever format the caller named.
+
+        Naming ``url``, naming ``b64_json`` and naming nothing at all must all
+        reach the same answer, because the stream has only one way to carry an
+        image.
+        """
+        named = {} if response_format is None else {"response_format": response_format}
+
+        response = app_client.post(
+            path, json={**_IMAGE_BODIES[path], "stream": True, **named}
+        )
+
+        assert response.status_code == 400, response.text
+        assert [job["is_url"] for job in image_jobs] == [False]
+
+    @_STREAMING_IMAGE_PATHS
+    @pytest.mark.parametrize("response_format", [None, "url"])
+    def test_the_same_request_unstreamed_still_asks_for_a_url(
+        self,
+        app_client: TestClientType,
+        image_jobs: list[dict[str, Any]],
+        path: str,
+        response_format: str | None,
+    ) -> None:
+        """Without ``stream``, the default and named ``url`` formats still get links.
+
+        This is the other half of the pair: it is streaming that forces the
+        inline answer, not the endpoint, so a route that answered inline for
+        everything would be just as wrong.
+        """
+        named = {} if response_format is None else {"response_format": response_format}
+
+        response = app_client.post(path, json={**_IMAGE_BODIES[path], **named})
+
+        assert response.status_code == 400, response.text
+        assert [job["is_url"] for job in image_jobs] == [True]
+
+
+def _logged_request_user_id(captured_stdout: str) -> str | None:
+    """Read the end-user identifier back out of the captured request log.
+
+    Args:
+        captured_stdout: Captured stdout, one JSON log event per line.
+
+    Returns:
+        The identifier the last request event recorded, or None if it recorded
+        none.
+    """
+    user_id: str | None = None
+    for line in captured_stdout.splitlines():
+        if '"request_user_id"' not in line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        user_id = event.get("request_user_id", user_id)
+    return user_id
+
+
+@pytest.mark.local
+class TestTheEndUserIdentifierIsFreeForm:
+    """``user`` is an opaque end-user identifier with no shape of its own.
+
+    Upstream types it as a plain string and states no bound, so a caller is
+    free to send a JWT subject, a signed session token, a hash digest, or the
+    empty string a ``session.get("user_id", "")`` lookup produces. Refusing any
+    of those would 400 a request the vendor serves, on every call such a client
+    makes -- and the identifier is only ever logged, so its length buys nothing
+    back. ``/v1/chat/completions`` already accepts all of them.
+
+    Ref: https://developers.openai.com/api/reference/resources/images.md
+         stdapi/types/openai_images.py:_ImageBaseParams
+    """
+
+    @pytest.mark.parametrize(
+        ("params_class", "body"),
+        [
+            (ImageGenerateParams, {"model": "m", "prompt": "p"}),
+            (ImageEditParams, {"model": "m"}),
+            (ImageVariationParams, {"model": "m"}),
+        ],
+        ids=["generate", "edit", "variation"],
+    )
+    @pytest.mark.parametrize("user", ["", "u" * 512], ids=["empty", "long"])
+    def test_every_image_request_model_accepts_it(
+        self, params_class: type[ImageParamsWithUser], body: dict[str, Any], user: str
+    ) -> None:
+        """An empty and a 512-character identifier both validate, unchanged."""
+        request = params_class.model_validate({**body, "user": user})
+
+        assert request.user == user
+
+    @_IMAGE_PATHS
+    @pytest.mark.parametrize("user", ["", "u" * 512], ids=["empty", "long"])
+    def test_a_json_request_carries_it_to_the_request_log(
+        self,
+        app_client: TestClientType,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+        path: str,
+        user: str,
+    ) -> None:
+        """Accepting the value is not enough: it is what the request is logged under.
+
+        An empty identifier names nobody, so it is logged as none at all --
+        the same answer as omitting the field.
+
+        Ref: stdapi/monitoring.py:log_request_params
+        """
+        _stub_image_jobs(monkeypatch, "test-bucket")
+        capfd.readouterr()
+
+        response = app_client.post(path, json={**_IMAGE_BODIES[path], "user": user})
+
+        assert response.status_code == 400, response.text
+        assert _logged_request_user_id(capfd.readouterr().out) == (user or None)
+
+    @pytest.mark.parametrize(
+        "path",
+        ["/v1/images/edits", "/v1/images/variations"],
+        ids=["edits", "variations"],
+    )
+    @pytest.mark.parametrize("user", ["", "u" * 512], ids=["empty", "long"])
+    def test_a_multipart_request_carries_it_to_the_request_log(
+        self,
+        app_client: TestClientType,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+        path: str,
+        user: str,
+    ) -> None:
+        """The two endpoints taking a binary upload accept the same identifiers.
+
+        The form field is bounded independently of the JSON body, so a bound
+        lifted on one of the two would leave the other refusing the request a
+        client sends through the official SDK's multipart path. An empty form
+        field arrives as no value at all, so it names nobody either way.
+
+        Ref: stdapi/routes/openai_images_edits.py:edit_images
+             stdapi/routes/openai_images_variations.py:create_image_variations
+        """
+        _stub_image_jobs(monkeypatch, "test-bucket")
+        capfd.readouterr()
+
+        response = app_client.post(
+            path,
+            data={"model": "m", "user": user},
+            files={"image": ("image.png", b"fake-bytes", "image/png")},
+        )
+
+        assert response.status_code == 400, response.text
+        assert _logged_request_user_id(capfd.readouterr().out) == (user or None)
 
 
 @pytest.mark.local

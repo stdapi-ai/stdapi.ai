@@ -282,10 +282,7 @@ class _ImageBaseParams(BaseModelRequestWithExtra):
         "the model pick. Supported values depend on the model; output size may differ.",
     )
     user: str | None = Field(
-        default=None,
-        description="User identifier for monitoring and abuse detection.",
-        min_length=1,
-        max_length=255,
+        default=None, description="User identifier for monitoring and abuse detection."
     )
 
     @field_validator("size", mode="after")

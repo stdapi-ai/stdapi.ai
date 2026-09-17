@@ -165,9 +165,7 @@ async def create_image_variations(
     user: Annotated[
         str | None,
         Form(
-            description="A unique identifier representing your end-user, which can help to monitor and detect abuse.",
-            min_length=1,
-            max_length=255,
+            description="A unique identifier representing your end-user, which can help to monitor and detect abuse."
         ),
     ] = None,
     _: Annotated[None, Depends(authenticate)] = None,
