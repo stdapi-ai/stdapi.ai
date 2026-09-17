@@ -12,6 +12,7 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 import base64
 from array import array
 from math import hypot
+from struct import unpack
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -240,6 +241,70 @@ class TestEmbeddings:
 
         assert response.model == embedding_model
         assert_embedding_list(response, count=1, min_dimensions=_MIN_DIMENSIONS)
+
+    @pytest.mark.parametrize(
+        "user", [pytest.param("", id="empty"), pytest.param("u" * 300, id="long")]
+    )
+    def test_user_is_free_form_and_never_reaches_the_model(
+        self, openai_client: OpenAI, embedding_model: str, user: str
+    ) -> None:
+        """``user`` takes any string, including an empty and a 300-character one.
+
+        Upstream types ``user`` as a plain string with no length bound, so
+        refusing either value would reject a request the mirrored API accepts.
+        The identifier is request-log attribution only and never reaches the
+        model, so the vector stays the one the same input yields without it —
+        held to the tolerance repeated calls themselves hold.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_embeddings.py:EmbeddingCreateParams
+        """
+        text = "An end-user identifier must not change the vector."
+
+        baseline = openai_client.embeddings.create(
+            model=embedding_model, input=text, encoding_format="float"
+        )
+        response = openai_client.embeddings.create(
+            model=embedding_model, input=text, user=user, encoding_format="float"
+        )
+
+        (vector,) = assert_embedding_list(
+            response, count=1, min_dimensions=_MIN_DIMENSIONS
+        )
+        (reference,) = assert_embedding_list(baseline, count=1)
+        assert _cosine_similarity(list(vector), list(reference)) == pytest.approx(
+            1.0, abs=1e-3
+        ), "the end-user identifier changed the vector"
+
+    def test_base64_encoding_round_trips_to_the_float_vector(
+        self, openai_client: OpenAI, embedding_model: str
+    ) -> None:
+        """A base64 embedding is the float vector as little-endian float32.
+
+        Both legs read the raw HTTP body so nothing decodes the payload on the
+        way out, and the blob is unpacked with an explicit ``<f`` format: a
+        big-endian or float64 encoding would still look like a valid base64
+        vector here and decode to noise in a client that follows the documented
+        format.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/routes/openai_embeddings.py:create_embeddings
+        """
+        text = "The base64 and float encodings must carry the same vector."
+
+        floats = openai_client.embeddings.with_raw_response.create(
+            model=embedding_model, input=text, encoding_format="float"
+        ).http_response.json()["data"][0]["embedding"]
+        encoded = openai_client.embeddings.with_raw_response.create(
+            model=embedding_model, input=text, encoding_format="base64"
+        ).http_response.json()["data"][0]["embedding"]
+
+        assert isinstance(floats, list), f"expected a float vector, got {floats!r}"
+        assert len(floats) >= _MIN_DIMENSIONS
+        assert isinstance(encoded, str), f"expected a base64 string, got {encoded!r}"
+        raw = base64.b64decode(encoded, validate=True)
+        assert len(raw) == 4 * len(floats), "payload is not one float32 per component"
+        assert list(unpack(f"<{len(floats)}f", raw)) == pytest.approx(floats)
 
     def test_mixed_batch_with_parameters(
         self, openai_client: OpenAI, embedding_model: str

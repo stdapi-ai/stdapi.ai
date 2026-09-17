@@ -95,8 +95,6 @@ class EmbeddingCreateParams(BaseModelRequestWithExtra):
     user: str | None = Field(
         default=None,
         description="A unique identifier representing your end-user, which can help detect abuse.",
-        min_length=1,
-        max_length=255,
     )
 
     @model_validator(mode="after")

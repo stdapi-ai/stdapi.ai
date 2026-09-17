@@ -2267,7 +2267,12 @@ class TestCohereEmbedV1Integration:
     ) -> None:
         """An image data URI is embedded and billed as one image.
 
+        The floats envelope declares ``texts`` required, so an image-only
+        request carries the empty list rather than omitting the member: a
+        strict client, and the SDK's own typing, expect a list there.
+
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v3.html
+             cohere.types.embed_response.EmbeddingsFloatsEmbedResponse
         """
         response = cohere_client_v1.embed(
             model=cohere_embed_v4_model,
@@ -2277,7 +2282,7 @@ class TestCohereEmbedV1Integration:
         assert response.response_type == "embeddings_floats"
         (vector,) = response.embeddings
         assert len(vector) in _COHERE_V4_DIMENSIONS
-        assert response.texts in (None, [])
+        assert response.texts == []
         assert response.meta is not None
         assert response.meta.billed_units is not None
         assert response.meta.billed_units.images == 1

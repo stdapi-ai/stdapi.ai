@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from stdapi.input_file import IngestInputFile
 from stdapi.types import BaseModelRequest, BaseModelResponse
@@ -64,6 +64,34 @@ class ModerationCreateParams(BaseModelRequest):
         "toxicity detection when none is configured; `text-moderation-*` for "
         "toxicity detection).",
     )
+
+    @field_validator("input", mode="before")
+    @classmethod
+    def _check_input_length(cls, value: object) -> object:
+        """Reject an oversized input array with a message naming the limit.
+
+        The per-branch ``max_length`` publishes the bound in the schema, but a
+        union reports one failure per branch and the caller reads whichever
+        surfaces first; checking ahead of the union makes the refusal say what
+        was wrong.
+
+        Args:
+            value: Raw ``input`` value, before the union is resolved.
+
+        Returns:
+            The value, unchanged.
+
+        Raises:
+            ValueError: When the array holds more than the accepted number of
+                elements.
+        """
+        if isinstance(value, list) and len(value) > _MAX_INPUT_ITEMS:
+            msg = (
+                f"'input' accepts at most {_MAX_INPUT_ITEMS} elements, "
+                f"got {len(value)}. Split the request into smaller batches."
+            )
+            raise ValueError(msg)
+        return value
 
 
 # Ref: openai.types.moderation.Categories

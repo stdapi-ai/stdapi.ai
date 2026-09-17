@@ -1078,11 +1078,14 @@ class TestModerationsSdkParity:
 class TestModerationInputLimit:
     """The input array is capped to bound per-element AWS moderation calls.
 
-    OpenAI's schema caps ``input`` at 2048 items; the gateway enforces the same
-    bound because every element costs one billable AWS moderation call.
+    The cap is this implementation's own: upstream constrains neither array
+    branch of ``input``, so nothing outside this repository pins 2048. Every
+    element costs one billable AWS moderation call, which is the entire reason
+    for the bound — relaxing it means editing ``_MAX_INPUT_ITEMS``, the
+    documented limit and these tests together.
 
-    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-         stdapi/types/openai_moderations.py:ModerationCreateParams
+    Ref: stdapi/types/openai_moderations.py:_MAX_INPUT_ITEMS
+         https://stdapi.ai/api_openai_moderations/
     """
 
     def test_input_at_the_limit_is_accepted(self) -> None:
@@ -1097,21 +1100,59 @@ class TestModerationInputLimit:
         assert params.input == ["x"] * 2048
         assert params.model is None
 
-    def test_input_over_the_limit_is_rejected(self) -> None:
-        """An input array beyond the maximum length is rejected.
+    @pytest.mark.parametrize(
+        "element",
+        [
+            pytest.param("x", id="strings"),
+            pytest.param({"type": "text", "text": "x"}, id="multimodal"),
+        ],
+    )
+    def test_input_over_the_limit_is_rejected(self, element: object) -> None:
+        """An input array beyond the maximum length is rejected, naming the cap.
 
-        Every list branch of the ``input`` union must report ``too_long`` with
-        ``max_length=2048``, so the rejection is the length cap and not an
-        unrelated union mismatch.
+        Both array branches are capped identically, and the single reported
+        error states the accepted number of elements: a union otherwise reports
+        one failure per branch, and the caller reads a mismatch against the
+        branch it did not send.
         """
         with pytest.raises(ValidationError) as excinfo:
-            ModerationCreateParams.model_validate({"input": ["x"] * 2049})
+            ModerationCreateParams.model_validate({"input": [element] * 2049})
 
-        errors = excinfo.value.errors()
-        too_long = [error for error in errors if error["type"] == "too_long"]
-        assert too_long, errors
-        assert all(error["loc"][0] == "input" for error in too_long), too_long
-        assert {error["ctx"]["max_length"] for error in too_long} == {2048}
+        (error,) = excinfo.value.errors()
+        assert error["loc"] == ("input",), error
+        assert "at most 2048 elements" in error["msg"], error
+
+    def test_the_published_schema_carries_the_cap(self) -> None:
+        """Both array branches publish ``maxItems`` so a client can read the cap.
+
+        The cap has no upstream counterpart, so the schema this API serves is
+        where a generated client or an agent discovers it.
+        """
+        branches = ModerationCreateParams.model_json_schema()["properties"]["input"][
+            "anyOf"
+        ]
+        arrays = [branch for branch in branches if branch.get("type") == "array"]
+
+        assert len(arrays) == 2, branches
+        assert all(branch["maxItems"] == 2048 for branch in arrays), arrays
+
+    def test_over_the_limit_is_a_400_naming_the_cap(
+        self, app_client: TestClient
+    ) -> None:
+        """The route refuses an oversized array with a 400 that states the cap.
+
+        The message is the only place a caller learns the limit at request
+        time, and the refusal happens before any classification is billed.
+
+        Ref: stdapi/main.py:handle_validation_exception
+        """
+        response = app_client.post("/v1/moderations", json={"input": ["x"] * 2049})
+
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error", error
+        assert "2048" in error["message"], error
+        assert "input" in error["message"], error
 
 
 #: A Comprehend toxicity result with violent-threat and profanity labels.
