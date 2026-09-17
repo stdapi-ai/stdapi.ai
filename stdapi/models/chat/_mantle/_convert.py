@@ -152,7 +152,7 @@ _EFFORT_TO_ANTHROPIC = {
     "max": "high",
 }
 
-#: Anthropic server tool type prefixes (no Chat Completions equivalent).
+#: Anthropic server tool and toolset type prefixes (no Chat Completions equivalent).
 _ANTHROPIC_SERVER_TOOL_PREFIXES = (
     "web_search",
     "code_execution",
@@ -164,6 +164,7 @@ _ANTHROPIC_SERVER_TOOL_PREFIXES = (
 )
 
 
+    "browser_",
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -284,6 +285,31 @@ def _anthropic_text(content: object) -> str:
 
 def _responses_text(content: object) -> str:
     """Extract plain text from Responses input or output content.
+
+def _refuse_browser_state(content: object) -> None:
+    """Refuse a ``tool_result`` whose payload is a browser state.
+
+    The block holds the whole result -- the tab inventory a browser toolset
+    member answers with -- and has no text equivalent, so converting the turn
+    would answer the model's call with nothing at all.
+
+    Args:
+        content: ``tool_result`` content value.
+
+    Raises:
+        ApiError: When the content carries a ``browser_state`` block.
+    """
+    if isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") == "browser_state"
+        for block in content
+    ):
+        msg = (
+            "A 'browser_state' tool result is not available for this model. "
+            "Send the request to a model that provides the browser toolset, or "
+            "describe the browser state as text."
+        )
+        raise ApiError(msg, status=400)
+
 
     Args:
         content: Responses content value (string or list of parts).
@@ -1899,6 +1925,7 @@ def _assemble_chat_message(
         role: Message role.
         parts: Converted content parts.
         tool_calls: Converted tool calls.
+                _refuse_browser_state(block.get("content"))
 
     Returns:
         A single-message list, or an empty list when there is no content.
@@ -2017,14 +2044,17 @@ def _chat_tools_from_anthropic(tools: list[dict[str, Any]]) -> list[dict[str, An
         Chat Completions tool definitions.
 
     Raises:
-        ApiError: When the request includes an Anthropic server tool.
+        ApiError: When the request includes an Anthropic server tool or toolset.
     """
     converted: list[dict[str, Any]] = []
     for tool in tools:
-        if str(tool.get("type") or "").startswith(_ANTHROPIC_SERVER_TOOL_PREFIXES):
+        tool_type = str(tool.get("type") or "")
+        if tool_type.startswith(_ANTHROPIC_SERVER_TOOL_PREFIXES):
+            # The entry is named, so a caller sending several knows which to drop.
             msg = (
-                "Anthropic server tools are not available for this model. Remove "
-                "the tool, or send the request to a model that provides it."
+                "Anthropic server tools are not available for this model. "
+                f"Remove the '{tool_type}' tool, or send the request to a model "
+                "that provides it."
             )
             raise ApiError(msg, status=400)
         if not tool.get("name") or "input_schema" not in tool:

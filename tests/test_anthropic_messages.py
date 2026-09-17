@@ -13,8 +13,9 @@ Ref: https://platform.claude.com/docs/en/api/messages
 import base64
 import json as _json
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -28,18 +29,22 @@ from anthropic import (
 )
 
 import stdapi.models as _models_mod
+import stdapi.models.chat._adapters._anthropic_message as _anthropic_message_adapter
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, PERFORMANCE_CONFIG_VAR
 from stdapi.aws_bedrock_mantle import mantle_request_headers, validate_pruning_extras
 from stdapi.config import SETTINGS
 from stdapi.models import ModelDetails
+from stdapi.models.chat import get_chat_model
 from stdapi.models.chat._adapters._anthropic_message import (
     _build_tool_config,
+    count_tokens_via_bedrock,
+    extract_reasoning,
     translate_request,
     warn_mcp_connector_ignored,
 )
 from stdapi.models.chat._default import ChatModel
-from stdapi.models.chat._mantle._convert import messages_payload
+from stdapi.models.chat._mantle._convert import convert_payload, messages_payload
 from stdapi.monitoring import log_request_params
 from stdapi.routes import anthropic_messages
 from stdapi.types.anthropic_messages import (
@@ -92,6 +97,40 @@ _MCP_TOOLSET: dict[str, object] = {
 
 #: Identifier prefix Anthropic mints for an MCP tool call.
 _MCP_TOOL_USE_ID = "mcptoolu_01ABCdefGHIjklMNOpqrST"
+
+#: Browser and computer toolset entries, as a current SDK client sends them.
+_TOOLSETS: tuple[dict[str, object], ...] = (
+    {"type": "browser_toolset_20260801", "configs": {"screenshot": {"enabled": True}}},
+    {"type": "computer_toolset_20260801", "configs": {"zoom": {"enabled": False}}},
+)
+
+#: Claude model whose Converse token count is built the same way a message is.
+_COUNT_TOKENS_MODEL = "anthropic.claude-opus-5"
+
+#: A recorded browser toolset result, as a client replays it on the next turn.
+_BROWSER_STATE_TURN: dict[str, object] = {
+    "role": "user",
+    "content": [
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_1",
+            "toolset_name": "browser_toolset_20260801",
+            "content": [
+                {
+                    "type": "browser_state",
+                    "tabs": [
+                        {
+                            "tab_id": "tab-1",
+                            "title": "Example",
+                            "url": "https://example.com/",
+                            "active": True,
+                        }
+                    ],
+                }
+            ],
+        }
+    ],
+}
 
 
 def _mcp_replay_messages() -> list[Any]:
@@ -5444,3 +5483,223 @@ class TestMCPConnectorRouteWiring:
 
         assert response.status_code == 200, response.text
         assert self._warnings(capsys.readouterr().out) == []
+
+
+class TestBrowserAndComputerToolsets:
+    """What a browser or computer toolset does on each backend path.
+
+    A toolset declares a whole tool family in one ``tools`` entry, with no name
+    and no schema of its own. Converse has no equivalent, so a request asking
+    for one is refused by name rather than served without the tools it asked
+    for; the Claude passthrough forwards it and lets the upstream API decide.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_spec
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    def _request(**fields: object) -> MessageCreateParams:
+        """Build a minimal create-message request carrying *fields*."""
+        return MessageCreateParams.model_validate(
+            {
+                "model": "test.translate-model",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                **fields,
+            }
+        )
+
+    @pytest.mark.parametrize("toolset", _TOOLSETS, ids=["browser", "computer"])
+    async def test_a_toolset_is_refused_by_the_converse_path(
+        self, toolset: dict[str, object]
+    ) -> None:
+        """Converse answers 400 naming the toolset instead of dropping it.
+
+        A toolset the model cannot run is the request, not a hint: served
+        without it the model answers as if the browser or the desktop did not
+        exist, so the refusal is the honest result.
+
+        Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_spec
+        """
+        with pytest.raises(ApiError) as raised:
+            await translate_request(
+                self._request(tools=[_WEATHER_TOOL, toolset]),
+                "test.translate-model",
+                prompt_caching_supported=False,
+                prompt_caching_tool_supported=False,
+            )
+
+        assert raised.value.status == 400
+        message = raised.value.args[0]
+        assert str(toolset["type"]) in message
+        assert "not available for this model" in message
+        assert "send the request to a model that provides it" in message, (
+            "the refusal must name the way forward, not read as an internal fault"
+        )
+        assert "Bedrock" not in message, "a client message must not name a backend"
+
+    @pytest.mark.parametrize("toolset", _TOOLSETS, ids=["browser", "computer"])
+    async def test_a_toolset_is_refused_even_when_no_tool_may_be_called(
+        self, toolset: dict[str, object]
+    ) -> None:
+        """``tool_choice: none`` does not turn the refusal into a crash.
+
+        That choice builds no tool configuration at all, so a refusal made while
+        building one never runs: the nameless toolset travels on to the server
+        tool wiring, which reads a ``name`` off every entry.
+
+        Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config
+        """
+        with pytest.raises(ApiError) as raised:
+            await translate_request(
+                self._request(
+                    tools=[_WEATHER_TOOL, toolset], tool_choice={"type": "none"}
+                ),
+                "test.translate-model",
+                prompt_caching_supported=False,
+                prompt_caching_tool_supported=False,
+            )
+
+        assert raised.value.status == 400
+        assert str(toolset["type"]) in raised.value.args[0]
+
+    @pytest.mark.parametrize("toolset", _TOOLSETS, ids=["browser", "computer"])
+    async def test_a_toolset_is_refused_before_the_count_tokens_call(
+        self, toolset: dict[str, object], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Counting a toolset request is refused the same way, and calls nothing.
+
+        The three entry points share one tool configuration builder, so a
+        toolset accepted for counting and refused for creation would report a
+        count for a request that can never be served.
+
+        Ref: stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
+        """
+
+        def _no_client(*_args: object, **_kwargs: object) -> object:
+            pytest.fail("the backend must not be reached")
+
+        monkeypatch.setattr(
+            _anthropic_message_adapter, "get_client", _no_client, raising=True
+        )
+        request = MessageCountTokensParams.model_validate(
+            {
+                "model": _COUNT_TOKENS_MODEL,
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [toolset],
+            }
+        )
+
+        with pytest.raises(ApiError) as raised:
+            await count_tokens_via_bedrock(
+                request,
+                _COUNT_TOKENS_MODEL,
+                "us-east-1",
+                get_chat_model(_COUNT_TOKENS_MODEL),  # type: ignore[arg-type]
+            )
+
+        assert raised.value.status == 400
+        assert str(toolset["type"]) in raised.value.args[0]
+        assert "not available for this model" in raised.value.args[0]
+
+    @pytest.mark.parametrize("toolset", _TOOLSETS, ids=["browser", "computer"])
+    async def test_a_toolset_reaches_the_claude_passthrough_verbatim(
+        self, toolset: dict[str, object]
+    ) -> None:
+        """The passthrough body carries the toolset exactly as it was sent.
+
+        That path hands the body to an API that serves the toolsets itself, so
+        the gateway's own validation was the only thing standing in the way.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:messages_payload
+        """
+        payload = await messages_payload(
+            self._request(tools=[toolset]), "test.translate-model"
+        )
+
+        assert payload["tools"] == [toolset]
+
+    @pytest.mark.parametrize("toolset", _TOOLSETS, ids=["browser", "computer"])
+    async def test_the_converted_openai_path_refuses_a_toolset(
+        self, toolset: dict[str, object]
+    ) -> None:
+        """A model served in an OpenAI shape refuses the toolset rather than drop it.
+
+        A toolset has no name and no schema, so the plain conversion would skip
+        it in silence and answer a request the caller never made.  The body
+        under conversion is the one the passthrough builds, so the two steps are
+        proven against the same payload rather than against a hand-written one.
+        The refusal names the entry, as the Converse path does and as the page
+        documents, so a caller sending several knows which one to drop.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_tools_from_anthropic
+        """
+        payload = await messages_payload(
+            self._request(tools=[toolset]), "test.translate-model"
+        )
+
+        with pytest.raises(ApiError) as raised:
+            convert_payload("messages", "chat_completions", payload)
+
+        assert raised.value.status == 400
+        message = raised.value.args[0]
+        assert str(toolset["type"]) in message
+        assert "not available for this model" in message
+
+    async def test_a_browser_state_result_is_refused_by_the_converse_path(self) -> None:
+        """A replayed ``browser_state`` result is refused, never emptied.
+
+        It is the whole payload of the result it belongs to, so dropping it
+        would answer the model's call with nothing at all.
+
+        Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_result_part_to_bedrock
+        """
+        with pytest.raises(ApiError) as raised:
+            await translate_request(
+                self._request(messages=[_BROWSER_STATE_TURN]),
+                "test.translate-model",
+                prompt_caching_supported=False,
+                prompt_caching_tool_supported=False,
+            )
+
+        assert raised.value.status == 400
+        assert "browser_state" in raised.value.args[0]
+
+    async def test_the_converted_openai_path_refuses_a_browser_state_result(
+        self,
+    ) -> None:
+        """A replayed browser state is refused there too, never flattened to text.
+
+        The block has no text equivalent, so converting the turn would hand the
+        model an empty answer to a call it made -- the same silent loss the
+        Converse path refuses.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_refuse_browser_state
+        """
+        payload = await messages_payload(
+            self._request(messages=[_BROWSER_STATE_TURN]), "test.translate-model"
+        )
+
+        with pytest.raises(ApiError) as raised:
+            convert_payload("messages", "chat_completions", payload)
+
+        assert raised.value.status == 400
+        assert "browser_state" in raised.value.args[0]
+
+    async def test_a_browser_state_result_reaches_the_claude_passthrough(self) -> None:
+        """The passthrough forwards the browser state with its tab inventory.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:messages_payload
+        """
+        payload = await messages_payload(
+            self._request(messages=[_BROWSER_STATE_TURN]), "test.translate-model"
+        )
+
+        assert (
+            payload["messages"][0]["content"][0]["content"][0]
+            == (
+                _BROWSER_STATE_TURN["content"][0]["content"][0]  # type: ignore[index]
+            )
+        )

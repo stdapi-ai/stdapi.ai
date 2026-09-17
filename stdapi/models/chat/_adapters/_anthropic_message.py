@@ -31,6 +31,8 @@ from stdapi.types.anthropic_messages import (
     Base64PDFSource,
     BashCodeExecutionToolResultBlock,
     BashCodeExecutionToolResultBlockParam,
+    BrowserStateBlockParam,
+    BrowserToolsetParam,
     CacheControlEphemeralParam,
     CacheCreation,
     CitationCharLocation,
@@ -42,6 +44,7 @@ from stdapi.types.anthropic_messages import (
     CodeExecutionToolParam,
     CodeExecutionToolResultBlock,
     CodeExecutionToolResultBlockParam,
+    ComputerToolsetParam,
     ContentBlock,
     ContentBlockParam,
     ContentBlockSourceParam,
@@ -380,7 +383,8 @@ async def _map_tool_result_part_to_bedrock(
     | ImageBlockParam
     | DocumentBlockParam
     | SearchResultBlockParam
-    | ToolReferenceBlockParam,
+    | ToolReferenceBlockParam
+    | BrowserStateBlockParam,
 ) -> ContentBlockTypeDef:
     """Convert a single ``tool_result`` content part to a Bedrock content block.
 
@@ -402,7 +406,10 @@ async def _map_tool_result_part_to_bedrock(
             return await _map_document_to_bedrock(part)
         case SearchResultBlockParam():
             return _map_search_result_to_bedrock(part)
-        case _:  # ToolReferenceBlockParam has no Bedrock equivalent.
+        case _:
+            # ToolReferenceBlockParam and BrowserStateBlockParam have no Bedrock
+            # equivalent, and both are the whole payload of the result they
+            # belong to: dropping one answers the call with nothing at all.
             msg = (
                 f"tool_result content of type '{part.type}' is not supported. "
                 "Use text, image, document, or search_result content instead."
@@ -948,17 +955,34 @@ def _build_tool_config(
         *tool_choice* disables tool calling.
 
     Raises:
-        ApiError: If the model's backend serves no server tool, or
-            *tool_name_map* is a map a server tool name is absent from.
+        ApiError: If a browser or computer toolset is declared, if the model's
+            backend serves no server tool, or *tool_name_map* is a map a server
+            tool name is absent from.
     """
+    for tool in tools or ():
+        if isinstance(tool, BrowserToolsetParam | ComputerToolsetParam):
+            # Refused before the tool config is even considered: a toolset names
+            # a tool family this backend does not run at all, and a model
+            # answering without the browser or the desktop answers a different
+            # request -- including when `tool_choice` is `none`, which returns no
+            # config and would otherwise carry the nameless entry onward.
+            msg = (
+                f"The '{tool.type}' toolset is not available for this model. "
+                "Remove it, or send the request to a model that provides it."
+            )
+            raise ApiError(msg)
+
     if not tools or isinstance(tool_choice, ToolChoiceNoneParam):
         return None
 
     tool_list: list[ToolTypeDef] = []
     for tool in tools:
-        if isinstance(tool, MCPToolsetParam):
+        if isinstance(
+            tool, MCPToolsetParam | BrowserToolsetParam | ComputerToolsetParam
+        ):
             # A toolset carries no name and no schema; the code below would
-            # read one as a tool definition.
+            # read one as a tool definition. The browser and computer ones are
+            # already refused above and only appear here to narrow the type.
             continue
         tool_bedrock = _map_tool_spec(tool)
         if tool_bedrock is None:

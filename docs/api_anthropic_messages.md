@@ -69,6 +69,7 @@ curl -X POST "$BASE/v1/messages" \
 | Empty tool result                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | A tool that returns nothing is answered with a `tool_result` whose `content` is omitted, an empty string, or an empty list; the model is told the call ran and returned nothing |
 | Web search tool (`web_search`)        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Available on models with system tool support (e.g., Amazon Nova 2)                           |
 | Claude server tools                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bash, text editor, computer use (Claude 3.5+), memory (Claude 3.7+)                          |
+| Browser & computer toolsets (`browser_toolset_*`, `computer_toolset_*`) |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepted on the wire, with their `browser_state` results and `toolset_name` pairing. Served only where the model's own API runs them; elsewhere the request is refused by name — see [Toolsets](#browser-and-computer-toolsets) |
 | MCP connector (`mcp_servers`, `mcp_toolset`) | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored: the model does not connect to remote MCP servers, so their tools never run. Declare the tools in `tools` and run them yourself — see [MCP Connector](#mcp-connector) |
 | MCP block replay (`mcp_tool_use`, `mcp_tool_result`) |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepted in conversation history and treated as an ordinary tool use and result; a repeated call comes back as `tool_use`, for you to run |
 | Server tool result replay (`web_search_tool_result`, `code_execution_tool_result`, …) |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Accepted in conversation history: send the assistant turn back unchanged and the recorded result is replayed to the model with the call it answered |
@@ -126,6 +127,7 @@ Mantle-only Claude models are passed through to the upstream Anthropic Messages 
 | Parameter | Claude passthrough | Converted to an OpenAI shape |
 |-----------|--------------------|------------------------------|
 | Server tools (`web_search`, `code_execution`, `bash`, `text_editor`, `computer`, …) | Forwarded verbatim (`anthropic-beta` flags are **not** auto-injected on the Mantle path — pass them yourself) | Rejected with `400` |
+| Browser & computer toolsets (`browser_toolset_*`, `computer_toolset_*`) | Forwarded verbatim, with the `browser_state` blocks that answer them | Rejected with `400`, `browser_state` results included |
 | MCP connector (`mcp_servers`, `mcp_toolset`) | Dropped before the request leaves — see [MCP Connector](#mcp-connector) | Dropped |
 | `thinking` | Forwarded | Dropped on conversion (use `output_config.effort` for portable reasoning control) |
 | `thinking` response blocks | Returned as sent upstream | Not returned — a converted model's chain of thought is only available on the OpenAI-compatible APIs |
@@ -550,6 +552,33 @@ The following Anthropic server tools are **not supported** via the classic Bedro
 
 Requests using these tools on Converse-served Claude models will return a `400 Bad Request` error. On [Mantle](#bedrock-mantle)-served Claude models (passthrough), server tools are instead forwarded verbatim to the upstream Messages API, which decides support; when a Mantle request must be converted to an OpenAI shape, server tools are rejected with `400`.
 
+#### Browser and Computer Toolsets { #browser-and-computer-toolsets }
+
+A **toolset** declares a whole tool family in a single `tools` entry — `browser_toolset_20260801` and `computer_toolset_20260801` are the current ones. The entry carries no `name` and no `input_schema`: only its `type`, an optional `cache_control`, and a `configs` map keyed by member name (`screenshot`, `navigate`, `zoom`, …) whose entries take `enabled` and `defer_loading`. A member left out of `configs` keeps the toolset's own default for it.
+
+```json
+{
+  "tools": [
+    {
+      "type": "browser_toolset_20260801",
+      "configs": {"javascript_exec": {"enabled": false}}
+    }
+  ]
+}
+```
+
+The whole shape validates, on `POST /v1/messages`, on `POST /v1/messages/count_tokens` and in a batch request alike:
+
+* **`toolset_name`** on `tool_use` and `tool_result` blocks — the family a member's call belongs to — is preserved, so a replayed toolset turn stays paired.
+* **`browser_state`** parts inside a `tool_result` — the tab inventory, plus the `tab_opened`, `download_started`, `download_completed` and `download_failed` state changes — are accepted with every field the Anthropic API defines.
+
+**Where they run.** A [Mantle](#bedrock-mantle)-served Claude model is the only path that can serve them, and the gateway does not decide whether it does: the toolset and the `browser_state` results answering it are forwarded verbatim, and the upstream Messages API answers. A model that does not offer the toolset answers `400` itself, naming the tool types it does offer. Whether any Mantle-served model currently accepts the 2026 toolset types has not been confirmed here, so treat that path as forwarding rather than as support. Everywhere else — Converse-served models, and a Mantle model whose request is converted to an OpenAI shape — the request is refused with `400` naming the toolset, because a model answering without the browser or the desktop answers a different question. A replayed `browser_state` result is refused the same way on those paths, rather than being reduced to an empty tool result.
+
+A dated toolset type newer than the two above is accepted and takes the same path, so a client tracking the API ahead of this page is never refused for its version alone.
+
+!!! warning "The web-access setting does not govern them"
+    [`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](operations_configuration_models.md#bedrock-external-web-access) applies to the Bedrock built-in web search alone, so it neither allows nor refuses a toolset: on the Mantle Claude passthrough a browser toolset is forwarded whatever it is set to, and any caller may ask the model to drive a browser against the pages it names. A deployment that must keep that boundary has to turn [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration_aws.md#bedrock-mantle-enabled) off, which is what leaves no path serving them.
+
 #### MCP Connector
 
 Anthropic's MCP connector — `mcp_servers` plus `mcp_toolset` entries in `tools` — asks the **model** to act as an MCP client and call a remote MCP server while it answers. That is **not supported here**: the models this API serves do not open those connections.
@@ -720,7 +749,7 @@ curl -X POST "$BASE/v1/messages" \
 
 **The MCP connector never opens a connection.** `mcp_servers` and `mcp_toolset` entries are dropped before the request leaves — declare the tools in `tools` and run them yourself. See [MCP Connector](#mcp-connector) for what happens to `tool_choice` and to an `authorization_token`.
 
-**A server tool a model cannot run is refused, not silently dropped.** `web_search`, `code_execution` and the Claude computer-use tools answer `400` on a model without support for them, and the Mantle-to-OpenAI conversion path rejects server tools outright — see [Server Tools](#server-tools) and [Bedrock Mantle](#bedrock-mantle).
+**A server tool a model cannot run is refused, not silently dropped.** `web_search`, `code_execution` and the Claude computer-use tools answer `400` on a model without support for them, and the Mantle-to-OpenAI conversion path rejects server tools outright — see [Server Tools](#server-tools) and [Bedrock Mantle](#bedrock-mantle). The same holds for the browser and computer toolsets and for a replayed `browser_state` result: outside the models that run them, both answer `400` naming what is unavailable — see [Toolsets](#browser-and-computer-toolsets).
 
 **Some models get their system prompt dropped.** Models with no system-prompt support (`mistral.mistral-7b-instruct-v0:2`, `mistral.mixtral-8x7b-instruct-v0:1`) have system messages removed so the same request works across models; set [`DROP_UNSUPPORTED_SYSTEM_PROMPT=false`](operations_configuration_models.md#drop-unsupported-system-prompt) to get an error instead.
 

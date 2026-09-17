@@ -426,6 +426,12 @@ class ToolUseBlock(BaseModelResponse):
     input: JsonMapping = Field(description="Tool input parameters as a JSON object.")
     caller: Caller | None = Field(default=None, description="Caller.")
 
+    toolset_name: str | None = Field(
+        default=None,
+        description="For a member of a tool family declared as a toolset, the "
+        "`tools` entry type of that family. Send it back on the matching "
+        "`tool_result`.",
+    )
 
 # Ref: anthropic.types.tool_use_block_param.ToolUseBlockParam
 class ToolUseBlockParam(BaseModelRequest):
@@ -442,6 +448,11 @@ class ToolUseBlockParam(BaseModelRequest):
     )
     caller: Caller | None = Field(default=None, description="Caller.")
 
+    toolset_name: str | None = Field(
+        default=None,
+        description="For a member of a tool family declared as a toolset, the "
+        "`tools` entry type of that family.",
+    )
 
 # Ref: anthropic.types.thinking_block.ThinkingBlock
 class ThinkingBlock(BaseModelResponse):
@@ -1297,6 +1308,129 @@ class ToolSearchToolResultBlockParam(BaseModelRequest):
 
 
 # Ref: anthropic.types.tool_result_block_param.ToolResultBlockParam
+# Ref: anthropic.types.browser_state_tab_entry_param.BrowserStateTabEntryParam
+class BrowserStateTabEntryParam(BaseModelRequest):
+    """One open browser tab reported in a `browser_state` inventory."""
+
+    tab_id: str = Field(
+        description="Identifier you gave this tab, unique within the inventory."
+    )
+    title: str = Field(
+        description="Title of the page the tab shows. May be an empty string."
+    )
+    url: str = Field(
+        description="URL of the page the tab shows. May be an empty string."
+    )
+    active: bool | None = Field(
+        default=None,
+        description="Whether this tab is the active one after the call. Exactly "
+        "one entry of a non-empty inventory carries it.",
+    )
+
+
+# Ref: anthropic.types.browser_state_change_tab_opened_param.BrowserStateChangeTabOpenedParam
+class BrowserStateChangeTabOpenedParam(BaseModelRequest):
+    """A tab the call opened that is still open when it ends."""
+
+    type: Literal["tab_opened"] = Field(
+        description="State change type. Always `tab_opened`."
+    )
+    tab_id: str = Field(
+        description="Identifier of the opened tab, also listed in the inventory."
+    )
+
+
+# Ref: anthropic.types.browser_state_change_download_started_param.BrowserStateChangeDownloadStartedParam
+class BrowserStateChangeDownloadStartedParam(BaseModelRequest):
+    """A file download that started during the call."""
+
+    type: Literal["download_started"] = Field(
+        description="State change type. Always `download_started`."
+    )
+    download_id: str = Field(
+        description="Identifier you gave this download, stable across its state "
+        "changes."
+    )
+    url: str = Field(description="Final post-redirect URL the download came from.")
+
+
+# Ref: anthropic.types.browser_state_change_download_completed_param.BrowserStateChangeDownloadCompletedParam
+class BrowserStateChangeDownloadCompletedParam(BaseModelRequest):
+    """A file download that finished during the call."""
+
+    type: Literal["download_completed"] = Field(
+        description="State change type. Always `download_completed`."
+    )
+    download_id: str = Field(
+        description="Identifier you gave this download, stable across its state "
+        "changes."
+    )
+    url: str = Field(description="Final post-redirect URL the download came from.")
+    path: str | None = Field(
+        default=None,
+        description="Where the file was saved, when another tool of the same "
+        "environment can read it there.",
+    )
+    size_bytes: int | None = Field(
+        default=None, description="Size of the completed download, in bytes."
+    )
+
+
+# Ref: anthropic.types.browser_state_change_download_failed_param.BrowserStateChangeDownloadFailedParam
+class BrowserStateChangeDownloadFailedParam(BaseModelRequest):
+    """A file download that failed, or was cancelled, during the call."""
+
+    type: Literal["download_failed"] = Field(
+        description="State change type. Always `download_failed`."
+    )
+    download_id: str = Field(
+        description="Identifier you gave this download, stable across its state "
+        "changes."
+    )
+    url: str = Field(description="Final post-redirect URL the download came from.")
+    error: str | None = Field(
+        default=None, description="Failure or cancellation detail, when known."
+    )
+
+
+# Ref: anthropic.types.browser_state_change_param.BrowserStateChangeParam
+BrowserStateChangeParam = Annotated[
+    BrowserStateChangeTabOpenedParam
+    | BrowserStateChangeDownloadStartedParam
+    | BrowserStateChangeDownloadCompletedParam
+    | BrowserStateChangeDownloadFailedParam,
+    Field(discriminator="type"),
+]
+
+
+# Ref: anthropic.types.browser_state_block_param.BrowserStateBlockParam
+class BrowserStateBlockParam(BaseModelRequest):
+    """Browser state after a call to a member of the browser toolset.
+
+    At most one per `tool_result`, and only on a non-error result.
+    UNSUPPORTED except on models whose own API runs the browser toolset: every
+    other model refuses a request replaying one, since the block is the whole
+    payload of the result it belongs to.
+    """
+
+    type: Literal["browser_state"] = Field(
+        description="Content block type. Always `browser_state`."
+    )
+    tabs: list[BrowserStateTabEntryParam] = Field(
+        description="Every tab open after the call: the full inventory, not a "
+        "delta. May be empty."
+    )
+    state_changes: list[BrowserStateChangeParam] | None = Field(
+        default=None,
+        description="Tabs opened and download state changes during the call. "
+        "Omit it when there is nothing to report, rather than sending an empty "
+        "list.",
+    )
+    cache_control: CacheControlEphemeralParam | None = Field(
+        default=None, description="Cache control for this content block."
+    )
+
+
 class ToolResultBlockParam(BaseModelRequest):
     """Tool result content block parameter."""
 
@@ -1314,7 +1448,8 @@ class ToolResultBlockParam(BaseModelRequest):
                 | ImageBlockParam
                 | DocumentBlockParam
                 | SearchResultBlockParam
-                | ToolReferenceBlockParam,
+                | ToolReferenceBlockParam
+                | BrowserStateBlockParam,
                 Field(discriminator="type"),
             ]
         ]
@@ -1331,6 +1466,11 @@ class ToolResultBlockParam(BaseModelRequest):
         default=None, description="Cache control for this content block."
     )
 
+    toolset_name: str | None = Field(
+        default=None,
+        description="For a result answering a member of a tool family declared "
+        "as a toolset, the `tools` entry type of that family.",
+    )
 
 # Ref: anthropic.types.container_upload_block_param.ContainerUploadBlockParam
 class ContainerUploadBlockParam(BaseModelRequest):
@@ -1936,6 +2076,74 @@ class MCPToolsetParam(BaseModelRequest):
 
 
 #: Tools run for the model instead of by the client, each identified by its name.
+# Ref: anthropic.types.browser_screenshot_config_param.BrowserScreenshotConfigParam
+# Ref: anthropic.types.computer_zoom_config_param.ComputerZoomConfigParam
+# Every member config of both toolsets carries these two fields and no other, so
+# one model covers all of them and any member a later toolset version adds.
+class ToolsetMemberConfigParam(BaseModelRequest):
+    """Configuration of one member tool of a toolset."""
+
+    defer_loading: bool | None = Field(
+        default=None, description="Load the tool only when it is referenced."
+    )
+    enabled: bool | None = Field(
+        default=None, description="Whether the tool is offered to the model."
+    )
+
+
+# Ref: anthropic.types.browser_toolset_20260801_param.BrowserToolset20260801Param
+class BrowserToolsetParam(BaseModelRequest):
+    """Every browser tool, declared as one `tools` entry.
+
+    The entry has no name and no schema of its own: it names the family, and
+    `configs` tunes its members.
+    UNSUPPORTED except on models whose own API runs the toolset: every other
+    model refuses the request rather than answer it without a browser.
+    """
+
+    type: str = Field(
+        pattern=r"^browser_toolset(?:_[0-9]{8})?$",
+        description="Tool type. The dated browser toolset version, e.g. "
+        "`browser_toolset_20260801`.",
+    )
+    cache_control: CacheControlEphemeralParam | None = Field(
+        default=None, description="Cache control for this tool."
+    )
+    configs: dict[str, ToolsetMemberConfigParam] | None = Field(
+        default=None,
+        description="Per-member configuration, keyed by member name — the same "
+        "name that member's `tool_use` blocks carry. A member left out keeps its "
+        "defaults.",
+    )
+
+
+# Ref: anthropic.types.computer_toolset_20260801_param.ComputerToolset20260801Param
+class ComputerToolsetParam(BaseModelRequest):
+    """Every computer tool, declared as one `tools` entry.
+
+    The entry has no name and no schema of its own: it names the family, and
+    `configs` tunes its members, zoom included.
+    UNSUPPORTED except on models whose own API runs the toolset: every other
+    model refuses the request rather than answer it without a desktop. The
+    single-tool `computer` server tool is unaffected.
+    """
+
+    type: str = Field(
+        pattern=r"^computer_toolset(?:_[0-9]{8})?$",
+        description="Tool type. The dated computer toolset version, e.g. "
+        "`computer_toolset_20260801`.",
+    )
+    cache_control: CacheControlEphemeralParam | None = Field(
+        default=None, description="Cache control for this tool."
+    )
+    configs: dict[str, ToolsetMemberConfigParam] | None = Field(
+        default=None,
+        description="Per-member configuration, keyed by member name — the same "
+        "name that member's `tool_use` blocks carry. A member left out keeps its "
+        "defaults.",
+    )
+
+
 ServerToolUnionParam = (
     ToolBashParam
     | ToolTextEditorParam
@@ -1949,8 +2157,11 @@ ServerToolUnionParam = (
 )
 
 # Ref: anthropic.types.tool_union_param.ToolUnionParam
+#: A whole tool family declared as one entry, with no name and no schema of its own.
+ToolsetParam = BrowserToolsetParam | ComputerToolsetParam
+
 # Ref: anthropic.types.message_count_tokens_tool_param.MessageCountTokensToolParam
-ToolUnionParam = ToolParam | ServerToolUnionParam | MCPToolsetParam
+ToolUnionParam = ToolParam | ServerToolUnionParam | MCPToolsetParam | ToolsetParam
 
 #: ``tools`` entry type declaring the tools of a remote MCP server.
 _MCP_TOOLSET_TOOL_TYPE = "mcp_toolset"
