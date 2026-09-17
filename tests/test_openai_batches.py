@@ -20,9 +20,12 @@ Ref: https://developers.openai.com/api/docs/guides/batch.md
 
 import contextlib
 from asyncio import CancelledError, Event, create_task
+from asyncio import sleep as async_sleep
 from base64 import b32hexencode
 from binascii import crc32
 from collections.abc import AsyncIterator, Iterator
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from itertools import count
 from json import dumps, loads
@@ -35,6 +38,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from stdapi import aws_s3, batches
+from stdapi.api_errors import ApiError
 from stdapi.cleanup import CLEANUPS
 from stdapi.files import payload_created_at
 from tests import _batches
@@ -143,6 +147,106 @@ def _translation_backlog(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     monkeypatch.setattr(batches, "_to_model_input", _translate)
     monkeypatch.setattr(batches, "to_json_bytes", _encode)
     return backlog
+
+
+@dataclass
+class _Waves:
+    """What the translation waves of the calling creation do.
+
+    Attributes:
+        turns: Event-loop turns each of the creation's waves costs.
+        gate: Event each of the creation's waves waits on before translating.
+        translating: Event set once one of the creation's waves has started.
+    """
+
+    turns: int = 0
+    gate: Event | None = None
+    translating: Event | None = None
+
+
+@dataclass
+class _WaveRecord:
+    """What the translation waves of every creation did.
+
+    Attributes:
+        in_flight: Waves being translated right now, whoever created them.
+        peak: The most waves that were ever translated at once.
+        every_slot_taken: Event set once as many waves translate as are allowed.
+    """
+
+    in_flight: int = 0
+    peak: int = 0
+    every_slot_taken: Event = field(default_factory=Event)
+
+
+#: What the calling creation's own translation waves do.
+_WAVES: ContextVar[_Waves | None] = ContextVar("waves", default=None)
+
+
+def _instrument_waves(monkeypatch: pytest.MonkeyPatch) -> _WaveRecord:
+    """Make a translation wave cost what its own creation asked for, and count it.
+
+    A wave is where a creation materialises the remote inputs its requests
+    point at, so it is both the phase a slow caller stalls in and the one the
+    server's memory ceiling is expressed in.
+
+    Args:
+        monkeypatch: The test's patcher.
+
+    Returns:
+        What every creation's waves did, filled in as they run.
+    """
+    from asyncio import Semaphore  # noqa: PLC0415
+
+    # Server-wide and created once, so it belongs to whichever loop first
+    # waited on it; each test contends on one of its own.
+    monkeypatch.setattr(batches, "_CREATE_SEMAPHORE", Semaphore(batches._CREATE_SLOTS))  # noqa: SLF001
+    translate = batches._translate_wave  # noqa: SLF001
+    record = _WaveRecord()
+
+    async def _translate_wave(wave: Any, start: int) -> Any:  # noqa: ANN401
+        asked = _WAVES.get() or _Waves()
+        if asked.translating is not None:
+            asked.translating.set()
+        record.in_flight += 1
+        record.peak = max(record.peak, record.in_flight)
+        if record.in_flight == batches._CREATE_SLOTS:  # noqa: SLF001
+            record.every_slot_taken.set()
+        try:
+            if asked.gate is not None:
+                await asked.gate.wait()
+            for _ in range(asked.turns):
+                await async_sleep(0)
+            return await translate(wave, start)
+        finally:
+            record.in_flight -= 1
+
+    monkeypatch.setattr(batches, "_translate_wave", _translate_wave)
+    return record
+
+
+async def _creation(
+    file_id: str,
+    *,
+    turns: int = 0,
+    gate: Event | None = None,
+    translating: Event | None = None,
+) -> batches.BatchState:
+    """Create a batch whose translation waves cost *turns* turns, or wait on *gate*.
+
+    Args:
+        file_id: Files API identifier of the input file.
+        turns: Event-loop turns each of this creation's waves costs.
+        gate: Event each of this creation's waves waits on before translating.
+        translating: Event to set once one of this creation's waves has started.
+
+    Returns:
+        The created batch and the state of its jobs.
+    """
+    _WAVES.set(_Waves(turns=turns, gate=gate, translating=translating))
+    return await batches.create_openai_batch(
+        endpoint="/v1/chat/completions", completion_window="24h", input_file_id=file_id
+    )
 
 
 @pytest.mark.local
@@ -283,7 +387,6 @@ class TestOpenAIBatchValidation:
 
         Ref: stdapi/batches.py:_resolve_distinct
         """
-        from stdapi.api_errors import ApiError  # noqa: PLC0415
         from tests._helpers import make_model_details  # noqa: PLC0415
 
         _batches.install(monkeypatch)
@@ -654,8 +757,6 @@ class TestOpenAIBatchValidation:
 
         Ref: stdapi/batches.py:_check_batchable
         """
-        from stdapi.api_errors import ApiError  # noqa: PLC0415
-
         with pytest.raises(ApiError) as raised:
             batches._check_batchable(  # noqa: SLF001
                 {
@@ -677,8 +778,6 @@ class TestOpenAIBatchValidation:
 
         Ref: stdapi/batches.py:_check_batchable
         """
-        from stdapi.api_errors import ApiError  # noqa: PLC0415
-
         with pytest.raises(ApiError) as raised:
             batches._check_batchable(  # noqa: SLF001
                 {"additionalModelRequestFields": {"tools": [{"type": "web_search"}]}},  # type: ignore[typeddict-item]
@@ -1125,51 +1224,199 @@ class TestOpenAIBatchInputFile:
         )
         assert isinstance(prepared.items, AsyncIterator)
 
-    async def test_the_creations_reading_a_file_are_bounded(
+
+@pytest.mark.local
+class TestOpenAIBatchCreationConcurrency:
+    """POST /v1/batches: what several creations at once cost, and who waits.
+
+    Translating a request fetches whatever it points at, so a creation is
+    bounded twice over: the waves materialising those inputs are capped
+    server-wide, and a caller is admitted or refused rather than queued behind
+    another tenant's file for as long as that file takes.
+
+    Ref: https://stdapi.ai/api_openai_batches/#creation-concurrency
+         stdapi/batches.py:_admit_creation
+    """
+
+    async def test_the_translation_waves_of_all_creations_are_bounded(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """However many batches are created at once, only a few are read at once.
+        """However many batches are created at once, only a few translate at once.
 
         The ceiling one creation holds is only a ceiling for the server if the
         creations sharing it are counted: a task answering an unbounded number
         of them at once multiplies it by however many arrive together.
 
-        Ref: stdapi/batches.py:create_openai_batch
+        Ref: stdapi/batches.py:_iter_prepared_requests
         """
-        from asyncio import gather, sleep  # noqa: PLC0415
-
-        from stdapi.aws_s3 import put_s3_object  # noqa: PLC0415
+        from asyncio import gather  # noqa: PLC0415
 
         _batches.install(monkeypatch)
         file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
-        in_flight = 0
-        peak = 0
-
-        async def _put(data: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-            nonlocal in_flight, peak
-            in_flight += 1
-            peak = max(peak, in_flight)
-            try:
-                await sleep(0)
-                return await put_s3_object(data, *args, **kwargs)
-            finally:
-                in_flight -= 1
-
-        monkeypatch.setattr(batches, "put_s3_object", _put)
+        waves = _instrument_waves(monkeypatch)
         creations = 2 * batches._CREATE_SLOTS  # noqa: SLF001
 
-        await gather(
-            *(
-                batches.create_openai_batch(
-                    endpoint="/v1/chat/completions",
-                    completion_window="24h",
-                    input_file_id=file_id,
-                )
-                for _ in range(creations)
-            )
-        )
+        await gather(*(_creation(file_id, turns=2) for _ in range(creations)))
 
-        assert peak == batches._CREATE_SLOTS < creations  # noqa: SLF001
+        assert waves.peak == batches._CREATE_SLOTS < creations  # noqa: SLF001
+
+    async def test_a_creation_is_admitted_while_a_long_one_is_still_preparing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A creation whose waves are slow does not hold the server to itself.
+
+        A wave fetching inputs from a host that answers just inside the
+        download timeout succeeds, so nothing refuses the batch: every slot the
+        server has stays taken for as long as the file is long. The next caller
+        must be admitted between those waves rather than after the whole file,
+        which is what is asserted -- not how quickly it then answers.
+
+        Ref: stdapi/batches.py:_iter_prepared_requests
+        """
+        _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        waves = _instrument_waves(monkeypatch)
+        slow = [
+            create_task(_creation(file_id, turns=100))
+            for _ in range(batches._CREATE_SLOTS)  # noqa: SLF001
+        ]
+        await waves.every_slot_taken.wait()
+        translating = Event()
+
+        admitted = create_task(_creation(file_id, translating=translating))
+        await translating.wait()
+
+        assert not [task for task in slow if task.done()]
+        assert (await admitted).record.batch_id
+        for task in slow:
+            await task
+
+    async def test_a_creation_that_waits_too_long_is_refused_rather_than_queued(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A creation that cannot start translating in time answers 503.
+
+        Queueing it instead leaves the caller with no answer and no bound: its
+        own client gives up long before the slot frees, and the handler it left
+        behind keeps the queue growing.
+
+        Ref: stdapi/batches.py:_admit_creation
+        """
+        _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        waves = _instrument_waves(monkeypatch)
+        monkeypatch.setattr(batches, "_CREATE_WAIT_SECONDS", 0.0)
+        gate = Event()
+        held = [
+            create_task(_creation(file_id, gate=gate))
+            for _ in range(batches._CREATE_SLOTS)  # noqa: SLF001
+        ]
+        await waves.every_slot_taken.wait()
+
+        with pytest.raises(ApiError) as refusal:
+            await _creation(file_id)
+
+        assert refusal.value.status == 503
+        assert "retry" in str(refusal.value).lower()
+        gate.set()
+        for task in held:
+            await task
+
+    async def test_a_tenant_already_at_its_creation_cap_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One tenant key may not have every creation the server is preparing.
+
+        A tenant resubmitting at will would otherwise own every slot, and the
+        refusal every other tenant reads would be the server's rather than
+        their own.
+
+        Ref: stdapi/batches.py:_tenant_creation
+        """
+        from stdapi.monitoring import TENANT, Tenant  # noqa: PLC0415
+
+        _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        waves = _instrument_waves(monkeypatch)
+        monkeypatch.setattr(batches, "_TENANT_CREATE_SLOTS", 2)
+        token = TENANT.set(Tenant(key_id="A" * 16, name="acme"))
+        try:
+            gate = Event()
+            held = [create_task(_creation(file_id, gate=gate)) for _ in range(2)]
+            await waves.every_slot_taken.wait()
+
+            with pytest.raises(ApiError) as refusal:
+                await _creation(file_id)
+
+            assert refusal.value.status == 429
+            assert "2 batch creations" in str(refusal.value)
+            gate.set()
+            for task in held:
+                await task
+        finally:
+            TENANT.reset(token)
+        assert not batches._TENANT_CREATIONS  # noqa: SLF001
+
+    async def test_the_deployment_key_has_no_creation_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The per-key cap is a fairness rule between tenants, and nothing else.
+
+        A deployment without tenant keys has one principal -- the operator's own
+        traffic -- so counting it would refuse a caller with nobody to be fair
+        to, while the slots still bound what is translated at once. The
+        per-minute limits draw the same line.
+
+        Ref: stdapi/batches.py:_tenant_creation
+        """
+        _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        waves = _instrument_waves(monkeypatch)
+        monkeypatch.setattr(batches, "_TENANT_CREATE_SLOTS", 2)
+        gate = Event()
+        held = [create_task(_creation(file_id, gate=gate)) for _ in range(2)]
+        await waves.every_slot_taken.wait()
+
+        third = create_task(_creation(file_id, gate=gate))
+
+        gate.set()
+        for task in (*held, third):
+            await task
+        assert not batches._TENANT_CREATIONS  # noqa: SLF001
+
+    async def test_a_creation_whose_caller_is_gone_takes_no_slot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A creation stops asking for a slot once its client has disconnected.
+
+        Nobody reads what it would answer, so waiting for a slot and holding it
+        takes both from the callers still connected.
+
+        Ref: stdapi/batches.py:_refuse_gone_caller
+        """
+        from starlette.requests import Request  # noqa: PLC0415
+
+        from stdapi.monitoring import REQUEST  # noqa: PLC0415
+
+        _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        waves = _instrument_waves(monkeypatch)
+
+        async def _receive() -> dict[str, str]:
+            return {"type": "http.disconnect"}
+
+        token = REQUEST.set(
+            Request({"type": "http", "method": "POST", "headers": []}, _receive)
+        )
+        try:
+            with pytest.raises(ApiError) as refusal:
+                await _creation(file_id)
+        finally:
+            REQUEST.reset(token)
+
+        assert refusal.value.status == 499
+        assert waves.peak == 0
+        assert not batches._TENANT_CREATIONS  # noqa: SLF001
 
 
 @pytest.mark.local

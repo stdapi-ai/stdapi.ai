@@ -30,6 +30,10 @@ A batch is created from a file of requests, runs without a connection held open,
 - :material-close-circle: **No tools, `json_schema`, streaming or `n` above 1**
   — a batch carrying one of them is refused when it is created, see
   [Feature compatibility](#feature-compatibility).
+- :material-traffic-light: **A few creations at a time** — the create call
+  reads and translates the whole file, so a caller past that bound is answered
+  `429` or `503` rather than queued, see
+  [How many batches may be created at once](#creation-concurrency).
 - :material-alert-circle-outline: **No `DELETE /v1/batches/{batch_id}`** —
   deletion is served by the Anthropic Message Batches surface, for the batches
   created there, see [Deleting a batch](#deleting-a-batch).
@@ -227,6 +231,39 @@ than `batch`, one holding no request at all, one past the
     `failed` is still reported, for a batch that was accepted and then could not
     run at all. Its single `errors.data[]` entry describes the batch rather than
     a line, so `line` is absent, and the batch names no result file.
+
+### How many batches may be created at once { #creation-concurrency }
+
+`POST /v1/batches` does its work while the call is open: the input file is read
+and every request in it is translated, which fetches whatever those requests
+point at — an image URL, a document, an audio file. That work is bounded so a
+few large files cannot exhaust the server, and the bound is answered rather
+than queued.
+
+| Bound                                             | Value | What a caller over it reads                                   |
+|---------------------------------------------------|-------|---------------------------------------------------------------|
+| Input files being translated at once, server-wide | 2     | `503`, after waiting up to 30 seconds for one of them to finish |
+| Creations in flight for one tenant API key         | 8     | `429`, immediately                                              |
+
+The per-key cap counts [tenant API keys](operations_authentication_security.md#tenant-api-keys)
+only: it is a fairness rule between tenants, and a deployment key is the
+operator's own traffic, held by the server-wide slots like everything else.
+
+Both are refusals of the create call alone: nothing is read, no batch is
+created, and no other endpoint is affected. Both are safe to retry, and the
+message names what to wait for. Neither carries a `retry-after` header.
+
+A creation that is admitted is never held up by another for longer than one
+translation wave: the server-wide slots are given back between waves, not at
+the end of a file, so a 50,000-request batch whose inputs are slow to fetch
+shares the server with every other caller instead of owning it until it is
+done. A client that disconnects while its creation waits releases its place.
+
+!!! tip "Creating many batches from one tenant key"
+    Create them a few at a time rather than firing every file at once: a `429`
+    here means the previous creations are still reading their files, so the
+    work is already under way. Upload the files first — `POST /v1/files` is not
+    bounded this way — then create the batches as each creation answers.
 
 ### Deleting a batch
 

@@ -10,9 +10,10 @@ the batch reports the aggregate. Results are written per job and translated to
 the calling API's dialect on read.
 """
 
-from asyncio import Semaphore, Task, TaskGroup, create_task, gather, shield
+from asyncio import Semaphore, Task, TaskGroup, create_task, gather, shield, timeout
 from base64 import b32hexencode
 from binascii import crc32 as _crc32
+from collections.abc import AsyncGenerator
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from botocore.exceptions import ClientError
 from pydantic_core import from_json
+from starlette.requests import Request
 
 from stdapi.api_errors import (
     ApiError,
@@ -57,7 +59,7 @@ from stdapi.models.chat._adapters import _anthropic_message as anthropic_adapter
 from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapter
 from stdapi.models.chat._default import ChatModel
 from stdapi.models.embedding import EmbeddingModelBase, get_embedding_model
-from stdapi.monitoring import log_error_details, tenant_aws_credential
+from stdapi.monitoring import REQUEST, TENANT, log_error_details, tenant_aws_credential
 from stdapi.routes.openai_embeddings import build_embedding_response
 from stdapi.types.openai_chat_completions import CompletionCreateParams
 from stdapi.types.openai_embeddings import EmbeddingCreateParams
@@ -201,11 +203,20 @@ _LIST_SEEK_GROWTH: int = 16
 #: Requests translated concurrently while a batch is being prepared.
 _BUILD_CONCURRENCY: int = 32
 
-#: Batch creations reading an input file at once, however many ask to.
+#: Translation waves materializing their requests' inputs at once, server-wide.
 _CREATE_SLOTS: int = 2
 
-#: Bounds concurrent creations to :data:`_CREATE_SLOTS` input files server-wide.
+#: Bounds concurrent translation waves to :data:`_CREATE_SLOTS`, server-wide.
 _CREATE_SEMAPHORE: Semaphore = Semaphore(_CREATE_SLOTS)
+
+#: Seconds a creation waits for its first translation wave before being refused.
+_CREATE_WAIT_SECONDS: float = 30.0
+
+#: Batch creations one API key may be having prepared at once.
+_TENANT_CREATE_SLOTS: int = 8
+
+#: Creations in flight per API key, counted so one key cannot hold them all.
+_TENANT_CREATIONS: dict[str, int] = {}
 
 #: Models the batch being prepared resolved, keyed by the name its lines wrote.
 _PINNED_MODELS: ContextVar[dict[str, ModelBase[Any, Any]] | None] = ContextVar(
@@ -1125,9 +1136,16 @@ async def _submit_job(
         raise ApiError(msg) from exc
     prefix = f"{SETTINGS.aws_s3_batches_prefix}{payload}/{index}/"
     input_key = f"{prefix}{_INPUT_FILE_NAME}"
-    await put_s3_object(
-        _job_records(items), "application/jsonl", bucket=bucket, key=input_key
-    )
+    try:
+        await put_s3_object(
+            _job_records(items), "application/jsonl", bucket=bucket, key=input_key
+        )
+    finally:
+        # A stream stopped early holds the slot its current wave was taken
+        # under until it is closed, and abandoning it defers that to a
+        # collection nothing in the request waits for.
+        if isinstance(items, AsyncGenerator):
+            await items.aclose()
     client: BedrockClient = get_client("bedrock", region)
     with feature_unavailable_guard(_FEATURE, missing=_CREATE_JOB_PERMISSIONS):
         try:
@@ -2479,10 +2497,41 @@ async def _read_input_file(file_id: str, endpoint: str) -> StreamedRequests:
     )
 
 
+async def _iter_input_waves(
+    file_id: str, endpoint: str
+) -> AsyncIterator[list[tuple[str, CompletionCreateParams | EmbeddingCreateParams]]]:
+    """Yield the requests of a batch input file, in waves of the built size.
+
+    Args:
+        file_id: Files API identifier of the input file.
+        endpoint: API endpoint every request must target.
+
+    Yields:
+        Up to :data:`_BUILD_CONCURRENCY` requests at a time, in input order.
+
+    Raises:
+        ApiError: When the file cannot be batched as it stands.
+    """
+    wave: list[tuple[str, CompletionCreateParams | EmbeddingCreateParams]] = []
+    async for entry in _iter_input_requests(file_id, endpoint):
+        wave.append(entry)
+        if len(wave) == _BUILD_CONCURRENCY:
+            yield wave
+            wave = []
+    if wave:
+        yield wave
+
+
 async def _iter_prepared_requests(
     file_id: str, endpoint: str
 ) -> AsyncIterator[PreparedRequest]:
     """Translate every request of a batch input file, a bounded number at a time.
+
+    A slot is taken for each wave and given back once that wave has been
+    written, so what the server holds stays capped at :data:`_CREATE_SLOTS`
+    waves however many creations are running, while a creation whose inputs are
+    slow to fetch queues again for every wave instead of owning its slot for as
+    long as its file is long.
 
     Args:
         file_id: Files API identifier of the input file.
@@ -2492,20 +2541,102 @@ async def _iter_prepared_requests(
         The translated requests, in input order.
 
     Raises:
-        ApiError: When a request asks for something batches cannot serve.
+        ApiError: When a request asks for something batches cannot serve, or
+            with 499 when the client waiting for the batch has disconnected.
     """
-    wave: list[tuple[str, CompletionCreateParams | EmbeddingCreateParams]] = []
     start = 0
-    async for entry in _iter_input_requests(file_id, endpoint):
-        wave.append(entry)
-        if len(wave) < _BUILD_CONCURRENCY:
-            continue
-        for item in await _translate_wave(wave, start):
-            yield item
+    async for wave in _iter_input_waves(file_id, endpoint):
+        await _acquire_slot()
+        try:
+            for item in await _translate_wave(wave, start):
+                yield item
+        finally:
+            _CREATE_SEMAPHORE.release()
         start += len(wave)
-        wave.clear()
-    for item in await _translate_wave(wave, start):
-        yield item
+
+
+async def _admit_creation() -> None:
+    """Wait for the server to have room to translate another input file.
+
+    Refusing is free here and nowhere later: nothing has been read, written or
+    submitted yet. A creation past this point waits its turn for every wave
+    instead, which the slot being given back between waves bounds to the waves
+    already queued rather than to the files they belong to.
+
+    Raises:
+        ApiError: With 499 when the client is gone, or 503 when no slot frees
+            within :data:`_CREATE_WAIT_SECONDS`.
+    """
+    await _refuse_gone_caller()
+    try:
+        async with timeout(_CREATE_WAIT_SECONDS):
+            await _CREATE_SEMAPHORE.acquire()
+    except TimeoutError:
+        msg = (
+            f"The server is already translating the input files of "
+            f"{_CREATE_SLOTS} batches and could not start another within "
+            f"{_CREATE_WAIT_SECONDS:.0f} seconds. Please retry this creation."
+        )
+        raise ApiError(msg, status=503) from None
+    _CREATE_SEMAPHORE.release()
+
+
+async def _acquire_slot() -> None:
+    """Take the slot the next translation wave materializes its inputs under.
+
+    Raises:
+        ApiError: With 499 when the client this creation answers is gone.
+    """
+    await _refuse_gone_caller()
+    await _CREATE_SEMAPHORE.acquire()
+
+
+async def _refuse_gone_caller() -> None:
+    """Stop a creation whose client has disconnected before it takes a slot.
+
+    Raises:
+        ApiError: With 499 when the client is gone.
+    """
+    request = REQUEST.get(None)
+    if isinstance(request, Request) and await request.is_disconnected():
+        msg = "The client disconnected before the batch could be prepared."
+        raise ApiError(msg, status=499)
+
+
+@contextmanager
+def _tenant_creation() -> Generator[None]:
+    """Count one creation against the tenant key asking for it.
+
+    Only a tenant key is counted, as for the per-minute limits: the deployment
+    key is the operator's own traffic, with no one to be fair to, and the
+    translation waves are bounded for everyone by the slots.
+
+    Yields:
+        Nothing; the count is given back once the creation has answered.
+
+    Raises:
+        ApiError: With 429 when the key already has as many creations being
+            prepared as one key may.
+    """
+    if (tenant := TENANT.get()) is None:
+        yield
+        return
+    key = tenant.key_id
+    if (in_flight := _TENANT_CREATIONS.get(key, 0)) >= _TENANT_CREATE_SLOTS:
+        msg = (
+            f"This API key already has {_TENANT_CREATE_SLOTS} batch creations "
+            "in flight, the most one key may have prepared at once. Please "
+            "retry once one of them has answered."
+        )
+        raise ApiError(msg, status=429)
+    _TENANT_CREATIONS[key] = in_flight + 1
+    try:
+        yield
+    finally:
+        if (left := _TENANT_CREATIONS[key] - 1) > 0:
+            _TENANT_CREATIONS[key] = left
+        else:
+            del _TENANT_CREATIONS[key]
 
 
 async def _translate_wave(
@@ -2546,8 +2677,9 @@ async def create_openai_batch(
     The file is checked first and translated second, a line at a time in both
     passes, and each translated request is written to the job's input as it is
     produced: what one creation holds follows the caps a batch is bounded by
-    rather than the size of the file. Creations are bounded too, so a
-    deployment answering several at once keeps that same ceiling.
+    rather than the size of the file. Translation is bounded too, wave by wave
+    and server-wide, so a deployment answering several creations at once keeps
+    that same ceiling while every one of them keeps making progress.
 
     Args:
         endpoint: API endpoint every request of the file targets.
@@ -2561,16 +2693,18 @@ async def create_openai_batch(
         The created batch and the state of its jobs.
 
     Raises:
-        ApiError: When the file cannot be batched as it stands, or when the
-            API key carries a tenant AWS credential a batch job cannot run
-            under.
+        ApiError: When the file cannot be batched as it stands, when the API
+            key carries a tenant AWS credential a batch job cannot run under,
+            when that key already has too many creations in flight (429), or
+            when the server cannot start translating in time (503).
     """
     _refuse_tenant_credential()
     # Before the input file is read, so a disabled deployment costs no read.
     require_batches_enabled()
-    async with _CREATE_SEMAPHORE:
-        # Pinned here rather than around the read: the translation resolves the
-        # same names again, and it runs after the read has returned.
+    with _tenant_creation():
+        await _admit_creation()
+        # Pinned here rather than around the read: the translation resolves
+        # the same names again, and it runs after the read has returned.
         with _pinned_models():
             return await create_batch(
                 surface="openai",
