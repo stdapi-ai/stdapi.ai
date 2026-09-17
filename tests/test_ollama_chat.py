@@ -291,6 +291,11 @@ def test_chat_calls_a_tool(
     an open question would leave the assertion resting on the model's discretion
     rather than on the translation under test.
 
+    The city is named in the prompt, so the arguments carry a value this test
+    knows: a translation that lost them would still answer a mapping, which is
+    all the client's own model guarantees. The key it is filed under is the
+    model's own wording and is not asserted.
+
     Ref: https://docs.ollama.com/api/chat#tools
     """
     answer = ollama_client.chat(
@@ -304,7 +309,43 @@ def test_chat_calls_a_tool(
     calls = answer.message.tool_calls
     assert calls
     assert calls[0].function.name == "get_weather"
-    assert isinstance(calls[0].function.arguments, dict)
+    arguments = calls[0].function.arguments
+    assert arguments, (
+        "the call must carry the arguments the model sent, not an empty object"
+    )
+    assert "paris" in " ".join(str(value) for value in arguments.values()).lower()
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_chat_reports_an_answer_cut_at_the_token_limit(
+    ollama_client: ollama.Client, ollama_chat_model: str, stream: bool
+) -> None:
+    """An answer cut at the token limit ends with ``done_reason`` ``length``.
+
+    The one reason besides ``stop`` a generated answer can end with, and the
+    only signal a client has that the text it received is incomplete. The limit
+    is four tokens against a prompt whose answer is far longer, so reaching it
+    is not a model decision.
+
+    Ref: https://github.com/ollama/ollama/blob/main/llm/server.go (DoneReason)
+         https://docs.ollama.com/api/chat
+    """
+    messages = [{"role": "user", "content": "Count from 1 to 100."}]
+    options = {"num_predict": 4}
+    terminal = (
+        list(
+            ollama_client.chat(
+                model=ollama_chat_model, messages=messages, stream=True, options=options
+            )
+        )[-1]
+        if stream
+        else ollama_client.chat(
+            model=ollama_chat_model, messages=messages, stream=False, options=options
+        )
+    )
+
+    assert terminal.done is True
+    assert terminal.done_reason == "length"
 
 
 def test_chat_replays_a_tool_result(

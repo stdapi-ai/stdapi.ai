@@ -160,6 +160,38 @@ def test_generate_streams_to_a_terminal_done_event(
         assert terminal.prompt_eval_duration
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_generate_reports_an_answer_cut_at_the_token_limit(
+    ollama_client: ollama.Client, ollama_chat_model: str, stream: bool
+) -> None:
+    """An answer cut at the token limit ends with ``done_reason`` ``length``.
+
+    The one reason besides ``stop`` a generated answer can end with, and the
+    only signal a client has that the text it received is incomplete. The limit
+    is four tokens against a prompt whose answer is far longer, so reaching it
+    is not a model decision.
+
+    Ref: https://github.com/ollama/ollama/blob/main/llm/server.go (DoneReason)
+         https://docs.ollama.com/api/generate
+    """
+    prompt = "Count from 1 to 100."
+    options = {"num_predict": 4}
+    terminal = (
+        list(
+            ollama_client.generate(
+                model=ollama_chat_model, prompt=prompt, stream=True, options=options
+            )
+        )[-1]
+        if stream
+        else ollama_client.generate(
+            model=ollama_chat_model, prompt=prompt, stream=False, options=options
+        )
+    )
+
+    assert terminal.done is True
+    assert terminal.done_reason == "length"
+
+
 @pytest.mark.parametrize(("field", "value"), PROMPT_LEVEL_FIELDS)
 def test_generate_refuses_the_prompt_level_fields(
     ollama_client: ollama.Client,

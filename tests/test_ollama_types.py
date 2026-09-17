@@ -11,7 +11,7 @@ Ref: https://docs.ollama.com/openapi.yaml
      stdapi/models/chat/_adapters/_ollama.py
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from json import dumps, loads
 from typing import TYPE_CHECKING, Any
 
@@ -33,6 +33,7 @@ from stdapi.types.ollama import (
 )
 from stdapi.types.openai import ResponseFormatJSONSchema
 from stdapi.types.openai_chat_completions import (
+    ChatCompletion,
     ChatCompletionAssistantMessageParam,
     ChatCompletionFunctionToolParam,
     ChatCompletionMessageFunctionToolCall,
@@ -40,7 +41,20 @@ from stdapi.types.openai_chat_completions import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Generator
+    from collections.abc import AsyncGenerator, AsyncIterable, Callable, Generator
+
+    from stdapi.types import JsonMapping
+    from stdapi.types.ollama import ChatResponse, GenerateResponse
+
+    #: One buffered translation, as both the chat and the generate route call it.
+    BufferedTranslation = Callable[
+        [ChatCompletion, str], ChatResponse | GenerateResponse
+    ]
+
+    #: One stream translation, as both streamed routes call it.
+    StreamTranslation = Callable[
+        [AsyncIterable[ServerSentEvent], str], AsyncGenerator[JsonMapping]
+    ]
 
 pytestmark = pytest.mark.gateway(
     "Exercises the gateway's own request models and adapter, below the HTTP "
@@ -49,6 +63,27 @@ pytestmark = pytest.mark.gateway(
 
 #: Host the mocked transport capturing the official client's request answers for.
 _MOCK_HOST = "http://ollama.test"
+
+#: The two buffered translations, one per Ollama inference endpoint.
+_BUFFERED_TRANSLATIONS: tuple[BufferedTranslation, ...] = (
+    adapter.from_chat_completion,
+    adapter.from_chat_completion_as_generate,
+)
+
+#: The two streamed translations, one per Ollama streaming endpoint.
+_STREAM_TRANSLATIONS: tuple[StreamTranslation, ...] = (
+    adapter.chat_stream,
+    adapter.generate_stream,
+)
+
+#: Upstream finish reason, and the reason Ollama spells it with.
+_DONE_REASONS: tuple[tuple[str | None, str], ...] = (
+    ("stop", "stop"),
+    ("length", "length"),
+    ("tool_calls", "stop"),
+    ("content_filter", "stop"),
+    (None, "stop"),
+)
 
 
 @pytest.fixture
@@ -165,6 +200,28 @@ def test_created_at_and_total_duration_use_the_request_clock(
     """
     assert created_at() == request_time.isoformat()
     assert total_duration() > 0
+
+
+def test_total_duration_is_counted_in_nanoseconds(
+    request_time: datetime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two seconds of wall clock are reported as two billion nanoseconds.
+
+    Upstream states plainly that every duration it reports is in nanoseconds,
+    and a client divides by that unit to show a generation speed, so the figure
+    itself is the contract rather than merely being positive. Both ends are
+    pinned here: the request clock supplies the start, the settings clock the
+    end.
+
+    Ref: https://raw.githubusercontent.com/ollama/ollama/main/docs/api.md
+         ("All durations are returned in nanoseconds")
+         stdapi/types/ollama.py:total_duration
+    """
+    monkeypatch.setattr(
+        type(SETTINGS), "now", lambda _: request_time + timedelta(seconds=2)
+    )
+
+    assert total_duration() == 2_000_000_000
 
 
 def test_options_map_onto_the_chat_completion_parameters() -> None:
@@ -847,20 +904,176 @@ class TestTheOfficialClientRequestBodies:
         assert ShowRequest.model_validate(body).requested_model() == "m"
 
 
+def _buffered_completion(
+    message: dict[str, Any], finish_reason: str | None
+) -> ChatCompletion:
+    """Build the upstream answer the buffered translations read.
+
+    Args:
+        message: The assistant message the single choice carries.
+        finish_reason: Why the upstream answer ended, absent when None.
+
+    Returns:
+        The complete chat completion.
+    """
+    return ChatCompletion.model_validate(
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "m",
+            "choices": [
+                {"index": 0, "finish_reason": finish_reason, "message": message}
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7},
+        }
+    )
+
+
+@pytest.mark.usefixtures("request_time")
+def test_a_buffered_tool_call_reports_the_arguments_the_model_sent() -> None:
+    """Serialized arguments become the JSON object an Ollama client acts on.
+
+    Nothing above this layer can fail on the value: the official client types
+    ``arguments`` as a mapping, so an answer carrying anything else is refused
+    inside the client before a test of it runs, and every parse failure here is
+    reported as the empty object below. The value is the whole signal.
+
+    Ref: https://docs.ollama.com/api/chat#tools
+         stdapi/models/chat/_adapters/_ollama.py:_parse_arguments
+    """
+    answer = adapter.from_chat_completion(
+        _buffered_completion(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "Paris"}',
+                        },
+                    }
+                ],
+            },
+            "tool_calls",
+        ),
+        "m",
+    )
+
+    assert answer.message.tool_calls is not None
+    call = answer.message.tool_calls[0]
+    assert call.function.name == "get_weather"
+    assert call.function.arguments == {"city": "Paris"}
+    assert call.function.index == 0
+
+
+@pytest.mark.usefixtures("request_time")
+@pytest.mark.parametrize("arguments", ["", "{", '"Paris"', "[1, 2]", "null"])
+def test_arguments_that_are_not_an_object_are_reported_as_an_empty_object(
+    arguments: str,
+) -> None:
+    """Anything a client could not read as arguments is reported as none.
+
+    ``arguments`` is an object upstream and a mapping in the official client, so
+    a model that emitted truncated or non-object JSON would otherwise fail the
+    client's own parsing and lose the whole answer with it, tool call and text
+    alike.
+
+    Ref: https://docs.ollama.com/openapi.yaml (ToolCallFunction.arguments)
+         stdapi/models/chat/_adapters/_ollama.py:_parse_arguments
+    """
+    answer = adapter.from_chat_completion(
+        _buffered_completion(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": arguments},
+                    }
+                ],
+            },
+            "tool_calls",
+        ),
+        "m",
+    )
+
+    assert answer.message.tool_calls is not None
+    assert answer.message.tool_calls[0].function.arguments == {}
+
+
+@pytest.mark.usefixtures("request_time")
+@pytest.mark.parametrize("translate", _BUFFERED_TRANSLATIONS)
+@pytest.mark.parametrize(("finish_reason", "done_reason"), _DONE_REASONS)
+def test_a_buffered_answer_reports_why_it_ended(
+    translate: BufferedTranslation, finish_reason: str | None, done_reason: str
+) -> None:
+    """A truncated answer says so; everything else Ollama has no word for is a stop.
+
+    ``length`` is the one reason a client acts on -- it is how it knows the
+    answer was cut at the token limit rather than finished -- and the fallback
+    that makes every other reason a stop is what would swallow it.
+
+    Ref: https://github.com/ollama/ollama/blob/main/llm/server.go (DoneReason)
+         stdapi/models/chat/_adapters/_ollama.py:_DONE_REASON_BY_FINISH_REASON
+    """
+    answer = translate(
+        _buffered_completion({"role": "assistant", "content": "1 2 3"}, finish_reason),
+        "m",
+    )
+
+    assert answer.done is True
+    assert answer.done_reason == done_reason
+
+
 async def _chat_completion_events(
-    deltas: list[dict[str, Any]],
+    deltas: list[dict[str, Any]], finish_reason: str | None = None
 ) -> AsyncGenerator[ServerSentEvent]:
     """Serialize deltas as the upstream chat completion stream would.
 
     Args:
         deltas: One ``delta`` object per chunk.
+        finish_reason: Why the answer ended, carried by the last chunk as
+            upstream carries it.
 
     Yields:
         One event per delta, then the terminal ``[DONE]``.
     """
-    for delta in deltas:
-        yield ServerSentEvent(data=dumps({"choices": [{"index": 0, "delta": delta}]}))
+    last = len(deltas) - 1
+    for index, delta in enumerate(deltas):
+        choice: dict[str, Any] = {"index": 0, "delta": delta}
+        if index == last and finish_reason is not None:
+            choice["finish_reason"] = finish_reason
+        yield ServerSentEvent(data=dumps({"choices": [choice]}))
     yield ServerSentEvent(data="[DONE]")
+
+
+async def _translate_stream(
+    translate: StreamTranslation,
+    deltas: list[dict[str, Any]],
+    finish_reason: str | None = None,
+) -> list[Any]:
+    """Run the deltas through one of the Ollama stream translations.
+
+    Args:
+        translate: The stream translation under test.
+        deltas: One ``delta`` object per chunk.
+        finish_reason: Why the answer ended, carried by the last chunk.
+
+    Returns:
+        Every event the translation yielded, in order.
+    """
+    return [
+        event
+        async for event in translate(
+            _chat_completion_events(deltas, finish_reason), "m"
+        )
+    ]
 
 
 async def _translate_chat(deltas: list[dict[str, Any]]) -> list[Any]:
@@ -872,10 +1085,7 @@ async def _translate_chat(deltas: list[dict[str, Any]]) -> list[Any]:
     Returns:
         Every event the translation yielded, in order.
     """
-    return [
-        event
-        async for event in adapter.chat_stream(_chat_completion_events(deltas), "m")
-    ]
+    return await _translate_stream(adapter.chat_stream, deltas)
 
 
 @pytest.mark.usefixtures("request_time")
@@ -904,6 +1114,31 @@ async def test_each_streamed_event_carries_the_moment_it_was_emitted(
     assert request_time.isoformat() not in stamps
     assert len(set(stamps)) == len(stamps)
     assert stamps == sorted(stamps)
+
+
+@pytest.mark.usefixtures("request_time")
+@pytest.mark.parametrize("translate", _STREAM_TRANSLATIONS)
+@pytest.mark.parametrize(("finish_reason", "done_reason"), _DONE_REASONS)
+async def test_a_streamed_answer_reports_why_it_ended(
+    translate: StreamTranslation, finish_reason: str | None, done_reason: str
+) -> None:
+    """The terminal event of a truncated stream says the answer was cut.
+
+    A client reading a stream has nothing but this field to tell a complete
+    answer from one stopped at the token limit, and the reason arrives on the
+    last chunk rather than on the one that carried the text.
+
+    Ref: https://github.com/ollama/ollama/blob/main/llm/server.go (DoneReason)
+         stdapi/models/chat/_adapters/_ollama.py:_DONE_REASON_BY_FINISH_REASON
+    """
+    events = await _translate_stream(
+        translate, [{"content": "1 2"}, {"content": " 3"}], finish_reason
+    )
+
+    terminal = events[-1]
+    assert terminal["done"] is True
+    assert terminal["done_reason"] == done_reason
+    assert all(event.get("done") is False for event in events[:-1])
 
 
 @pytest.mark.usefixtures("request_time")
