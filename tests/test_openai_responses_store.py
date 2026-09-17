@@ -18,13 +18,28 @@ from stdapi.api_errors import ApiError
 from stdapi.routes import openai_responses
 from stdapi.types.openai_responses import (
     EasyInputMessage,
+    FileSearchCallInput,
+    FileSearchResult,
+    FunctionCallInput,
+    FunctionCallOutput,
+    ImageGenerationCall,
+    ImageGenerationCallInput,
     InputTokensDetails,
     OutputTokensDetails,
     Response,
     ResponseCreateParams,
+    ResponseFileSearchToolCall,
+    ResponseFunctionToolCall,
+    ResponseFunctionWebSearch,
+    ResponseOutputItem,
     ResponseOutputMessage,
     ResponseOutputText,
+    ResponseReasoningItem,
+    ResponseReasoningItemInput,
     ResponseUsage,
+    WebSearchActionSearch,
+    WebSearchActionSource,
+    WebSearchCallInput,
 )
 from tests._helpers import make_model_details
 
@@ -58,13 +73,22 @@ def _sse_events(text: str) -> list[dict[str, Any]]:
     return events
 
 
-def _canned_response(response_id: str, model: str) -> Response:
-    return Response(
-        id=response_id,
-        created_at=1752000000.0,
-        model=model,
-        object="response",
-        output=[
+def _canned_response(
+    response_id: str, model: str, output: list[ResponseOutputItem] | None = None
+) -> Response:
+    """Build the Response object a stored turn is persisted from.
+
+    Args:
+        response_id: Public response ID the object carries.
+        model: Model ID the object reports.
+        output: Output items of the turn; defaults to a single assistant
+            text message.
+
+    Returns:
+        The generated Response object.
+    """
+    if output is None:
+        output = [
             ResponseOutputMessage(
                 id="msg-out",
                 content=[
@@ -76,7 +100,13 @@ def _canned_response(response_id: str, model: str) -> Response:
                 status="completed",
                 type="message",
             )
-        ],
+        ]
+    return Response(
+        id=response_id,
+        created_at=1752000000.0,
+        model=model,
+        object="response",
+        output=output,
         parallel_tool_calls=True,
         tool_choice="auto",
         tools=[],
@@ -91,13 +121,19 @@ def _canned_response(response_id: str, model: str) -> Response:
 
 
 def _stored_document(
-    response_id: str, input_: object, **extra: object
+    response_id: str,
+    input_: object,
+    *,
+    output: list[ResponseOutputItem] | None = None,
+    **extra: object,
 ) -> dict[str, Any]:
     """Build the stored document shape persisted by a ``store=true`` create.
 
     Args:
         response_id: Public response ID the canned response is built around.
         input_: Value of the document's ``input`` key.
+        output: Output items of the stored turn; defaults to a single
+            assistant text message.
         **extra: Additional top-level document keys (e.g. ``instructions``).
 
     Returns:
@@ -105,7 +141,7 @@ def _stored_document(
     """
     return {
         "input": input_,
-        "response": _canned_response(response_id, "m").model_dump(
+        "response": _canned_response(response_id, "m", output).model_dump(
             mode="json", by_alias=True, exclude_none=True
         ),
         **extra,
@@ -511,6 +547,155 @@ class TestPreviousResponseId:
         assert isinstance(request.input[2], EasyInputMessage)
         assert request.input[2].content == "second"
 
+    def test_stored_tool_call_turn_precedes_a_bare_function_call_output(
+        self, app_client: TestClient, backend: _StubChatBackend, store: _StubStore
+    ) -> None:
+        """A continuation sending only the tool output gets the stored call back ahead of it.
+
+        The canonical agent loop re-sends nothing but the
+        ``function_call_output`` plus ``previous_response_id``; the stored
+        turn's ``function_call`` — and any reasoning, web search, image
+        generation or file search item beside it — comes from the stored
+        response. Those items carry output-only fields
+        (``reasoning.encrypted_content``, ``web_search_call.action.sources``,
+        ``image_generation_call.result``, ``file_search_call.results``) that no
+        client ever sends as input, so replaying them must not fail validation.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling
+             stdapi/routes/openai_responses.py:_merge_previous_response
+        """
+        store.documents["resp-sess-1"] = _stored_document(
+            "resp-sess-1",
+            [{"role": "user", "content": "weather in Paris?"}],
+            output=[
+                ResponseReasoningItem(
+                    id="rs-1", summary=[], type="reasoning", encrypted_content="gAAAAA"
+                ),
+                ResponseFunctionWebSearch(
+                    id="ws-1",
+                    action=WebSearchActionSearch(
+                        query="weather Paris",
+                        type="search",
+                        sources=[
+                            WebSearchActionSource(
+                                type="url", url="https://example.invalid/paris"
+                            )
+                        ],
+                    ),
+                    status="completed",
+                    type="web_search_call",
+                ),
+                ImageGenerationCall(
+                    id="ig-1",
+                    status="completed",
+                    type="image_generation_call",
+                    result="aGk=",
+                ),
+                ResponseFileSearchToolCall(
+                    id="fs-1",
+                    queries=["paris weather"],
+                    status="completed",
+                    type="file_search_call",
+                    results=[
+                        FileSearchResult(
+                            file_id="file-1",
+                            filename="paris.txt",
+                            score=0.5,
+                            text="sunny",
+                        )
+                    ],
+                ),
+                ResponseFunctionToolCall(
+                    arguments='{"city": "Paris"}',
+                    call_id="call-1",
+                    name="get_weather",
+                    type="function_call",
+                    id="fc-1",
+                    status="completed",
+                ),
+            ],
+        )
+        response = app_client.post(
+            "/v1/responses",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "input": [
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call-1",
+                        "output": "18 degrees and sunny",
+                    }
+                ],
+                "previous_response_id": "resp-sess-1",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["previous_response_id"] == "resp-sess-1"
+        ((request, _),) = backend.requests
+        assert isinstance(request.input, list)
+        question, reasoning, search, image, files, call, call_output = request.input
+        assert isinstance(question, EasyInputMessage)
+        assert question.content == "weather in Paris?"
+        assert isinstance(reasoning, ResponseReasoningItemInput)
+        assert reasoning.encrypted_content == "gAAAAA"
+        assert isinstance(search, WebSearchCallInput)
+        assert search.action["sources"] == [
+            {"type": "url", "url": "https://example.invalid/paris"}
+        ]
+        assert isinstance(image, ImageGenerationCallInput)
+        assert image.result == "aGk="
+        assert isinstance(files, FileSearchCallInput)
+        assert files.results == [
+            {
+                "file_id": "file-1",
+                "filename": "paris.txt",
+                "score": 0.5,
+                "text": "sunny",
+            }
+        ]
+        assert isinstance(call, FunctionCallInput)
+        assert call.name == "get_weather"
+        assert isinstance(call_output, FunctionCallOutput)
+        assert call_output.call_id == call.call_id == "call-1"
+
+    def test_instructions_on_a_continuation_replace_the_stored_system_message(
+        self, app_client: TestClient, backend: _StubChatBackend, store: _StubStore
+    ) -> None:
+        """New ``instructions`` apply to the continuation and the stored ones do not return.
+
+        Upstream documents instructions as not carried over across
+        ``previous_response_id``, which is what makes swapping the system (or
+        developer) message between turns a single parameter change: the merged
+        conversation holds only the two turns' messages, never a system item
+        rebuilt from the stored ``instructions``.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/routes/openai_responses.py:_merge_previous_response
+        """
+        store.documents["resp-sess-1"] = _stored_document(
+            "resp-sess-1",
+            [{"role": "user", "content": "first"}],
+            instructions="old sys",
+        )
+        response = app_client.post(
+            "/v1/responses",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "input": "second",
+                "instructions": "new sys",
+                "previous_response_id": "resp-sess-1",
+            },
+        )
+        assert response.status_code == 200, response.text
+        ((request, _),) = backend.requests
+        assert request.instructions == "new sys"
+        assert isinstance(request.input, list)
+        assert [getattr(item, "role", None) for item in request.input] == [
+            "user",
+            "assistant",
+            "user",
+        ]
+
     def test_unknown_previous_response_is_not_found(
         self, app_client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
@@ -689,8 +874,9 @@ class TestStoredResponseRoutes:
     ) -> None:
         """Deletion returns a confirmation object and discards the backing session.
 
-        The envelope's ``object`` is ``response.deleted`` on this
-        implementation, where the upstream reference documents ``response``.
+        The envelope's ``object`` is ``response.deleted``, which is what the
+        OpenAI API answers — its reference page's example shows ``response``,
+        and the live lifecycle test pins the real value on both lanes.
 
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/delete
              stdapi/types/openai_responses.py:ResponseDeleted
@@ -1442,7 +1628,8 @@ class TestStoredResponsesLive:
         Walks the whole documented lifecycle in one billed conversation:
         ``store=true`` create, retrieve, the synchronous-response 400 from
         cancel, input-items listing, a ``previous_response_id`` continuation
-        that must recall the secret word, then delete and the resulting 404.
+        that must recall the secret word and carries its own ``instructions``,
+        then delete — with its documented envelope — and the resulting 404.
 
         Ref: https://developers.openai.com/api/docs/guides/conversation-state#passing-context-from-the-previous-response
              https://developers.openai.com/api/reference/resources/responses/methods/delete
@@ -1483,11 +1670,23 @@ class TestStoredResponsesLive:
             follow = openai_client.responses.create(
                 model=responses_model,
                 input="What is the secret word? Reply with that word only.",
+                instructions="Answer with a single lowercase word.",
                 previous_response_id=created.id,
                 store=True,
             )
             assert "xylophone" in follow.output_text.lower()
             assert follow.previous_response_id == created.id
+            # Instructions are per-turn: the continuation echoes its own.
+            assert follow.instructions == "Answer with a single lowercase word."
+
+            # Read off the wire: the SDK discards the deletion body. The
+            # reference page's example shows "response", the live API does not.
+            raw_delete = openai_client.responses.with_raw_response.delete(follow.id)
+            assert raw_delete.status_code == 200
+            deleted_body = loads(raw_delete.text)
+            assert deleted_body["id"] == follow.id
+            assert deleted_body["object"] == "response.deleted"
+            assert deleted_body["deleted"] is True
         finally:
             with contextlib.suppress(Exception):
                 openai_client.responses.delete(created.id)
@@ -1497,3 +1696,70 @@ class TestStoredResponsesLive:
         with pytest.raises(NotFoundError) as deleted:
             openai_client.responses.retrieve(created.id)
         assert deleted.value.status_code == 404
+
+    def test_function_call_loop_over_previous_response_id(
+        self, openai_client: OpenAI, responses_model: str
+    ) -> None:
+        """A follow-up carrying only the tool output continues the tool loop.
+
+        This is the canonical agent loop: the second turn re-sends neither the
+        question nor the model's ``function_call``, only the matching
+        ``function_call_output`` and ``previous_response_id``. Without the
+        stored call being supplied ahead of it, the tool output would have
+        nothing to answer and the turn would fail.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling
+             https://developers.openai.com/api/docs/guides/conversation-state#passing-context-from-the-previous-response
+        """
+        from openai.types.responses import ResponseFunctionToolCall  # noqa: PLC0415
+
+        tools: list[Any] = [
+            {
+                "type": "function",
+                "name": "get_temperature",
+                "description": "Get the current temperature of a city, in Celsius.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+        created = openai_client.responses.create(
+            model=responses_model,
+            input="What is the temperature in Paris?",
+            tools=tools,
+            tool_choice="required",
+            store=True,
+        )
+        follow = None
+        try:
+            calls = [
+                item
+                for item in created.output
+                if isinstance(item, ResponseFunctionToolCall)
+            ]
+            assert calls, "tool_choice='required' produced no function call"
+
+            follow = openai_client.responses.create(
+                model=responses_model,
+                input=[
+                    {
+                        "type": "function_call_output",
+                        "call_id": calls[0].call_id,
+                        "output": "18",
+                    }
+                ],
+                previous_response_id=created.id,
+                tools=tools,
+                store=True,
+            )
+            assert follow.status == "completed"
+            assert follow.previous_response_id == created.id
+        finally:
+            with contextlib.suppress(Exception):
+                openai_client.responses.delete(created.id)
+            if follow is not None:
+                with contextlib.suppress(Exception):
+                    openai_client.responses.delete(follow.id)

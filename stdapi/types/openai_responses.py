@@ -4385,7 +4385,9 @@ class ResponseCreateParams(BaseModelRequestWithExtra):
     )
     instructions: str | None = Field(
         default=None,
-        description="A system (or developer) message inserted into the model's context.",
+        description="A system (or developer) message inserted into the model's "
+        "context. Not carried over by a `previous_response_id` continuation: "
+        "send it again on each turn, or send a different one to swap it.",
     )
     max_output_tokens: int | None = Field(
         default=None,
@@ -4657,6 +4659,9 @@ class InputTokenCountResponse(BaseModelResponse):
     input_tokens: int = Field(description="Total input token count.")
 
 
+# The reference page's example shows "response"; the live API answers
+# "response.deleted", which is what is mirrored here.
+# Ref: https://developers.openai.com/api/reference/resources/responses/methods/delete
 class ResponseDeleted(BaseModelResponse):
     """Stored response deletion confirmation."""
 

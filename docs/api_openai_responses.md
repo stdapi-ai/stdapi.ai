@@ -960,7 +960,7 @@ The returned `id` then works with:
 - `GET /v1/responses/{response_id}/input_items` — list the input items that produced it. Bedrock Mantle native storage does not serve input item listings: for Mantle-stored responses this returns `404` with an explanatory message.
 - `DELETE /v1/responses/{response_id}` — delete it (and its Amazon Bedrock session).
 - `POST /v1/responses/{response_id}/cancel` — for Mantle region-tagged IDs, proxied to Bedrock Mantle (background responses are cancellable upstream); for Bedrock-session-stored responses it fails with the OpenAI synchronous-response error since execution is synchronous.
-- `previous_response_id` on a new request — continue the conversation: the stored input and output are automatically prepended to the new input (instructions are not carried over, per the OpenAI API).
+- `previous_response_id` on a new request — continue the conversation: the stored input and output are automatically prepended to the new input (instructions are not carried over, per the OpenAI API). A tool loop therefore sends back only the `function_call_output` items: the `function_call` they answer, and any reasoning or built-in tool item from that turn, come from the stored response.
 
 !!! warning "Response IDs are stdapi.ai-specific"
     Response IDs embed the serving AWS region, so conversation turns chained with `previous_response_id` stay region-local. These IDs **cannot** be used directly against the Bedrock Mantle API, and raw [Mantle](features.md#bedrock-mantle-models) response IDs are not accepted by stdapi.ai.
