@@ -7,7 +7,11 @@ from pydantic import Field, JsonValue, model_validator
 from stdapi.api_errors import ApiError
 from stdapi.types import BaseModelRequest, BaseModelResponse
 from stdapi.types.openai import Metadata, PaginatedListEnvelope
-from stdapi.types.openai_responses import ResponseInputItem, ResponseItem
+from stdapi.types.openai_responses import (
+    ResponseInputItem,
+    ResponseItem,
+    reject_input_message_phase,
+)
 
 #: Maximum number of key-value pairs a conversation's metadata can hold.
 METADATA_MAX_KEYS: int = 16
@@ -81,7 +85,8 @@ def _validate_items(items: list[ResponseInputItem] | None, *, required: bool) ->
         required: Whether the list must be present and non-empty.
 
     Raises:
-        ApiError: 400 when the list is missing, empty, or too long.
+        ApiError: 400 when the list is missing, empty, too long, or holds a
+            non-assistant message carrying a `phase`.
     """
     if items is None:
         if required:
@@ -94,6 +99,7 @@ def _validate_items(items: list[ResponseInputItem] | None, *, required: bool) ->
     if len(items) > ITEMS_MAX_PER_REQUEST:
         msg = f"'items' accepts at most {ITEMS_MAX_PER_REQUEST} items per request."
         raise _invalid_request(msg, "array_above_max_length", "items")
+    reject_input_message_phase(items, "items")
 
 
 # Ref: openai.types.conversations.conversation.Conversation
@@ -159,7 +165,8 @@ class ConversationCreateParams(BaseModelRequest):
         """Enforce the item-count and metadata limits.
 
         Raises:
-            ApiError: 400 when a limit is exceeded.
+            ApiError: 400 when a limit is exceeded, or an item is a
+                non-assistant message carrying a `phase`.
         """
         _validate_items(self.items, required=False)
         if self.metadata is not None:
@@ -217,7 +224,8 @@ class ConversationItemsCreateParams(BaseModelRequest):
         """Enforce the item-count limits.
 
         Raises:
-            ApiError: 400 when ``items`` is missing, empty, or too long.
+            ApiError: 400 when ``items`` is missing, empty, too long, or holds a
+                non-assistant message carrying a `phase`.
         """
         _validate_items(self.items, required=True)
         return self

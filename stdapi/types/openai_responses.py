@@ -1133,9 +1133,16 @@ class EasyInputMessage(BaseModelRequest):
         description="Message role: `user`, `assistant`, `system`, or `developer`."
     )
     id: str | None = Field(default=None, description="Message item ID.")
+    # The official client types `phase` under every role, the API keeps it under
+    # none: it answers `unknown_parameter` on a user, system or developer message
+    # and drops it from an assistant one. The server is what is mirrored, so the
+    # field is declared -- `reject_input_message_phase` needs to see it to refuse
+    # it -- and excluded from serialization, which is what drops it.
     phase: Literal["commentary", "final_answer"] | None = Field(
         default=None,
-        description="Labels assistant message as commentary or final answer.",
+        exclude=True,
+        description="Labels an assistant message as commentary or final answer. "
+        "Accepted on an assistant message and ignored; rejected under any other role.",
     )
     type: Literal["message"] | None = Field(
         default=None, description="Message input type."
@@ -2483,6 +2490,40 @@ ResponseInputItem = (  # type: ignore[misc]
 )
 #: The `input` parameter for a response creation request.
 ResponseInputParam = str | list[ResponseInputItem]
+
+#: The only message role a `phase` may be sent under, where it is then ignored.
+_PHASE_ROLE: Final = "assistant"
+
+
+def reject_input_message_phase(items: ResponseInputParam | None, param: str) -> None:
+    """Refuse a `phase` on an input message whose role is not `assistant`.
+
+    The API declares `phase` on the input message independently of the role and
+    then accepts it under one role only, so a user, system or developer message
+    carrying it is refused rather than stored. A null `phase` is not a refusal:
+    storage excludes null fields, so a client replaying a listed item sends one
+    that means the same as omitting it.
+
+    Args:
+        items: The request's ``input`` or ``items`` value.
+        param: Name of the list parameter, naming the refused path with it.
+
+    Raises:
+        ApiError: 400 when a non-assistant message carries a `phase`.
+    """
+    if not isinstance(items, list):
+        return
+    for index, item in enumerate(items):
+        if (
+            isinstance(item, EasyInputMessage)
+            and item.phase is not None
+            and item.role != _PHASE_ROLE
+        ):
+            path = f"{param}[{index}].phase"
+            error = ApiError(f"Unknown parameter: '{path}'.")
+            error.code = "unknown_parameter"
+            error.param = path
+            raise error
 
 
 # Ref: openai.types.responses.response_apply_patch_tool_call.OperationCreateFile
@@ -4139,20 +4180,6 @@ class ResponseInputMessageItem(BaseModelResponse):
     )
 
 
-class ResponseInputMessageItemPhased(ResponseInputMessageItem):
-    """A returned message input item that also carries the `phase` a client sent.
-
-    ``EasyInputMessage`` accepts ``phase`` under every role, so the store keeps it
-    on a user, system or developer message, while the item above -- like its
-    upstream counterpart -- declares it only on the assistant message.
-    """
-
-    phase: Literal["commentary", "final_answer"] | None = Field(
-        default=None,
-        description="Labels assistant message as commentary or final answer.",
-    )
-
-
 # ResponseItem union  (items returned via /v1/responses/{id}/input_items)
 
 # Ref: openai.types.responses.response_item.ResponseItem
@@ -4165,9 +4192,6 @@ ResponseItem = (
     # shape the input union accepts and the store keeps, so the read side has to
     # be able to express it or the item is written and never readable back.
     | ResponseOutputMessageInput
-    # Same reason, for a non-assistant message carrying `phase`: the input union
-    # accepts it under every role, the listed input message item declares it on none.
-    | ResponseInputMessageItemPhased
     | ResponseFileSearchToolCall
     # Same reason, for a replayed `results` entry carrying a key the strict result
     # model does not declare.
@@ -4526,6 +4550,16 @@ class ResponseCreateParams(BaseModelRequestWithExtra):
         return self
 
     @model_validator(mode="after")
+    def _input_message_phase(self) -> Self:
+        """Validate that only an assistant input message carries a `phase`.
+
+        Raises:
+            ApiError: If a non-assistant input message carries a `phase`.
+        """
+        reject_input_message_phase(self.input, "input")
+        return self
+
+    @model_validator(mode="after")
     def _unsupported(self) -> Self:
         """Validate that unsupported parameters are not used.
 
@@ -4629,6 +4663,16 @@ class InputTokenCountParams(BaseModelRequest):
         reject_conversation_with_previous_response(
             self.conversation, self.previous_response_id
         )
+        return self
+
+    @model_validator(mode="after")
+    def _input_message_phase(self) -> Self:
+        """Validate that only an assistant input message carries a `phase`.
+
+        Raises:
+            ApiError: If a non-assistant input message carries a `phase`.
+        """
+        reject_input_message_phase(self.input, "input")
         return self
 
     @model_validator(mode="after")

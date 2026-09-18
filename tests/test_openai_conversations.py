@@ -1850,22 +1850,21 @@ class TestConversationsLive:
                 assert _field(stored, path) == expected
                 assert _field(retrieved, path) == expected
 
-    def test_an_assistant_message_phase_reads_back_per_target(
-        self, openai_client: OpenAI, use_official_api: bool
+    def test_an_assistant_message_phase_is_accepted_and_dropped(
+        self, openai_client: OpenAI
     ) -> None:
-        """An assistant message's ``phase`` is kept here and dropped upstream.
+        """An assistant message's ``phase`` is written, stored without it, and read back.
 
-        ``EasyInputMessage`` declares ``phase``, the reference tells a client to
-        "preserve and resend phase on all assistant messages" because dropping
-        it degrades a Codex-family model, and the stored message model declares
-        it too -- so a client has every reason to expect it back. The official
-        API nonetheless accepts the write and stores the message without it,
-        while this gateway hands it back, which is a divergence in the gateway's
-        favour and a probable upstream defect.
+        ``EasyInputMessageParam`` types ``phase`` in the official client and the
+        reference tells a client to "preserve and resend phase on all assistant
+        messages", so a client that replays a transcript sends it. The API takes
+        the write and keeps the message without it, which is what is mirrored
+        here: the write succeeds, the message survives in full, and ``phase``
+        comes back absent on both the listing and the retrieval.
 
         Ref: https://developers.openai.com/api/reference/resources/conversations.md
              openai.types.conversations.message.Message
-             stdapi/types/openai_responses.py:ResponseInputMessageItemPhased
+             stdapi/types/openai_responses.py:EasyInputMessage
         """
         item = {
             "type": "message",
@@ -1879,47 +1878,40 @@ class TestConversationsLive:
             )
 
             assert _item_text(stored) == _REPLAYED_DETAIL
-            expected = None if use_official_api else "final_answer"
-            assert _field(stored, "phase") == expected
-            assert _field(retrieved, "phase") == expected
+            assert _field(stored, "phase") is None
+            assert _field(retrieved, "phase") is None
 
-    def test_a_user_message_phase_reads_back_per_target(
-        self, openai_client: OpenAI, use_official_api: bool
+    @pytest.mark.parametrize("role", ["user", "system", "developer"])
+    def test_a_non_assistant_message_phase_is_refused(
+        self, openai_client: OpenAI, role: str
     ) -> None:
-        """A ``phase`` on a user message is refused upstream and kept here.
+        """A ``phase`` under any role but ``assistant`` is refused as an unknown parameter.
 
-        ``phase`` is declared on ``EasyInputMessage`` independently of ``role``
-        and the reference only says it is "not used for user messages", so the
-        write side here accepts it under every role and the listing union grew a
-        member to express it. The official API is stricter than its own schema:
-        it answers 400 ``unknown_parameter`` on ``items[0].phase`` for a user
-        message, whatever ``type`` the item declares. The extra read-union member
-        therefore mirrors nothing upstream, and this lane is the only place that
-        says so.
+        ``phase`` is typed on the official client's input message independently
+        of ``role``, and the API accepts it under one role only: every other one
+        answers 400 ``unknown_parameter`` naming ``items[<n>].phase``, whatever
+        ``type`` the item declares. The client type being wider than the server
+        is the trap here -- the server is what this mirrors, so the same refusal
+        has to come back from both targets, down to the code and the parameter.
 
         Ref: https://developers.openai.com/api/reference/resources/conversations.md
-             stdapi/types/openai_responses.py:ResponseInputMessageItemPhased
+             stdapi/types/openai_responses.py:reject_input_message_phase
         """
         item = {
             "type": "message",
-            "role": "user",
+            "role": role,
             "phase": "commentary",
             "content": _REPLAYED_DETAIL,
         }
         with _live_conversation(openai_client) as conversation:
-            if use_official_api:
-                with pytest.raises(BadRequestError) as refused:
-                    openai_client.conversations.items.create(
-                        conversation.id,
-                        items=[item],  # type: ignore[list-item]
-                    )
-                assert refused.value.status_code == 400
-                assert refused.value.code == "unknown_parameter"
-                assert refused.value.param == "items[0].phase"
-                return
+            with pytest.raises(BadRequestError) as refused:
+                openai_client.conversations.items.create(
+                    conversation.id,
+                    items=[item],  # type: ignore[list-item]
+                )
 
-            stored, retrieved = self._write_and_read_back(
-                openai_client, conversation.id, item, "message"
-            )
-            assert _field(stored, "phase") == "commentary"
-            assert _field(retrieved, "phase") == "commentary"
+            assert refused.value.status_code == 400
+            assert refused.value.type == "invalid_request_error"
+            assert refused.value.code == "unknown_parameter"
+            assert refused.value.param == "items[0].phase"
+            assert openai_client.conversations.items.list(conversation.id).data == []
