@@ -5244,6 +5244,12 @@ _KNOWN_PRICING_GAPS: Final[frozenset[str]] = frozenset(
         "stability.stable-diffusion-xl-v1",
         # No Price List rows and no pricing-page rate (only GLM 4.7/5 listed).
         "zai.glm-4.6",
+        # Newly catalogued and not yet priced: every Bedrock Price List row in
+        # us-east-1 was read (2026-09-18) and none names it under any spelling.
+        # AWS is the only source this reads, and OpenAI states its Bedrock rates
+        # match its direct ones, so the rows are expected to arrive at the list
+        # price of $10.00/$1.00/$12.50/$50.00 per 1M tokens rather than differ.
+        "openai.gpt-6-astra",
     }
 )
 
