@@ -516,7 +516,9 @@ class _MessageParam(BaseModelRequest):
 
     name: str | None = Field(
         default=None,
-        description="Optional participant name to differentiate same-role participants.",
+        description="Optional participant name to differentiate same-role participants. "
+        "Accepted and ignored on Amazon Bedrock Converse models, whose messages carry no "
+        "author field; forwarded on Bedrock Mantle passthrough models.",
     )
 
 

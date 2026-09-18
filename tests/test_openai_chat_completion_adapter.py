@@ -295,6 +295,54 @@ class TestMapMessagesRoleAlternation:
         assert messages == [{"role": "user", "content": [{"text": "a"}, {"text": "b"}]}]
 
 
+class TestMessageParticipantName:
+    """The message ``name`` participant field is accepted and left out of the prompt.
+
+    OpenAI names a speaker among same-role turns with ``name``; the Bedrock
+    Converse ``Message`` shape has only ``role`` and ``content`` and no
+    ``ContentBlock`` variant naming an author, so the field is accepted and
+    ignored rather than injected as a text prefix, which would change the prompt
+    bytes (and the prompt-cache prefix) of every request already sending it.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat.md
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Message.html
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:map_messages
+    """
+
+    async def test_name_does_not_reach_the_bedrock_messages(self) -> None:
+        """A named user and assistant turn map exactly as unnamed ones do.
+
+        The mapped turns must be byte-identical to the same conversation without
+        ``name``: neither an author field nor a ``name: content`` text prefix.
+        """
+        named, _ = await map_messages(
+            [
+                ChatCompletionUserMessageParam(role="user", content="q", name="alice"),
+                ChatCompletionAssistantMessageParam(
+                    role="assistant", content="a", name="bob"
+                ),
+            ]
+        )
+        assert named == [
+            {"role": "user", "content": [{"text": "q"}]},
+            {"role": "assistant", "content": [{"text": "a"}]},
+        ]
+
+    async def test_system_message_name_is_not_prefixed_to_the_instructions(
+        self,
+    ) -> None:
+        """A named system message contributes its text alone to the system blocks."""
+        _, system_blocks = await map_messages(
+            [
+                ChatCompletionSystemMessageParam(
+                    role="system", content="rules", name="ops"
+                ),
+                ChatCompletionUserMessageParam(role="user", content="q"),
+            ]
+        )
+        assert system_blocks == [{"text": "rules"}]
+
+
 class TestFormatResponseCacheWriteTokens:
     """Cache-write tokens are reported in ``prompt_tokens_details``.
 

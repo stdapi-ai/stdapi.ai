@@ -4431,6 +4431,31 @@ class TestJsonObjectSystemInstruction:
         )
 
 
+def _stub_converse_capture(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Replace ``ChatModel.converse`` with a stub capturing its request body.
+
+    Args:
+        monkeypatch: Fixture used to stub ``ChatModel.converse``.
+
+    Returns:
+        The dict the captured Converse request body is written into.
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake_converse(
+        _self: ChatModel, bedrock_request: ConverseRequestBaseTypeDef
+    ) -> dict[str, Any]:
+        captured.update(bedrock_request)
+        return {
+            "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        }
+
+    monkeypatch.setattr(ChatModel, "converse", fake_converse)
+    return captured
+
+
 class TestOutputShapingHintsAreAcceptedAndIgnored:
     """``prediction`` and ``verbosity`` are dropped rather than answered with a 400.
 
@@ -4459,33 +4484,6 @@ class TestOutputShapingHintsAreAcceptedAndIgnored:
         "prediction": {"type": "content", "content": "PREDICTEDXYZ"},
     }
 
-    @staticmethod
-    def _stub_converse(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-        """Replace ``ChatModel.converse`` with a stub capturing its request body.
-
-        Args:
-            monkeypatch: Fixture used to stub ``ChatModel.converse``.
-
-        Returns:
-            The dict the captured Converse request body is written into.
-        """
-        captured: dict[str, Any] = {}
-
-        async def fake_converse(
-            _self: ChatModel, bedrock_request: ConverseRequestBaseTypeDef
-        ) -> dict[str, Any]:
-            captured.update(bedrock_request)
-            return {
-                "output": {
-                    "message": {"role": "assistant", "content": [{"text": "ok"}]}
-                },
-                "stopReason": "end_turn",
-                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
-            }
-
-        monkeypatch.setattr(ChatModel, "converse", fake_converse)
-        return captured
-
     @pytest.mark.parametrize("hint", ["verbosity", "prediction"])
     async def test_hint_is_answered_and_never_forwarded(
         self, hint: str, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
@@ -4502,7 +4500,7 @@ class TestOutputShapingHintsAreAcceptedAndIgnored:
                 hint: self._HINTS[hint],
             }
         )
-        captured = self._stub_converse(monkeypatch)
+        captured = _stub_converse_capture(monkeypatch)
 
         completion = await ChatModel("amazon.nova-2-lite-v1:0").create_completion(
             request, "chatcmpl-1", 0
@@ -4532,7 +4530,7 @@ class TestOutputShapingHintsAreAcceptedAndIgnored:
             return make_model_details(model_id)
 
         monkeypatch.setattr(openai_chat_completions, "validate_model", _validate_model)
-        captured = self._stub_converse(monkeypatch)
+        captured = _stub_converse_capture(monkeypatch)
 
         response = app_client.post(
             "/v1/chat/completions",
@@ -4549,6 +4547,67 @@ class TestOutputShapingHintsAreAcceptedAndIgnored:
         assert not {"verbosity", "prediction"} & set(captured), (
             "neither hint is a Converse request field"
         )
+
+
+class TestParticipantNameIsAcceptedAndIgnored:
+    """The message ``name`` field is served rather than refused or injected.
+
+    OpenAI declares ``name`` on the developer, system, user and assistant message
+    schemas to tell same-role participants apart, so a group-chat or multi-agent
+    transcript carries it on every turn. The Bedrock Converse ``Message`` shape
+    is exactly ``role`` plus ``content`` and no ``ContentBlock`` variant names an
+    author, so the only available mapping would be a ``name: content`` text
+    prefix — which rewrites the prompt bytes, and with them the prompt-cache
+    prefix, of every request already sending the field. The house convention for
+    that trade is accept-and-ignore, documented in the feature table rather than
+    left silent.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Message.html
+         stdapi/types/openai_chat_completions.py:_MessageParam
+    """
+
+    pytestmark = pytest.mark.local
+
+    def test_named_turns_are_answered_and_never_reach_the_model(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Named user and assistant turns get a 200 and leave no trace in the call.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:map_messages
+        """
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> ModelDetails:
+            return make_model_details(model_id)
+
+        monkeypatch.setattr(openai_chat_completions, "validate_model", _validate_model)
+        captured = _stub_converse_capture(monkeypatch)
+
+        response = app_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "messages": [
+                    {"role": "system", "content": "rules", "name": "OPSNAMEXYZ"},
+                    {"role": "user", "content": "q", "name": "ALICENAMEXYZ"},
+                    {"role": "assistant", "content": "a", "name": "BOBNAMEXYZ"},
+                    {"role": "user", "content": "q2", "name": "ALICENAMEXYZ"},
+                ],
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["choices"][0]["message"]["content"] == "ok"
+        assert captured, "the request must have reached the model call"
+        body = _json.dumps(captured, default=str)
+        assert "q2" in body, "the message text itself did reach the model call"
+        for participant in ("OPSNAMEXYZ", "ALICENAMEXYZ", "BOBNAMEXYZ"):
+            assert participant not in body, (
+                f"`{participant}` has no Converse field to travel in and must not be "
+                "prefixed into the prompt text either"
+            )
 
 
 class TestIdentifierFieldLengthBounds:
