@@ -620,3 +620,28 @@ class TestToolSetChangesReachTheModel:
         assert called == {"get_time"}, (
             "only the tools declared on this turn may be called"
         )
+
+    def test_responses_replaced_tool_set(
+        self, openai_client: OpenAI, responses_model: str
+    ) -> None:
+        """The Responses dialect honours the same change.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling
+        """
+        response = openai_client.responses.create(  # type: ignore[call-overload]
+            model=responses_model,
+            input=_responses_history(),
+            tools=[
+                {
+                    "type": "function",
+                    "name": "get_time",
+                    "parameters": _TIME_SCHEMA,
+                    "strict": False,
+                }
+            ],
+            tool_choice="required",
+        )
+        called = {item.name for item in response.output if item.type == "function_call"}
+        assert called == {"get_time"}, (
+            "only the tools declared on this turn may be called"
+        )

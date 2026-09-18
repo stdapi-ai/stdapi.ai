@@ -36,6 +36,7 @@ from uuid import UUID
 
 import pytest
 from botocore.exceptions import ClientError
+from openai import BadRequestError
 
 from stdapi import aws_s3, batches
 from stdapi.api_errors import ApiError
@@ -3338,6 +3339,13 @@ class TestBatchOnAnApplicationInferenceProfile:
         assert [job["modelId"] for job in seeded_catalog.created] == [_SYSTEM_PROFILE]
 
 
+#: How long a vendor batch with one bad line is given to reach 'failed'.
+_BAD_INPUT_TIMEOUT: float = 600.0
+
+#: Seconds between two status reads while waiting on a bad-input batch.
+_BAD_INPUT_POLL_INTERVAL: float = 20.0
+
+
 @pytest.mark.slow
 @pytest.mark.usefixtures("batches_api")
 class TestOpenAIBatchLive:
@@ -3407,6 +3415,79 @@ class TestOpenAIBatchLive:
             assert cancelled.id == batch.id
             assert cancelled.cancelling_at is not None
             assert cancelled.status in {"cancelling", "cancelled"}
+        finally:
+            if batch is not None:
+                with contextlib.suppress(Exception):
+                    openai_client.batches.cancel(batch.id)
+            with contextlib.suppress(Exception):
+                openai_client.files.delete(input_file.id)
+
+    def test_a_bad_input_line_is_reported_the_way_the_target_reports_it(
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+    ) -> None:
+        """A malformed input line is reported the way each target reports it.
+
+        Upstream creates the batch and only later reports the bad line inside
+        ``errors.data``, with the batch itself ending ``failed``. This gateway
+        instead refuses the creation outright with a 400 and creates no batch
+        at all. Both are asserted here, one per target, so the divergence is
+        measured rather than assumed.
+
+        Ref: https://developers.openai.com/api/docs/guides/batch.md
+             https://stdapi.ai/api_openai_batches/#input-file-validation
+             stdapi/batches.py:_read_input_file
+        """
+        good_lines = "\n".join(
+            dumps(
+                {
+                    "custom_id": f"req-{index}",
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "model": chat_model,
+                        "messages": [{"role": "user", "content": "hi"}],
+                    },
+                }
+            )
+            for index in range(3)
+        )
+        lines = good_lines + '\n{"custom_id": "req-3", "body": {'
+        input_file = openai_client.files.create(
+            file=("requests.jsonl", lines.encode()), purpose="batch"
+        )
+        batch = None
+        try:
+            if use_official_api:
+                batch = openai_client.batches.create(
+                    input_file_id=input_file.id,
+                    endpoint="/v1/chat/completions",
+                    completion_window="24h",
+                )
+                deadline = monotonic() + _BAD_INPUT_TIMEOUT
+                while (
+                    batch := openai_client.batches.retrieve(batch.id)
+                ).status != "failed":
+                    assert monotonic() < deadline, f"still '{batch.status}'"
+                    sleep(_BAD_INPUT_POLL_INTERVAL)
+                assert batch.status == "failed"
+                assert batch.errors is not None
+                assert batch.errors.data
+                assert batch.errors.data[0].line is not None
+            else:
+                with pytest.raises(BadRequestError) as excinfo:
+                    openai_client.batches.create(
+                        input_file_id=input_file.id,
+                        endpoint="/v1/chat/completions",
+                        completion_window="24h",
+                    )
+                assert excinfo.value.status_code == 400
+                body = excinfo.value.body
+                assert isinstance(body, dict), body
+                assert "Line 4" in str(body["message"]), body
+                listed = openai_client.batches.list(limit=100).data
+                assert not any(
+                    item.input_file_id == input_file.id for item in listed
+                ), "a batch exists for a file the gateway should have refused"
         finally:
             if batch is not None:
                 with contextlib.suppress(Exception):

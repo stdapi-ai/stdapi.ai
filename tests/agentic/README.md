@@ -27,7 +27,7 @@ by the gateway for a model that is usually not the vendor's own.
 | pydantic-ai | `/v1/chat/completions` | Proves a real multi-turn tool loop survives Claude's silent `reasoning_content` replay drop |
 | litellm | `/v1` chat + embeddings | The only client that puts *its own* control parameters in the request body — the client half of `EXTRA_MODEL_PARAMS_DENYLIST` |
 | Docling Serve | `/v1/chat/completions` | The only client sending an `image_url` content part — a real app's multimodal request |
-| OpenAI Agents SDK | `/v1/realtime`, `/v1/responses`, `/v1/conversations`, `/v1/vector_stores` | The vendor's own agent framework: a `RealtimeRunner` voice session, plus the surfaces added with it |
+| OpenAI Agents SDK | `/v1/realtime`, `/v1/responses`, `/v1/conversations`, `/v1/vector_stores` | The vendor's own agent framework: a `RealtimeRunner` voice session — and the only client on the lane that runs the **realtime tool loop** — plus the surfaces added with it |
 | LiveKit Agents | `/v1/realtime` | One of the two media frameworks `docs/api_openai_realtime.md` puts in front of this gateway; the one deriving the WebSocket from an HTTP base URL |
 | Pipecat | `/v1/realtime` | The other one, dialling the WebSocket path whole — and the strictest reader of the realtime events on the lane |
 | inspect-ai | `/v1/files` + `/v1/batches`, `/anthropic/v1/messages/batches` | The only client that batches anything, and the only one reaching **both** batch surfaces |
@@ -318,9 +318,10 @@ header:
 agentic clients: langchain-anthropic==1.5.3, langchain-openai==1.4.1, litellm==1.97.0, livekit-plugins-openai==1.6.10, openai-agents==0.20.0, pipecat-ai==1.7.0, pydantic-ai-slim==2.23.0, wyoming==1.10.0
 ```
 
-`openai-agents` caps `openai` below 3, so the overlay resolves that dependency one
-major version behind the project environment. Nothing under `stdapi/` imports the
-vendor SDKs, and the lane's own modules run on either.
+The overlay resolves the vendor SDKs it shares with the project environment on its
+own, so a client capping one of them puts the lane on a different version from the
+gateway's. Nothing under `stdapi/` imports the vendor SDKs, and the lane's own
+modules run on either.
 
 Without the overlay, those modules are dropped from collection and the header
 names them rather than letting the run look complete. `mypy` needs the overlay too,
@@ -862,6 +863,23 @@ Eight things bite:
   timeout. The SDK validates every frame against the `openai` package's Realtime
   types and reports a rejected one as an `error` event, which is what
   `test_every_event_of_a_spoken_turn_parses_with_the_official_types` reads.
+- **it is also the only client that proves the realtime *tool* loop.**
+  `test_a_spoken_question_runs_the_sdks_tool_loop_into_the_answer` hands a
+  `@function_tool` to the `RealtimeAgent` and then drives none of it: the SDK
+  declares `tools` in its own `session.update`, reads the gateway's
+  `response.function_call_arguments.done`, runs the tool, sends the
+  `function_call_output` conversation item back and asks for the second response.
+  The collection therefore runs to the *second* `response.done` — stopping at the
+  first would end the loop at the tool call, before the client ever answered it.
+  `tool_choice` stays at the gateway default, because upstream honours `required`
+  per response: a session left on it calls the tool again instead of ever
+  speaking. The question is synthesized, so the call has to carry the city the
+  caller spoke, and the tool returns a temperature no real Paris forecast
+  reaches, so the second response's transcript is what proves the tool's output
+  travelled all the way into the speech. That transcript is read off the session
+  events rather than transcribed: a Transcriptions call made after the session
+  opened would fail the autouse model-identity check, which is also why the
+  spoken question is a module-scoped fixture.
 
 ## What the tests actually assert
 

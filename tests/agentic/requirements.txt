@@ -20,8 +20,7 @@ wyoming
 litellm
 
 # tests/agentic/test_openai_agents.py -- the OpenAI Agents SDK, whose RealtimeRunner
-# is the lane's only client for /v1/realtime. It caps `openai` below 3, so the
-# overlay resolves the SDK one major behind the project environment's.
+# is the lane's only client for /v1/realtime, tool loop included.
 openai-agents[realtime]
 
 # tests/agentic/test_livekit.py -- the media framework docs/api_openai_realtime.md

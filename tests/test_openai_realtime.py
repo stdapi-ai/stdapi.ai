@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
 import re
 import wave
 from typing import TYPE_CHECKING, Any
@@ -711,6 +712,42 @@ class TestRealtimeSession:
         assert closed is not None, raised.value
         assert closed.code == _ERROR_CLOSE_CODE, closed
         assert closed.reason == "invalid_request_error.invalid_api_key", closed
+
+    async def test_an_error_correlates_to_the_client_event_that_caused_it(
+        self, async_openai_client: AsyncOpenAI, realtime_model: str
+    ) -> None:
+        """``error.event_id`` echoes the client's id, and never a stale one.
+
+        ``error.event_id`` is the id of the *client* event that caused the
+        error -- distinct from the envelope's own ``event_id``, which the
+        server assigns to the error event itself. A client multiplexing
+        several requests over one socket has no other way to match an error
+        back to the request that caused it. Both bad events are sent over the
+        same connection so the second one also proves the field is not left
+        over from the first: an id belongs to the event that carried it, or
+        to none.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             (RealtimeServerEventError)
+             stdapi/realtime.py:RealtimeSession._error
+        """
+        async with async_openai_client.realtime.connect(
+            model=realtime_model
+        ) as connection:
+            await connection.recv()
+            await connection.send_raw(
+                json.dumps({"type": "wat", "event_id": "evt-from-the-client"})
+            )
+            named = (await _drain_until(connection, "error"))[-1]
+            await connection.send_raw(json.dumps({"type": "wat"}))
+            anonymous = (await _drain_until(connection, "error"))[-1]
+
+        assert named.type == "error", named
+        assert named.error.event_id == "evt-from-the-client", named
+        # The envelope id is the server's own, never borrowed from the client.
+        assert named.event_id != "evt-from-the-client", named
+        assert anonymous.error.event_id != "evt-from-the-client", anonymous
+        assert anonymous.error.event_id is None, anonymous
 
 
 class TestFunctionTools:

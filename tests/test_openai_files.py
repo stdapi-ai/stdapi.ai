@@ -2047,6 +2047,44 @@ class TestOpenAIUploads:
         finally:
             openai_client.uploads.cancel(upload.id)
 
+    @pytest.mark.slow
+    def test_add_part_over_max_size_rejected(
+        self, openai_client: OpenAI, use_official_api: bool
+    ) -> None:
+        """A part over the documented 64 MiB cap is rejected.
+
+        64 MiB is the SDK's own default part size
+        (``openai.resources.uploads.uploads.DEFAULT_PART_SIZE``), so cap + 1 is
+        the boundary the gateway enforces at ``add_upload_part``. The status
+        OpenAI itself returns, and whether it enforces at exactly cap + 1 rather
+        than with slack, is unverified upstream: if the official lane accepts
+        this part, that is a real divergence to record as a documented
+        limitation, not a reason to loosen the gateway assertion below.
+
+        Ref: https://developers.openai.com/api/reference/resources/uploads.md
+             openai.resources.uploads.uploads.DEFAULT_PART_SIZE
+             stdapi/routes/openai_uploads.py:add_upload_part
+        """
+        oversized = 64 * 1024 * 1024 + 1
+        upload = openai_client.uploads.create(
+            bytes=oversized,
+            filename="oversized_part.bin",
+            mime_type="application/octet-stream",
+            purpose="assistants",
+        )
+        try:
+            with pytest.raises(APIStatusError) as exc_info:
+                openai_client.uploads.parts.create(
+                    upload_id=upload.id, data=b"\0" * oversized
+                )
+            if not use_official_api:
+                error = _error_envelope(exc_info.value, 413)
+                assert str(64 * 1024 * 1024) in str(error["message"]), error
+            else:
+                assert exc_info.value.status_code >= 400
+        finally:
+            openai_client.uploads.cancel(upload.id)
+
     # --- Complete ---
 
     def test_complete_produces_file(self, openai_client: OpenAI) -> None:

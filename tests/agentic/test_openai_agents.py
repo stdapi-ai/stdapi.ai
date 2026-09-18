@@ -4,10 +4,14 @@
 WebSocket the way a voice application does: ``RealtimeRunner`` opens the session,
 sends the caller's microphone frames, and turns the server events back into its
 own conversation history -- so a gateway event the SDK cannot parse fails here
-rather than in a hand-written protocol test. The same package reaches three more
-surfaces over ``/v1/responses``: the hosted web-search tool, ``/v1/conversations``
-through ``OpenAIConversationsSession``, and ``/v1/vector_stores`` through a
-retrieval tool.
+rather than in a hand-written protocol test. It is also the only client on the
+lane that runs the realtime *tool* loop end to end: the SDK declares the tool in
+its own ``session.update``, runs it when the gateway asks, sends the
+``function_call_output`` back as a conversation item and lets the model speak
+what it returned. The same package reaches three more surfaces over
+``/v1/responses``: the hosted web-search tool, ``/v1/conversations`` through
+``OpenAIConversationsSession``, and ``/v1/vector_stores`` through a retrieval
+tool.
 
 Two client behaviours shape the configuration below:
 
@@ -36,6 +40,7 @@ Ref: https://openai.github.io/openai-agents-python/realtime/guide/
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -62,6 +67,7 @@ from ._tools import AgenticTool
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from agents import Tool
     from agents.realtime import RealtimeSession
 
     from ._server import AgenticServer
@@ -123,14 +129,46 @@ _SPEECH_MODEL = "amazon.polly-standard"
 #: that changes the instructions it was minted for.
 _REALTIME_INSTRUCTIONS = "Answer with one short spoken sentence."
 
+#: Instructions of the session that has to call a tool before it may answer.
+#:
+#: ``_REALTIME_INSTRUCTIONS`` is left alone: a session opened with a client
+#: secret refuses an update that changes the instructions it was minted for, so
+#: the tool session carries its own.
+_REALTIME_TOOL_INSTRUCTIONS = (
+    "You do not know the weather yourself. Call the tool you are given, then "
+    "answer in one short sentence which states the temperature it returned, in "
+    "degrees Celsius."
+)
+
 #: Sentence the caller speaks, synthesized once per module.
 _SPOKEN_QUESTION = "Hello there. Please say something back to me."
+
+#: Sentence the caller speaks when the answer needs the tool, synthesized once.
+_SPOKEN_TOOL_QUESTION = "What is the weather in Paris?"
+
+#: City the spoken question names, as the tool call's arguments must carry it.
+_SPOKEN_LOCATION = "paris"
+
+#: Temperature the tool answers with: no real Paris forecast reaches it by chance.
+_TOOL_TEMPERATURE_C = 47
+
+#: Renderings of `_TOOL_TEMPERATURE_C` a spoken transcript may use, once normalised.
+_TEMPERATURE_SPELLINGS = ("47", "forty seven")
+
+#: Runs of anything but a letter or a digit, collapsed before matching a transcript.
+_NOT_ALPHANUMERIC = re.compile(r"[^a-z0-9]+")
 
 #: Audio sent per ``input_audio_buffer.append``, ~100 ms at 24 kHz 16-bit mono.
 _APPEND_BYTES = 4800
 
 #: Seconds one spoken turn may take end to end, model latency included.
 _TURN_TIMEOUT = 120.0
+
+#: Responses one tool loop produces: the call, then the answer that speaks it.
+_TOOL_LOOP_RESPONSES = 2
+
+#: Seconds the whole tool loop may take: one budget per response it produces.
+_TOOL_TURN_TIMEOUT = _TURN_TIMEOUT * _TOOL_LOOP_RESPONSES
 
 #: Seconds the handshake of a session that never speaks may take.
 _HANDSHAKE_TIMEOUT = 60.0
@@ -197,8 +235,47 @@ def spoken_pcm(gateway_client: OpenAI) -> bytes:
     return audio
 
 
+@pytest.fixture(scope="module")
+def spoken_tool_question_pcm(gateway_client: OpenAI) -> bytes:
+    """The caller's tool-needing question, as the Realtime input format.
+
+    Module-scoped like :func:`spoken_pcm`, and for one more reason than saving a
+    synthesis: the autouse model-identity check only forgives requests for
+    another model that arrive *before* the session's first one, so a speech call
+    made from inside the test body would fail it on a model mismatch.
+    """
+    audio = gateway_client.audio.speech.create(
+        model=_SPEECH_MODEL,
+        voice="alloy",
+        input=_SPOKEN_TOOL_QUESTION,
+        response_format="pcm",
+    ).content
+    assert audio, "the gateway synthesized no speech for the tool question"
+    return audio
+
+
+@function_tool
+def get_weather(location: str) -> str:
+    """Get the current weather for a city.
+
+    Args:
+        location: City to report the weather for.
+
+    Returns:
+        The current conditions, as a JSON object.
+    """
+    return json.dumps(
+        {"location": location, "temperature_c": _TOOL_TEMPERATURE_C, "condition": "dry"}
+    )
+
+
 async def _realtime_session(
-    server: AgenticServer, model: str, *, credential: str
+    server: AgenticServer,
+    model: str,
+    *,
+    credential: str,
+    instructions: str = _REALTIME_INSTRUCTIONS,
+    tools: list[Tool] | None = None,
 ) -> RealtimeSession:
     """Build the realtime session an agent application would open.
 
@@ -206,15 +283,23 @@ async def _realtime_session(
     turn: the alternative depends on the backend's voice activity detector
     firing, which is not the gateway behaviour under test.
 
+    ``tool_choice`` is left at the gateway default: upstream honours ``required``
+    per response, so a session left on it calls the tool again instead of ever
+    speaking the answer.
+
     Args:
         server: Gateway serving the session.
         model: Realtime model the session is opened for.
         credential: API key or minted client secret to authenticate with.
+        instructions: System prompt the session is opened with.
+        tools: Tools the SDK declares to the gateway and runs itself.
 
     Returns:
         The session, not yet connected: entering it opens the WebSocket.
     """
-    agent = RealtimeAgent(name="voice-caller", instructions=_REALTIME_INSTRUCTIONS)
+    agent = RealtimeAgent(
+        name="voice-caller", instructions=instructions, tools=list(tools or ())
+    )
     url = server.base_url.replace("http://", "ws://", 1)
     return await RealtimeRunner(agent).run(
         model_config={
@@ -222,7 +307,7 @@ async def _realtime_session(
             "url": f"{url}/v1/realtime?model={model}",
             "initial_model_settings": {
                 "model_name": model,
-                "instructions": _REALTIME_INSTRUCTIONS,
+                "instructions": instructions,
                 "turn_detection": None,
             },
         }
@@ -336,6 +421,122 @@ async def _collect_until(
     )
 
 
+@dataclass(slots=True)
+class _ToolTurn(_Turn):
+    """One tool loop: everything :class:`_Turn` holds, plus what the loop added.
+
+    Attributes:
+        tools: ``(event type, tool name)`` of each SDK tool lifecycle event.
+        responses: The ``response`` object of each completed response, in order.
+    """
+
+    tools: list[tuple[str, str]] = field(default_factory=list)
+    responses: list[dict[str, Any]] = field(default_factory=list)
+
+
+async def _collect_tool_loop(
+    session: RealtimeSession, seconds: float = _TOOL_TURN_TIMEOUT
+) -> _ToolTurn:
+    """Read a session through a tool call and the spoken answer that follows it.
+
+    Stopping at the first ``response.done`` -- as :func:`_collect_until` would --
+    would end the loop at the tool call: the SDK runs the tool and sends the
+    ``conversation.item.create`` carrying its ``function_call_output``, then the
+    second ``response.create``, from inside this very iteration. So collection
+    runs to the second ``response.done``, which is the answer.
+
+    Args:
+        session: The open realtime session.
+        seconds: Time the whole loop may take.
+
+    Returns:
+        The loop, up to and including its second response.
+    """
+    turn = _ToolTurn()
+    try:
+        async with asyncio.timeout(seconds):
+            async for event in session:
+                if event.type == "audio":
+                    turn.audio.extend(event.audio.data)
+                elif event.type in {"history_updated", "history_added"}:
+                    turn.history = list(getattr(event, "history", turn.history))
+                elif event.type == "error":
+                    turn.rejected.append(_rejection(str(event.error)))
+                elif event.type in {"tool_start", "tool_end"}:
+                    turn.tools.append((event.type, event.tool.name))
+                if (payload := _raw_server_event(event)) is None:
+                    continue
+                turn.received.append(payload)
+                if payload.get("type") == "error":
+                    return turn
+                if payload.get("type") == "response.done":
+                    turn.responses.append(payload.get("response") or {})
+                    if len(turn.responses) >= _TOOL_LOOP_RESPONSES:
+                        return turn
+    except TimeoutError:
+        pytest.fail(
+            f"the tool loop produced {len(turn.responses)} of "
+            f"{_TOOL_LOOP_RESPONSES} responses in {seconds}s; the session sent "
+            f"{[payload.get('type') for payload in turn.received]}"
+        )
+    pytest.fail(
+        "the session ended mid tool loop: "
+        f"{[payload.get('type') for payload in turn.received]}"
+    )
+
+
+def _spoken_transcript(response: dict[str, Any]) -> str:
+    """Return what a ``response.done`` payload says its speech said.
+
+    Args:
+        response: The ``response`` object of a completed response.
+
+    Returns:
+        Every transcript the response's output carries, joined.
+    """
+    return " ".join(
+        part["transcript"]
+        for item in response.get("output", [])
+        for part in item.get("content", [])
+        if part.get("transcript")
+    )
+
+
+def _assistant_transcript(history: list[Any]) -> str:
+    """Return what the SDK itself recorded the assistant as having said.
+
+    Args:
+        history: The conversation the SDK built out of the session's events.
+
+    Returns:
+        Every assistant transcript in the history, joined.
+    """
+    return " ".join(
+        part.transcript
+        for item in history
+        if getattr(item, "role", None) == "assistant"
+        for part in getattr(item, "content", ())
+        if getattr(part, "transcript", None)
+    )
+
+
+def _states_the_temperature(transcript: str) -> bool:
+    """Whether *transcript* states the temperature the tool returned.
+
+    A model renders a spoken number either way -- "47" or "forty-seven" -- so
+    every plausible spelling is accepted, on a transcript reduced to lowercase
+    words separated by single spaces.
+
+    Args:
+        transcript: Text to search.
+
+    Returns:
+        True when one of the spellings appears as a whole word.
+    """
+    normalized = f" {_NOT_ALPHANUMERIC.sub(' ', transcript.lower()).strip()} "
+    return any(f" {spelling} " in normalized for spelling in _TEMPERATURE_SPELLINGS)
+
+
 async def _settle(seconds: float = _TEARDOWN_SETTLE) -> None:
     """Wait for the gateway to finish tearing the closed session down.
 
@@ -362,7 +563,10 @@ def _assert_no_error(turn: _Turn) -> None:
 
 @pytest.mark.parametrize("model_config", [_REALTIME_MODEL_CONFIG])
 class TestRealtimeVoiceSession:
-    """A ``RealtimeRunner`` application holding a spoken turn with the gateway.
+    """A ``RealtimeRunner`` application holding spoken turns with the gateway.
+
+    One turn is answered from the model alone, the other through the SDK's tool
+    loop, so both halves of a voice application's session are covered.
 
     Ref: https://openai.github.io/openai-agents-python/realtime/guide/
          https://developers.openai.com/api/docs/guides/realtime
@@ -407,6 +611,77 @@ class TestRealtimeVoiceSession:
         assert answer["usage"]["output_tokens"] > 0, answer["usage"]
         assert [item for item in turn.history if item.role == "assistant"], (
             f"the SDK built no assistant turn from the session: {turn.history}"
+        )
+
+    async def test_a_spoken_question_runs_the_sdks_tool_loop_into_the_answer(
+        self,
+        model_config: ModelConfig,
+        agentic_server: AgenticServer,
+        spoken_tool_question_pcm: bytes,
+    ) -> None:
+        """The SDK calls the declared tool and speaks back what it returned.
+
+        This is the loop a voice application is written around, and none of it
+        is driven by the test: the SDK puts ``tools`` in its own
+        ``session.update``, reads the gateway's
+        ``response.function_call_arguments.done``, runs ``get_weather``, sends
+        the ``function_call_output`` conversation item and asks for the second
+        response. A gateway that declared the tool but never asked for it, lost
+        the client's answer or refused the item would stop the loop at the first
+        response, which is why the collection runs to the second one.
+
+        The question is synthesized rather than canned and the call is checked
+        against the city it names, so the input audio path is load-bearing: audio
+        the model made nothing of would still reach the tool, but not with Paris
+        in its arguments. The temperature is one no real Paris forecast reaches,
+        so an answer carrying it came from the tool and not from the model.
+
+        The answer is read off the session's own events rather than transcribed:
+        a Transcriptions call made after the session opened would fail the
+        autouse model-identity check.
+
+        Ref: https://openai.github.io/openai-agents-python/realtime/guide/
+             https://developers.openai.com/api/docs/guides/realtime-function-calling
+             stdapi/realtime.py:RealtimeSession._answer_tool_call
+        """
+        async with await _realtime_session(
+            agentic_server,
+            model_config.model,
+            credential=agentic_server.api_key,
+            instructions=_REALTIME_TOOL_INSTRUCTIONS,
+            tools=[get_weather],
+        ) as session:
+            await _speak(session, spoken_tool_question_pcm)
+            turn = await _collect_tool_loop(session)
+        await _settle()
+
+        _assert_no_error(turn)
+        assert turn.tools == [
+            ("tool_start", "get_weather"),
+            ("tool_end", "get_weather"),
+        ], f"the SDK never ran the declared tool: {turn.tools}"
+
+        called, answered = turn.responses[0], turn.responses[1]
+        arguments = [
+            str(payload.get("arguments", ""))
+            for payload in turn.received
+            if payload.get("type") == "response.function_call_arguments.done"
+        ] or [
+            str(item.get("arguments", ""))
+            for item in called.get("output", [])
+            if item.get("type") == "function_call"
+        ]
+        assert arguments, f"the tool call carried no arguments: {called}"
+        assert any(_SPOKEN_LOCATION in text.lower() for text in arguments), (
+            f"the tool call did not carry the city the caller spoke: {arguments}"
+        )
+
+        spoken = _spoken_transcript(answered)
+        assert _states_the_temperature(spoken), (
+            f"the answer never stated what the tool returned: {spoken!r}"
+        )
+        assert _states_the_temperature(_assistant_transcript(turn.history)), (
+            f"the SDK's own history lost the answer: {turn.history}"
         )
 
     async def test_a_minted_client_secret_opens_the_session_it_carries(
