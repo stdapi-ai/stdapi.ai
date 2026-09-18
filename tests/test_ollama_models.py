@@ -15,12 +15,14 @@ Ref: https://docs.ollama.com/api/tags
      stdapi/models/__init__.py:_lookup_with_latest_fallback
 """
 
+from importlib.util import find_spec, module_from_spec
 from typing import TYPE_CHECKING
 
 import ollama
 import pytest
 
 from stdapi.api_providers.ollama import OLLAMA_API_VERSION
+from stdapi.config import SETTINGS
 from stdapi.models import _lookup_with_latest_fallback
 from stdapi.routes.ollama_models import model_capabilities, model_digest
 from tests._helpers import make_model_details, ollama_route
@@ -29,6 +31,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     import httpx
+    from starlette.testclient import TestClient
 
     from stdapi.models import ModelDetails
 
@@ -351,3 +354,65 @@ def test_version_answers_a_head_probe(ollama_http: httpx.Client) -> None:
     Ref: ollama/ollama@main:server/routes.go (GenerateRoutes)
     """
     assert ollama_http.head("/api/version").status_code == 200
+
+
+@pytest.mark.local
+@pytest.mark.parametrize("suffix", ["", "/"])
+def test_the_base_url_reports_that_ollama_is_running(
+    app_client: TestClient, suffix: str
+) -> None:
+    """A client's "test connection" probes the base URL, not an API endpoint.
+
+    An Ollama server answers its base URL with that exact plain-text body, and
+    the base URL of this dialect is its routes prefix, so the probe is served
+    there. The body is what a client matches on; anything else reads as "not
+    Ollama". The slashed spelling answers in its own right rather than
+    redirecting, because a probe whose HTTP client does not follow redirects
+    fails on a ``307``.
+
+    Ref: ollama/ollama@main:server/routes.go (GenerateRoutes)
+         stdapi/routes/ollama_root.py:root
+    """
+    response = app_client.get(ollama_route(suffix))
+
+    assert response.status_code == 200
+    assert response.text == "Ollama is running"
+    assert response.headers["content-type"].startswith("text/plain")
+
+
+@pytest.mark.local
+@pytest.mark.parametrize("suffix", ["", "/"])
+def test_the_base_url_answers_a_head_probe(app_client: TestClient, suffix: str) -> None:
+    """`HEAD` on the base URL is the cheapest "is it up" a client sends.
+
+    Ref: ollama/ollama@main:server/routes.go (GenerateRoutes)
+         stdapi/routes/ollama_root.py:head_root
+    """
+    assert app_client.head(ollama_route(suffix)).status_code == 200
+
+
+@pytest.mark.local
+def test_a_root_mounted_dialect_leaves_the_welcome_document_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty routes prefix registers nothing, rather than colliding at `/`.
+
+    ``OLLAMA_ROUTES_PREFIX`` may be empty, which is what an operator sets for a
+    drop-in swap with a stock Ollama host. The base URL is then `/`, which the
+    server's own welcome document owns -- so the probe is dropped, as the other
+    dialects drop a colliding router, and the documented limitation stands for
+    that deployment. Re-executed as a private copy: reloading would replace the
+    running application's own router.
+
+    Ref: stdapi/routes/ollama_root.py
+         stdapi/routes/anthropic_models.py (the same collision pattern)
+    """
+    monkeypatch.setattr(SETTINGS, "ollama_routes_prefix", "")
+    spec = find_spec("stdapi.routes.ollama_root")
+    assert spec is not None
+    assert spec.loader is not None
+    module = module_from_spec(spec)
+
+    spec.loader.exec_module(module)
+
+    assert module.router is None

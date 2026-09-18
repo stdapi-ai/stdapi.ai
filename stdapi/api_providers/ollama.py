@@ -1,10 +1,11 @@
 """Ollama API.
 
 Every operation of this dialect is published as an MCP tool by default, except
-the four that always refuse: this deployment stores no models, so a schema for
-``ollama_create``, ``ollama_copy``, ``ollama_push`` or ``ollama_delete`` would
-advertise a capability that can never succeed. An operator narrows the
-published set further through ``mcp_include_tools`` / ``mcp_exclude_tools``.
+the five that always refuse: this deployment stores no models, so a schema for
+``ollama_create``, ``ollama_copy``, ``ollama_push``, ``ollama_delete`` or
+``ollama_blob_push`` would advertise a capability that can never succeed. An
+operator narrows the published set further through ``mcp_include_tools`` /
+``mcp_exclude_tools``.
 """
 
 from typing import TYPE_CHECKING, Final
@@ -29,7 +30,7 @@ OLLAMA_API_VERSION: Final = "0.33.1"
 
 #: Operation IDs mounted but not published as MCP tools by default: each always refuses.
 MCP_ALWAYS_REFUSED_OPERATIONS: Final = frozenset(
-    {"ollama_create", "ollama_copy", "ollama_push", "ollama_delete"}
+    {"ollama_create", "ollama_copy", "ollama_push", "ollama_delete", "ollama_blob_push"}
 )
 
 

@@ -2,19 +2,23 @@
 
 Every model this server offers is already available, and none of them is stored
 here, so this module holds the one verb whose post-condition can be met and the
-four that would have to change a model store this server does not have.
+five that would have to change a model store this server does not have, plus
+the blob existence probe, which is mounted only so that the upload verb beside
+it does not turn into a 405.
 
 - POST   /api/pull — make a model available (already true, reports success)
 - POST   /api/create — refused
 - POST   /api/copy — refused
 - POST   /api/push — refused
 - DELETE /api/delete — refused
+- POST   /api/blobs/{digest} — refused
+- HEAD   /api/blobs/{digest} — never present, so always 404
 """
 
 from typing import TYPE_CHECKING, Annotated, Never
 
-from fastapi import APIRouter, Depends
-from starlette.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Path, Request
+from starlette.responses import Response, StreamingResponse
 
 from stdapi.api_errors import NoModelStoreError
 from stdapi.api_providers.ollama import NDJSON_MEDIA_TYPE, TAG_OLLAMA
@@ -47,24 +51,34 @@ router = APIRouter(
 #: Status Ollama's model management operations report on completion.
 _SUCCESS: str = "success"
 
-#: Refusal shared by the four verbs that would have to write to a model store.
+#: Refusal shared by the verbs that would have to write to a model store.
 _NO_MODEL_STORE: str = (
     "This server does not store models: the models it offers are hosted and "
     "already available, so they cannot be created, copied, published or "
     "deleted. Call the model list endpoint to see what is available."
 )
 
+#: Refusal of a blob upload, which only feeds the model creation this server refuses.
+_NO_BLOB_STORE: str = (
+    "This server does not store models: a blob is uploaded only to build a "
+    "model from it, which this server cannot do, so there is nothing to upload "
+    "it into. Call the model list endpoint to see what is available."
+)
 
-def _refuse() -> Never:
+
+def _refuse(message: str = _NO_MODEL_STORE) -> Never:
     """Refuse an operation that would have to change a model store.
 
     The request is well-formed; the server will not perform it, because models
     live in Amazon Bedrock and cannot be written from here.
 
+    Args:
+        message: The refusal to report.
+
     Raises:
         NoModelStoreError: Always.
     """
-    raise NoModelStoreError(_NO_MODEL_STORE)
+    raise NoModelStoreError(message)
 
 
 async def _pull_status() -> AsyncGenerator[JsonMapping]:
@@ -226,3 +240,64 @@ async def delete(
     """
     log_request_params(request)
     _refuse()
+
+
+async def _discard_body(http_request: Request) -> None:
+    """Read a request body to its end without holding any of it.
+
+    The refusal is the answer to a client that may already be streaming a
+    multi-gigabyte file: reading the body out in chunks and dropping each one
+    keeps the allocation constant, and letting it finish is what makes the
+    ``403`` arrive as a response rather than as a broken pipe.
+
+    Args:
+        http_request: The incoming request.
+    """
+    async for _chunk in http_request.stream():
+        pass
+
+
+@router.post(
+    "/blobs/{digest}",
+    summary="Push a blob (Ollama format)",
+    operation_id="ollama_blob_push",
+    description=(
+        "UNSUPPORTED (Ollama Push a Blob API). A blob is uploaded only to build "
+        "a model from it, which this server offers no way to do, so there is "
+        "nothing to upload it into."
+    ),
+    response_description="Always an error.",
+    response_model=None,
+    responses={403: {"description": "Blobs cannot be stored on this server."}},
+)
+async def push_blob(
+    http_request: Request,
+    digest: Annotated[str, Path(description="Digest of the blob, as `sha256:<hex>`.")],
+    _: Annotated[None, Depends(authenticate)] = None,
+) -> Never:
+    """Refuse to store a blob.
+
+    Args:
+        http_request: The incoming request, whose body is drained and dropped.
+        digest: Digest the client named the blob by.
+
+    Raises:
+        NoModelStoreError: Always.
+    """
+    log_request_params({"digest": digest})
+    await _discard_body(http_request)
+    _refuse(_NO_BLOB_STORE)
+
+
+# Mounted only so that the upload verb above does not turn an absent blob into
+# a 405. No blob is ever present here, which is the answer Ollama gives for one.
+@router.head("/blobs/{digest}", include_in_schema=False)
+async def head_blob(_: Annotated[None, Depends(authenticate)] = None) -> Response:
+    """Report that a blob is not present, which is always true here.
+
+    The digest is left undeclared: nothing is looked up under it.
+
+    Returns:
+        An empty 404 response.
+    """
+    return Response(status_code=404)

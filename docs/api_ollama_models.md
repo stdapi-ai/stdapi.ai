@@ -1,7 +1,7 @@
 ---
 title: Ollama Models API - Discover Amazon Bedrock Models via the Ollama Interface
 description: List, describe and manage Amazon Bedrock models through the Ollama-compatible /api/tags, /api/show, /api/ps, /api/version and model management endpoints.
-keywords: Ollama models API, Ollama compatible API, Amazon Bedrock models, Ollama /api/tags, Ollama /api/show, Ollama /api/ps, Ollama /api/version, Ollama /api/pull
+keywords: Ollama models API, Ollama compatible API, Amazon Bedrock models, Ollama /api/tags, Ollama /api/show, Ollama /api/ps, Ollama /api/version, Ollama /api/pull, Ollama /api/blobs, Ollama is running
 ---
 
 # Models API (Ollama Compatible)
@@ -14,7 +14,7 @@ Discover, describe and manage Amazon Bedrock models through the Ollama model end
 - :material-format-list-bulleted: **Canonical model names** — `/api/tags` publishes the exact names to send back as `model` on every other Ollama endpoint.
 - :material-tag-check: **Honest capability hints** — `capabilities` reports what the catalogue actually knows about a model, never a guess dressed up as a fact.
 - :material-cloud-lock: **Private AWS backend** — Backed entirely by Amazon Bedrock models in your own AWS account — no traffic to third-party endpoints.
-- :material-swap-horizontal: **Differs from the Ollama API:** the four store-writing verbs answer `403`, `/api/ps` is always empty, `model_info` is always `{}`, and `GET /` does not answer `Ollama is running` — see [Limits and behaviour to know](#limitations).
+- :material-swap-horizontal: **Differs from the Ollama API:** the five store-writing verbs answer `403`, `/api/ps` is always empty, and `model_info` is always `{}` — see [Limits and behaviour to know](#limitations).
 
 !!! info "Base URL and route prefix"
     By default, all Ollama-compatible routes are prefixed with `/ollama`. This means these endpoints are available at `/ollama/api/tags`, `/ollama/api/show`, `/ollama/api/ps`, `/ollama/api/version`, and so on, instead of their bare paths. You can customize this prefix using the `OLLAMA_ROUTES_PREFIX` configuration variable documented in [HTTP Server and MCP](operations_configuration_server.md#ollama-routes-prefix).
@@ -42,9 +42,12 @@ curl "$BASE/api/tags" -H "Authorization: Bearer $API_KEY"
 | `/api/copy`        | `POST`   | Refused — no model store to write to                          | Not exposed     |
 | `/api/push`        | `POST`   | Refused — no model store to write to                          | Not exposed     |
 | `/api/delete`      | `DELETE` | Refused — no model store to write to                          | Not exposed     |
+| `/api/blobs/{digest}` | `POST` | Refused — no model store to upload a blob into                | Not exposed     |
+| `/api/blobs/{digest}` | `HEAD` | Always `404` — no blob is ever stored here                    | Not exposed     |
+| `$BASE`            | `GET`, `HEAD` | Answer `Ollama is running` — see [`GET $BASE`](#base-url-probe) | Not exposed |
 
-!!! note "The Four Refused Verbs Are Not Exposed as MCP Tools"
-    `ollama_create`, `ollama_copy`, `ollama_push` and `ollama_delete` always refuse, since this deployment stores no models — a tool schema for a call that can never succeed would only mislead an agent — so none of the four is in the MCP tool set by default. Every other operation on this page is published; model discovery is also covered by [`/search_models`](api_search_models.md). An operator who wants a refused verb back anyway names it (for example `ollama_create`) in [`MCP_INCLUDE_TOOLS`](operations_configuration_server.md#mcp-include-tools).
+!!! note "The Five Refused Verbs Are Not Exposed as MCP Tools"
+    `ollama_create`, `ollama_copy`, `ollama_push`, `ollama_delete` and `ollama_blob_push` always refuse, since this deployment stores no models — a tool schema for a call that can never succeed would only mislead an agent — so none of the five is in the MCP tool set by default. Every other operation on this page is published; model discovery is also covered by [`/search_models`](api_search_models.md). An operator who wants a refused verb back anyway names it (for example `ollama_create`) in [`MCP_INCLUDE_TOOLS`](operations_configuration_server.md#mcp-include-tools).
 
 ## `GET /api/tags`
 
@@ -146,12 +149,24 @@ curl "$BASE/api/version" -H "Authorization: Bearer $API_KEY"
 
 This is a **compatibility declaration**, not this server's own version: an Ollama client uses it to decide which features of the Ollama API it may send. `HEAD /api/version` also answers `200`, for clients that probe it as a liveness check — and, like every other route, it requires the API key.
 
-!!! warning "GET / Does Not Answer \"Ollama is running\""
-    A real Ollama server answers `GET /` with the plain-text body `Ollama is running`, and some clients probe that path to detect one. On this server, `GET /` is the server's own root document, unrelated to Ollama compatibility. Clients that need to detect this server as an Ollama-compatible endpoint should probe `GET /api/version` instead.
+## `GET $BASE` { #base-url-probe }
+
+A real Ollama server answers its base URL with the plain-text body `Ollama is running`, and a client's "test connection" action probes that rather than an API endpoint. This server answers it at the base URL an Ollama client is configured with — the routes prefix, `/ollama` by default — with or without a trailing slash, and `HEAD` answers `200` the same way.
+
+```bash
+curl "$BASE" -H "Authorization: Bearer $API_KEY"
+```
+
+```text
+Ollama is running
+```
+
+!!! warning "Not served when the prefix is empty"
+    With `OLLAMA_ROUTES_PREFIX` set to the empty string, the Ollama base URL *is* `/`, which the server's own root document owns. That deployment does not answer `Ollama is running` anywhere; clients detecting it should probe `GET /api/version` instead.
 
 ## Model Management
 
-Every model this server offers is already available and none of them is stored locally, which leaves one verb whose post-condition can be met, and four that would have to change a model store this server does not have.
+Every model this server offers is already available and none of them is stored locally, which leaves one verb whose post-condition can be met, and five that would have to change a model store this server does not have.
 
 ### `POST /api/pull`
 
@@ -185,14 +200,25 @@ curl -X POST "$BASE/api/create" \
 {"error": "This server does not store models: the models it offers are hosted and already available, so they cannot be created, copied, published or deleted. Call the model list endpoint to see what is available."}
 ```
 
+### `POST /api/blobs/{digest}`, `HEAD /api/blobs/{digest}`
+
+A blob is uploaded only as the first step of building a model from local GGUF or safetensors files — the flow `POST /api/create` documents, and refuses here. `POST` therefore answers `403` as the four verbs above do, rather than upstream's `400`: the request is well-formed, the server simply will not perform it. The upload is read out and discarded in constant memory before the refusal is sent, so a client that had already started streaming a multi-gigabyte file receives the error rather than a broken connection.
+
+`HEAD` answers `404` for every digest, which is what an Ollama server answers for a blob it does not hold — no blob is ever stored here.
+
+```bash
+curl -I "$BASE/api/blobs/sha256:$DIGEST" -H "Authorization: Bearer $API_KEY"
+```
+
 ## Limits and behaviour to know { #limitations }
 
 - `POST /api/create`, `POST /api/copy`, `POST /api/push` and `DELETE /api/delete` always answer `403`: this server does not store models, so these operations have no state to change, and answering `200` would tell the caller something changed when nothing did.
-- `GET /` does not answer `Ollama is running` — see the note under [`GET /api/version`](#get-apiversion) above.
+- `POST /api/blobs/{digest}` answers `403` and `HEAD /api/blobs/{digest}` answers `404`: there is no model store for a blob to be uploaded into, and none is ever held. Upstream answers a mismatched upload `400`; the `403` says something different — the server will not store any blob, whatever its digest.
+- `Ollama is running` is answered at the Ollama base URL — the routes prefix, `/ollama` by default — and not at `/`, which is the server's own root document. A deployment that sets `OLLAMA_ROUTES_PREFIX` to the empty string does not answer it anywhere; see [`GET $BASE`](#base-url-probe).
 - `capabilities` is a best-effort hint derived from the catalogue, never a contract; `thinking` and `insert` are never advertised, for the reasons given under [Capabilities](#capabilities).
 - `model_info` is always an empty object, and `details.parameter_size` and `details.quantization_level` always empty strings: Amazon Bedrock publishes no GGUF header for the models it serves, and a plausible-looking invention is worse than the empty value Ollama itself uses for an unknown one.
 - `digest` is the full 64-character identifier an Ollama server returns, derived from the model name rather than from any content, so it is a stable cache key and never a content hash.
-- `HEAD /api/tags` and `HEAD /api/version` require the API key like every other route, so they answer `401` to an unauthenticated probe. Point a load balancer at `/health` instead.
+- `HEAD /api/tags`, `HEAD /api/version` and the base-URL probe (`GET` and `HEAD`) require the API key like every other route, so they answer `401` to an unauthenticated probe. Point a load balancer at `/health` instead.
 
 ## Request headers
 

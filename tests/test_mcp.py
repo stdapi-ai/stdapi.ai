@@ -561,10 +561,11 @@ class TestMCPIntegration:
     ) -> None:
         """The nine Ollama operations that can succeed are published by default.
 
-        Only the four that always refuse -- create, copy, push, delete -- are
-        withheld: this deployment stores no models, so a tool schema for a
-        call that can never succeed would only mislead an agent. Ollama is no
-        longer treated differently from the Anthropic and Cohere dialects.
+        Only the five that always refuse -- create, copy, push, delete and the
+        blob upload -- are withheld: this deployment stores no models, so a tool
+        schema for a call that can never succeed would only mislead an agent.
+        Ollama is no longer treated differently from the Anthropic and Cohere
+        dialects.
 
         Ref: stdapi/api_providers/ollama.py:MCP_ALWAYS_REFUSED_OPERATIONS
         """
@@ -589,7 +590,13 @@ class TestMCPIntegration:
             "ollama_version",
             "ollama_pull",
         }
-        refused = {"ollama_create", "ollama_copy", "ollama_push", "ollama_delete"}
+        refused = {
+            "ollama_create",
+            "ollama_copy",
+            "ollama_push",
+            "ollama_delete",
+            "ollama_blob_push",
+        }
         assert published <= names
         assert refused.isdisjoint(names)
 
