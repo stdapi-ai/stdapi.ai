@@ -1454,16 +1454,23 @@ def ollama_embedding_model(ollama_models: dict[str, str]) -> str:
 
 
 @pytest.fixture(scope="session")
-def live_server(use_official_api: bool, server_url: str | None) -> Iterator[str | None]:
+def live_server(
+    use_official_api: bool, server_url: str | None, test_client: TestClient | None
+) -> Iterator[str | None]:
     """Base URL of a target reachable over a real socket, or None for the vendor.
 
     A WebSocket route cannot be exercised through ``TestClient`` as an SDK
     transport: the official client dials the URL itself, with its own WebSocket
     stack. The in-process lane therefore serves the same ASGI app from a real
-    uvicorn on a loopback port, running a second lifespan of it in the same
-    process. That lifespan drops the shared AWS client pool when it unwinds, so
-    the pool the ``test_client`` lifespan built is put back afterwards: any
-    session fixture finalised later still answers through it.
+    uvicorn on a loopback port -- on the event loop ``test_client`` already
+    runs, and with uvicorn's own lifespan switched off.
+
+    The app then keeps a single lifespan, and with it a single AWS client pool
+    whose clients are created, used and closed on one loop. A second lifespan on
+    a second loop cannot: both write the same process-wide pool, so requests
+    served by one loop reach clients the other owns, and the aiohttp connector
+    they open on first use belongs to the serving loop while the owning lifespan
+    closes it on its own -- which aiohttp refuses.
 
     Yields:
         The HTTP base URL to dial, or None when the vendor's own endpoint is the
@@ -1477,35 +1484,42 @@ def live_server(use_official_api: bool, server_url: str | None) -> Iterator[str 
         return
 
     import socket  # noqa: PLC0415
-    import threading  # noqa: PLC0415
     import time  # noqa: PLC0415
+    from contextlib import suppress  # noqa: PLC0415
 
     import uvicorn  # noqa: PLC0415
 
-    from stdapi.aws import _CLIENTS  # noqa: PLC0415
     from stdapi.main import app  # noqa: PLC0415
 
-    pool = {service: dict(clients) for service, clients in _CLIENTS.items()}
+    assert test_client is not None, "the in-process lane always builds one"
+    portal = test_client.portal
+    assert portal is not None, "the ASGI test client holds its portal while entered"
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     port = int(listener.getsockname()[1])
-    server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
-    thread = threading.Thread(
-        target=server.run, kwargs={"sockets": [listener]}, daemon=True
-    )
-    thread.start()
+    server = uvicorn.Server(uvicorn.Config(app, log_level="warning", lifespan="off"))
+    serving = portal.start_task_soon(server.serve, [listener])
     try:
         deadline = time.monotonic() + _LIVE_SERVER_BOOT_TIMEOUT
         while not server.started:
-            if time.monotonic() > deadline or not thread.is_alive():
+            if serving.done():
+                serving.result()  # Re-raises whatever stopped the server.
+                pytest.fail("the in-process WebSocket server stopped while booting")
+            if time.monotonic() > deadline:
                 pytest.fail("the in-process WebSocket server did not start")
             time.sleep(0.05)
         yield f"http://127.0.0.1:{port}"
     finally:
         server.should_exit = True
-        thread.join(timeout=_LIVE_SERVER_STOP_TIMEOUT)
-        for service, clients in pool.items():
-            _CLIENTS.setdefault(service, {}).update(clients)
+        try:
+            serving.result(timeout=_LIVE_SERVER_STOP_TIMEOUT)
+        except TimeoutError:
+            # The portal is shut down by ``test_client`` right after this, and
+            # it waits for every task it spawned: a graceful stop that hangs
+            # would hang the session instead of ending it.
+            server.force_exit = True
+            with suppress(TimeoutError):
+                serving.result(timeout=_LIVE_SERVER_STOP_TIMEOUT)
 
 
 @pytest.fixture(scope="session")
