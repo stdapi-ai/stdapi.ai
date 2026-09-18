@@ -409,6 +409,11 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "epoch/aider_polyglot_external/moonshotai.kimi-k3": {
+  "candidates": "c87a5a7843a47504",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/aider_polyglot_external/nvidia.nemotron-nano-12b-v2": {
   "candidates": "d739bc607742a0c7",
   "match": null,
@@ -460,6 +465,11 @@
   "reason": "the model was not recognised on this board"
  },
  "epoch/aider_polyglot_external/openai.gpt-5.6-terra": {
+  "candidates": "bf67b661cc584983",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "epoch/aider_polyglot_external/openai.gpt-6-astra": {
   "candidates": "bf67b661cc584983",
   "match": null,
   "reason": "the model was not recognised on this board"
@@ -1054,6 +1064,11 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "epoch/frontiermath/moonshotai.kimi-k3": {
+  "candidates": "2f90913db5e4dc48",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/frontiermath/nvidia.nemotron-nano-12b-v2": {
   "candidates": "e3b0c44298fc1c14",
   "match": null,
@@ -1100,6 +1115,11 @@
   "reason": "the model was not recognised on this board"
  },
  "epoch/frontiermath/openai.gpt-5.6-terra": {
+  "candidates": "ba2f16fb378edf40",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "epoch/frontiermath/openai.gpt-6-astra": {
   "candidates": "ba2f16fb378edf40",
   "match": null,
   "reason": "the model was not recognised on this board"
@@ -1520,17 +1540,17 @@
   "reason": "the model was not recognised on this board"
  },
  "epoch/gpqa_diamond/google.gemma-4-26b-a4b": {
-  "candidates": "e5ba1573d8dc3b52",
+  "candidates": "1e6a4ae8014e6333",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/gpqa_diamond/google.gemma-4-31b": {
-  "candidates": "e5ba1573d8dc3b52",
+  "candidates": "1e6a4ae8014e6333",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/gpqa_diamond/google.gemma-4-e2b": {
-  "candidates": "e5ba1573d8dc3b52",
+  "candidates": "1e6a4ae8014e6333",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -1690,47 +1710,47 @@
   "reason": "the model was not recognised on this board"
  },
  "epoch/gpqa_diamond/qwen.qwen3-coder-30b-a3b-instruct": {
-  "candidates": "d031840a79758d56",
+  "candidates": "5ae1e39d09612bb3",
   "match": null,
   "reason": "the two directions disagreed"
  },
  "epoch/gpqa_diamond/qwen.qwen3-coder-30b-a3b-v1:0": {
-  "candidates": "d031840a79758d56",
+  "candidates": "5ae1e39d09612bb3",
   "match": null,
   "reason": "the two directions disagreed"
  },
  "epoch/gpqa_diamond/qwen.qwen3-coder-480b-a35b-instruct": {
-  "candidates": "d031840a79758d56",
+  "candidates": "5ae1e39d09612bb3",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/gpqa_diamond/qwen.qwen3-coder-480b-a35b-v1:0": {
-  "candidates": "d031840a79758d56",
+  "candidates": "5ae1e39d09612bb3",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/gpqa_diamond/qwen.qwen3-coder-next": {
-  "candidates": "d031840a79758d56",
+  "candidates": "5ae1e39d09612bb3",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/gpqa_diamond/qwen.qwen3-next-80b-a3b": {
-  "candidates": "d031840a79758d56",
+  "candidates": "5ae1e39d09612bb3",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/gpqa_diamond/qwen.qwen3-next-80b-a3b-instruct": {
-  "candidates": "d031840a79758d56",
+  "candidates": "5ae1e39d09612bb3",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/gpqa_diamond/qwen.qwen3-vl-235b-a22b": {
-  "candidates": "d031840a79758d56",
+  "candidates": "5ae1e39d09612bb3",
   "match": null,
   "reason": "the two directions disagreed"
  },
  "epoch/gpqa_diamond/qwen.qwen3-vl-235b-a22b-instruct": {
-  "candidates": "d031840a79758d56",
+  "candidates": "5ae1e39d09612bb3",
   "match": null,
   "reason": "the two directions disagreed"
  },
@@ -2264,6 +2284,11 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "epoch/math_level_5/openai.gpt-6-astra": {
+  "candidates": "fee2c4e6c5cc3855",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/math_level_5/openai.gpt-oss-120b": {
   "candidates": "fee2c4e6c5cc3855",
   "match": null,
@@ -2720,32 +2745,32 @@
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/google.gemma-3-12b-it": {
-  "candidates": "e73145c4a7c55523",
+  "candidates": "cd302e23ba4fb182",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/google.gemma-3-27b-it": {
-  "candidates": "e73145c4a7c55523",
+  "candidates": "cd302e23ba4fb182",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/google.gemma-3-4b-it": {
-  "candidates": "e73145c4a7c55523",
+  "candidates": "cd302e23ba4fb182",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/google.gemma-4-26b-a4b": {
-  "candidates": "e73145c4a7c55523",
+  "candidates": "cd302e23ba4fb182",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/google.gemma-4-31b": {
-  "candidates": "e73145c4a7c55523",
+  "candidates": "cd302e23ba4fb182",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/google.gemma-4-e2b": {
-  "candidates": "e73145c4a7c55523",
+  "candidates": "cd302e23ba4fb182",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -2955,67 +2980,67 @@
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/qwen.qwen3-235b-a22b-2507": {
-  "candidates": "9901f445be44413a",
+  "candidates": "bc130a7515c45bf7",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/qwen.qwen3-235b-a22b-2507-v1:0": {
-  "candidates": "9901f445be44413a",
+  "candidates": "bc130a7515c45bf7",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/qwen.qwen3-32b": {
-  "candidates": "9901f445be44413a",
+  "candidates": "bc130a7515c45bf7",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/qwen.qwen3-32b-v1:0": {
-  "candidates": "9901f445be44413a",
+  "candidates": "bc130a7515c45bf7",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/qwen.qwen3-coder-30b-a3b-instruct": {
-  "candidates": "9901f445be44413a",
+  "candidates": "bc130a7515c45bf7",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/qwen.qwen3-coder-30b-a3b-v1:0": {
-  "candidates": "9901f445be44413a",
+  "candidates": "bc130a7515c45bf7",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/qwen.qwen3-coder-480b-a35b-instruct": {
-  "candidates": "9901f445be44413a",
+  "candidates": "bc130a7515c45bf7",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/qwen.qwen3-coder-480b-a35b-v1:0": {
-  "candidates": "9901f445be44413a",
+  "candidates": "bc130a7515c45bf7",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/qwen.qwen3-coder-next": {
-  "candidates": "9901f445be44413a",
+  "candidates": "bc130a7515c45bf7",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/qwen.qwen3-next-80b-a3b": {
-  "candidates": "9901f445be44413a",
+  "candidates": "bc130a7515c45bf7",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/qwen.qwen3-next-80b-a3b-instruct": {
-  "candidates": "9901f445be44413a",
+  "candidates": "bc130a7515c45bf7",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/qwen.qwen3-vl-235b-a22b": {
-  "candidates": "9901f445be44413a",
+  "candidates": "bc130a7515c45bf7",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/qwen.qwen3-vl-235b-a22b-instruct": {
-  "candidates": "9901f445be44413a",
+  "candidates": "bc130a7515c45bf7",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -3539,6 +3564,11 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "epoch/swe_bench_verified/moonshotai.kimi-k3": {
+  "candidates": "cee5d84d4d2eba65",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/swe_bench_verified/nvidia.nemotron-nano-12b-v2": {
   "candidates": "e3b0c44298fc1c14",
   "match": null,
@@ -3585,6 +3615,11 @@
   "reason": "the model was not recognised on this board"
  },
  "epoch/swe_bench_verified/openai.gpt-5.6-terra": {
+  "candidates": "132bfff0576d9710",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "epoch/swe_bench_verified/openai.gpt-6-astra": {
   "candidates": "132bfff0576d9710",
   "match": null,
   "reason": "the model was not recognised on this board"
@@ -5554,6 +5589,11 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "lmarena/search/openai.gpt-6-astra": {
+  "candidates": "18591e9da85bac24",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "lmarena/search/openai.gpt-oss-120b": {
   "candidates": "18591e9da85bac24",
   "match": null,
@@ -5895,12 +5935,12 @@
   "reason": "no rule match and no plausible candidate"
  },
  "lmarena/text/meta.llama4-maverick-17b-instruct-v1:0": {
-  "candidates": "f75679f1259a56c7",
+  "candidates": "8ff52f37886f64d9",
   "match": "llama-4-maverick-17b-128e-instruct",
-  "reason": "Matches the base model name and size exactly; only differs in the suffix which likely denotes hyperparameters."
+  "reason": "Matches the base model name and size exactly; only differs in parameter count specification which does not change model identity."
  },
  "lmarena/text/meta.llama4-scout-17b-instruct-v1:0": {
-  "candidates": "f75679f1259a56c7",
+  "candidates": "8ff52f37886f64d9",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -5975,22 +6015,22 @@
   "reason": "the model was not recognised on this board"
  },
  "lmarena/text/openai.gpt-5.4-2026-03-05": {
-  "candidates": "8b398869d64701f2",
+  "candidates": "47e2e83c3d098395",
   "match": "gpt-5.4",
-  "reason": "The Bedrock model ID openai.gpt-5.4-2026-03-05 corresponds directly to the leaderboard entry gpt-5.4, as it represents the same base model version."
- },
- "lmarena/text/openai.gpt-5.5-2026-04-23": {
-  "candidates": "8b398869d64701f2",
-  "match": "gpt-5.5",
   "reason": "Exact match of model name without any variation in size, generation, or vendor."
  },
+ "lmarena/text/openai.gpt-5.5-2026-04-23": {
+  "candidates": "47e2e83c3d098395",
+  "match": "gpt-5.5",
+  "reason": "Exact match of model name without any variations in size, generation, or vendor."
+ },
  "lmarena/text/openai.gpt-oss-safeguard-120b": {
-  "candidates": "8b398869d64701f2",
+  "candidates": "47e2e83c3d098395",
   "match": null,
   "reason": "the two directions disagreed"
  },
  "lmarena/text/openai.gpt-oss-safeguard-20b": {
-  "candidates": "8b398869d64701f2",
+  "candidates": "47e2e83c3d098395",
   "match": null,
   "reason": "the two directions disagreed"
  },
@@ -7470,27 +7510,27 @@
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/anthropic.claude-haiku-4-5": {
-  "candidates": "a7adfaa7bb13d8f5",
+  "candidates": "5335b44925e86e3e",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/anthropic.claude-haiku-4-5-20251001-v1:0": {
-  "candidates": "a7adfaa7bb13d8f5",
+  "candidates": "5335b44925e86e3e",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/anthropic.claude-opus-4-1-20250805-v1:0": {
-  "candidates": "a7adfaa7bb13d8f5",
+  "candidates": "5335b44925e86e3e",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/anthropic.claude-opus-4-5-20251101-v1:0": {
-  "candidates": "a7adfaa7bb13d8f5",
+  "candidates": "5335b44925e86e3e",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/anthropic.claude-sonnet-4-5-20250929-v1:0": {
-  "candidates": "a7adfaa7bb13d8f5",
+  "candidates": "5335b44925e86e3e",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -7555,12 +7595,12 @@
   "reason": "no rule match and no plausible candidate"
  },
  "lmarena/vision/meta.llama4-maverick-17b-instruct-v1:0": {
-  "candidates": "09f57ae4cf7920cb",
+  "candidates": "995a4d54db542e66",
   "match": "llama-4-maverick-17b-128e-instruct",
-  "reason": "Matches the base model name and size exactly; only the context window size (128e) differs, which does not change the model identity."
+  "reason": "Matches the base model name and size exactly; only the context window size (128e) differs, which is a configuration detail not changing the core model identity."
  },
  "lmarena/vision/meta.llama4-scout-17b-instruct-v1:0": {
-  "candidates": "09f57ae4cf7920cb",
+  "candidates": "995a4d54db542e66",
   "match": "llama-4-scout-17b-16e-instruct",
   "reason": "Same base model Llama 4 Scout 17B Instruct, only difference is 16e vs unspecified encoding which doesn't change model identity"
  },
@@ -7599,6 +7639,11 @@
   "match": null,
   "reason": "no rule match and no plausible candidate"
  },
+ "lmarena/vision/moonshotai.kimi-k3": {
+  "candidates": "16ec52a5e503bfc2",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "lmarena/vision/nvidia.nemotron-nano-12b-v2": {
   "candidates": "76778faf18e24dc8",
   "match": null,
@@ -7620,14 +7665,14 @@
   "reason": "no rule match and no plausible candidate"
  },
  "lmarena/vision/openai.gpt-5.4-2026-03-05": {
-  "candidates": "32c70b402f74ad81",
+  "candidates": "35a24cf757dbc33e",
   "match": "gpt-5.4",
-  "reason": "Exact match in model family and version, same vendor."
+  "reason": "Exact match of model version without any suffix variations"
  },
  "lmarena/vision/openai.gpt-5.5-2026-04-23": {
-  "candidates": "32c70b402f74ad81",
+  "candidates": "35a24cf757dbc33e",
   "match": "gpt-5.5",
-  "reason": "Exact match in model family and version, same vendor."
+  "reason": "The Bedrock model ID openai.gpt-5.5-2026-04-23 corresponds directly to the leaderboard entry gpt-5.5, as it shares the same base model version without any variant modifiers."
  },
  "lmarena/vision/stability.sd3-5-large-v1:0": {
   "candidates": "c4473370b74bf8c1",

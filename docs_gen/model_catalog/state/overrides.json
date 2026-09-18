@@ -10,6 +10,18 @@
     "Review docs_gen/model_catalog/state/unmatched.json after every run: its",
     "entries_shared_by_several_models section is where a wrong match shows up."
   ],
+  "zai.glm-4.7": {
+    "epoch/gpqa_diamond": {
+      "match": null,
+      "reason": "matched glm-4.7-flash, the smaller model this one is not"
+    }
+  },
+  "deepseek.v3.2": {
+    "epoch/gpqa_diamond": {
+      "match": null,
+      "reason": "matched DeepSeek-V3, a different model generation"
+    }
+  },
   "anthropic.claude-sonnet-4-6": {
     "epoch/math_level_5": {
       "match": null,
