@@ -10,13 +10,13 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 ## :material-tag-multiple: Version Index { #recent-releases }
 
-**Latest: v1.18.0 — not yet released.**
+**Latest: v1.18.0 — released 2026-09-19.**
 
 Every release, newest first. Each entry in the [Release History](#release-history) below opens with a five-bullet summary.
 
 | Version | Date | Theme | Release notes |
 |---|---|---|---|
-| **v1.18.0** | not yet released | Vendor parity across every mirrored API, tenant key rotation, per-tenant rate limits, realtime tools | [Read](#v1180-vendor-parity-tenant-key-rotation-rate-limits) |
+| **v1.18.0** | 2026-09-19 | Vendor parity across every mirrored API, tenant key rotation, per-tenant rate limits, realtime tools | [Read](#v1180-vendor-parity-tenant-key-rotation-rate-limits) |
 | **v1.17.0** | 2026-09-08 | Your own model endpoints, the Ollama dialect, per-tenant keys, usage and cost from the API, WebRTC | [Read](#v1170-your-own-models-your-own-tenants-your-own-spend) |
 | **v1.16.0** (and v1.16.1) | 2026-08-21 (2026-08-25) | Conversations, batches, vector stores, realtime speech and per-user identity | [Read](#v1160-conversations-batches-vector-stores-realtime-speech-per-user-identity-with-v1161-maintenance-update) |
 | **v1.15.0** | 2026-08-03 | Reliability, performance and feature completeness | [Read](#v1150-reliability-performance-feature-completeness) |
@@ -46,7 +46,7 @@ Pending features and current deployment state are tracked on the [GitHub Project
 
 ## :material-history: Release History
 
-### v1.18.0 – not yet released – Vendor Parity, Tenant Key Rotation & Rate Limits { #v1180-vendor-parity-tenant-key-rotation-rate-limits }
+### v1.18.0 – 2026-09-19 – Vendor Parity, Tenant Key Rotation & Rate Limits { #v1180-vendor-parity-tenant-key-rotation-rate-limits }
 
 !!! abstract "At a glance"
     - **Requests the real APIs accept are no longer refused** — about thirty of them, across Chat Completions, Responses, Anthropic Messages, the Ollama dialect, audio and images: a `temperature` above 1, `service_tier: "fast"`, `max_tokens: 0`, `speed` up to 4.0, an empty Ollama `format`, a `tool_result` with no content, and the rest. The gateway's job is to answer what the vendor answers.
