@@ -19,6 +19,9 @@ UploadStatus = Literal["pending", "completed", "cancelled", "expired"]
 #: Accepted form of the completion checksum: a hex-encoded MD5 digest, either case.
 _MD5_PATTERN = r"^[0-9a-fA-F]{32}$"
 
+#: Largest object S3 can assemble from a multipart upload: 10,000 parts of 5 GiB (48.8 TiB).
+_MAX_UPLOAD_BYTES = 10_000 * 5 * 1024 * 1024 * 1024
+
 
 class UploadExpiresAfter(BaseModelRequest):
     """Expiration policy applied to the file created by an upload."""
@@ -40,8 +43,10 @@ class CreateUploadBody(BaseModelRequest):
 
     bytes: int = Field(
         gt=0,
-        le=8 * 1024 * 1024 * 1024,
-        description="The number of bytes in the file you are uploading.",
+        le=_MAX_UPLOAD_BYTES,
+        description="The number of bytes in the file you are uploading, at most "
+        "48.8 TiB (10,000 parts of 5 GiB, the largest object the storage backend "
+        "assembles).",
     )
     filename: str = Field(description="The name of the file to upload.")
     mime_type: str = Field(description="The MIME type of the file.")

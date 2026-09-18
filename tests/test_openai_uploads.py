@@ -5,7 +5,7 @@ complete/cancel against S3) lives in ``tests/test_openai_files.py::TestOpenAIUpl
 which shares the ``openai_files``-namespace fixtures with the ``/v1/files``
 tests. This module covers the ``purpose=batch`` default-expiry resolution, the
 bounded per-process session cache, the completion checksum, the shape of the
-part IDs a completion accepts, the part size cap,
+part IDs a completion accepts, the inline JSON part size cap,
 and the JSON-body part route's remote-source handling. Everything is offline (no AWS credentials,
 no S3 calls, no network beyond a loopback origin a test starts itself) except
 ``TestCompleteUploadChecksumOnS3``, which runs the checksum against a real
@@ -48,6 +48,7 @@ serve_origin = serve_origin_fixture
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
+    from typing import BinaryIO
 
     # Starlette types TestClient against httpx2; these helpers only ever carry its
     # responses, so they are typed from the same module it returns them from.
@@ -307,8 +308,8 @@ class TestAddUploadPartJsonBodyRemoteSources:
             A replacement for ``stdapi.routes.openai_uploads.add_part``.
         """
 
-        async def fake_add_part(_upload_id: str, chunk: bytes) -> tuple[str, int]:
-            chunks.append(chunk)
+        async def fake_add_part(_upload_id: str, part: BinaryIO) -> tuple[str, int]:
+            chunks.append(part.read())
             return _STUB_PART_ID, 0
 
         return fake_add_part
@@ -394,38 +395,36 @@ class TestAddUploadPartJsonBodyRemoteSources:
 
 
 class TestAddUploadPartSizeCap:
-    """POST /v1/uploads/{id}/parts refuses a part larger than a Part may carry.
+    """POST /v1/uploads/{id}/parts bounds the inline JSON part form, and only that one.
 
-    The Uploads API documents "Each Part can be at most 64 MB", and the official
-    client splits at exactly that size, so a larger part is refused with 413
-    instead of being held whole in the server's memory: without the bound one
-    authenticated caller decides how much memory is left for every other request
-    the deployment is serving.
+    An inline part is decoded whole before it can be stored, so the request
+    decides how much memory is left for every other request the deployment is
+    serving unless a maximum says otherwise. A binary part carries no such cost:
+    the parser spools it to a file and the route streams that file to storage, so
+    the only ceiling left is the backend's own 5 GiB per part -- more permissive
+    than the 64 MB the Uploads API documents, which is the direction this
+    gateway diverges in on purpose.
 
-    Both request shapes are covered, because they allocate in different places:
-    the binary form field is read out of the parsed body, while the JSON body is
-    the allocation itself and is bounded as it arrives.
-
-    Ref: https://developers.openai.com/api/reference/resources/uploads
-         openai.resources.uploads.uploads.DEFAULT_PART_SIZE
+    Ref: https://developers.openai.com/api/reference/resources/uploads.md
+         https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
          stdapi/routes/openai_uploads.py:add_upload_part
     """
 
-    #: Part maximum the tests substitute, so the bound is asserted without a 64 MiB payload.
+    #: Inline part maximum the tests substitute, so the bound is asserted without a 64 MiB payload.
     _CAP = 16
 
     @pytest.fixture
     def chunks(self, monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
-        """Shrink the part maximum and record what reaches storage.
+        """Shrink the inline part maximum and record what reaches storage.
 
         Returns:
             List each accepted part appends its bytes to.
         """
-        monkeypatch.setattr(openai_uploads_routes, "_MAX_PART_SIZE", self._CAP)
+        monkeypatch.setattr(openai_uploads_routes, "_MAX_INLINE_PART_SIZE", self._CAP)
         recorded: list[bytes] = []
 
-        async def fake_add_part(_upload_id: str, chunk: bytes) -> tuple[str, int]:
-            recorded.append(chunk)
+        async def fake_add_part(_upload_id: str, part: BinaryIO) -> tuple[str, int]:
+            recorded.append(part.read())
             return _STUB_PART_ID, 0
 
         monkeypatch.setattr(openai_uploads_routes, "add_part", fake_add_part)
@@ -440,24 +439,24 @@ class TestAddUploadPartSizeCap:
         assert str(cls._CAP) in error["message"], error
         assert chunks == []
 
-    def test_the_maximum_is_the_one_the_official_client_uploads(self) -> None:
-        """The cap equals the part size the OpenAI client splits a file into.
+    def test_the_inline_maximum_holds_a_part_the_official_client_uploads(self) -> None:
+        """The inline cap is at least the part size the OpenAI client splits a file into.
 
-        A cap below it would refuse parts a compliant client sends unprompted,
-        and one above it would accept what the upstream API does not.
+        A cap below it would refuse, on the JSON form, a part a compliant client
+        sends unprompted on the binary one.
 
         Ref: openai.resources.uploads.uploads.DEFAULT_PART_SIZE
         """
-        assert openai_uploads_routes._MAX_PART_SIZE == DEFAULT_PART_SIZE  # noqa: SLF001
-        assert openai_uploads_routes._MAX_PART_SIZE == 64 * 1024 * 1024  # noqa: SLF001
+        assert openai_uploads_routes._MAX_INLINE_PART_SIZE >= DEFAULT_PART_SIZE  # noqa: SLF001
+        assert openai_uploads_routes._MAX_INLINE_PART_SIZE == 64 * 1024 * 1024  # noqa: SLF001
 
-    def test_a_binary_part_at_the_maximum_is_stored_whole(
+    def test_a_binary_part_at_the_inline_maximum_is_stored_whole(
         self, app_client: TestClient, chunks: list[bytes]
     ) -> None:
-        """A part of exactly the maximum size is accepted and stored unchanged.
+        """A binary part of exactly the inline maximum is accepted and stored unchanged.
 
-        The bound is exclusive, and reading it must not truncate the part: a part
-        silently cut to the cap would assemble into a corrupt file.
+        Reading it must not truncate the part: a part silently cut to a cap would
+        assemble into a corrupt file.
 
         Ref: stdapi/routes/openai_uploads.py:add_upload_part
         """
@@ -471,21 +470,27 @@ class TestAddUploadPartSizeCap:
         assert response.status_code == 200, response.text
         assert chunks == [payload]
 
-    def test_an_oversized_binary_part_is_refused(
+    def test_a_binary_part_past_the_inline_maximum_is_still_accepted(
         self, app_client: TestClient, chunks: list[bytes]
     ) -> None:
-        """One byte over the maximum is refused with 413 and never reaches storage.
+        """The inline maximum does not reach the binary form, which is streamed.
 
-        Ref: stdapi/routes/openai_uploads.py:add_upload_part
+        The binary part never becomes an allocation the gateway chooses to make,
+        so nothing but the storage backend's own per-part maximum bounds it; the
+        whole part must still reach storage, byte for byte.
+
+        Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
+             stdapi/routes/openai_uploads.py:add_upload_part
         """
+        payload = b"x" * (self._CAP + 1)
+
         response = app_client.post(
             f"/v1/uploads/{_STUB_UPLOAD_ID}/parts",
-            files={
-                "data": ("part.bin", b"x" * (self._CAP + 1), "application/octet-stream")
-            },
+            files={"data": ("part.bin", payload, "application/octet-stream")},
         )
 
-        self._assert_refused(response, chunks)
+        assert response.status_code == 200, response.text
+        assert chunks == [payload], "a streamed part is neither refused nor truncated"
 
     def test_a_json_part_at_the_maximum_is_stored_whole(
         self, app_client: TestClient, chunks: list[bytes]
@@ -711,10 +716,10 @@ class _StubMultipartS3Client:
         }
 
     async def upload_part(self, **kwargs: object) -> dict[str, Any]:
-        """Store one part and report its entity tag."""
+        """Drain the streamed part body, store it, and report its entity tag."""
         number: int = kwargs["PartNumber"]  # type: ignore[assignment]
-        body: bytes = kwargs["Body"]  # type: ignore[assignment]
-        self.parts[number] = data = bytes(body)
+        body: BinaryIO = kwargs["Body"]  # type: ignore[assignment]
+        self.parts[number] = data = body.read()
         return {"ETag": self._etag(data)}
 
     async def complete_multipart_upload(self, **kwargs: object) -> dict[str, Any]:
@@ -1255,7 +1260,8 @@ class TestUploadHashingOffTheEventLoop:
 
         async def staggered_to_thread(func: Any, /, *args: Any) -> Any:  # noqa: ANN401
             """Run *func* after a delay chosen so the second caller finishes first."""
-            await asyncio.sleep(next(delays, 0.0))
+            if func.__name__ == "update":
+                await asyncio.sleep(next(delays, 0.0))
             return func(*args)
 
         monkeypatch.setattr(_multipart, "to_thread", staggered_to_thread)
@@ -1264,8 +1270,8 @@ class TestUploadHashingOffTheEventLoop:
         )
 
         added = await asyncio.gather(
-            _multipart.add_part(session.upload_id, first),
-            _multipart.add_part(session.upload_id, second),
+            _multipart.add_part(session.upload_id, io.BytesIO(first)),
+            _multipart.add_part(session.upload_id, io.BytesIO(second)),
         )
         await _multipart.complete_multipart_session(
             session.upload_id,
@@ -1299,7 +1305,7 @@ class TestUploadHashingOffTheEventLoop:
 
         async def gated_to_thread(func: Any, /, *args: Any) -> Any:  # noqa: ANN401
             """Hold the second part's first fold open until its caller is cancelled."""
-            if args[0] is second and not folding.is_set():
+            if func.__name__ == "update" and args[0] == second and not folding.is_set():
                 folding.set()
                 await release.wait()
             return func(*args)
@@ -1308,16 +1314,19 @@ class TestUploadHashingOffTheEventLoop:
         session = await _multipart.create_multipart_session(
             "f.bin", "text/plain", "assistants", len(first) + len(second)
         )
-        first_id, _ = await _multipart.add_part(session.upload_id, first)
+        first_id, _ = await _multipart.add_part(session.upload_id, io.BytesIO(first))
 
-        handler = asyncio.create_task(_multipart.add_part(session.upload_id, second))
+        handler = asyncio.create_task(
+            _multipart.add_part(session.upload_id, io.BytesIO(second))
+        )
         await folding.wait()
         handler.cancel()
         with pytest.raises(asyncio.CancelledError):
             await handler
         release.set()
-        # The client never read an answer for that part, so it sends it again.
-        retried_id, _ = await _multipart.add_part(session.upload_id, second)
+        # The client never read an answer for that part, so it sends it again --
+        # with a fresh body, as a retried request carries.
+        retried_id, _ = await _multipart.add_part(session.upload_id, io.BytesIO(second))
 
         await _multipart.complete_multipart_session(
             session.upload_id,

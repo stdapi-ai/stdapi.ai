@@ -13,10 +13,10 @@ Upload and manage files via an OpenAI-compatible interface. Files are stored in 
 - :material-api: **Nine endpoints** — five for files and four for multipart
   upload sessions, every one backed by Amazon S3, see
   [Endpoints](#available-endpoints).
-- :material-upload-multiple: **~78 GiB in one direct upload, 8 GiB per upload
+- :material-upload-multiple: **~78 GiB in one direct upload, 48.8 TiB per upload
   session** — a direct upload streams in 8 MiB parts up to S3's 10,000-part
   ceiling, and larger files go part by part through the
-  [Uploads API](#uploads-api).
+  [Uploads API](#uploads-api), whose parts may be 5 GiB each.
 - :material-clock-outline: **Expiry from 1 hour to 30 days** —
   `expires_after[seconds]` accepts 3 600 to 2 592 000 and is enforced on every
   read, see [Upload with expiry](#upload-with-expiry).
@@ -235,7 +235,7 @@ An upload ID and the file it produces share the same identifier — only the pre
 
 ### Create an upload session
 
-The declared `bytes` must be between 1 byte and 8 GiB; a larger declared size is rejected when the session is created.
+The declared `bytes` must be between 1 byte and 48.8 TiB — 10,000 parts of 5 GiB, the largest object S3 assembles from a multipart upload; a larger declared size is rejected when the session is created. OpenAI documents 8 GiB here, so a session larger than that is not portable upstream.
 
 Set the optional `expires_after` object to give the resulting file a TTL (same behavior as `expires_after` on `/v1/files`, 1 hour to 30 days). The pending upload's own `expires_at` always reflects the upload session's expiry (1 day); the requested file TTL appears on the resulting file object once the upload is completed.
 
@@ -269,7 +269,13 @@ curl -X POST "$BASE/v1/uploads" \
 
 ### Add parts
 
-Each part except the last must be at least 5 MiB (S3 minimum part size); the last part may be any size. A part carries at most 64 MiB — the OpenAI per-part maximum, and the size the official client splits a file into — and a larger one is rejected with a 413 error. An upload accepts at most 10,000 parts (S3's own ceiling).
+Each part except the last must be at least 5 MiB (S3 minimum part size); the last part may be any size. A binary part is streamed straight into the S3 multipart upload, so it is bounded only by S3's own 5 GiB per-part maximum, and an upload by S3's 10,000 parts — together, an object of up to 48.8 TiB. A part sent as an inline JSON body (below) is decoded in memory instead, so that form alone carries a 64 MiB maximum and answers `413` above it.
+
+!!! warning "More permissive than OpenAI"
+    OpenAI caps **every** part at 64 MiB. A client written against the 5 GiB ceiling here is therefore not portable upstream. Splitting at 64 MiB — what the official OpenAI client does on its own — works on both.
+
+!!! info "Large parts cost disk, not memory"
+    A binary part over ~1 MiB is spooled to the server's temporary directory while it is being received, then streamed to S3 and deleted. Memory use stays flat whatever the part size, but a deployment accepting multi-GiB parts needs ephemeral storage to match the largest parts it may receive at once.
 
 **Binary upload (multipart/form-data):**
 
@@ -365,14 +371,14 @@ curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/cancel" \
 
 | Feature                  |                  Status                  | Notes                                                        |
 |--------------------------|:----------------------------------------:|--------------------------------------------------------------|
-| `bytes` (declared size)  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 byte – 8 GiB; validated at completion against actual assembled size |
+| `bytes` (declared size)  |   :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" }    | 1 byte – 48.8 TiB, past OpenAI's 8 GiB; validated at completion against actual assembled size |
 | `filename`               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Carried through to the final file object; only its last path component is kept |
 | `mime_type`              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Set as the S3 `ContentType` for the assembled object         |
 | `purpose`                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Echoed to the final file object                              |
 | Part data (binary)       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Standard `multipart/form-data` binary upload via the `data` field |
 | Part data (JSON body)    | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents |
 | Part ordering            |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `part_ids` must be listed in ascending upload order; S3 cannot reassemble out of order |
-| Part count / size limits |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Max 10,000 parts; every part except the last must be at least 5 MiB |
+| Part count / size limits |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Max 10,000 parts; every part except the last must be at least 5 MiB. A binary part may reach 5 GiB, past OpenAI's 64 MiB; an inline JSON part stops at 64 MiB |
 | `md5` checksum           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Hex MD5 of the whole file; a mismatch is refused with a 400 error |
 | Session TTL              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 day from creation                                          |
 

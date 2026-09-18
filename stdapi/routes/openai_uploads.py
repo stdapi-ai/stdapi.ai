@@ -1,6 +1,7 @@
 """OpenAI-compatible Uploads API routes."""
 
-from typing import Annotated, Never
+from io import BytesIO
+from typing import TYPE_CHECKING, Annotated, Never
 
 from fastapi import APIRouter, Depends, File, Path, Request, UploadFile
 
@@ -31,6 +32,9 @@ from stdapi.types.openai_uploads import (
 )
 from stdapi.utils import missing_file_error, validation_error_handler
 
+if TYPE_CHECKING:
+    from typing import BinaryIO
+
 router = APIRouter(prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=OPENAI_FILES_TAGS)
 
 #: Reusable path annotation for the ``upload_id`` path parameter.
@@ -38,28 +42,29 @@ _UploadId = Annotated[
     str, Path(description="The ID of the upload.", pattern=UPLOAD_ID_PATTERN)
 ]
 
-#: Largest part the Uploads API accepts, 64 MiB, and the size the OpenAI client splits at.
-_MAX_PART_SIZE = 64 * 1024 * 1024
+#: Largest part sent inline as JSON, 64 MiB: that form is held whole to decode it, so it bounds memory.
+_MAX_INLINE_PART_SIZE = 64 * 1024 * 1024
 
-#: Largest JSON part body, wide enough for a base64-encoded part of the maximum size.
-_MAX_JSON_BODY_SIZE = (_MAX_PART_SIZE + 2) // 3 * 4 + 1024
+#: Largest JSON part body, wide enough for a base64-encoded part of the maximum inline size.
+_MAX_JSON_BODY_SIZE = (_MAX_INLINE_PART_SIZE + 2) // 3 * 4 + 1024
 
 
 def _part_too_large() -> Never:
-    """Refuse a part carrying more bytes than one part may.
+    """Refuse an inline JSON part carrying more bytes than that form may.
 
     Raises:
         ApiError: 413, naming the maximum and how to stay under it.
     """
     msg = (
-        f"A part must not exceed {_MAX_PART_SIZE} bytes. "
-        "Split the content into more parts and add them one by one."
+        f"A part sent as an inline JSON body must not exceed {_MAX_INLINE_PART_SIZE} "
+        "bytes. Split the content into more parts and add them one by one, or send "
+        "the part as a binary multipart/form-data upload, which is streamed."
     )
     raise ApiError(msg, status=413)
 
 
 async def _read_json_part_body(http_request: Request) -> bytearray:
-    """Read a JSON part request body, stopping once it is too large to be a part.
+    """Read a JSON part request body, stopping once it is too large to be an inline part.
 
     The body of an inline part *is* the allocation, so it is measured as it
     arrives rather than once it is held.
@@ -71,7 +76,7 @@ async def _read_json_part_body(http_request: Request) -> bytearray:
         The raw request body.
 
     Raises:
-        ApiError: 413 if the body outgrows what a part may carry.
+        ApiError: 413 if the body outgrows what an inline part may carry.
     """
     body = bytearray()
     async for chunk in http_request.stream():
@@ -166,8 +171,10 @@ async def create_upload_endpoint(
         "Adds a binary chunk (Part) to an existing multipart upload session (OpenAI Uploads API).\n\n"
         "**Prerequisite:** Create an upload session first with `openai_upload`. "
         "Call this endpoint once per chunk, then finalise with `openai_upload_complete`.\n\n"
-        f"**Part size:** a Part carries at most {_MAX_PART_SIZE} bytes (64 MiB); a larger one is "
-        "rejected. Every Part but the last must also be at least 5 MiB.\n\n"
+        "**Part size:** a binary Part is streamed straight to storage and may carry up to 5 GiB, "
+        "with at most 10,000 Parts per upload. Every Part but the last must also be at least 5 MiB. "
+        f"A Part sent inline as JSON is decoded in memory instead, so it carries at most {_MAX_INLINE_PART_SIZE} "
+        "bytes (64 MiB). This is more permissive than the OpenAI API, which caps every Part at 64 MiB.\n\n"
         "**MCP / AI agent usage:** Pass the chunk as a JSON body with ``data`` set to a base64 string, "
         "data URI (``data:<mime>;base64,<data>``), HTTPS URL, or S3 URI."
     ),
@@ -180,7 +187,8 @@ async def add_upload_part(
     data: Annotated[
         UploadFile | None,
         File(
-            description=f"The chunk of bytes for this Part, at most {_MAX_PART_SIZE} bytes."
+            description="The chunk of bytes for this Part, at most 5 GiB (the storage "
+            "backend's own per-part maximum)."
         ),
     ] = None,
     _: Annotated[None, Depends(authenticate)] = None,
@@ -199,27 +207,32 @@ async def add_upload_part(
         UploadPart object for the uploaded chunk.
 
     Raises:
-        ApiError: If the upload is not found (404), not pending (400), or the
-            part carries more than the maximum a part may hold (413).
+        ApiError: If the upload is not found (404), not pending (400), or an
+            inline JSON part carries more than that form may hold (413). A
+            binary part is bounded by the storage backend alone, which answers
+            for one larger than it accepts.
     """
     log_request_params({"upload_id": upload_id})
+    part: BinaryIO
     if "application/json" in http_request.headers.get("content-type", ""):
         with validation_error_handler():
             body = AddUploadPartJsonBody.model_validate_json(
                 await _read_json_part_body(http_request)
             )
-        if await body.data.get_size() > _MAX_PART_SIZE:
-            # A source declaring more than a part holds is refused before it is read.
+        if await body.data.get_size() > _MAX_INLINE_PART_SIZE:
+            # A source declaring more than an inline part holds is refused before it is read.
             _part_too_large()
-        chunk = await body.data.to_bytes(limit=_MAX_PART_SIZE)
+        chunk = await body.data.to_bytes(limit=_MAX_INLINE_PART_SIZE)
+        if len(chunk) > _MAX_INLINE_PART_SIZE:
+            _part_too_large()
+        part = BytesIO(chunk)
     elif data is None:
         missing_file_error("data")
     else:
-        # One byte past the maximum is all it takes to know the part is too large.
-        chunk = await data.read(_MAX_PART_SIZE + 1)
-    if len(chunk) > _MAX_PART_SIZE:
-        _part_too_large()
-    part_id, created_at = await add_part(upload_id, chunk)
+        # The parser already spooled the part to a file, so it is handed on as it
+        # stands: nothing but one chunk of it is ever held in memory.
+        part = data.file
+    part_id, created_at = await add_part(upload_id, part)
     return log_response_params(
         UploadPart(id=part_id, created_at=created_at, upload_id=upload_id)
     )

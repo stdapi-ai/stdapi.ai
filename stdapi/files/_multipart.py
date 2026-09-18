@@ -15,11 +15,11 @@ sequential parts.  Concurrent calls from different pods may race on the part
 number (last writer wins); sequential use is safe.
 
 The same entry carries the running MD5 of the parts this process proxied, which
-is what the client-declared ``md5`` is compared against at completion — the
-bytes are hashed while they are already in memory, so nothing is buffered and
-nothing is read back.  When that state does not cover exactly the parts being
-completed (another instance served some of them, or the entry was evicted), the
-assembled object is streamed back and hashed instead.
+is what the client-declared ``md5`` is compared against at completion — each
+part is hashed from the file the caller streamed, in bounded chunks, so nothing
+is held whole and nothing is read back.  When that state does not cover exactly
+the parts being completed (another instance served some of them, or the entry
+was evicted), the assembled object is streamed back and hashed instead.
 
 ID formats
 ----------
@@ -65,6 +65,7 @@ from stdapi.utils import now_utc_timestamp
 if TYPE_CHECKING:
     from asyncio import Task
     from hashlib import _Hash
+    from typing import BinaryIO
 
     from types_aiobotocore_s3.client import S3Client
 
@@ -513,7 +514,7 @@ async def create_multipart_session(
     )
 
 
-async def add_part(upload_id: str, data: bytes) -> tuple[str, int]:
+async def add_part(upload_id: str, data: BinaryIO) -> tuple[str, int]:
     """Add a part to an existing multipart session.
 
     The part number continues the parts already stored in S3, so consecutive
@@ -522,7 +523,10 @@ async def add_part(upload_id: str, data: bytes) -> tuple[str, int]:
 
     Args:
         upload_id: Session identifier.
-        data: Raw bytes for this part (max 64 MiB per OpenAI spec).
+        data: Seekable binary file holding this part, positioned at its start.
+            It is streamed straight to S3 and then re-read in bounded chunks for
+            the session digest, so a part of any size the backend accepts costs
+            one chunk of memory; it is left positioned at its start again.
 
     Returns:
         ``(part_id, created_at)`` — part_id encodes the 1-based part number.
@@ -559,8 +563,8 @@ async def add_part(upload_id: str, data: bytes) -> tuple[str, int]:
             await _check_not_pending(upload_id, bucket, s3)
         raise  # pragma: no cover
 
-    # Folded in while the bytes are still in memory, so the completion checksum
-    # costs no buffering and no read-back; only the digest state outlives the call.
+    # Folded in from the caller's own file, so the completion checksum costs no
+    # buffering and no S3 read-back; only the digest state outlives the call.
     # The whole update is shielded, lock included: a cancellation that released
     # the lock mid-fold, or that stopped the signature being written once the
     # bytes were in, would leave the digest answering for parts the signature
@@ -571,23 +575,29 @@ async def add_part(upload_id: str, data: bytes) -> tuple[str, int]:
 
 
 async def _fold_part_into_digest(
-    state: _SessionState, data: bytes, part_number: int, etag: str
+    state: _SessionState, data: BinaryIO, part_number: int, etag: str
 ) -> None:
     """Extend the session digest with one part, and record it in its signature.
 
     Both are written under the session lock and never apart: the digest only
     answers for the session while it covers exactly the parts the signature
-    names, in the order it names them.
+    names, in the order it names them.  The part is re-read from its own file in
+    bounded chunks, each folded in before the next is read, which keeps the
+    digest ordered and only ever touched by one thread; the file is left
+    positioned back at its start.
 
     Args:
         state: State of the session the part belongs to.
-        data: Raw bytes of the part.
+        data: Seekable binary file holding the part, already stored in S3.
         part_number: 1-based S3 part number.
         etag: Entity tag S3 reported for that part.
     """
     async with state.digest_lock:
         state.digest = digest = state.digest or md5(usedforsecurity=False)
-        await _update_digest(digest, data)
+        data.seek(0)
+        while chunk := await to_thread(data.read, UPLOAD_CHUNK_SIZE):
+            await _update_digest(digest, chunk)
+        data.seek(0)
         state.parts_signature = _fold_part(state.parts_signature, part_number, etag)
 
 

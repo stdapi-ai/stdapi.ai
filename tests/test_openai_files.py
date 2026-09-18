@@ -39,6 +39,7 @@ from tests._helpers import make_client_error
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from typing import BinaryIO
 
     import httpx
     from anthropic import Anthropic
@@ -1393,7 +1394,7 @@ class _StubAddPartS3Client(_StubCompleteS3Client):
 
     async def upload_part(self, **kwargs: object) -> dict[str, Any]:
         part_number = cast("int", kwargs["PartNumber"])
-        body = cast("bytes", kwargs["Body"])
+        body = cast("BinaryIO", kwargs["Body"]).read()
         etag = f"etag-{part_number}"
         self.parts[part_number] = (etag, len(body))
         return {"ETag": etag}
@@ -1434,8 +1435,8 @@ class TestAddPartNumberingUnit:
             "f.bin", "text/plain", "assistants", 8
         )
 
-        first, _ = await _multipart.add_part(session.upload_id, b"1234")
-        second, _ = await _multipart.add_part(session.upload_id, b"5678")
+        first, _ = await _multipart.add_part(session.upload_id, io.BytesIO(b"1234"))
+        second, _ = await _multipart.add_part(session.upload_id, io.BytesIO(b"5678"))
 
         extract = _multipart._extract_part_number  # noqa: SLF001
         assert extract(first, session.upload_id) == 1
@@ -1483,7 +1484,7 @@ class TestAddPartNumberingUnit:
         # Part served by another instance: this process never saw it.
         stub_s3.parts[1] = ("etag-1", 4)
 
-        part_id, _ = await _multipart.add_part(session.upload_id, b"5678")
+        part_id, _ = await _multipart.add_part(session.upload_id, io.BytesIO(b"5678"))
 
         assert _multipart._extract_part_number(part_id, session.upload_id) == 2  # noqa: SLF001
         assert stub_s3.parts[1] == ("etag-1", 4)
@@ -1506,7 +1507,7 @@ class TestAddPartNumberingUnit:
         stub_s3.parts[max_part_number] = ("etag-max", 1)
 
         with pytest.raises(ApiError) as exc_info:
-            await _multipart.add_part(session.upload_id, b"1234")
+            await _multipart.add_part(session.upload_id, io.BytesIO(b"1234"))
 
         assert exc_info.value.status == 400
         assert str(max_part_number) in str(exc_info.value)
@@ -2048,21 +2049,22 @@ class TestOpenAIUploads:
             openai_client.uploads.cancel(upload.id)
 
     @pytest.mark.slow
-    def test_add_part_over_max_size_rejected(
+    def test_add_part_over_the_openai_part_maximum(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """A part over the documented 64 MiB cap is rejected.
+        """A binary part over OpenAI's 64 MiB cap is refused upstream and taken here.
 
-        64 MiB is the SDK's own default part size
-        (``openai.resources.uploads.uploads.DEFAULT_PART_SIZE``), so cap + 1 is
-        the boundary the gateway enforces at ``add_upload_part``. The status
-        OpenAI itself returns, and whether it enforces at exactly cap + 1 rather
-        than with slack, is unverified upstream: if the official lane accepts
-        this part, that is a real divergence to record as a documented
-        limitation, not a reason to loosen the gateway assertion below.
+        64 MiB is the documented per-Part maximum and the SDK's own default part
+        size (``openai.resources.uploads.uploads.DEFAULT_PART_SIZE``), and OpenAI
+        was measured refusing cap + 1. The gateway streams a binary part straight
+        into an S3 multipart upload instead of holding it, so the only ceiling
+        left is S3's own 5 GiB per part: it takes this one. That is a deliberate
+        divergence in the permissive direction -- a client written against it is
+        not portable to OpenAI, but no request this gateway serves is refused by
+        a limit its backend does not have.
 
         Ref: https://developers.openai.com/api/reference/resources/uploads.md
-             openai.resources.uploads.uploads.DEFAULT_PART_SIZE
+             https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
              stdapi/routes/openai_uploads.py:add_upload_part
         """
         oversized = 64 * 1024 * 1024 + 1
@@ -2073,15 +2075,101 @@ class TestOpenAIUploads:
             purpose="assistants",
         )
         try:
-            with pytest.raises(APIStatusError) as exc_info:
-                openai_client.uploads.parts.create(
+            if use_official_api:
+                with pytest.raises(APIStatusError) as exc_info:
+                    # Raw bytes, not a stream: a retried request must re-serialise.
+                    openai_client.uploads.parts.create(
+                        upload_id=upload.id, data=b"\0" * oversized
+                    )
+                assert exc_info.value.status_code >= 400
+            else:
+                part = openai_client.uploads.parts.create(
                     upload_id=upload.id, data=b"\0" * oversized
                 )
-            if not use_official_api:
-                error = _error_envelope(exc_info.value, 413)
-                assert str(64 * 1024 * 1024) in str(error["message"]), error
-            else:
-                assert exc_info.value.status_code >= 400
+                assert part.object == "upload.part"
+                assert part.upload_id == upload.id
+        finally:
+            openai_client.uploads.cancel(upload.id)
+
+    @pytest.mark.slow
+    @pytest.mark.gateway("OpenAI caps every Part at 64 MiB; only S3 bounds one here")
+    def test_add_part_over_the_openai_part_maximum_round_trips(
+        self, openai_client: OpenAI
+    ) -> None:
+        """A single part past 64 MiB assembles into a file of exactly its size.
+
+        The streamed part is never held in the gateway's memory, so the bytes S3
+        stores are the only record that all of them arrived: completing the
+        upload and reading the assembled size back is what proves the stream was
+        neither truncated nor buffered into something smaller.
+
+        Ref: https://developers.openai.com/api/reference/resources/uploads.md
+             https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
+             stdapi/files/_multipart.py:add_part
+        """
+        oversized = 64 * 1024 * 1024 + 1
+        upload = openai_client.uploads.create(
+            bytes=oversized,
+            filename="streamed_part.bin",
+            mime_type="application/octet-stream",
+            purpose="assistants",
+        )
+        file_id: str | None = None
+        try:
+            part = openai_client.uploads.parts.create(
+                upload_id=upload.id, data=b"\0" * oversized
+            )
+            completed = openai_client.uploads.complete(
+                upload_id=upload.id, part_ids=[part.id]
+            )
+            assert completed.status == "completed"
+            assert completed.file is not None
+            assert completed.file.bytes == oversized, (
+                "every byte of the streamed part must reach the assembled file"
+            )
+            file_id = completed.file.id
+        finally:
+            with suppress(OpenAINotFoundError, BadRequestError):
+                openai_client.uploads.cancel(upload.id)
+            if file_id is not None:
+                with suppress(OpenAINotFoundError):
+                    openai_client.files.delete(file_id)
+
+    @pytest.mark.slow
+    @pytest.mark.gateway("The inline JSON part form is this gateway's own extension")
+    def test_add_inline_json_part_over_max_size_rejected(
+        self, openai_client: OpenAI
+    ) -> None:
+        """An inline JSON part past 64 MiB is refused with a 413 naming the cap.
+
+        The JSON form carries its part as base64 inside the request body, so the
+        gateway has to hold and decode it whole before anything can be stored.
+        That allocation is the gateway's own choice, and the only request shape
+        where one caller would otherwise decide how much memory is left for every
+        other request the deployment is serving -- so this form alone keeps a cap.
+
+        Ref: https://developers.openai.com/api/reference/resources/uploads.md
+             https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
+             stdapi/routes/openai_uploads.py:_part_too_large
+        """
+        cap = 64 * 1024 * 1024
+        http_client = openai_client._client  # noqa: SLF001
+        upload = openai_client.uploads.create(
+            bytes=cap + 1,
+            filename="oversized_inline_part.bin",
+            mime_type="application/octet-stream",
+            purpose="assistants",
+        )
+        try:
+            response = http_client.post(
+                f"{openai_client.base_url}uploads/{upload.id}/parts",
+                json={"data": base64.b64encode(b"\0" * (cap + 1)).decode()},
+                headers={"Authorization": f"Bearer {openai_client.api_key}"},
+            )
+            assert response.status_code == 413, response.text
+            error = response.json()["error"]
+            assert error["type"] == "invalid_request_error"
+            assert str(cap) in error["message"], error
         finally:
             openai_client.uploads.cancel(upload.id)
 
