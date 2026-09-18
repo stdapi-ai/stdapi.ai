@@ -1525,6 +1525,55 @@ class TestEchoFields:
         assert all(snapshot["background"] is True for snapshot in snapshots)
         assert all(snapshot["safety_identifier"] == "user-1" for snapshot in snapshots)
 
+    @pytest.mark.parametrize("truncation", ["disabled", None])
+    async def test_truncation_is_always_reported_as_disabled(
+        self, truncation: str | None
+    ) -> None:
+        """The response reports ``disabled`` whether or not the request set it.
+
+        Upstream defaults the field to ``disabled`` and reports it on every
+        response; the gateway only ever serves that strategy, so the value is
+        reported rather than echoed and is present even when the request omits it.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
+             stdapi/models/chat/_adapters/_openai_responses.py:_build_response_object
+        """
+        response = await format_response(
+            "resp-1",
+            1234.56,
+            "model",
+            _bedrock_response([{"text": "hi"}]),
+            _request(**({"truncation": truncation} if truncation else {})),
+        )
+        assert response.truncation == "disabled"
+
+    async def test_streamed_snapshots_report_truncation(self) -> None:
+        """Every streamed snapshot carries ``truncation``.
+
+        A streaming client only sees the Response object through these snapshots,
+        so the reported strategy must be on the ``response.created`` snapshot and
+        on the terminal one, not only on the non-streaming object.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/models/chat/_adapters/_openai_responses.py:_build_response_object
+        """
+        events = await _collect(
+            format_stream(
+                "resp-1",
+                1234.56,
+                "model",
+                _stream(_text_stream_events()),
+                _request(truncation="disabled"),
+            )
+        )
+        snapshots = [
+            payload["response"]
+            for payload in (_payload(sse) for sse in events)
+            if "response" in payload
+        ]
+        assert snapshots, "the stream carries at least one response snapshot"
+        assert all(snapshot["truncation"] == "disabled" for snapshot in snapshots)
+
 
 class TestStreamedModeration:
     """The streamed terminal event carries the moderation field.

@@ -2789,6 +2789,9 @@ def _build_response_object(
         service_tier=_openai_common.map_service_tier(request.service_tier)[1],  # type: ignore[arg-type]
         text=request.text,
         top_logprobs=request.top_logprobs,
+        # Reported, not echoed: "disabled" is the only strategy served, and
+        # upstream reports the field even when the request omits it.
+        truncation=request.truncation or "disabled",
         usage=usage,
         user=request.user,
     )
