@@ -1,11 +1,21 @@
 """WebRTC call transport: SDP exchange, media bridge, call control, routes.
 
-Everything here is offline: aiortc plays both peers over loopback UDP inside
-one process, and the model conversation is a scripted fake. That proves the
-SDP exchange, the DTLS/SRTP handshake, the data-channel event bridge, the
-audio resampling in both directions and the call registry -- and proves
-nothing about NAT traversal, security groups, STUN/TURN or a real browser,
-which only a deployed gateway exercises.
+Everything here but :class:`TestLiveLoopbackCall` is offline: aiortc plays both
+peers over loopback UDP inside one process, and the model conversation is a
+scripted fake. That proves the SDP exchange, the DTLS/SRTP handshake, the
+data-channel event bridge, the audio resampling in both directions and the call
+registry -- and proves nothing about NAT traversal, security groups, STUN/TURN
+or a real browser, which only a deployed gateway exercises.
+
+WebRTC is never exercised against a deployed gateway, here or anywhere else:
+that needs public UDP, NAT-surviving ICE candidates and most likely a TURN
+relay. This loopback lane is the whole of its media coverage, which the release
+checklist states as a limitation rather than pretending otherwise.
+
+The ``local`` marker is therefore carried per class instead of by the module:
+:class:`TestLiveLoopbackCall` opens a real conversation, and that marker also
+exempts a test from the unavailable-model xfail mask, which only holds for
+tests that call nothing.
 
 The upstream contract was probed against api.openai.com on 2026-08-27: raw
 ``application/sdp`` and ``multipart/form-data`` both answer 201 with the SDP
@@ -20,13 +30,20 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import math
+import re
+import time
+import wave
+from array import array
+from fractions import Fraction
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import pytest
 from aiortc import RTCPeerConnection, RTCSessionDescription
-from aiortc.mediastreams import AudioStreamTrack, MediaStreamError
+from aiortc.mediastreams import AUDIO_PTIME, AudioStreamTrack, MediaStreamError
+from av.audio.frame import AudioFrame
 
 from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR
 from stdapi.aws_bedrock_mantle import MANTLE_PROJECT_VAR
@@ -56,19 +73,22 @@ from stdapi.realtime_webrtc import (
     hangup_call,
     open_call,
 )
-from stdapi.types.openai_realtime import FunctionTool, RealtimeSessionConfig
+from stdapi.types.openai_realtime import (
+    AudioConfig,
+    AudioInputConfig,
+    FunctionTool,
+    RealtimeSessionConfig,
+)
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Iterator
 
-    from av.audio.frame import AudioFrame
+    from openai import OpenAI
     from starlette.testclient import TestClient
 
     from stdapi.models.realtime import BackendEvent
     from stdapi.realtime import RealtimeSession
-
-pytestmark = pytest.mark.local
 
 #: Model identifier the fake backend answers for, never resolved against AWS.
 _MODEL = "fake.realtime-v1:0"
@@ -86,6 +106,39 @@ _ANSWER_SCRIPT: tuple[BackendEvent, ...] = (
     OutputAudio(_LOUD_CHUNK),
     ResponseFinished(),
 )
+
+#: Sample rate the live caller's microphone track speaks at, in hertz.
+_CALLER_RATE = 24000
+
+#: Sample rate aiortc decodes the answer's Opus track at, in hertz.
+_HEARD_RATE = 48000
+
+#: Bytes of one decoded frame of that track: 16-bit stereo.
+_HEARD_FRAME_BYTES = 4
+
+#: Seconds one real spoken turn may take end to end, model latency included.
+_LIVE_TURN_TIMEOUT = 120.0
+
+#: Seconds given to the encoder to flush the caller's speech before committing.
+_SPEECH_FLUSH_SECONDS = 0.5
+
+#: Seconds of continuous quiet that mark the end of the answer's playback.
+_PLAYBACK_TAIL_SECONDS = 0.6
+
+#: Amplitude below which a decoded 16-bit sample counts as silence.
+_SILENCE_LEVEL = 200
+
+#: Amplitude a real answer must reach on the decoded track, in 16-bit units.
+_AUDIBLE_LEVEL = 1000
+
+#: Instructions the one live answer is spoken under.
+_LIVE_INSTRUCTIONS = "Answer with one short spoken sentence."
+
+#: Runs of anything but a letter or a digit, collapsed before matching a transcript.
+_NOT_ALPHANUMERIC = re.compile(r"[^a-z0-9]+")
+
+#: Shortest word an answer and its recording must share to count as the same speech.
+_MIN_SHARED_WORD = 3
 
 
 class _FakeSession(RealtimeBackendSession):
@@ -220,6 +273,128 @@ class _ToneTrack(AudioStreamTrack):
         return frame
 
 
+class _SpeechTrack(AudioStreamTrack):
+    """A caller's microphone: quiet, then one spoken sample, then quiet again.
+
+    The base track paces 8 kHz frames; this one keeps that pacing but speaks at
+    the session's own 24 kHz, so the sample reaches the Opus encoder without
+    being narrowed to the telephone band on the way in.
+    """
+
+    def __init__(self, pcm: bytes) -> None:
+        """Hold *pcm*, to be played once :meth:`speak` is called.
+
+        Args:
+            pcm: 24 kHz mono 16-bit samples of the caller's speech.
+        """
+        super().__init__()
+        self._pcm = pcm
+        self._offset: int | None = None
+        self._start = 0.0
+        self._pts = 0
+        self.spoken = asyncio.Event()
+
+    def speak(self) -> None:
+        """Start playing the sample from the next frame on."""
+        self._offset = 0
+
+    async def recv(self) -> AudioFrame:
+        """Emit the next 20 ms frame, paced at wall clock as the base is.
+
+        Returns:
+            The frame.
+
+        Raises:
+            MediaStreamError: The track was stopped.
+        """
+        if self.readyState != "live":
+            raise MediaStreamError
+        samples = int(AUDIO_PTIME * _CALLER_RATE)
+        if self._start:
+            self._pts += samples
+            await asyncio.sleep(
+                self._start + self._pts / _CALLER_RATE - time.monotonic()
+            )
+        else:
+            self._start = time.monotonic()
+        speech = b""
+        if self._offset is not None:
+            speech = self._pcm[self._offset : self._offset + samples * 2]
+            self._offset += len(speech)
+            if self._offset >= len(self._pcm):
+                self.spoken.set()
+        frame = AudioFrame(format="s16", layout="mono", samples=samples)
+        frame.planes[0].update(speech.ljust(samples * 2, b"\x00"))
+        frame.pts = self._pts
+        frame.sample_rate = _CALLER_RATE
+        frame.time_base = Fraction(1, _CALLER_RATE)
+        return frame
+
+
+def _mono(stereo: bytes) -> bytes:
+    """Return the left channel of what the caller heard.
+
+    Args:
+        stereo: 48 kHz 16-bit stereo samples, as aiortc decoded the answer.
+
+    Returns:
+        The same speech as 48 kHz 16-bit mono samples.
+    """
+    samples = array("h")
+    samples.frombytes(stereo[: len(stereo) - len(stereo) % _HEARD_FRAME_BYTES])
+    return samples[::2].tobytes()
+
+
+def _peak(pcm: bytes) -> int:
+    """Return the loudest absolute 16-bit amplitude in *pcm*, or 0 when empty.
+
+    Args:
+        pcm: 16-bit mono samples.
+
+    Returns:
+        The peak amplitude.
+    """
+    samples = array("h")
+    samples.frombytes(pcm[: len(pcm) - len(pcm) % 2])
+    return max((abs(value) for value in samples), default=0)
+
+
+def _as_wav(pcm: bytes) -> bytes:
+    """Wrap what the caller heard in a WAV container, for an upload.
+
+    Args:
+        pcm: 48 kHz 16-bit mono samples.
+
+    Returns:
+        The same samples as a WAV file.
+    """
+    container = io.BytesIO()
+    with wave.open(container, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(_HEARD_RATE)
+        wav.writeframes(pcm)
+    return container.getvalue()
+
+
+def _words(transcript: str) -> set[str]:
+    """Return the words of *transcript* worth matching another transcript on.
+
+    Args:
+        transcript: Text to split.
+
+    Returns:
+        Its lowercased words of at least ``_MIN_SHARED_WORD`` characters, with
+        punctuation dropped, so two recognizers spelling the same speech
+        differently still meet.
+    """
+    return {
+        word
+        for word in _NOT_ALPHANUMERIC.sub(" ", transcript.lower()).split()
+        if len(word) >= _MIN_SHARED_WORD
+    }
+
+
 def _fake_request() -> Any:  # noqa: ANN401
     """Build the creating request the call keeps for its log scope.
 
@@ -244,14 +419,19 @@ def _fake_request() -> Any:  # noqa: ANN401
 class _Client:
     """The caller's side of one loopback call."""
 
-    def __init__(self) -> None:
-        """Prepare the peer, its tone track and its event channel."""
+    def __init__(self, track: AudioStreamTrack | None = None) -> None:
+        """Prepare the peer, its microphone track and its event channel.
+
+        Args:
+            track: Microphone the caller speaks through; a 440 Hz tone by
+                default, which is all a scripted conversation ever needs.
+        """
         self.pc = RTCPeerConnection()
         self.events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.audio = bytearray()
         self.channel = self.pc.createDataChannel("oai-events")
         self.channel.on("message", self._on_message)
-        self.pc.addTrack(_ToneTrack())
+        self.pc.addTrack(track or _ToneTrack())
         self._reader: asyncio.Task[None] | None = None
         self.pc.on("track", self._on_track)
 
@@ -286,16 +466,19 @@ class _Client:
         while self.channel.readyState != "open":  # noqa: ASYNC110 - readyState has no waiter
             await asyncio.sleep(0.01)
 
-    async def next_event(self, kind: str) -> dict[str, Any]:
+    async def next_event(
+        self, kind: str, seconds: float = _STEP_TIMEOUT
+    ) -> dict[str, Any]:
         """Return the next event of *kind*, recording nothing it skips.
 
         Args:
             kind: The event type awaited.
+            seconds: How long it may take to arrive.
 
         Returns:
             The event.
         """
-        async with asyncio.timeout(_STEP_TIMEOUT):
+        async with asyncio.timeout(seconds):
             while True:
                 event = await self.events.get()
                 if event.get("type") == kind:
@@ -310,20 +493,25 @@ class _Client:
 
 async def _open_loopback_call(
     config: RealtimeSessionConfig | None = None,
+    *,
+    model: str = _MODEL,
+    track: AudioStreamTrack | None = None,
 ) -> tuple[_Client, str]:
     """Open one call between an in-process caller and the gateway side.
 
     Args:
         config: Session configuration the call opens with.
+        model: Model answering the call.
+        track: Microphone the caller speaks through.
 
     Returns:
         The connected caller and the call identifier.
     """
-    client = _Client()
+    client = _Client(track)
     offer = await client.offer()
     with log_request_event(_fake_request()):
         call_id, answer = await open_call(
-            _fake_request(), _MODEL, config or RealtimeSessionConfig(), offer
+            _fake_request(), model, config or RealtimeSessionConfig(), offer
         )
     assert call_id.startswith("rtc_")
     assert "m=audio" in answer
@@ -331,9 +519,40 @@ async def _open_loopback_call(
     return client, call_id
 
 
-async def _drain_call_tasks() -> None:
-    """Wait for every background call task the test started."""
-    assert await drain_realtime_calls(_STEP_TIMEOUT) == 0
+async def _drain_call_tasks(seconds: float = _STEP_TIMEOUT) -> None:
+    """Wait for every background call task the test started.
+
+    Args:
+        seconds: How long the teardown may take.
+    """
+    assert await drain_realtime_calls(seconds) == 0
+
+
+async def _hear_the_whole_answer(client: _Client) -> bytes:
+    """Read *client*'s track until the answer has stopped sounding.
+
+    The outgoing track keeps pacing silence frames once the answer is spoken,
+    so the end of playback is read from the samples rather than from the byte
+    count, which never stops growing.
+
+    Args:
+        client: The caller, with an answer already on its way.
+
+    Returns:
+        Everything it heard, as 48 kHz 16-bit stereo samples.
+    """
+    tail = int(_HEARD_RATE * _PLAYBACK_TAIL_SECONDS) * _HEARD_FRAME_BYTES
+    async with asyncio.timeout(_LIVE_TURN_TIMEOUT):
+        while True:
+            await asyncio.sleep(_PLAYBACK_TAIL_SECONDS)
+            heard = bytes(client.audio)
+            if len(heard) < tail or _peak(_mono(heard[-tail:])) > _SILENCE_LEVEL:
+                continue
+            # Quiet now, and something was spoken at some point: the whole
+            # buffer is read rather than the tail alone so that an answer
+            # already finished when this starts is not waited out.
+            if _peak(_mono(heard)) > _AUDIBLE_LEVEL:
+                return heard
 
 
 @pytest.fixture
@@ -354,6 +573,8 @@ class TestLoopbackCall:
     Ref: https://developers.openai.com/api/docs/guides/realtime-webrtc
          stdapi/realtime_webrtc.py:open_call
     """
+
+    pytestmark = pytest.mark.local
 
     async def test_session_events_ride_the_data_channel(self) -> None:
         """The session opens on the channel exactly as it does on the socket."""
@@ -505,11 +726,92 @@ class TestLoopbackCall:
         return client.pc.connectionState not in {"closed", "failed"}
 
 
+class TestLiveLoopbackCall:
+    """A real model's speech carried by the loopback media path.
+
+    The only test here that is not ``local``: it opens a real conversation, so
+    an unavailable model has to mask it as xfail rather than fail it.
+
+    Ref: https://developers.openai.com/api/docs/guides/realtime-webrtc
+         stdapi/realtime_webrtc.py:_OutgoingTrack
+    """
+
+    @pytest.mark.slow
+    @pytest.mark.usefixtures("allow_private_candidates", "local_test_client")
+    async def test_a_real_answer_survives_the_media_path(
+        self,
+        realtime_model: str,
+        sample_audio_pcm24: bytes,
+        openai_client: OpenAI,
+        transcription_model: str,
+    ) -> None:
+        """What the caller hears is the speech the model says it produced.
+
+        Every other call in this module is answered with a 100 ms square wave,
+        which survives the media path as a square wave whatever it does to it:
+        a tone played at a third of its rate, downmixed wrongly or cut to every
+        other sample is still a tone, and still passes a peak-amplitude check.
+        So none of them proves that model speech comes out the far end
+        intelligible.
+
+        This one speaks a real sentence into the call, transcribes what the
+        caller's decoder actually produced, and requires that recording to
+        share a word with the transcript the session itself reported. A media
+        path that plays the answer at the wrong sample rate, delivers silence,
+        or mangles the frames leaves the event sequence and the byte counts
+        intact and fails only here.
+
+        Ref: https://developers.openai.com/api/docs/guides/realtime-webrtc
+             stdapi/realtime_webrtc.py:WebRTCCallTransport.send_event
+        """
+        track = _SpeechTrack(sample_audio_pcm24)
+        client, call_id = await _open_loopback_call(
+            RealtimeSessionConfig(
+                instructions=_LIVE_INSTRUCTIONS,
+                audio=AudioConfig(input=AudioInputConfig(turn_detection=None)),
+            ),
+            model=realtime_model,
+            track=track,
+        )
+        try:
+            await client.next_event("session.created")
+            # Spoken only once the call is up: audio pushed before that is
+            # encoded into a media path the session is not yet reading.
+            track.speak()
+            async with asyncio.timeout(_LIVE_TURN_TIMEOUT):
+                await track.spoken.wait()
+            await asyncio.sleep(_SPEECH_FLUSH_SECONDS)
+            client.channel.send(json.dumps({"type": "input_audio_buffer.commit"}))
+            client.channel.send(json.dumps({"type": "response.create"}))
+            done = await client.next_event("response.done", _LIVE_TURN_TIMEOUT)
+            assert done["response"]["status"] == "completed", done
+            said = done["response"]["output"][0]["content"][0]["transcript"]
+            assert said.strip(), f"the model reported no transcript: {done}"
+            heard = _mono(await _hear_the_whole_answer(client))
+        finally:
+            hangup_call(call_id)
+            await _drain_call_tasks(_LIVE_TURN_TIMEOUT)
+            await client.close()
+
+        assert _peak(heard) > _AUDIBLE_LEVEL, "the answer arrived inaudible"
+        recognized = openai_client.audio.transcriptions.create(
+            file=("answer.wav", io.BytesIO(_as_wav(heard))), model=transcription_model
+        ).text
+        assert _words(recognized), (
+            f"nothing intelligible came out of the media path, for {said!r}"
+        )
+        assert _words(recognized) & _words(said), (
+            f"the caller heard {recognized!r} where the model said {said!r}"
+        )
+
+
 class TestLockedSecret:
     """The model pin a locked ephemeral secret places on a call.
 
     Ref: stdapi/realtime_webrtc.py:open_call
     """
+
+    pytestmark = pytest.mark.local
 
     @pytest.mark.usefixtures("fake_backend")
     async def test_a_differing_model_query_is_refused(self) -> None:
@@ -564,6 +866,8 @@ class TestUnservableModel:
     Ref: stdapi/realtime_webrtc.py:open_call
     """
 
+    pytestmark = pytest.mark.local
+
     async def test_the_refusal_takes_the_answered_media_path_down(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -603,6 +907,8 @@ class TestCallRegistry:
     Ref: stdapi/realtime_webrtc.py:get_call
     """
 
+    pytestmark = pytest.mark.local
+
     def test_an_unknown_call_answers_an_upstream_shaped_404(self) -> None:
         """The 404 does not describe the deployment's instance topology."""
         from stdapi.api_errors import ApiError  # noqa: PLC0415
@@ -631,6 +937,8 @@ class TestCallOwnership:
 
     Ref: stdapi/realtime_webrtc.py:get_call
     """
+
+    pytestmark = pytest.mark.local
 
     @pytest.fixture
     async def owned_call(
@@ -701,6 +1009,8 @@ class TestSideband:
 
     Ref: stdapi/realtime_webrtc.py:WebRTCCallTransport.serve_sideband
     """
+
+    pytestmark = pytest.mark.local
 
     async def test_events_mirror_and_control_flows_in(self) -> None:
         """A sideband sees server events and injects client events."""
@@ -811,6 +1121,8 @@ class TestCallCreationRoute:
     Ref: https://developers.openai.com/api/docs/guides/realtime-webrtc
          stdapi/routes/openai_realtime.py:create_realtime_call
     """
+
+    pytestmark = pytest.mark.local
 
     def test_disabled_by_default_answers_404(
         self, app_client: TestClient, capsys: pytest.CaptureFixture[str]
@@ -1058,6 +1370,8 @@ class TestCallCreationAuthentication:
     Ref: stdapi/routes/openai_realtime.py:_authenticate_call
     """
 
+    pytestmark = pytest.mark.local
+
     @pytest.mark.usefixtures("webrtc_enabled", "stub_open_call")
     def test_no_credential_is_refused(self, enforced_auth_client: TestClient) -> None:
         """An anonymous offer answers 401."""
@@ -1158,6 +1472,8 @@ class TestInvalidOffer:
     Ref: stdapi/realtime_webrtc.py:WebRTCCallTransport.answer
     """
 
+    pytestmark = pytest.mark.local
+
     @staticmethod
     def _post_offer(app_client: TestClient, offer: str) -> Any:  # noqa: ANN401
         """Post *offer* through the route with the fake model named."""
@@ -1230,6 +1546,8 @@ class TestOfferCandidateScreen:
     Ref: stdapi/realtime_webrtc.py:_screen_candidates
          https://developers.openai.com/api/docs/guides/realtime-webrtc
     """
+
+    pytestmark = pytest.mark.local
 
     @staticmethod
     def _offer(*addresses: str) -> str:
@@ -1316,6 +1634,8 @@ class TestCallControlRoutes:
          stdapi/routes/openai_realtime.py:hangup_realtime_call
     """
 
+    pytestmark = pytest.mark.local
+
     @pytest.mark.usefixtures("webrtc_enabled")
     def test_hangup_answers_200(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -1362,6 +1682,8 @@ class TestSidebandRoute:
     Ref: stdapi/realtime.py:_open_sideband
     """
 
+    pytestmark = pytest.mark.local
+
     @pytest.mark.usefixtures("webrtc_enabled")
     def test_an_unknown_call_is_refused_on_the_socket(
         self, app_client: TestClient
@@ -1392,6 +1714,8 @@ class TestOutgoingTrack:
 
     Ref: stdapi/realtime_webrtc.py:_OutgoingTrack
     """
+
+    pytestmark = pytest.mark.local
 
     async def test_the_buffer_keeps_the_newest_speech_past_its_cap(self) -> None:
         """The not-yet-spoken buffer is bounded, dropping the oldest bytes."""
@@ -1433,6 +1757,8 @@ class TestBargeIn:
 
     Ref: stdapi/realtime_webrtc.py:WebRTCCallTransport.send_event
     """
+
+    pytestmark = pytest.mark.local
 
     @pytest.mark.parametrize("status", ["incomplete", "cancelled"])
     async def test_an_unfinished_answer_stops_sounding(self, status: str) -> None:
@@ -1528,6 +1854,8 @@ class TestTransportBackpressure:
     Ref: stdapi/realtime_webrtc.py:WebRTCCallTransport._on_channel_message
     """
 
+    pytestmark = pytest.mark.local
+
     async def test_an_oversized_channel_message_ends_the_call(self) -> None:
         """A message past the event size cap is refused before it is held."""
         transport = WebRTCCallTransport("rtc_test", 24000, 24000)
@@ -1605,6 +1933,8 @@ class TestChannelBackpressure:
 
     Ref: stdapi/realtime_webrtc.py:WebRTCCallTransport._drain_channel
     """
+
+    pytestmark = pytest.mark.local
 
     @staticmethod
     def _adopt(buffered: int) -> tuple[WebRTCCallTransport, _StubChannel]:
@@ -1692,6 +2022,8 @@ class TestFixedCallFormats:
     Ref: stdapi/realtime.py:RealtimeSession._update_session
     """
 
+    pytestmark = pytest.mark.local
+
     async def test_a_format_change_is_refused_on_a_call(self) -> None:
         """A ``session.update`` naming another audio format answers an error."""
         client, call_id = await _open_loopback_call()
@@ -1759,6 +2091,8 @@ class TestCallBilling:
 
     Ref: stdapi/realtime_webrtc.py:_serve_call
     """
+
+    pytestmark = pytest.mark.local
 
     async def test_an_answer_records_its_usage(
         self, fake_backend: type[_FakeModel], capsys: pytest.CaptureFixture[str]
@@ -1832,6 +2166,8 @@ class TestSecretAudioEvent:
 
     Ref: stdapi/realtime_webrtc.py:WebRTCCallTransport._push_audio
     """
+
+    pytestmark = pytest.mark.local
 
     async def test_audio_is_batched_and_base64_encoded(self) -> None:
         """One pushed chunk is one well-formed append event."""

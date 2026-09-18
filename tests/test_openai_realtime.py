@@ -46,6 +46,42 @@ _PCM24_BYTES_PER_MS = 48
 #: Sample rate of the session's audio, in hertz.
 _PCM24_RATE = 24000
 
+#: Sample rate both G.711 formats are defined at, in hertz.
+_G711_RATE = 8000
+
+#: ffmpeg codec name of each companded format, keyed by its media type.
+_G711_CODECS = {"audio/pcmu": "mulaw", "audio/pcma": "alaw"}
+
+#: Sentence a session is told to speak, so its answer has a known length.
+_PINNED_SENTENCE = "The quick brown fox jumps over the lazy dog and then runs away."
+
+#: Instructions pinning the answer, so both its words and its duration are known.
+_PINNED_ANSWER_INSTRUCTIONS = (
+    "Whatever the caller says, reply out loud with exactly this sentence, and "
+    f"nothing else: {_PINNED_SENTENCE}"
+)
+
+#: Word the caller's recorded sample says, which its transcript must carry.
+_SPOKEN_WORD = "test"
+
+#: Share of a claimed transcript's words a real transcription must also carry.
+_TRANSCRIPT_OVERLAP = 0.6
+
+#: Words a transcript needs before its speaking rate means anything.
+_MIN_TRANSCRIPT_WORDS = 5
+
+#: Slowest and fastest credible speaking rate of an answer, in words per second.
+_SPEECH_RATE_BAND = (1.5, 6.0)
+
+#: Peak sample an answer must reach, against the 32767 of full scale.
+_MIN_PEAK_AMPLITUDE = 3000
+
+#: Seconds of silence appended to speech, for turn detection to end the turn on.
+_TRAILING_SILENCE_SECONDS = 2.0
+
+#: Seconds a stopped answer is listened to, to prove nothing more is spoken.
+_SILENCE_AFTER_STOP = 1.0
+
 #: Question the caller speaks, which cannot be answered without the tool.
 _SPOKEN_QUESTION = "What is the weather in Paris?"
 
@@ -113,6 +149,36 @@ _SPOKEN_TOOL_SESSION: Any = {
     "tool_choice": "auto",
 }
 
+#: Manual-turn session answering a known sentence, so its length can be measured.
+_PINNED_ANSWER_SESSION: Any = {
+    **_MANUAL_TURN_SESSION,
+    "instructions": _PINNED_ANSWER_INSTRUCTIONS,
+}
+
+#: Session whose turns the backend's own voice activity detection ends.
+_SERVER_VAD_SESSION: Any = {
+    **_MANUAL_TURN_SESSION,
+    "audio": {
+        "input": {
+            "format": {"type": "audio/pcm", "rate": 24000},
+            "turn_detection": {"type": "server_vad"},
+        },
+        "output": {"format": {"type": "audio/pcm", "rate": 24000}},
+    },
+}
+
+#: Transcription-only session, whose type is fixed by the secret it is opened with.
+_TRANSCRIPTION_SESSION: Any = {
+    "type": "transcription",
+    "audio": {
+        "input": {
+            "format": {"type": "audio/pcm", "rate": 24000},
+            "transcription": {},
+            "turn_detection": None,
+        }
+    },
+}
+
 #: Fields a response object always carries, measured against upstream 2026-08-16.
 _RESPONSE_FIELDS = (
     "status_details",
@@ -142,6 +208,29 @@ async def _drain_until(connection: AsyncRealtimeConnection, terminal: str) -> li
         if event.type in {terminal, "error"}:
             break
     return events
+
+
+def _g711_session(media_type: str) -> Any:  # noqa: ANN401
+    """Return a manual-turn session both listening and speaking in *media_type*.
+
+    Args:
+        media_type: ``audio/pcmu`` or ``audio/pcma``.
+
+    Returns:
+        The session configuration, reporting the caller's transcript too.
+    """
+    return {
+        "type": "realtime",
+        "instructions": _PINNED_ANSWER_INSTRUCTIONS,
+        "audio": {
+            "input": {
+                "format": {"type": media_type},
+                "transcription": {},
+                "turn_detection": None,
+            },
+            "output": {"format": {"type": media_type}},
+        },
+    }
 
 
 def _types(events: list[Any]) -> list[str]:
@@ -214,11 +303,12 @@ def _claimed_transcript(events: list[Any]) -> str:
     )
 
 
-def _as_wav(pcm: bytes) -> bytes:
+def _as_wav(pcm: bytes, rate: int = _PCM24_RATE) -> bytes:
     """Wrap the session's raw samples in a WAV container, for an upload.
 
     Args:
-        pcm: 24 kHz mono 16-bit samples.
+        pcm: Mono 16-bit samples.
+        rate: Sample rate they are defined at, in hertz.
 
     Returns:
         The same samples as a WAV file.
@@ -227,9 +317,159 @@ def _as_wav(pcm: bytes) -> bytes:
     with wave.open(container, "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
-        wav.setframerate(_PCM24_RATE)
+        wav.setframerate(rate)
         wav.writeframes(pcm)
     return container.getvalue()
+
+
+def _ffmpeg(arguments: list[str], data: bytes) -> bytes:
+    """Convert *data* with one bounded ffmpeg run, as the audio fixtures do.
+
+    Args:
+        arguments: Everything between the program name and the output pipe.
+        data: What to feed its standard input.
+
+    Returns:
+        What it wrote to its standard output.
+    """
+    import shutil  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+
+    ffmpeg = shutil.which("ffmpeg")
+    assert ffmpeg, "ffmpeg is required to compand the Realtime audio"
+    converted = subprocess.run(  # noqa: S603
+        [ffmpeg, "-v", "quiet", *arguments, "pipe:1"],
+        input=data,
+        capture_output=True,
+        check=False,
+    )
+    assert converted.returncode == 0, converted.stderr.decode(errors="replace")
+    assert converted.stdout, "ffmpeg produced no output"
+    return converted.stdout
+
+
+def _companded(wav: bytes, media_type: str) -> bytes:
+    """Compand a WAV recording into the G.711 codec *media_type* names.
+
+    ffmpeg owns both G.711 tables here, so nothing of the gateway's own is
+    involved in producing what the session is asked to understand.
+
+    Args:
+        wav: The recording, in any container ffmpeg reads.
+        media_type: ``audio/pcmu`` or ``audio/pcma``.
+
+    Returns:
+        One companded byte per 8 kHz mono sample.
+    """
+    return _ffmpeg(
+        [
+            *("-i", "pipe:0"),
+            *("-f", _G711_CODECS[media_type]),
+            *("-ar", str(_G711_RATE)),
+            *("-ac", "1"),
+        ],
+        wav,
+    )
+
+
+def _expanded(companded: bytes, media_type: str) -> bytes:
+    """Expand companded bytes back to samples, again with ffmpeg's own tables.
+
+    Args:
+        companded: One companded byte per sample.
+        media_type: ``audio/pcmu`` or ``audio/pcma``.
+
+    Returns:
+        8 kHz mono 16-bit little-endian samples.
+    """
+    return _ffmpeg(
+        [
+            *("-f", _G711_CODECS[media_type]),
+            *("-ar", str(_G711_RATE)),
+            *("-ac", "1"),
+            *("-i", "pipe:0"),
+            *("-f", "s16le"),
+        ],
+        companded,
+    )
+
+
+def _words(transcript: str) -> list[str]:
+    """Return the lowercase words of a transcript, punctuation dropped.
+
+    Args:
+        transcript: Text to split.
+
+    Returns:
+        The words, in order.
+    """
+    return _NOT_ALPHANUMERIC.sub(" ", transcript.lower()).split()
+
+
+def _peak_amplitude(pcm: bytes) -> int:
+    """Return the loudest sample of 16-bit little-endian *pcm*.
+
+    Args:
+        pcm: Mono 16-bit little-endian samples.
+
+    Returns:
+        The largest absolute sample value, zero when there are none.
+    """
+    import struct  # noqa: PLC0415
+
+    usable = len(pcm) // 2
+    samples: tuple[int, ...] = struct.unpack(f"<{usable}h", pcm[: usable * 2])
+    return max((abs(sample) for sample in samples), default=0)
+
+
+def _shared_word_share(claimed: str, heard: str) -> float:
+    """Return the share of *claimed*'s words that *heard* also carries.
+
+    Args:
+        claimed: What the speaker says it said.
+        heard: What a recognizer made of the same audio.
+
+    Returns:
+        A share between 0 and 1, and 0 when nothing was claimed.
+    """
+    said = set(_words(claimed))
+    if not said:
+        return 0.0
+    return len(said & set(_words(heard))) / len(said)
+
+
+def _assert_duration_matches_transcript(
+    transcript: str, seconds: float, what: str
+) -> None:
+    """Fail unless *seconds* of audio plausibly carries the words of *transcript*.
+
+    This is what catches a mislabelled sample rate, which transcription alone
+    survives: the samples are intact, so a recognizer reads them correctly, but
+    a client plays them at the wrong speed. The two rates a session can confuse
+    differ by a factor of three, so the band only has to be narrower than that.
+    It is deliberately wide -- any speaking rate, a leading breath, a trailing
+    pause and a recognizer's own word splitting all move the ratio, and none of
+    them moves it anywhere near threefold.
+
+    Args:
+        transcript: What the audio was recognized as saying.
+        seconds: How long the audio lasts at its declared rate.
+        what: Name of the audio, for the failure message.
+
+    Raises:
+        AssertionError: Too few words to judge, or an implausible speaking rate.
+    """
+    words = len(_words(transcript))
+    assert words >= _MIN_TRANSCRIPT_WORDS, (
+        f"{what} says too little to time: {transcript!r}"
+    )
+    rate = words / seconds
+    slowest, fastest = _SPEECH_RATE_BAND
+    assert slowest <= rate <= fastest, (
+        f"{what} carries {words} words in {seconds:.2f}s, which is {rate:.2f} "
+        f"words per second and outside {slowest}-{fastest}: its declared sample "
+        f"rate does not match the speech it holds. Transcript: {transcript!r}"
+    )
 
 
 def _states_the_temperature(transcript: str) -> bool:
@@ -570,6 +810,7 @@ class TestRealtimeSession:
         async_openai_client: AsyncOpenAI,
         realtime_model: str,
         sample_audio_pcm24: bytes,
+        transcription_model: str,
     ) -> None:
         """One spoken turn produces audio deltas, transcript deltas and usage.
 
@@ -580,6 +821,14 @@ class TestRealtimeSession:
         Both response events describe the same answer whole: a client that
         validates the frame refuses one missing a field its model requires.
 
+        The audio itself is then inspected rather than counted: it has to be
+        loud enough to be speech at all, to last as long as the words it is
+        recognized as saying, and to say what the session claimed it said.
+        Counting bytes passes on silence, on white noise and on the wrong
+        sample rate; each of those fails one of the three. The answer is pinned
+        to a known sentence so that timing it means something: a model free to
+        reply "sure" produces too few words to time at all.
+
         Ref: https://developers.openai.com/api/reference/resources/realtime/server-events
              openai.types.realtime.realtime_response.RealtimeResponse
         """
@@ -587,7 +836,7 @@ class TestRealtimeSession:
             model=realtime_model
         ) as connection:
             await connection.recv()
-            await connection.session.update(session=_MANUAL_TURN_SESSION)
+            await connection.session.update(session=_PINNED_ANSWER_SESSION)
             await _drain_until(connection, "session.updated")
 
             await _send_audio(connection, sample_audio_pcm24)
@@ -605,12 +854,27 @@ class TestRealtimeSession:
         assert "response.output_audio.delta" in kinds, kinds
         assert "response.output_audio_transcript.delta" in kinds, kinds
 
-        audio = b"".join(
-            base64.b64decode(event.delta)
-            for event in events
-            if event.type == "response.output_audio.delta"
-        )
+        audio = _spoken_audio(events)
         assert audio, "the answer carried no audio"
+        assert _peak_amplitude(audio) >= _MIN_PEAK_AMPLITUDE, (
+            "the answer's audio never rises above a whisper: its peak sample is "
+            f"{_peak_amplitude(audio)}"
+        )
+
+        heard = (
+            await async_openai_client.audio.transcriptions.create(
+                file=("answer.wav", io.BytesIO(_as_wav(audio))),
+                model=transcription_model,
+            )
+        ).text
+        claimed = _claimed_transcript(events)
+        assert _shared_word_share(claimed, heard) >= _TRANSCRIPT_OVERLAP, (
+            f"the answer's audio does not say what it claimed: said {claimed!r}, "
+            f"heard {heard!r}"
+        )
+        _assert_duration_matches_transcript(
+            heard, len(audio) / (_PCM24_BYTES_PER_MS * 1000), "the answer's audio"
+        )
 
         done = events[-1]
         assert done.type == "response.done", kinds
@@ -633,6 +897,64 @@ class TestRealtimeSession:
         )
 
     @pytest.mark.slow
+    async def test_a_silent_pause_ends_the_turn_and_the_answer_starts_itself(
+        self,
+        async_openai_client: AsyncOpenAI,
+        realtime_model: str,
+        sample_audio_pcm24: bytes,
+    ) -> None:
+        """Default turn detection ends the turn on silence, with no commit sent.
+
+        ``server_vad`` is the default of the API and what every voice framework
+        leaves in place, yet every other spoken test here turns it off and ends
+        its turns by hand. Nothing is committed and no response is asked for:
+        the caller speaks, stops, and the only thing that can start an answer
+        is the backend noticing the silence. ``input_audio_buffer.committed``
+        must therefore be absent -- it is the event of the turn the caller ends
+        itself, and its presence would mean this test proved nothing.
+
+        Ref: https://developers.openai.com/api/reference/resources/realtime/server-events
+             stdapi/realtime.py:RealtimeSession._report_speech_stopped
+        """
+        silence = bytes(int(_TRAILING_SILENCE_SECONDS * _PCM24_RATE) * 2)
+
+        async with async_openai_client.realtime.connect(
+            model=realtime_model
+        ) as connection:
+            await connection.recv()
+            await connection.session.update(session=_SERVER_VAD_SESSION)
+            configured = await _drain_until(connection, "session.updated")
+
+            await _send_audio(connection, sample_audio_pcm24 + silence)
+
+            async with asyncio.timeout(_TURN_TIMEOUT):
+                events = await _drain_until(connection, "response.done")
+
+        assert configured[-1].type == "session.updated", _types(configured)
+        assert configured[-1].session.audio.input.turn_detection is not None, (
+            configured[-1].session
+        )
+        assert configured[-1].session.audio.input.turn_detection.type == "server_vad", (
+            configured[-1].session.audio.input
+        )
+
+        kinds = _types(events)
+        assert "error" not in kinds, [
+            event for event in events if event.type == "error"
+        ]
+        assert "input_audio_buffer.speech_started" in kinds, kinds
+        assert "input_audio_buffer.speech_stopped" in kinds, kinds
+        assert "input_audio_buffer.committed" not in kinds, (
+            f"the turn was committed rather than detected: {kinds}"
+        )
+        assert events[-1].type == "response.done", kinds
+        assert events[-1].response.output, (
+            f"the detected turn answered nothing: {kinds}"
+        )
+        assert _spoken_audio(events), f"the detected turn spoke nothing: {kinds}"
+        _assert_response_is_whole(events[-1].response)
+
+    @pytest.mark.slow
     async def test_a_caller_speaking_over_the_answer_truncates_it(
         self,
         async_openai_client: AsyncOpenAI,
@@ -648,14 +970,20 @@ class TestRealtimeSession:
         against an item that has not settled -- and a session that answers it
         with an error, or stops responding afterwards, drops the call.
 
+        Truncating synchronizes the record with what was played; ``response.cancel``
+        is what stops the speech, and a barge-in client sends both. The answer
+        must then really go quiet: the model keeps producing past the stop, and
+        a session still forwarding it would speak over the caller who interrupted
+        it. The stopped answer is therefore listened to for a further second.
+
         Ref: https://developers.openai.com/api/reference/resources/realtime/client-events
-             stdapi/realtime.py:RealtimeSession._truncate_item
+             stdapi/realtime.py:RealtimeSession._cancel_response
         """
         async with async_openai_client.realtime.connect(
             model=realtime_model
         ) as connection:
             await connection.recv()
-            await connection.session.update(session=_MANUAL_TURN_SESSION)
+            await connection.session.update(session=_PINNED_ANSWER_SESSION)
             await _drain_until(connection, "session.updated")
 
             await _send_audio(connection, sample_audio_pcm24)
@@ -670,8 +998,17 @@ class TestRealtimeSession:
                 interrupted = await _drain_until(
                     connection, "conversation.item.truncated"
                 )
-                # Answered out of band while the answer is still streaming, so
-                # the acknowledgement also shows the session is still reading.
+                # Nothing is left to stop once the answer has ended by itself,
+                # and waiting for a second "response.done" would then hang.
+                assert "response.done" not in _types(interrupted), (
+                    "the answer ended before it could be interrupted: "
+                    f"{_types(interrupted)}"
+                )
+                await connection.response.cancel()
+                stopped = await _drain_until(connection, "response.done")
+                await asyncio.sleep(_SILENCE_AFTER_STOP)
+                # Answered out of band after a silent second, so the
+                # acknowledgement also shows the session is still reading.
                 await connection.input_audio_buffer.clear()
                 resumed = await _drain_until(connection, "input_audio_buffer.cleared")
 
@@ -680,7 +1017,18 @@ class TestRealtimeSession:
         assert interrupted[-1].item_id == item_id, interrupted[-1]
         assert interrupted[-1].content_index == 0, interrupted[-1]
         assert interrupted[-1].audio_end_ms == heard_ms, interrupted[-1]
+        assert stopped[-1].type == "response.done", _types(stopped)
+        assert stopped[-1].response.status == "cancelled", stopped[-1].response
         assert resumed[-1].type == "input_audio_buffer.cleared", _types(resumed)
+        spoken_on = [
+            event
+            for event in resumed
+            if event.type == "response.output_audio.delta" and event.item_id == item_id
+        ]
+        assert not spoken_on, (
+            f"the interrupted answer kept speaking: {len(spoken_on)} further "
+            f"audio deltas for {item_id}"
+        )
 
     async def test_an_unauthenticated_connection_is_refused_before_any_audio(
         self, live_server: str | None, realtime_model: str
@@ -748,6 +1096,191 @@ class TestRealtimeSession:
         assert named.event_id != "evt-from-the-client", named
         assert anonymous.error.event_id != "evt-from-the-client", anonymous
         assert anonymous.error.event_id is None, anonymous
+
+
+class TestG711Turn:
+    """A telephony session speaks and listens in G.711, at 8 kHz.
+
+    The conversion tables themselves are proved numerically elsewhere; what is
+    proved here is everything around them -- that the media type the client
+    asked for selects the right pair, that 8 kHz is what the backend is told the
+    audio is, and that what comes back is companded at that same rate.
+
+    Ref: https://www.itu.int/rec/T-REC-G.711
+         stdapi/realtime.py:_COMPANDED
+    """
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("media_type", ["audio/pcmu", "audio/pcma"])
+    async def test_a_companded_turn_is_heard_and_answered_in_its_own_codec(
+        self,
+        async_openai_client: AsyncOpenAI,
+        realtime_model: str,
+        sample_audio_file: bytes,
+        transcription_model: str,
+        media_type: str,
+    ) -> None:
+        """A turn companded by ffmpeg is understood, and answered in the same codec.
+
+        ffmpeg owns both ends of the companding: it encodes what the caller
+        sends and expands what the session answers with. Using the gateway's own
+        encoder for either would let a symmetrically wrong pair of tables cancel
+        out and pass -- which is the exact shape of the A-law sign defect that
+        shipped in this release.
+
+        Each direction is then proved on its own. The caller's transcript has to
+        carry the word the recording says, which only happens if what the
+        session decoded is the speech ffmpeg companded. The answer is expanded,
+        transcribed, and has to say what the session was told to say -- and to
+        last as long as saying it takes, because a mislabelled rate is audible
+        as a third of the speed and nothing else here would notice it.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             (RealtimeAudioFormats)
+             stdapi/types/openai_realtime.py:FORMAT_SAMPLE_RATES
+        """
+        spoken = _companded(sample_audio_file, media_type)
+
+        async with async_openai_client.realtime.connect(
+            model=realtime_model
+        ) as connection:
+            await connection.recv()
+            await connection.session.update(session=_g711_session(media_type))
+            configured = await _drain_until(connection, "session.updated")
+
+            await _send_audio(connection, spoken)
+            await connection.input_audio_buffer.commit()
+            await connection.response.create()
+
+            async with asyncio.timeout(_TURN_TIMEOUT):
+                events = await _drain_until(connection, "response.done")
+
+        assert configured[-1].type == "session.updated", _types(configured)
+        session = configured[-1].session
+        assert session.audio.input.format.type == media_type, session.audio.input
+        assert session.audio.output.format.type == media_type, session.audio.output
+
+        kinds = _types(events)
+        assert "error" not in kinds, [
+            event for event in events if event.type == "error"
+        ]
+        assert events[-1].type == "response.done", kinds
+
+        transcribed = next(
+            (
+                event
+                for event in events
+                if event.type == "conversation.item.input_audio_transcription.completed"
+            ),
+            None,
+        )
+        assert transcribed is not None, (
+            f"the companded turn was never transcribed: {kinds}"
+        )
+        assert _SPOKEN_WORD in _words(transcribed.transcript), (
+            "the session did not understand the companded speech it was sent: "
+            f"{transcribed.transcript!r}"
+        )
+
+        answer = _spoken_audio(events)
+        assert answer, f"the companded turn was answered without audio: {kinds}"
+        expanded = _expanded(answer, media_type)
+        assert len(expanded) == 2 * len(answer), (
+            "the answer is not one companded byte per sample: "
+            f"{len(answer)} bytes expanded to {len(expanded)}"
+        )
+        assert _peak_amplitude(expanded) >= _MIN_PEAK_AMPLITUDE, (
+            "the expanded answer never rises above a whisper: its peak sample is "
+            f"{_peak_amplitude(expanded)}"
+        )
+
+        heard = (
+            await async_openai_client.audio.transcriptions.create(
+                file=("answer.wav", io.BytesIO(_as_wav(expanded, _G711_RATE))),
+                model=transcription_model,
+            )
+        ).text
+        assert _shared_word_share(_PINNED_SENTENCE, heard) >= _TRANSCRIPT_OVERLAP, (
+            f"the expanded answer does not say what it was told to: heard {heard!r}, "
+            f"claimed {_claimed_transcript(events)!r}"
+        )
+        _assert_duration_matches_transcript(
+            heard, len(answer) / _G711_RATE, f"the {media_type} answer"
+        )
+
+        done = events[-1]
+        assert done.response.audio is not None, done.response
+        assert done.response.audio.output is not None, done.response.audio
+        assert done.response.audio.output.format is not None, done.response.audio
+        assert done.response.audio.output.format.type == media_type, done.response.audio
+
+
+class TestTranscriptionSession:
+    """A transcription session reports the caller, and answers nothing.
+
+    Ref: https://developers.openai.com/api/reference/resources/realtime/subresources/client_secrets/methods/create
+         stdapi/types/openai_realtime.py:TranscriptionSessionConfig
+    """
+
+    @pytest.mark.slow
+    @pytest.mark.gateway(
+        "Upstream selects a transcription session with an 'intent' query "
+        "parameter; this gateway takes the session kind from the secret instead."
+    )
+    async def test_a_transcription_session_reports_what_was_spoken_and_nothing_else(
+        self,
+        async_openai_client: AsyncOpenAI,
+        realtime_model: str,
+        sample_audio_pcm24: bytes,
+    ) -> None:
+        """The caller's words come back, and the session never speaks.
+
+        The transcription session kind is fixed when the session is opened and
+        cannot be updated into afterwards, so the secret the connection is
+        authenticated with is what selects it. Everything downstream branches on
+        that kind: the instructions the backend is opened with, the tools it is
+        given, the content part an answer is written into, and whether any
+        speech is generated at all. No test had ever opened one.
+
+        Ref: https://developers.openai.com/api/reference/resources/realtime
+             stdapi/realtime.py:RealtimeSession._speech_output
+        """
+        created = await async_openai_client.realtime.client_secrets.create(
+            session=_TRANSCRIPTION_SESSION
+        )
+        assert created.session.type == "transcription", created.session
+
+        holder = AsyncOpenAI(
+            base_url=str(async_openai_client.base_url),
+            api_key=created.value,
+            max_retries=0,
+        )
+        async with holder.realtime.connect(model=realtime_model) as connection:
+            opened = await connection.recv()
+            await _send_audio(connection, sample_audio_pcm24)
+            await connection.input_audio_buffer.commit()
+
+            async with asyncio.timeout(_TURN_TIMEOUT):
+                events = await _drain_until(
+                    connection, "conversation.item.input_audio_transcription.completed"
+                )
+
+        assert opened.type == "session.created", opened
+        assert opened.session.type == "transcription", opened.session
+
+        kinds = _types(events)
+        assert "error" not in kinds, [
+            event for event in events if event.type == "error"
+        ]
+        assert events[-1].type == (
+            "conversation.item.input_audio_transcription.completed"
+        ), kinds
+        assert _SPOKEN_WORD in _words(events[-1].transcript), (
+            f"the transcription session misheard the caller: {events[-1].transcript!r}"
+        )
+        assert "response.output_audio.delta" not in kinds, (
+            f"a transcription session spoke back: {kinds}"
+        )
 
 
 class TestFunctionTools:

@@ -104,6 +104,9 @@ _INSTRUCTIONS = "Answer with one short spoken sentence."
 #: Sentence the caller speaks, synthesized once per module.
 _SPOKEN_QUESTION = "Hello there. Please say something back to me."
 
+#: Word of `_SPOKEN_QUESTION` the caller's transcript must carry, mid-sentence on purpose.
+_SPOKEN_KEYWORD = "something"
+
 #: Audio pushed per frame, ~100 ms at 24 kHz 16-bit mono.
 _FRAME_BYTES = 4800
 
@@ -285,7 +288,9 @@ class TestLiveKitRealtimeSession:
 
         The caller's transcript is asserted alongside the answer because the
         plugin only reports it when the gateway sends the input-transcription
-        events, which is what an agent shows in its own conversation view.
+        events, which is what an agent shows in its own conversation view. It
+        has to carry a word that was actually spoken: a transcript of the wrong
+        audio, or of the answer instead of the question, is non-empty too.
 
         Ref: https://developers.openai.com/api/reference/resources/realtime
              stdapi/realtime.py:RealtimeSession
@@ -302,8 +307,8 @@ class TestLiveKitRealtimeSession:
         assert not turn.errors, f"the session reported an error: {turn.errors}"
         assert turn.audio, "the spoken turn returned no audio"
         assert turn.text.strip(), "the spoken turn returned no transcript"
-        assert any(heard.strip() for heard in turn.heard), (
-            f"the plugin never received a transcript of the caller: {turn.heard}"
+        assert any(_SPOKEN_KEYWORD in heard.lower() for heard in turn.heard), (
+            f"the plugin never received a transcript of what was spoken: {turn.heard}"
         )
 
     async def test_the_documented_snippet_derives_this_deployment_websocket(
