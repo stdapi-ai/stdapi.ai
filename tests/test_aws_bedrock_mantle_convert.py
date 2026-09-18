@@ -3630,13 +3630,30 @@ class TestTextCompletionAsChatPayload:
         )
         assert payload["n"] == 2
 
-    @pytest.mark.parametrize(
-        ("field", "value"), [("echo", True), ("suffix", "S"), ("logprobs", 1)]
-    )
-    async def test_unsupported_option_rejected(self, field: str, value: object) -> None:
-        """``echo``, ``suffix`` and ``logprobs`` are rejected with a 400 ApiError.
+    async def test_echo_is_accepted_and_never_forwarded_upstream(self) -> None:
+        """``echo`` is accepted; the payload carries no ``echo`` key for upstream.
 
-        None of the three has a Chat Completions equivalent, and silently dropping them
+        ``echo`` is served locally by prefixing each choice with the prompt this very
+        payload carries, so forwarding it to a Chat Completions upstream that has no such
+        parameter would be both meaningless and a risk of a vendor-side rejection.
+
+        Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+             stdapi/models/chat/_mantle/_convert.py:text_completion_as_chat_payload
+        """
+        request = LegacyCompletionCreateParams.model_validate(
+            {"model": "ignored", "prompt": "Hi", "echo": True}
+        )
+        payload = await mantle_convert.text_completion_as_chat_payload(
+            request, "model-id"
+        )
+        assert "echo" not in payload
+        assert payload["messages"] == [{"role": "user", "content": "Hi"}]
+
+    @pytest.mark.parametrize(("field", "value"), [("suffix", "S"), ("logprobs", 1)])
+    async def test_unsupported_option_rejected(self, field: str, value: object) -> None:
+        """``suffix`` and ``logprobs`` are rejected with a 400 ApiError.
+
+        Neither has a Chat Completions equivalent, and silently dropping them
         would change the response shape the caller expects.
 
         Ref: stdapi/models/chat/_mantle/_convert.py:text_completion_as_chat_payload
@@ -3731,6 +3748,161 @@ class TestChatResponseAsTextCompletion:
         assert result.usage.completion_tokens == 2
         assert result.usage.total_tokens == 7
         assert "cache_read_input_tokens" not in result.usage.model_dump()
+
+    def test_echo_text_prefixes_every_choice(self) -> None:
+        """``echo_text`` is prepended to each choice, not to the first one only.
+
+        A Mantle request carries a single prompt, so every one of the ``n`` choices was
+        generated from that same text and must carry it back.
+
+        Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+             stdapi/models/chat/_mantle/_convert.py:chat_response_as_text_completion
+        """
+        raw = {
+            "id": "chatcmpl-1",
+            "created": 100,
+            "model": "m",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "two."},
+                    "finish_reason": "stop",
+                },
+                {
+                    "index": 1,
+                    "message": {"role": "assistant", "content": "2."},
+                    "finish_reason": "stop",
+                },
+            ],
+        }
+        result = mantle_convert.chat_response_as_text_completion(
+            raw, "cmpl-1", echo_text="One plus one is "
+        )
+        assert [choice.text for choice in result.choices] == [
+            "One plus one is two.",
+            "One plus one is 2.",
+        ]
+
+    def test_no_echo_text_leaves_the_choice_text_unprefixed(self) -> None:
+        """The default empty ``echo_text`` is the unmodified conversion.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:chat_response_as_text_completion
+        """
+        raw = {
+            "id": "chatcmpl-1",
+            "created": 100,
+            "model": "m",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "two."},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+        result = mantle_convert.chat_response_as_text_completion(raw, "cmpl-1")
+        assert result.choices[0].text == "two."
+
+
+class TestChatStreamAsTextCompletionEcho:
+    """Streamed ``echo`` emits one leading chunk per choice index.
+
+    The echo chunks are yielded before the upstream stream is even pulled from, so the
+    prompt can never reach the client after the generated text it precedes.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         stdapi/models/chat/_mantle/_convert.py:chat_stream_as_text_completion
+    """
+
+    @staticmethod
+    async def _chunks(
+        upstream: list[dict[str, Any]],
+        *,
+        echo_text: str = "",
+        choice_count: int = 1,
+        model_id: str = "",
+    ) -> list[dict[str, Any]]:
+        """Wrap stubbed Chat Completions chunks and decode the emitted events.
+
+        Args:
+            upstream: Chat Completions chunk dicts to replay.
+            echo_text: Prompt prefix passed through to the wrapper.
+            choice_count: Number of choices the request asked for.
+            model_id: Model identifier reported on the echo chunks.
+
+        Returns:
+            The JSON-decoded text-completion chunks.
+        """
+
+        async def source() -> AsyncGenerator[ServerSentEvent]:
+            for chunk in upstream:
+                yield ServerSentEvent(data=dumps(chunk))
+
+        return [
+            loads(event.data)
+            async for event in mantle_convert.chat_stream_as_text_completion(
+                source(),
+                "cmpl-1",
+                echo_text=echo_text,
+                choice_count=choice_count,
+                model_id=model_id,
+            )
+            if isinstance(event.data, str)
+        ]
+
+    @staticmethod
+    def _delta(text: str, index: int = 0) -> dict[str, Any]:
+        """Build an upstream Chat Completions content-delta chunk.
+
+        Args:
+            text: Delta text the chunk carries.
+            index: Choice index the delta belongs to.
+
+        Returns:
+            A Chat Completions chunk dict.
+        """
+        return {
+            "id": "chatcmpl-1",
+            "created": 1,
+            "model": "m",
+            "choices": [
+                {"index": index, "delta": {"content": text}, "finish_reason": None}
+            ],
+        }
+
+    async def test_echo_chunk_precedes_the_generated_content(self) -> None:
+        """The lone choice's echo chunk arrives before its first delta."""
+        chunks = await self._chunks(
+            [self._delta("hi")], echo_text="Say hi: ", model_id="model-id"
+        )
+        assert chunks[0]["choices"][0]["text"] == "Say hi: "
+        assert chunks[0]["choices"][0]["index"] == 0
+        assert chunks[0]["choices"][0]["finish_reason"] is None
+        assert chunks[0]["object"] == "text_completion"
+        assert chunks[0]["id"] == "cmpl-1"
+        assert chunks[0]["model"] == "model-id"
+        assert chunks[1]["choices"][0]["text"] == "hi"
+
+    async def test_one_echo_chunk_per_choice_precedes_any_delta(self) -> None:
+        """``n=2`` emits the prompt once per index, both ahead of any delta."""
+        chunks = await self._chunks(
+            [self._delta("two", 0), self._delta("blue", 1)],
+            echo_text="One plus one is ",
+            choice_count=2,
+            model_id="model-id",
+        )
+        assert [chunk["choices"][0]["text"] for chunk in chunks[:2]] == [
+            "One plus one is ",
+            "One plus one is ",
+        ]
+        assert [chunk["choices"][0]["index"] for chunk in chunks[:2]] == [0, 1]
+        assert [chunk["choices"][0]["text"] for chunk in chunks[2:]] == ["two", "blue"]
+
+    async def test_empty_echo_text_emits_no_leading_chunk(self) -> None:
+        """An unset ``echo`` (the default empty prefix) leaves the stream unmodified."""
+        chunks = await self._chunks([self._delta("hi")], choice_count=2)
+        assert len(chunks) == 1
+        assert chunks[0]["choices"][0]["text"] == "hi"
 
 
 class TestChatStreamAsTextCompletionCompact:

@@ -650,18 +650,28 @@ class ChatModel(ChatModelBase[Any, Any]):
             ``Completion`` or streaming ``EventSourceResponse``.
         """
         payload = await convert.text_completion_as_chat_payload(request, self._model_id)
+        # The conversion above normalized the prompt into that single user
+        # message, so 'echo' prepends the payload's own content, repeated on
+        # each of the 'n' choices it asks for.
+        echo_text = payload["messages"][0]["content"] if request.echo else ""
         if request.stream:
             return await self._stream_serve(
                 "chat_completions",
                 payload,
                 strip_usage_chunk=not _include_usage(request),
                 wrap=lambda events: convert.chat_stream_as_text_completion(
-                    events, completion_id
+                    events,
+                    completion_id,
+                    echo_text=echo_text,
+                    choice_count=request.n or 1,
+                    model_id=self._model_id,
                 ),
             )
         _, _, raw = await self._serve_validated("chat_completions", payload)
         return log_response_params(
-            convert.chat_response_as_text_completion(raw, completion_id)
+            convert.chat_response_as_text_completion(
+                raw, completion_id, echo_text=echo_text
+            )
         )
 
     async def create_message(

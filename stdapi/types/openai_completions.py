@@ -162,8 +162,7 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         default=None,
         description="Echo back the prompt in addition to the completion: each choice's "
         "text is prefixed with the prompt it was generated from (one leading chunk "
-        "per choice when streamed). A file-only prompt echoes nothing.\n"
-        "UNSUPPORTED on Mantle-served models.",
+        "per choice when streamed). A file-only prompt echoes nothing.",
     )
     frequency_penalty: float | None = Field(
         default=None,

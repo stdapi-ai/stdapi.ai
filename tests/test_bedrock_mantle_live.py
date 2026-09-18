@@ -1306,20 +1306,38 @@ class TestMantleCompletions:
         assert response.usage is not None
         assert response.usage.completion_tokens > 0
 
-    def test_gemma3_echo_rejected(self, openai_client: OpenAI) -> None:
-        """The unsupported `echo` option is rejected with the documented 400.
+    def test_gemma3_echo_prepends_the_prompt(self, openai_client: OpenAI) -> None:
+        """`echo` prefixes the completion with the prompt, as on the Converse path.
 
-        ``echo`` requires the prompt tokens back in the completion, which no
-        chat-shaped upstream can produce, so it is refused instead of ignored.
+        Mantle has no ``echo`` parameter, so the gateway prepends the very prompt
+        it folded into the chat message rather than refusing the request.
 
-        Ref: stdapi/models/chat/_mantle/_convert.py:text_completion_as_chat_payload
+        Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+             stdapi/models/chat/_mantle/_convert.py:chat_response_as_text_completion
         """
-        with pytest.raises(BadRequestError) as bad_request:
+        prompt = "Say OK."
+        response = openai_client.completions.create(
+            model=_GEMMA3, prompt=prompt, max_tokens=16, echo=True
+        )
+        assert response.choices
+        text = response.choices[0].text
+        assert text.startswith(prompt), f"missing echoed prompt: {text!r}"
+        assert text != prompt, "the completion itself must still be appended"
+
+    def test_gemma3_echo_streams_the_prompt_first(self, openai_client: OpenAI) -> None:
+        """A streamed `echo` sends the prompt as the leading chunk, before any delta.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:chat_stream_as_text_completion
+        """
+        prompt = "Say OK."
+        chunks = list(
             openai_client.completions.create(
-                model=_GEMMA3, prompt="Say OK.", max_tokens=16, echo=True
+                model=_GEMMA3, prompt=prompt, max_tokens=16, echo=True, stream=True
             )
-        assert bad_request.value.status_code == 400
-        assert "`echo` is not supported" in str(bad_request.value)
+        )
+        assert chunks[0].choices[0].text == prompt
+        assert chunks[0].choices[0].index == 0
+        assert chunks[0].choices[0].finish_reason is None
 
 
 class TestMantleResponsesSiblingGuards:

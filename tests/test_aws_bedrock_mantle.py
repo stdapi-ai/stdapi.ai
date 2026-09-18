@@ -87,7 +87,7 @@ from stdapi.types.openai_chat_completions import ChatCompletionUserMessageParam
 from stdapi.types.openai_chat_completions import (
     CompletionCreateParams as ChatCompletionCreateParams,
 )
-from stdapi.types.openai_completions import CompletionCreateParams
+from stdapi.types.openai_completions import Completion, CompletionCreateParams
 from stdapi.types.openai_responses import Response, ResponseCreateParams
 from tests._helpers import make_event_log, make_model_details
 from tests.conftest import REPO_ROOT
@@ -3936,6 +3936,133 @@ class TestStreamWrapBranches:
         (path, payload) = sent[0]
         assert path == "/openai/v1/responses"
         assert payload["stream"] is True
+
+
+class TestTextCompletionEchoPlumbing:
+    """``echo`` is honored end to end on the Mantle-served legacy route.
+
+    Mantle has no ``echo`` parameter, so the prompt the payload builder normalized
+    into the single user message is the prefix, prepended locally to each of the
+    ``n`` choices the request asked for.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         stdapi/models/chat/_mantle/_default.py:ChatModel.create_text_completion
+         stdapi/models/chat/_mantle/_convert.py:chat_response_as_text_completion
+    """
+
+    async def test_echo_prefixes_every_choice_of_a_non_streamed_completion(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``echo=True`` with ``n=2`` prefixes both choices with the same prompt."""
+        raw = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "m",
+            "choices": [
+                {
+                    "index": index,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": "stop",
+                }
+                for index, content in enumerate((" two.", " 2."))
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+
+        async def fake_invoke_api(
+            self: mantle_default.ChatModel,  # noqa: ARG001
+            api: str,  # noqa: ARG001
+            payload: dict[str, Any],  # noqa: ARG001
+            *,
+            stream: bool,  # noqa: ARG001
+            region: str | None = None,  # noqa: ARG001
+        ) -> tuple[str, Any]:
+            return "us-east-1", raw
+
+        monkeypatch.setattr(mantle_default.ChatModel, "_invoke_api", fake_invoke_api)
+        model = OpenWeightChatModel("qwen.text-completion-echo-model")
+        request = CompletionCreateParams(
+            model="qwen.text-completion-echo-model",
+            prompt="One plus one is",
+            n=2,
+            echo=True,
+        )
+        result = await model.create_text_completion(request, "cmpl-1", 0)
+        assert isinstance(result, Completion)
+        assert [choice.text for choice in result.choices] == [
+            "One plus one is two.",
+            "One plus one is 2.",
+        ]
+
+    async def test_echo_leads_a_streamed_completion_with_one_chunk_per_choice(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The echo chunks lead the stream, one per index, ahead of every delta."""
+
+        async def fake_invoke_stream(
+            region: RegionName,  # noqa: ARG001
+            path: str,  # noqa: ARG001
+            payload: Mapping[str, Any],  # noqa: ARG001
+            *,
+            single_region: bool,  # noqa: ARG001
+            headers: Mapping[str, str] | None = None,  # noqa: ARG001
+        ) -> AsyncGenerator[SseEvent]:
+            return _fake_stream(
+                [
+                    (
+                        None,
+                        dumps(
+                            {
+                                "id": "chatcmpl-1",
+                                "created": 1,
+                                "model": "qwen.text-completion-echo-stream-model",
+                                "choices": [
+                                    {
+                                        "index": index,
+                                        "delta": {"content": content},
+                                        "finish_reason": "stop",
+                                    }
+                                ],
+                            }
+                        ),
+                    )
+                    for index, content in enumerate((" two.", " 2."))
+                ]
+            )
+
+        monkeypatch.setattr(mantle_default, "invoke_stream", fake_invoke_stream)
+        model = OpenWeightChatModel("qwen.text-completion-echo-stream-model")
+        request = CompletionCreateParams(
+            model="qwen.text-completion-echo-stream-model",
+            prompt="One plus one is",
+            n=2,
+            echo=True,
+            stream=True,
+        )
+        result = await model.create_text_completion(request, "cmpl-1", 0)
+        assert isinstance(result, EventSourceResponse)
+        token = REQUEST_ID.set("req-echo-stream")
+        try:
+            events = cast(
+                "list[ServerSentEvent]", [event async for event in result.body_iterator]
+            )
+        finally:
+            REQUEST_ID.reset(token)
+        chunks = [
+            loads(_event_data(event))
+            for event in events
+            if _event_data(event) != "[DONE]"
+        ]
+        assert [chunk["choices"][0]["text"] for chunk in chunks[:2]] == [
+            "One plus one is",
+            "One plus one is",
+        ]
+        assert [chunk["choices"][0]["index"] for chunk in chunks[:2]] == [0, 1]
+        assert chunks[0]["model"] == "qwen.text-completion-echo-stream-model", (
+            "the echo chunk names the model, it precedes any upstream chunk to copy"
+        )
+        assert [chunk["choices"][0]["text"] for chunk in chunks[2:]] == [" two.", " 2."]
 
 
 class TestStreamedResponseIdPlumbing:

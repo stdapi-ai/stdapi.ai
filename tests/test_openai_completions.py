@@ -1046,6 +1046,21 @@ class TestMantleTextCompletionPassthrough:
         assert completion.system_fingerprint is None
         assert completion.service_tier is None
 
+    def test_echo_text_prefixes_the_choice_like_the_converse_path(self) -> None:
+        """``echo`` prepends the prompt here too, so the two backends agree.
+
+        The Converse path computes the prefix from the prompt it built the Bedrock
+        message from; Mantle's single normalized prompt plays the same role, so
+        ``echo`` is honored on both backends of this route rather than on one.
+
+        Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+             stdapi/models/chat/_mantle/_convert.py:chat_response_as_text_completion
+        """
+        completion = chat_response_as_text_completion(
+            self._raw(), "cmpl-3", echo_text="Say "
+        )
+        assert completion.choices[0].text == "Say hi"
+
 
 #: Bedrock Converse response the capturing model answers with, one text block.
 _CANNED_CONVERSE_RESPONSE: dict[str, Any] = {

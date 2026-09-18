@@ -3613,10 +3613,10 @@ async def text_completion_as_chat_payload(
         JSON-ready Chat Completions request payload.
 
     Raises:
-        ApiError: When the request uses unsupported options (``echo``,
-            ``suffix``, ``logprobs``), multiple prompts, or file prompts.
+        ApiError: When the request uses unsupported options (``suffix``,
+            ``logprobs``), multiple prompts, or file prompts.
     """
-    for name in ("echo", "suffix", "logprobs"):
+    for name in ("suffix", "logprobs"):
         if getattr(request, name):
             msg = f"`{name}` is not supported by this model."
             raise ApiError(msg, status=400)
@@ -3663,20 +3663,22 @@ def _text_finish(finish_reason: str | None) -> str | None:
 
 
 def chat_response_as_text_completion(
-    raw: dict[str, Any], completion_id: str
+    raw: dict[str, Any], completion_id: str, *, echo_text: str = ""
 ) -> Completion:
     """Convert a Chat Completions response to a legacy ``Completion``.
 
     Args:
         raw: Chat Completions response dict.
         completion_id: Identifier for the completion.
+        echo_text: Prompt text prepended to every choice when the request set
+            ``echo``; empty leaves each choice unchanged.
 
     Returns:
         Validated ``Completion`` response model.
     """
     choices = [
         {
-            "text": (choice.get("message") or {}).get("content") or "",
+            "text": echo_text + ((choice.get("message") or {}).get("content") or ""),
             "index": choice.get("index", index),
             "finish_reason": _text_finish(choice.get("finish_reason")),
             "logprobs": None,
@@ -3701,17 +3703,70 @@ def chat_response_as_text_completion(
     )
 
 
+def _text_completion_echo_chunks(
+    completion_id: str, model_id: str, echo_text: str, choice_count: int
+) -> list[ServerSentEvent]:
+    """Build the leading echo chunks of a streamed legacy completion.
+
+    Args:
+        completion_id: Identifier set on the emitted chunks.
+        model_id: Model identifier reported on the chunks.
+        echo_text: Prompt text prefixed to every choice.
+        choice_count: Number of choices the request asked for.
+
+    Returns:
+        One chunk per choice index, empty when *echo_text* is empty.
+    """
+    if not echo_text:
+        return []
+    created = int(time())
+    return [
+        ServerSentEvent(
+            data=to_json_str(
+                {
+                    "id": completion_id,
+                    "object": "text_completion",
+                    "created": created,
+                    "model": model_id,
+                    "choices": [
+                        {
+                            "text": echo_text,
+                            "index": index,
+                            "finish_reason": None,
+                            "logprobs": None,
+                        }
+                    ],
+                }
+            )
+        )
+        for index in range(choice_count)
+    ]
+
+
 async def chat_stream_as_text_completion(
-    events: AsyncGenerator[ServerSentEvent], completion_id: str
+    events: AsyncGenerator[ServerSentEvent],
+    completion_id: str,
+    *,
+    echo_text: str = "",
+    choice_count: int = 1,
+    model_id: str = "",
 ) -> AsyncGenerator[ServerSentEvent]:
     """Wrap a Chat Completions SSE stream as text-completion chunks.
 
     The ``[DONE]`` sentinel and named events carrying neither content nor
     usage (e.g. relayed errors) are passed through unchanged.
 
+    When ``echo_text`` is set, one chunk per choice index carries it ahead of
+    any relayed event, so the prompt never arrives after the text it precedes.
+
     Args:
         events: Inbound-shaped Chat Completions server-sent events.
         completion_id: Identifier set on the emitted chunks.
+        echo_text: Prompt text emitted as a leading chunk per choice when the
+            request set ``echo``; empty emits no chunk.
+        choice_count: Number of choices the request asked for, used to emit one
+            echo chunk per index.
+        model_id: Model identifier reported on the echo chunks.
 
     Yields:
         Text-completion chunk server-sent events.
@@ -3719,6 +3774,10 @@ async def chat_stream_as_text_completion(
     Raises:
         MantleError: When an unnamed upstream chunk reports an in-band error.
     """
+    for echo_chunk in _text_completion_echo_chunks(
+        completion_id, model_id, echo_text, choice_count
+    ):
+        yield echo_chunk
     async for event in events:
         data = event.data
         if not isinstance(data, str) or data == "[DONE]":
