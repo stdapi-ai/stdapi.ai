@@ -154,6 +154,11 @@ class TestCompletions:
             == response.usage.prompt_tokens + response.usage.completion_tokens
         )
 
+    @pytest.mark.gateway(
+        "the official Completions route answers the lane's model with "
+        "'this is a chat model', and refuses `echo` beside `best_of` on the "
+        "ones it does serve; the gateway builds the prefix itself"
+    )
     def test_echo_prepends_the_prompt_to_the_completion(
         self, openai_client: OpenAI, completion_model: str
     ) -> None:
@@ -176,6 +181,11 @@ class TestCompletions:
         assert text.startswith(prompt), f"missing echoed prompt: {text!r}"
         assert text != prompt, "the completion itself must still be appended"
 
+    @pytest.mark.gateway(
+        "the official Completions route answers the lane's model with "
+        "'this is a chat model', and refuses `echo` beside `best_of` on the "
+        "ones it does serve; the gateway builds the prefix itself"
+    )
     def test_echo_batch_prompt_each_choice_echoes_its_own_prompt(
         self, openai_client: OpenAI, completion_model: str
     ) -> None:
@@ -196,6 +206,11 @@ class TestCompletions:
                 f"choice {index} must echo its own prompt: {text!r}"
             )
 
+    @pytest.mark.gateway(
+        "the official Completions route answers the lane's model with "
+        "'this is a chat model', and refuses `echo` beside `best_of` on the "
+        "ones it does serve; the gateway builds the prefix itself"
+    )
     def test_echo_with_n_gt_1_repeats_the_prompt_for_every_choice(
         self, openai_client: OpenAI, completion_model: str
     ) -> None:
@@ -360,6 +375,11 @@ class TestCompletions:
             assert deltas_per_index[index], f"no deltas for choice {index}"
             assert finish_per_index[index] in _TERMINAL_REASONS
 
+    @pytest.mark.gateway(
+        "the official Completions route answers the lane's model with "
+        "'this is a chat model', and refuses `echo` beside `best_of` on the "
+        "ones it does serve; the gateway builds the prefix itself"
+    )
     def test_echo_streaming_emits_the_prompt_as_the_leading_chunk_per_index(
         self, openai_client: OpenAI, completion_model: str
     ) -> None:
@@ -597,6 +617,11 @@ class TestCompletions:
         assert response.usage is not None
         assert response.usage.prompt_tokens > 0
 
+    @pytest.mark.gateway(
+        "the official Completions route answers the lane's model with "
+        "'this is a chat model', and refuses `echo` beside `best_of` on the "
+        "ones it does serve; the gateway builds the prefix itself"
+    )
     def test_echo_on_a_file_only_prompt_echoes_nothing(
         self,
         openai_client: OpenAI,
@@ -624,6 +649,11 @@ class TestCompletions:
             f"the file reference must not have been echoed: {text!r}"
         )
 
+    @pytest.mark.gateway(
+        "the official Completions route answers the lane's model with "
+        "'this is a chat model', and refuses `echo` beside `best_of` on the "
+        "ones it does serve; the gateway builds the prefix itself"
+    )
     def test_echo_on_a_text_plus_image_prompt_echoes_only_the_text(
         self,
         openai_client: OpenAI,

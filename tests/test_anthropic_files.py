@@ -706,6 +706,9 @@ class TestAnthropicFilesExpiry:
         message = str(exc_info.value).lower()
         assert "7776000" in message or "day" in message, message
 
+    @pytest.mark.gateway(
+        "upstream takes only a multipart upload; the JSON body is a gateway form"
+    )
     def test_json_body_expires_in_seconds_is_honoured(
         self, openai_client: OpenAI, anthropic_client: Anthropic
     ) -> None:
@@ -732,6 +735,9 @@ class TestAnthropicFilesExpiry:
                 headers={"Authorization": f"Bearer {openai_client.api_key}"},
             )
 
+    @pytest.mark.gateway(
+        "upstream takes only a multipart upload; the JSON body is a gateway form"
+    )
     def test_json_body_expires_in_seconds_out_of_range_rejected(
         self, openai_client: OpenAI, anthropic_client: Anthropic
     ) -> None:
@@ -751,6 +757,10 @@ class TestAnthropicFilesExpiry:
         assert response.status_code == 400, response.text
         assert "expires_in_seconds" in response.json()["error"]["message"]
 
+    @pytest.mark.gateway(
+        "one store behind both dialects is what this asserts, and only a gateway "
+        "has one"
+    )
     def test_cross_surface_expiry_reports_the_same_instant(
         self, openai_client: OpenAI, anthropic_client: Anthropic
     ) -> None:

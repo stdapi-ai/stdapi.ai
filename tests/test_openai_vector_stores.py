@@ -2068,6 +2068,10 @@ class TestFileAttachment:
                 "file-" + "0" * 32, vector_store_id=empty_store
             )
 
+    @pytest.mark.gateway(
+        "upstream refuses the attach itself for an unsupported extension, so no "
+        "file ever settles; see issue #275"
+    )
     def test_non_text_file_fails_with_unsupported_file(
         self, empty_store: str, openai_client: OpenAI
     ) -> None:

@@ -897,6 +897,10 @@ class TestRealtimeSession:
         )
 
     @pytest.mark.slow
+    @pytest.mark.gateway(
+        "upstream sends input_audio_buffer.committed on a detected turn too, "
+        "which this asserts the absence of; see issue #274"
+    )
     async def test_a_silent_pause_ends_the_turn_and_the_answer_starts_itself(
         self,
         async_openai_client: AsyncOpenAI,
@@ -1111,6 +1115,10 @@ class TestG711Turn:
     """
 
     @pytest.mark.slow
+    @pytest.mark.gateway(
+        "the official API answers this G.711 session update with an error, "
+        "though its own RealtimeAudioFormats schema names both media types"
+    )
     @pytest.mark.parametrize("media_type", ["audio/pcmu", "audio/pcma"])
     async def test_a_companded_turn_is_heard_and_answered_in_its_own_codec(
         self,
