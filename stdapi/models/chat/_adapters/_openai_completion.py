@@ -182,6 +182,7 @@ def format_response(
     model_id: str,
     responses: list[ConverseResponseTypeDef],
     openai_service_tier: ServiceTiers | None,
+    echo_texts: list[str] | None = None,
 ) -> Completion:
     """Aggregate parallel Bedrock Converse responses into a ``Completion``.
 
@@ -195,6 +196,8 @@ def format_response(
         model_id: Model identifier echoed back to the client.
         responses: Ordered Bedrock responses (``prompt_count * n`` entries).
         openai_service_tier: Echoed service tier.
+        echo_texts: Per-choice prompt prefix to prepend to ``text`` when the
+            request set ``echo``, aligned with *responses*; ``None`` when unset.
 
     Returns:
         Populated ``Completion`` with summed usage and ordered choices.
@@ -212,13 +215,16 @@ def format_response(
         usage.completion_tokens += response_usage["outputTokens"]
         cached_tokens += cache_read
         cache_write_tokens += cache_write
+        text = "".join(
+            block["text"]
+            for block in response["output"]["message"]["content"]
+            if "text" in block
+        )
+        if echo_texts:
+            text = echo_texts[index] + text
         choices.append(
             CompletionChoice(
-                text="".join(
-                    block["text"]
-                    for block in response["output"]["message"]["content"]
-                    if "text" in block
-                ),
+                text=text,
                 index=index,
                 finish_reason=_map_finish_reason(response.get("stopReason")),
             )
@@ -278,6 +284,43 @@ def _chunk(
     )
 
 
+def _echo_chunks(
+    completion_id: str,
+    created: int,
+    model_id: str,
+    echo_texts: list[str] | None,
+    openai_service_tier: ServiceTiers | None,
+) -> list[JSONServerSentEvent]:
+    """Build the leading echo chunks for a streamed completion.
+
+    Args:
+        completion_id: Stable identifier for the completion.
+        created: Unix timestamp (seconds).
+        model_id: Model identifier echoed back to the client.
+        echo_texts: Per-choice prompt prefix, or ``None`` when ``echo`` is unset.
+        openai_service_tier: Echoed service tier.
+
+    Returns:
+        One chunk per non-empty prefix in *echo_texts*, in index order.
+    """
+    if not echo_texts:
+        return []
+    return [
+        _chunk(
+            completion_id,
+            created,
+            model_id,
+            prefix,
+            index,
+            None,
+            openai_service_tier,
+            None,
+        )
+        for index, prefix in enumerate(echo_texts)
+        if prefix
+    ]
+
+
 async def _drain(
     stream: AsyncIterator[ConverseStreamOutputTypeDef],
     index: int,
@@ -308,6 +351,7 @@ async def format_stream(
     openai_service_tier: ServiceTiers | None,
     *,
     include_usage: bool,
+    echo_texts: list[str] | None = None,
 ) -> AsyncGenerator[ServerSentEvent]:
     """Stream one or more Bedrock Converse iterators as Completion SSE chunks.
 
@@ -320,6 +364,9 @@ async def format_stream(
     aggregated ``usage`` attached to the last one when ``include_usage`` is
     ``True``.  The stream ends with a ``[DONE]`` sentinel.
 
+    When ``echo_texts`` is set, one leading chunk per choice carries that
+    choice's prompt prefix, emitted before any generated-content chunk.
+
     A failing stream is not re-raised until every stream has drained, so the
     caller's monitoring wrapper logs one error for the whole batch.
 
@@ -330,6 +377,9 @@ async def format_stream(
         streams: Ordered Bedrock stream iterators, one per prompt in the batch.
         openai_service_tier: Echoed service tier.
         include_usage: Populate ``usage`` on the final chunk when ``True``.
+        echo_texts: Per-choice prompt prefix to emit as a leading chunk when
+            the request set ``echo``, aligned with *streams*; ``None`` when
+            unset. An empty prefix (e.g. a file-only prompt) emits no chunk.
 
     Yields:
         ``JSONServerSentEvent`` chunks, terminated by the ``[DONE]`` sentinel.
@@ -339,6 +389,10 @@ async def format_stream(
             streams, if any.
     """
     prompt_count = len(streams)
+    for echo_chunk in _echo_chunks(
+        completion_id, created, model_id, echo_texts, openai_service_tier
+    ):
+        yield echo_chunk
     finish_reasons: list[CompletionFinishReasonLiteral | None] = [None] * prompt_count
     usage_total = (
         CompletionUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)

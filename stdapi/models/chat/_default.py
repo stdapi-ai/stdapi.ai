@@ -382,6 +382,19 @@ class ChatModel(ChatModelBase[Any, Any]):
         prompt_caching = _openai_common.parse_prompt_cache_key(request.prompt_cache_key)
         prompt_caching_ttl = self._cache_ttl(request.prompt_cache_retention)
 
+        # 'echo' is a pure string operation: each choice's prefix is its own
+        # prompt's text blocks, joined and expanded to the flat (prompt_i,
+        # choice_j) order the requests below fan out in.
+        echo_texts: list[str] | None = None
+        if request.echo:
+            echo_texts = [
+                "".join(
+                    block["text"] for block in message["content"] if "text" in block
+                )
+                for message in user_messages
+                for _ in range(n)
+            ]
+
         bedrock_requests: list[ConverseRequestBaseTypeDef] = []
         for user_message in user_messages:
             messages = [user_message]
@@ -425,6 +438,7 @@ class ChatModel(ChatModelBase[Any, Any]):
                             request.stream_options is not None
                             and request.stream_options.include_usage is True
                         ),
+                        echo_texts=echo_texts,
                     )
                 )
             )
@@ -438,6 +452,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             _invoked_model_id(responses[0]) or self._model_id,
             responses,
             openai_service_tier,
+            echo_texts=echo_texts,
         )
 
     async def build_message_request(

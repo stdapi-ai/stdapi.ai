@@ -154,6 +154,70 @@ class TestCompletions:
             == response.usage.prompt_tokens + response.usage.completion_tokens
         )
 
+    def test_echo_prepends_the_prompt_to_the_completion(
+        self, openai_client: OpenAI, completion_model: str
+    ) -> None:
+        """``echo=True`` prefixes the single choice with the prompt it grew from.
+
+        The gateway derives the prefix from the prompt text it already built the
+        Bedrock message from, rather than forwarding ``echo`` to Bedrock (which
+        has no such parameter).
+
+        Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+             stdapi/models/chat/_adapters/_openai_completion.py:format_response
+        """
+        prompt = "The capital of France is"
+        response = openai_client.completions.create(
+            model=completion_model, prompt=prompt, max_tokens=5, echo=True
+        )
+
+        assert len(response.choices) == 1
+        text = response.choices[0].text
+        assert text.startswith(prompt), f"missing echoed prompt: {text!r}"
+        assert text != prompt, "the completion itself must still be appended"
+
+    def test_echo_batch_prompt_each_choice_echoes_its_own_prompt(
+        self, openai_client: OpenAI, completion_model: str
+    ) -> None:
+        """Each choice of a batch echoes the prompt it was generated from, not another's.
+
+        Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+             stdapi/models/chat/_default.py:ChatModel.create_text_completion
+        """
+        prompts = ["One plus one is", "The sky color is"]
+        response = openai_client.completions.create(
+            model=completion_model, prompt=prompts, max_tokens=5, echo=True
+        )
+
+        assert len(response.choices) == 2
+        for index, prompt in enumerate(prompts):
+            text = response.choices[index].text
+            assert text.startswith(prompt), (
+                f"choice {index} must echo its own prompt: {text!r}"
+            )
+
+    def test_echo_with_n_gt_1_repeats_the_prompt_for_every_choice(
+        self, openai_client: OpenAI, completion_model: str
+    ) -> None:
+        """``n=2`` with ``echo=True`` echoes the same prompt onto both choices.
+
+        The flat ``(prompt_i, choice_j)`` fan-out order means the same echo
+        prefix must land on every one of the ``n`` choices generated from it,
+        not only the first.
+
+        Ref: stdapi/models/chat/_default.py:ChatModel.create_text_completion
+        """
+        prompt = "Hello"
+        response = openai_client.completions.create(
+            model=completion_model, prompt=prompt, n=2, max_tokens=3, echo=True
+        )
+
+        assert len(response.choices) == 2
+        for choice in response.choices:
+            assert choice.text.startswith(prompt), (
+                f"choice {choice.index} must echo the prompt: {choice.text!r}"
+            )
+
     def test_streaming_yields_text_deltas_and_terminal_finish_reason(
         self, openai_client: OpenAI, completion_model: str
     ) -> None:
@@ -295,6 +359,45 @@ class TestCompletions:
         for index in range(n):
             assert deltas_per_index[index], f"no deltas for choice {index}"
             assert finish_per_index[index] in _TERMINAL_REASONS
+
+    def test_echo_streaming_emits_the_prompt_as_the_leading_chunk_per_index(
+        self, openai_client: OpenAI, completion_model: str
+    ) -> None:
+        """Streamed ``echo=True`` sends one prompt chunk per choice before any delta.
+
+        Every echo chunk is queued before the underlying Bedrock streams are even
+        started, so the client must see the two prompts, one per index, ahead of
+        any generated-content chunk for either.
+
+        Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+             stdapi/models/chat/_adapters/_openai_completion.py:format_stream
+        """
+        prompts = ["One plus one is", "The sky color is"]
+        response = openai_client.completions.create(
+            model=completion_model, prompt=prompts, max_tokens=5, stream=True, echo=True
+        )
+
+        chunks = list(response)
+
+        leading = {
+            chunks[0].choices[0].index: chunks[0],
+            chunks[1].choices[0].index: chunks[1],
+        }
+        assert set(leading) == {0, 1}, "the two leading chunks must cover both indices"
+        for index, prompt in enumerate(prompts):
+            leading_chunk = leading[index].choices[0]
+            assert leading_chunk.text == prompt, (
+                f"leading chunk for index {index} must be exactly its prompt"
+            )
+            assert leading_chunk.finish_reason is None
+
+        deltas_per_index: dict[int, list[str]] = {0: [], 1: []}
+        for chunk in chunks[2:]:
+            choice = chunk.choices[0]
+            if choice.text:
+                deltas_per_index[choice.index].append(choice.text)
+        for index in range(2):
+            assert deltas_per_index[index], f"no generated content for choice {index}"
 
     def test_stop_sequences_truncate_generation(
         self, openai_client: OpenAI, completion_model: str, use_official_api: bool
@@ -493,6 +596,57 @@ class TestCompletions:
         assert response.choices[0].finish_reason in _TERMINAL_REASONS
         assert response.usage is not None
         assert response.usage.prompt_tokens > 0
+
+    def test_echo_on_a_file_only_prompt_echoes_nothing(
+        self,
+        openai_client: OpenAI,
+        chat_vision_model: str,
+        sample_image_file_base64: str,
+    ) -> None:
+        """``echo=True`` on an image-only prompt leaves the completion untouched.
+
+        The echo prefix is joined from the prompt's own *text* blocks; a
+        file-only prompt has none, so there is nothing to prepend and the
+        completion must not start with the file reference itself.
+
+        Ref: stdapi/models/chat/_adapters/_openai_completion.py:build_user_messages
+        """
+        response = openai_client.completions.create(
+            model=chat_vision_model,
+            prompt=sample_image_file_base64,
+            max_tokens=80,
+            echo=True,
+        )
+        assert len(response.choices) == 1
+        text = response.choices[0].text
+        assert text
+        assert not text.startswith("data:"), (
+            f"the file reference must not have been echoed: {text!r}"
+        )
+
+    def test_echo_on_a_text_plus_image_prompt_echoes_only_the_text(
+        self,
+        openai_client: OpenAI,
+        chat_vision_model: str,
+        sample_image_file_base64: str,
+    ) -> None:
+        """``echo=True`` on a text+files collapse prompt echoes just the instruction.
+
+        Ref: stdapi/models/chat/_adapters/_openai_completion.py:build_user_messages
+        """
+        instruction = "Describe what is shown in this image in one short sentence:"
+        response = openai_client.completions.create(
+            model=chat_vision_model,
+            prompt=[instruction, sample_image_file_base64],
+            max_tokens=80,
+            echo=True,
+        )
+        assert len(response.choices) == 1
+        text = response.choices[0].text
+        assert text.startswith(instruction), f"missing echoed instruction: {text!r}"
+        assert "data:" not in text, (
+            f"the file reference must not have been echoed: {text!r}"
+        )
 
 
 class TestStopSequenceValidation:
@@ -1156,6 +1310,68 @@ class TestFormatResponseCacheTokens:
         assert usage.total_tokens == 15
 
 
+class TestFormatResponseEcho:
+    """``echo_texts`` prepends a per-choice prompt prefix onto ``format_response``.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         stdapi/models/chat/_adapters/_openai_completion.py:format_response
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    def _response(text: str) -> dict[str, Any]:
+        """Build a minimal Converse response carrying the given completion text.
+
+        Args:
+            text: Completion text the response reports.
+
+        Returns:
+            A Converse response payload.
+        """
+        return {
+            "output": {"message": {"role": "assistant", "content": [{"text": text}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1},
+        }
+
+    def test_prefix_is_prepended_to_the_choice_text(self) -> None:
+        """A single choice's text is prefixed with its echo text, not replaced."""
+        completion = format_response(
+            "cmpl-1",
+            0,
+            "model",
+            [self._response("Paris.")],  # type: ignore[list-item]
+            None,
+            echo_texts=["The capital of France is "],
+        )
+        assert completion.choices[0].text == "The capital of France is Paris."
+
+    def test_no_echo_texts_leaves_the_choice_text_unprefixed(self) -> None:
+        """``echo_texts=None`` (the default) is the unmodified pre-fix behavior."""
+        completion = format_response(
+            "cmpl-1",
+            0,
+            "model",
+            [self._response("Paris.")],  # type: ignore[list-item]
+            None,
+        )
+        assert completion.choices[0].text == "Paris."
+
+    def test_each_choice_is_prefixed_with_its_own_echo_text(self) -> None:
+        """A batch's choices each get their own prefix, aligned by index."""
+        completion = format_response(
+            "cmpl-1",
+            0,
+            "model",
+            [self._response("two."), self._response("blue.")],  # type: ignore[list-item]
+            None,
+            echo_texts=["One plus one is ", "The sky color is "],
+        )
+        assert completion.choices[0].text == "One plus one is two."
+        assert completion.choices[1].text == "The sky color is blue."
+
+
 async def _stub_stream(events: list[dict[str, Any]]) -> AsyncIterator[dict[str, Any]]:
     """Yield the given Bedrock Converse stream event dicts one by one.
 
@@ -1355,6 +1571,94 @@ class TestLegacyStreamChunks:
             None,
             "stop",
         ]
+
+
+class TestLegacyStreamEcho:
+    """``echo_texts`` emits one leading chunk per choice before any stream drains.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         stdapi/models/chat/_adapters/_openai_completion.py:format_stream
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    async def _chunks(
+        streams_events: list[list[dict[str, Any]]], echo_texts: list[str] | None
+    ) -> list[dict[str, Any]]:
+        """Format one or more stubbed Bedrock streams and decode the emitted chunks.
+
+        Args:
+            streams_events: Converse stream event dicts to replay, one list per stream.
+            echo_texts: Per-choice prompt prefix passed through to ``format_stream``.
+
+        Returns:
+            The JSON-decoded chunks, excluding the ``[DONE]`` sentinel.
+        """
+        sse_events = [
+            event
+            async for event in format_stream(
+                "cmpl-1",
+                0,
+                "model",
+                [_stub_stream(events) for events in streams_events],  # type: ignore[misc]
+                None,
+                include_usage=False,
+                echo_texts=echo_texts,
+            )
+        ]
+        assert sse_events[-1].data == "[DONE]", "the stream must end with the sentinel"
+        return [
+            json.loads(event.data)
+            for event in sse_events
+            if isinstance(event.data, str) and event.data != "[DONE]"
+        ]
+
+    async def test_echo_chunk_precedes_the_generated_content(self) -> None:
+        """The echo chunk for the lone choice arrives before its first delta."""
+        chunks = await self._chunks(
+            [[{"contentBlockDelta": {"delta": {"text": "hi"}}}]],
+            echo_texts=["Say hi: "],
+        )
+        assert chunks[0]["choices"][0]["text"] == "Say hi: "
+        assert chunks[0]["choices"][0]["index"] == 0
+        assert "finish_reason" not in chunks[0]["choices"][0]
+        assert chunks[1]["choices"][0]["text"] == "hi"
+
+    async def test_echo_chunks_for_every_index_precede_any_delta(self) -> None:
+        """With two streams, both echo chunks lead, one per index, before deltas."""
+        chunks = await self._chunks(
+            [
+                [{"contentBlockDelta": {"delta": {"text": "two"}}}],
+                [{"contentBlockDelta": {"delta": {"text": "blue"}}}],
+            ],
+            echo_texts=["One plus one is ", "The sky color is "],
+        )
+        assert [chunk["choices"][0]["text"] for chunk in chunks[:2]] == [
+            "One plus one is ",
+            "The sky color is ",
+        ]
+        assert [chunk["choices"][0]["index"] for chunk in chunks[:2]] == [0, 1]
+        assert all("finish_reason" not in chunk["choices"][0] for chunk in chunks[:2])
+
+    async def test_empty_echo_prefix_emits_no_leading_chunk(self) -> None:
+        """A file-only prompt's empty prefix skips the chunk instead of sending one."""
+        chunks = await self._chunks(
+            [
+                [{"contentBlockDelta": {"delta": {"text": "described"}}}],
+                [{"contentBlockDelta": {"delta": {"text": "blue"}}}],
+            ],
+            echo_texts=["", "The sky color is "],
+        )
+        assert chunks[0]["choices"][0]["text"] == "The sky color is "
+        assert chunks[0]["choices"][0]["index"] == 1
+
+    async def test_no_echo_texts_emits_no_leading_chunk(self) -> None:
+        """``echo_texts=None`` (the default) leaves the stream unmodified."""
+        chunks = await self._chunks(
+            [[{"contentBlockDelta": {"delta": {"text": "hi"}}}]], echo_texts=None
+        )
+        assert chunks[0]["choices"][0]["text"] == "hi"
 
 
 #: What a model that must never be called reports when it is.
