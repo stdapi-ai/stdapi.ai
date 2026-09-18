@@ -110,6 +110,7 @@ asyncio.run(main())
 | **Turn Detection**                            |                                          |                                                                     |
 | Server-side voice activity detection           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Default; ends each turn automatically                                |
 | Manual turns (`turn_detection: null`)          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | End each turn yourself with `input_audio_buffer.commit`              |
+| `turn_detection.type: "semantic_vad"`          |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepted and served as `server_vad` — a turn ends on silence, not on what was said |
 | `threshold`, `prefix_padding_ms`, `silence_duration_ms`, `idle_timeout_ms`, `eagerness` | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored — detection sensitivity is not tunable          |
 | `create_response`, `interrupt_response`        | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored — a detected turn always starts a response, and interruption is the model's own decision |
 | Barge-in (caller speaks over the answer)       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Handled by the model itself                                          |

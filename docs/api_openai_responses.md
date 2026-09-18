@@ -1059,7 +1059,7 @@ curl -X POST "$BASE/v1/responses" \
 
 ## Limits and behaviour to know
 
-**What is rejected with a `400`.** `max_tool_calls`, `context_management`, `truncation: "auto"` (`disabled`, the OpenAI default, is the behavior served), `conversation` together with `previous_response_id`, `stream=true` on `GET /v1/responses/{response_id}`, and the `moderation` parameter on a [Mantle](features.md#bedrock-mantle-models)-served model.
+**What is rejected with a `400`.** `max_tool_calls`, `context_management`, `truncation: "auto"` (`disabled`, the OpenAI default, is the behavior served), `conversation` together with `previous_response_id`, `stream=true` on `GET /v1/responses/{response_id}`, the `moderation` parameter on a [Mantle](features.md#bedrock-mantle-models)-served model, and a `phase` on an input message whose `role` is not `assistant` (`unknown_parameter`) — on an assistant message it is accepted and dropped rather than stored.
 
 **What is accepted and ignored on Converse-served models.** `background` (execution is synchronous), `stream_options`, `reasoning.summary`, `reasoning.context`, `reasoning.mode`, `text.verbosity`, `client_metadata`, `top_logprobs`, `include` values other than the two honored ones, and `include` / `starting_after` on a stored-response retrieval. On Mantle-native models these are forwarded upstream instead — see [Bedrock Mantle passthrough](#feature-compatibility) above.
 

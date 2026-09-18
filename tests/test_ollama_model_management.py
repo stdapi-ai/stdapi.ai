@@ -1,4 +1,4 @@
-"""Ollama-compatible model management: /api/pull and the four refused verbs.
+"""Ollama-compatible model management: /api/pull and the five refused verbs.
 
 ``pull`` is the only one of the five whose post-condition this server can meet:
 its contract is "after this returns, the model can be used", which is already

@@ -17,7 +17,7 @@ Upload and manage files via an Anthropic-compatible interface. Files are stored 
 - :material-file-document-multiple: **Messages integration** — Reference uploaded files directly in Messages requests as document or image source blocks using `"type": "file"`.
 - :material-download: **Content download** — Download raw file bytes at any time via the `/content` endpoint.
 - :material-database: **One file store for both dialects** — a file uploaded here is readable and deletable through the [OpenAI Files API](api_openai_files.md), and vice versa; both are backed by the same S3 bucket.
-- :material-swap-horizontal: **Differs from the Anthropic API:** no file size cap beyond S3's ~5 TB object limit, `downloadable` is always `true`, and `scope_id` filtering is refused — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
+- :material-swap-horizontal: **Differs from the Anthropic API:** no file size cap beyond the ~78 GiB a direct upload reaches, `downloadable` is always `true`, and `scope_id` filtering is refused — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
 
 !!! info "Base URL and route prefix"
     By default, all Anthropic-compatible routes are prefixed with `/anthropic`. This means the Files API is available at `/anthropic/v1/files` instead of `/v1/files`. You can customize this prefix using the `ANTHROPIC_ROUTES_PREFIX` configuration variable documented in [HTTP Server and MCP](operations_configuration_server.md#anthropic-routes-prefix).
@@ -66,7 +66,7 @@ curl -X POST "$BASE/v1/files" \
 | `first_id` / `last_id` / `has_more` | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Page edges and continuation flag, served alongside `next_page`   |
 | `limit`                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 – 1 000; default 20 — ignored alongside `ids`                  |
 | `scope_id` filter        | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Refused with a `400`: files here are not associated with a scope |
-| **File size cap**        | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | No artificial limit; S3 object limit (~5 TB)                     |
+| **File size cap**        | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | No limit imposed by stdapi.ai; an upload streams in fixed 8 MiB parts, so S3's 10,000-part ceiling caps it at ~78 GiB |
 | **Messages integration** |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `"source": {"type": "file", "file_id": "..."}` in document/image |
 | `downloadable` field     |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Always `true`; spec default is `false` for user-uploaded files   |
 
@@ -148,6 +148,8 @@ curl -X POST "$BASE/v1/files" \
 ```
 
 All variants return the same `FileMetadata` response as a multipart upload.
+
+A JSON body is held whole to decode it, so this form alone is bounded: a body carrying more than the base64 form of a 64 MiB file — or of [`MAX_INPUT_FILE_SIZE`](operations_configuration_server.md#max-input-file-size) when one is configured — is refused with a `413` naming the maximum. The URL and S3 URI variants carry no content, and a `multipart/form-data` upload is streamed, so neither is affected.
 
 ### Retrieve Metadata
 

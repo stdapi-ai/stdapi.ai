@@ -436,11 +436,11 @@ def _bind_media_results(mcp: FastApiMCP) -> None:
 def _operation_filters() -> tuple[list[str] | None, list[str] | None]:
     """Resolve which operations become MCP tools.
 
-    Four Ollama endpoints are mounted but not published by default: this
+    Five Ollama endpoints are mounted but not published by default: this
     deployment stores no models, so ``ollama_create``, ``ollama_copy``,
-    ``ollama_push`` and ``ollama_delete`` always refuse, and a tool schema for
-    a call that can never succeed would only mislead an agent. Naming one in
-    ``mcp_include_tools`` publishes it anyway.
+    ``ollama_push``, ``ollama_delete`` and ``ollama_blob_push`` always refuse,
+    and a tool schema for a call that can never succeed would only mislead an
+    agent. Naming one in ``mcp_include_tools`` publishes it anyway.
 
     The organization usage endpoints are published only while every setting
     they read is enabled -- ``usage_api`` and ``cloudwatch_metrics``, plus

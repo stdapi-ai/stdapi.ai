@@ -599,14 +599,16 @@ export AWS_S3_ACCEPTED_BUCKETS='{"my-data-bucket": "us-east-1", "my-eu-bucket": 
 ## :material-broom: S3 Bucket Lifecycle Configuration { #s3-lifecycle }
 
 :octicons-package-24: **Purpose**
-:   Configure automatic deletion of temporary files and abandoned multipart upload parts to minimize storage costs
+:   Configure automatic deletion of temporary files, expired Files API objects and abandoned multipart upload parts to minimize storage costs
 
 :octicons-clock-24: **Recommendation**
-:   Configure S3 lifecycle policies to automatically delete objects under the `AWS_S3_TMP_PREFIX` after 1 day, and abort incomplete multipart uploads under the `AWS_S3_FILES_PREFIX` after 1 day
+:   Configure S3 lifecycle policies to automatically delete objects under the `AWS_S3_TMP_PREFIX` after 1 day, abort incomplete multipart uploads under the `AWS_S3_FILES_PREFIX` after 1 day, and expire objects tagged `stdapi-ai.expires=true` after 30 days
 
 stdapi.ai stores temporary files under the prefix configured by `AWS_S3_TMP_PREFIX` (default: `tmp/`). These include generated images, audio files, and transcription workflow files. Configure S3 lifecycle policies to automatically delete objects under this prefix after 1 day.
 
 Additionally, multipart file uploads (OpenAI Uploads API) store parts under `AWS_S3_FILES_PREFIX` (default: `files/`). If a session is never completed or cancelled — for example when a client disconnects — the uploaded parts remain in S3 and accumulate costs. Add an `AbortIncompleteMultipartUpload` rule on the files prefix to clean these up automatically.
+
+A file uploaded with an expiry (Files API `expires_after`, Anthropic `expires_in_seconds`) of 30 days or less is tagged `stdapi-ai.expires=true` on write. Expiry itself is enforced by the API — an expired file answers `404` — but the bytes are only deleted by a lifecycle rule matching that tag, so without one they are stored and billed forever. Add the tag-filtered expiration rule below; 30 days is the window the tag is written for, and the application never tags a longer expiry.
 
 !!! info "Application Cleanup Behavior"
     **Short-lived temporary files:** The application attempts to clean up short-lived temporary files (such as intermediate transcription files) after processing completes.
@@ -640,6 +642,24 @@ Additionally, multipart file uploads (OpenAI Uploads API) store parts under `AWS
       "AbortIncompleteMultipartUpload": {
         "DaysAfterInitiation": 1
       }
+    },
+    {
+      "Id": "ExpireTaggedFiles",
+      "Status": "Enabled",
+      "Filter": {
+        "And": {
+          "Prefix": "files/",
+          "Tags": [
+            {
+              "Key": "stdapi-ai.expires",
+              "Value": "true"
+            }
+          ]
+        }
+      },
+      "Expiration": {
+        "Days": 30
+      }
     }
   ]
 }
@@ -651,7 +671,7 @@ Additionally, multipart file uploads (OpenAI Uploads API) store parts under `AWS
     **Examples:**
 
     - If `AWS_S3_TMP_PREFIX=temporary/`, use `"Prefix": "temporary/"` in the first rule
-    - If `AWS_S3_FILES_PREFIX=prod/files/`, use `"Prefix": "prod/files/"` in the second rule
+    - If `AWS_S3_FILES_PREFIX=prod/files/`, use `"Prefix": "prod/files/"` in the second and third rules
 
 **Apply via AWS CLI:**
 

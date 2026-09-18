@@ -195,7 +195,7 @@ This is a hand-picked sample, not the full roster — the [Models](models.md) pa
 **Text-to-speech (Amazon Polly)**
 
 - 60+ voices across 30+ languages, on the Standard, Neural, Long-Form and Generative engines, with the language detected automatically
-- SSML control over pronunciation, emphasis, pauses and prosody, at [0.2× to 4.0× speed](api_openai_audio_speech.md#limits-and-behaviour-to-know); MP3, PCM, Opus, AAC, FLAC and OGG Vorbis output
+- SSML control over pronunciation, emphasis, pauses and prosody; [0.2× to 4.0× `speed`](api_openai_audio_speech.md#limits-and-behaviour-to-know) on plain text, set in the document itself for SSML input; MP3, PCM, Opus, AAC, FLAC and OGG Vorbis output
 - Long input — up to 100,000 characters per request, 24× OpenAI's limit ([20,000 with a generative voice, which speaks it as the audio is delivered](api_openai_audio_speech.md#long-input))
 
 **Speech-to-text (Amazon Transcribe)**
@@ -376,7 +376,7 @@ Run your own model — a fine-tune, an open-weight release, anything the [SageMa
 
 S3 backs the whole API surface, not just file storage, which buys three things a file API bolted onto a database cannot:
 
-- **No artificial size ceiling** — Files go up to S3's own limit of roughly 5 TB, uploaded in native multipart parts and streamed rather than buffered. One file ID works on both the OpenAI and the Anthropic endpoints
+- **No artificial size ceiling** — Files reach ~78 GiB in one direct upload and 48.8 TiB per [upload session](api_openai_files.md#uploads-api), in native multipart parts, streamed rather than buffered. One file ID works on both the OpenAI and the Anthropic endpoints
 - **`s3://` is a first-class input** — An object already in your buckets is named directly in chat completions, Messages, embeddings and image operations, read under the gateway's IAM role: no pre-signed URLs, no download-and-re-upload round trip
 - **Region-local by construction** — Anything the gateway stages sits in a bucket in the region serving the request, so payloads do not cross a region on the way to the model; a generated image can be handed back over [S3 Transfer Acceleration](operations_configuration_storage.md#aws-s3-accelerate), downloaded from a CloudFront edge instead of the bucket's region
 

@@ -34,9 +34,11 @@ curl "$BASE/api/tags" -H "Authorization: Bearer $API_KEY"
 | Endpoint          | Method   | What It Does                                             | MCP Tool        |
 |--------------------|----------|-------------------------------------------------------------|-----------------|
 | `/api/tags`        | `GET`    | List the models this server can serve                       | `ollama_tags`   |
+| `/api/tags`        | `HEAD`   | Answer a reachability probe, without listing anything        | Not exposed     |
 | `/api/show`        | `POST`   | Describe one model's details and capabilities                | `ollama_show`   |
 | `/api/ps`          | `GET`    | List the models currently resident — always empty            | `ollama_ps`     |
 | `/api/version`     | `GET`    | Report the Ollama API version this server is compatible with | `ollama_version`|
+| `/api/version`     | `HEAD`   | Answer a reachability probe, without reporting a version     | Not exposed     |
 | `/api/pull`        | `POST`   | Confirm a model is available for use                         | `ollama_pull`   |
 | `/api/create`      | `POST`   | Refused — no model store to write to                          | Not exposed     |
 | `/api/copy`        | `POST`   | Refused — no model store to write to                          | Not exposed     |
@@ -256,7 +258,7 @@ Both servers answer the Ollama model endpoints for models they host rather than 
 | `capabilities`        | Never claims `thinking`                                  | Advertises `thinking` on every model it hosts                |
 | `GET /api/ps`         | Answers `{"models": []}`                                 | Answers `401` to a cloud API key                             |
 | `GET /api/version`    | The Ollama API version this server is compatible with    | `0.0.0`                                                      |
-| The four store verbs  | `403`                                                    | `401`                                                        |
+| The five store verbs  | `403`                                                    | `401`                                                        |
 
 ## Next steps
 

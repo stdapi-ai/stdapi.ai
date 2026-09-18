@@ -178,7 +178,7 @@ exchange that has to outlive the window keeps its own copy of the items.
 
 | Status | When                                                                 |
 |--------|----------------------------------------------------------------------|
-| `400`  | A malformed `conversation_id` or `item_id`, a metadata limit, an empty or oversized `items` list, or `conversation` combined with `previous_response_id`. |
+| `400`  | A malformed `conversation_id` or `item_id`, a metadata limit, an empty or oversized `items` list, `conversation` combined with `previous_response_id`, or a `phase` on a message whose `role` is not `assistant` (`unknown_parameter`) — on an assistant message it is accepted and dropped rather than stored. |
 | `404`  | A well-formed identifier that names no conversation or item, including one created on another provider. |
 
 ### Prerequisites

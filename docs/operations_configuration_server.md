@@ -689,7 +689,7 @@ export ENABLE_MCP_SSE=true
 :   Comma-separated list of tool names (duplicates are automatically removed)
 
 :octicons-gear-24: **Default**
-:   None — every publishable tool is exposed; see [API Overview → MCP Tools](api_overview.md#mcp-model-context-protocol) for the nine operations always held back and the usage tools that need the Usage API
+:   None — every publishable tool is exposed; see [API Overview → MCP Tools](api_overview.md#mcp-model-context-protocol) for the ten operations always held back and the usage tools that need the Usage API
 
 ```bash
 # All publishable tools exposed by default
