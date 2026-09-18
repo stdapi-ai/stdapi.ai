@@ -5,7 +5,7 @@ from base64 import urlsafe_b64decode, urlsafe_b64encode
 from contextlib import suppress
 from datetime import UTC, datetime
 from re import compile as re_compile
-from typing import Annotated
+from typing import Annotated, Never
 
 from fastapi import APIRouter, Depends, File, Form, Path, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -32,7 +32,7 @@ from stdapi.types.anthropic_files import (
     FileListResponse,
     FileMetadata,
 )
-from stdapi.utils import missing_file_error, validation_error_handler
+from stdapi.utils import b64_encoded_len, missing_file_error, validation_error_handler
 
 #: Content type is client-controlled: force download and disable content-type sniffing.
 _CONTENT_DOWNLOAD_HEADERS = {
@@ -49,6 +49,68 @@ _EXPIRES_IN_SECONDS_MIN: int = 3600
 
 #: Maximum accepted value (seconds) for `expires_in_seconds` on upload (90 days, matching upstream).
 _EXPIRES_IN_SECONDS_MAX: int = 7776000
+
+#: Largest inline file a JSON body may carry, 64 MiB, when no input maximum is configured.
+_MAX_INLINE_FILE_SIZE: int = 64 * 1024 * 1024
+
+#: Room a JSON body needs around its base64 payload: the object keys and a data URI prefix.
+_JSON_BODY_OVERHEAD: int = 1024
+
+
+def _max_json_body_size() -> int:
+    """Return the largest accepted ``application/json`` upload body.
+
+    The body of an inline upload is the allocation, so it is bounded by the
+    base64 form of the largest file it may carry. ``max_input_file_size`` is
+    unlimited by default, so the bound falls back to a ceiling of its own
+    rather than leaving the body unbounded.
+
+    Returns:
+        Maximum accepted body size, in bytes.
+    """
+    limit = SETTINGS.max_input_file_size or _MAX_INLINE_FILE_SIZE
+    return b64_encoded_len(limit) + _JSON_BODY_OVERHEAD
+
+
+def _body_too_large(limit: int) -> Never:
+    """Refuse a JSON upload body carrying more bytes than that form may.
+
+    Args:
+        limit: Maximum accepted body size, in bytes.
+
+    Raises:
+        ApiError: 413, naming the maximum and how to stay under it.
+    """
+    msg = (
+        f"A file sent as an inline JSON body must not exceed {limit} bytes. "
+        "Send a URL or an S3 URI for the gateway to ingest, or send the file as a "
+        "binary multipart/form-data upload, which is streamed."
+    )
+    raise ApiError(msg, status=413)
+
+
+async def _read_json_body(http_request: Request) -> bytearray:
+    """Read a JSON upload request body, stopping once it is too large to be an inline file.
+
+    The body of an inline upload *is* the allocation, so it is measured as it
+    arrives rather than once it is held.
+
+    Args:
+        http_request: The incoming request.
+
+    Returns:
+        The raw request body.
+
+    Raises:
+        ApiError: 413 if the body outgrows what an inline upload may carry.
+    """
+    limit = _max_json_body_size()
+    body = bytearray()
+    async for chunk in http_request.stream():
+        body += chunk
+        if len(body) > limit:
+            _body_too_large(limit)
+    return body
 
 
 def _strip(fid: str) -> str:
@@ -242,12 +304,13 @@ async def upload(
         FileMetadata for the uploaded file.
 
     Raises:
-        ApiError: If S3 is not configured.
+        ApiError: If S3 is not configured, or 413 if a JSON body outgrows what an
+            inline upload may carry.
     """
     if "application/json" in http_request.headers.get("content-type", ""):
         with validation_error_handler():
             body = AnthropicFileUploadJsonBody.model_validate_json(
-                await http_request.body()
+                await _read_json_body(http_request)
             )
         return log_response_params(
             _to_file_metadata(

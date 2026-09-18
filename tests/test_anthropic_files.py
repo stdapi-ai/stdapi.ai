@@ -20,7 +20,7 @@ Ref: https://platform.claude.com/docs/en/build-with-claude/files
 """
 
 import io
-from base64 import urlsafe_b64encode
+from base64 import b64encode, urlsafe_b64encode
 from contextlib import suppress
 from datetime import UTC, datetime
 from itertools import islice
@@ -36,6 +36,7 @@ from stdapi.aws_s3 import BUCKET_TO_REGION
 from stdapi.config import SETTINGS
 from stdapi.files import FileRecord, _core
 from stdapi.routes import anthropic_files
+from stdapi.utils import b64_encoded_len
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator
@@ -899,6 +900,129 @@ class TestAnthropicFilesJsonBodySources:
         assert body["type"] == "error"
         assert body["error"]["type"] == "invalid_request_error"
         assert not uploaded_source, "no object may be created for a rejected source"
+
+
+class TestAnthropicFilesJsonBodySize:
+    """How much an ``application/json`` upload body may carry before it is refused.
+
+    The body of an inline upload *is* the allocation: it is held whole to decode
+    it, so an unbounded read lets one authenticated tenant decide how much memory
+    is left for every other request the gateway serves. It is measured as it
+    arrives and refused with a 413, rather than buffered in full and judged once
+    the cost has already been paid.
+
+    Ref: https://platform.claude.com/docs/en/api/errors
+         stdapi/routes/anthropic_files.py:_read_json_body
+         stdapi/routes/openai_uploads.py:_read_json_part_body
+    """
+
+    pytestmark = pytest.mark.local
+
+    #: Decoded size of the accepted upload: a realistic document, far below the bound.
+    _NORMAL_FILE_SIZE = 256 * 1024
+
+    #: Inline ceiling the refusal test substitutes, so the bound is asserted without a 64 MiB body.
+    _SMALL_CEILING = 32
+
+    @staticmethod
+    @pytest.fixture
+    def stored(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
+        """Record the bytes the route hands to the storage layer.
+
+        Returns:
+            List each accepted upload appends its decoded content to.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", "test-bucket")
+        monkeypatch.setattr(SETTINGS, "max_input_file_size", 0)
+        recorded: list[bytes] = []
+
+        async def _fake_upload_file(
+            file: InputFile, *_args: object, **_kwargs: object
+        ) -> FileRecord:
+            content = await file.to_bytes()
+            recorded.append(content)
+            return FileRecord(
+                file_id="b" * 32,
+                filename="upload.bin",
+                content_type="application/octet-stream",
+                purpose="",
+                size=len(content),
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                expires_at=None,
+            )
+
+        monkeypatch.setattr(anthropic_files, "upload_file", _fake_upload_file)
+        return recorded
+
+    def test_an_oversized_json_body_is_refused_before_it_is_parsed(
+        self,
+        anthropic_app_client: TestClient,
+        stored: list[bytes],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A body too large to hold an inline file is refused while it is still arriving.
+
+        The ``stored`` fixture leaves ``max_input_file_size`` unlimited, so the
+        body bound is the only guard the request meets: without it the whole body
+        is allocated and the upload succeeds.
+
+        Ref: stdapi/routes/anthropic_files.py:_body_too_large
+        """
+        monkeypatch.setattr(
+            anthropic_files, "_MAX_INLINE_FILE_SIZE", self._SMALL_CEILING
+        )
+        oversized = b64encode(b"\0" * anthropic_files._max_json_body_size()).decode()  # noqa: SLF001
+
+        response = anthropic_app_client.post(
+            "/anthropic/v1/files", json={"file": f"data:text/plain;base64,{oversized}"}
+        )
+
+        assert response.status_code == 413, response.text
+        body = response.json()
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "request_too_large"
+        assert str(anthropic_files._max_json_body_size()) in body["error"]["message"]  # noqa: SLF001
+        assert not stored, "a refused body must never reach storage"
+
+    def test_a_base64_upload_of_a_normal_size_is_accepted_whole(
+        self, anthropic_app_client: TestClient, stored: list[bytes]
+    ) -> None:
+        """A base64 body of an ordinary document is accepted and stored unchanged.
+
+        The bound must not cut a legitimate upload short: a body silently
+        truncated to a cap would store a corrupt file.
+
+        Ref: stdapi/routes/anthropic_files.py:upload
+        """
+        payload = bytes(range(256)) * (self._NORMAL_FILE_SIZE // 256)
+        encoded = b64encode(payload).decode()
+
+        response = anthropic_app_client.post(
+            "/anthropic/v1/files",
+            json={"file": f"data:application/octet-stream;base64,{encoded}"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["size_bytes"] == len(payload)
+        assert stored == [payload]
+
+    def test_the_body_bound_falls_back_to_a_ceiling_when_input_is_unlimited(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no input maximum configured the body is bounded by the inline ceiling.
+
+        ``max_input_file_size`` defaults to unlimited, so deriving the bound from
+        it alone would leave the body unbounded on a default deployment.
+
+        Ref: stdapi/config.py:Settings.max_input_file_size
+             stdapi/mcp.py:_MCP_MAX_BODY_SIZE
+        """
+        monkeypatch.setattr(SETTINGS, "max_input_file_size", 0)
+        ceiling = anthropic_files._max_json_body_size()  # noqa: SLF001
+        assert ceiling >= b64_encoded_len(anthropic_files._MAX_INLINE_FILE_SIZE)  # noqa: SLF001
+
+        monkeypatch.setattr(SETTINGS, "max_input_file_size", 1024)
+        assert anthropic_files._max_json_body_size() < ceiling  # noqa: SLF001
 
 
 class TestAnthropicFilesMultipartWithoutAFile:
