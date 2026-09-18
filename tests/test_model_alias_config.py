@@ -788,6 +788,7 @@ class TestAliasResolution:
                 request: Any,  # noqa: ANN401
                 completion_id: str,
                 created: int,
+                moderation_builder: Any = None,  # noqa: ANN401 (stream-only)
             ) -> ChatCompletion:
                 """Record the guardrail and return a canned completion."""
                 seen.append(GUARDRAIL_CONFIG_VAR.get(None))

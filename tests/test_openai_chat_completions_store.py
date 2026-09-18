@@ -70,7 +70,11 @@ class _StubChatBackend:
         self.created_args: list[int] = []
 
     async def create_completion(
-        self, request: CompletionCreateParams, completion_id: str, created: int
+        self,
+        request: CompletionCreateParams,
+        completion_id: str,
+        created: int,
+        moderation_builder: Any = None,  # noqa: ANN401 (stream-only contract)
     ) -> ChatCompletion | EventSourceResponse:
         """Record the request and return a canned completion, or a stream when requested."""
         self.requests.append((request, completion_id))
@@ -442,7 +446,10 @@ class TestStoreOnChatCreate:
         """
 
         async def _raise(
-            _request: CompletionCreateParams, _completion_id: str, _created: int
+            _request: CompletionCreateParams,
+            _completion_id: str,
+            _created: int,
+            _moderation_builder: Any = None,  # noqa: ANN401
         ) -> ChatCompletion:
             msg = "backend failure"
             raise ApiError(msg, status=502)

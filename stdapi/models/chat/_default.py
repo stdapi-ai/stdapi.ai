@@ -63,7 +63,7 @@ if TYPE_CHECKING:
         MessageCreateParams,
         ServerTools,
     )
-    from stdapi.types.openai import ResponseModeration
+    from stdapi.types.openai import ChatModeration, ResponseModeration
     from stdapi.types.openai_chat_completions import (
         ChatCompletion,
         PromptCacheOptions,
@@ -284,7 +284,11 @@ class ChatModel(ChatModelBase[Any, Any]):
         )
 
     async def create_completion(
-        self, request: ChatCompletionCreateParams, completion_id: str, created: int
+        self,
+        request: ChatCompletionCreateParams,
+        completion_id: str,
+        created: int,
+        moderation_builder: Callable[[], ChatModeration | None] | None = None,
     ) -> ChatCompletion | EventSourceResponse:
         """Handle a chat completion request via the OpenAI route.
 
@@ -292,6 +296,10 @@ class ChatModel(ChatModelBase[Any, Any]):
             request: OpenAI-format completion request.
             completion_id: Unique identifier for the completion.
             created: Unix timestamp of request creation.
+            moderation_builder: Optional callable building the ``moderation``
+                field of a streamed completion, invoked at stream end once the
+                guardrail trace is complete. The non-streamed field is built by
+                the route, which already holds the trace when the call returns.
 
         Returns:
             Completed response or streaming ``EventSourceResponse``.
@@ -302,6 +310,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             choices_count,
         ) = await self.build_completion_request(request)
         if request.stream:
+            stream = (await self.converse_stream(bedrock_request))["stream"]
             # The invoked-model trace only arrives at stream end: report the router ID.
             return EventSourceResponse(
                 log_request_sse_stream_event(
@@ -309,14 +318,22 @@ class ChatModel(ChatModelBase[Any, Any]):
                         completion_id,
                         created,
                         self._model_id,
-                        (await self.converse_stream(bedrock_request))["stream"],
-                        openai_service_tier,
+                        stream,
+                        # The tier the call was sent on, which the request's own
+                        # value no longer describes once an alias, a configured
+                        # default or the tier header applied; the tier AWS
+                        # reports as having served it only arrives at stream end.
+                        _openai_common.map_response_service_tier(
+                            bedrock_request.get("serviceTier", {}).get("type"),
+                            openai_service_tier,
+                        ),
                         include_usage=(
                             request.stream_options is not None
                             and request.stream_options.include_usage is True
                         ),
                         suppress_tool_names=self.SUPPORTED_SYSTEM_TOOLS or None,
                         suppress_reasoning=request.suppress_reasoning,
+                        moderation_builder=moderation_builder,
                     )
                 )
             )
@@ -329,7 +346,16 @@ class ChatModel(ChatModelBase[Any, Any]):
             # Report the model the prompt router actually invoked, when applicable.
             _invoked_model_id(responses[0]) or self._model_id,
             responses,
-            openai_service_tier,
+            # AWS reports the tier that served the call; it takes precedence
+            # over the tier the call was sent on, itself more accurate than the
+            # requested one, as it does for recorded usage. One field covers the
+            # whole fan-out: the first response answers for it, as it does for
+            # the invoked model.
+            _openai_common.map_response_service_tier(
+                (responses[0].get("serviceTier") or {}).get("type")
+                or bedrock_request.get("serviceTier", {}).get("type"),
+                openai_service_tier,
+            ),
             request.audio,
             request.modalities or openai_adapter.DEFAULT_OUTPUT_MODALITIES,  # type: ignore[arg-type]
             self.SUPPORTED_SYSTEM_TOOLS or None,
@@ -433,7 +459,15 @@ class ChatModel(ChatModelBase[Any, Any]):
                         created,
                         self._model_id,
                         [r["stream"] for r in stream_responses],
-                        openai_service_tier,
+                        # The tier the calls were sent on, which the request's
+                        # own value no longer describes once an alias, a
+                        # configured default or the tier header applied; the
+                        # tier AWS reports as having served them only arrives at
+                        # stream end. Every fanned-out call carries the same one.
+                        _openai_common.map_response_service_tier(
+                            bedrock_requests[0].get("serviceTier", {}).get("type"),
+                            openai_service_tier,
+                        ),
                         include_usage=(
                             request.stream_options is not None
                             and request.stream_options.include_usage is True
@@ -451,7 +485,16 @@ class ChatModel(ChatModelBase[Any, Any]):
             created,
             _invoked_model_id(responses[0]) or self._model_id,
             responses,
-            openai_service_tier,
+            # AWS reports the tier that served the call; it takes precedence
+            # over the tier the call was sent on, itself more accurate than the
+            # requested one, as it does for recorded usage. One field covers the
+            # whole fan-out: the first response answers for it, as it does for
+            # the invoked model.
+            _openai_common.map_response_service_tier(
+                (responses[0].get("serviceTier") or {}).get("type")
+                or bedrock_requests[0].get("serviceTier", {}).get("type"),
+                openai_service_tier,
+            ),
             echo_texts=echo_texts,
         )
 
@@ -714,6 +757,7 @@ class ChatModel(ChatModelBase[Any, Any]):
                     fallback_model=SETTINGS.image_generation_model,
                 )
 
+            stream = (await self.converse_stream(bedrock_request))["stream"]
             # The invoked-model trace only arrives at stream end: report the router ID.
             return EventSourceResponse(
                 log_request_sse_stream_event(
@@ -721,13 +765,20 @@ class ChatModel(ChatModelBase[Any, Any]):
                         response_id,
                         created_at,
                         self._model_id,
-                        (await self.converse_stream(bedrock_request))["stream"],
+                        stream,
                         request,
                         suppress_with_img,
                         post_handler,
                         web_search_names,
                         code_exec_names,
                         moderation_builder,
+                        # The tier the call was sent on, which the request's own
+                        # value no longer describes once an alias, a configured
+                        # default or the tier header applied; the tier AWS
+                        # reports as having served it only arrives at stream end.
+                        _openai_common.map_responses_service_tier(
+                            bedrock_request.get("serviceTier", {}).get("type")
+                        ),
                     )
                 )
             )
@@ -743,6 +794,13 @@ class ChatModel(ChatModelBase[Any, Any]):
             suppress_names,
             web_search_names,
             code_exec_names,
+            # AWS reports the tier that served the call; it takes precedence
+            # over the tier the call was sent on, itself more accurate than the
+            # requested one, as it does for recorded usage.
+            _openai_common.map_responses_service_tier(
+                (converse_response.get("serviceTier") or {}).get("type")
+                or bedrock_request.get("serviceTier", {}).get("type")
+            ),
         )
         if image_gen_tool:
             response.output = await responses_adapter.execute_image_generation_calls(

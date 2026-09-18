@@ -59,7 +59,7 @@ if TYPE_CHECKING:
     from stdapi.aws_bedrock_mantle import MantleApi, Surface
     from stdapi.aws_http import SseEvent
     from stdapi.types.anthropic_messages import MessageCreateParams
-    from stdapi.types.openai import ResponseModeration
+    from stdapi.types.openai import ChatModeration, ResponseModeration
     from stdapi.types.openai_chat_completions import (
         CompletionCreateParams as ChatCompletionCreateParams,
     )
@@ -603,6 +603,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         request: ChatCompletionCreateParams,
         completion_id: str,  # noqa: ARG002 (passthrough keeps upstream IDs)
         created: int,  # noqa: ARG002
+        moderation_builder: Callable[[], ChatModeration | None] | None = None,  # noqa: ARG002
     ) -> ChatCompletion | EventSourceResponse:
         """Handle a chat completion request via the OpenAI route.
 
@@ -610,6 +611,8 @@ class ChatModel(ChatModelBase[Any, Any]):
             request: OpenAI-format completion request.
             completion_id: Unused; passthrough keeps the upstream identifier.
             created: Unused; passthrough keeps the upstream timestamp.
+            moderation_builder: Unused; a Mantle-served request rejects
+                ``moderation`` with a 400.
 
         Returns:
             Completed response or streaming ``EventSourceResponse``.

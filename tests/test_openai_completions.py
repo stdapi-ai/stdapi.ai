@@ -1214,6 +1214,126 @@ class TestLegacyPromptCaching:
         ]
 
 
+class _ServedTierChatModel(ClaudeChatModel):
+    """Claude chat model whose Converse call reports the tier that served it."""
+
+    def __init__(self, model_id: str, sent: str | None, served: str | None) -> None:
+        """Initialize the model with the tiers its call carries and reports.
+
+        Args:
+            model_id: Bedrock model identifier.
+            sent: Tier the prepared Converse request carries, as
+                ``_prepare_converse_request_for_region`` resolves it per region.
+            served: Tier the Converse response reports, if any.
+        """
+        super().__init__(model_id)
+        self._sent = sent
+        self._served = served
+
+    async def converse(
+        self, request: ConverseRequestBaseTypeDef
+    ) -> ConverseResponseTypeDef:
+        """Answer with a canned response naming the tier that served the call.
+
+        Args:
+            request: Bedrock Converse request payload.
+
+        Returns:
+            A minimal successful Converse response.
+        """
+        if self._sent:
+            request["serviceTier"] = {"type": self._sent}  # type: ignore[typeddict-item]
+        response = dict(_CANNED_CONVERSE_RESPONSE)
+        if self._served:
+            response["serviceTier"] = {"type": self._served}
+        return cast("ConverseResponseTypeDef", response)
+
+
+class TestLegacyServedServiceTier:
+    """The completion reports the tier that served it, not the one asked for.
+
+    Upstream: "the response body will include the ``service_tier`` value based
+    on the processing mode actually used to serve the request. This response
+    value may be different from the value set in the parameter." Amazon Bedrock
+    names that mode in ``ConverseResponse.serviceTier``, and the tier the call
+    was sent on -- which an alias, ``DEFAULT_MODEL_SERVICE_TIERS`` or the
+    ``X-Amzn-Bedrock-Service-Tier`` header can set in the request's place --
+    answers for it when the response names none.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+         stdapi/models/chat/_default.py:ChatModel.create_text_completion
+    """
+
+    pytestmark = pytest.mark.local
+
+    @pytest.fixture(autouse=True)
+    @staticmethod
+    def _http_request() -> Generator[None]:
+        """Bind a header-less HTTP request for the model's header passthrough.
+
+        Ref: stdapi/models/chat/_default.py:ChatModel._get_passthrough_header_fields
+        """
+        token = REQUEST.set(
+            Request({"type": "http", "method": "POST", "headers": [], "path": "/"})
+        )
+        try:
+            yield
+        finally:
+            REQUEST.reset(token)
+
+    @staticmethod
+    async def _reported_tier(
+        *, requested: str | None, sent: str | None, served: str | None
+    ) -> str | None:
+        """Run a one-prompt completion and return the tier it reports.
+
+        Args:
+            requested: ``service_tier`` the request carries, if any.
+            sent: Tier the prepared Converse request carries.
+            served: Tier the Converse response reports, if any.
+
+        Returns:
+            The ``service_tier`` of the formatted completion.
+        """
+        payload: dict[str, Any] = {"model": "model", "prompt": "hi"}
+        if requested:
+            payload["service_tier"] = requested
+        completion = await _ServedTierChatModel(
+            _CACHING_MODEL_ID, sent, served
+        ).create_text_completion(
+            CompletionCreateParams.model_validate(payload), "cmpl-1", 0
+        )
+        assert isinstance(completion, Completion)
+        return completion.service_tier
+
+    async def test_the_served_tier_overrides_the_requested_one(self) -> None:
+        """A call asked on ``priority`` but served on ``flex`` reports ``flex``."""
+        assert (
+            await self._reported_tier(
+                requested="priority", sent="priority", served="flex"
+            )
+            == "flex"
+        )
+
+    async def test_a_tier_set_in_the_requests_place_is_reported(self) -> None:
+        """A deployment-configured tier is reported although the request set none.
+
+        Ref: stdapi/aws_bedrock.py:resolve_service_tier
+        """
+        assert (
+            await self._reported_tier(requested=None, sent="flex", served=None)
+            == "flex"
+        )
+
+    async def test_an_unreported_tier_falls_back_to_the_request(self) -> None:
+        """Naming no tier anywhere leaves the requested one, after alias mapping."""
+        assert (
+            await self._reported_tier(requested="fast", sent=None, served=None)
+            == "priority"
+        )
+
+
 class TestFormatResponseCacheTokens:
     """Cache-read/write tokens fold into ``prompt_tokens`` on the legacy surface too.
 
@@ -1531,6 +1651,32 @@ class TestLegacyStreamChunks:
         """No requested tier means no ``service_tier`` key rather than a null one."""
         chunks = await self._chunks([{"contentBlockDelta": {"delta": {"text": "hi"}}}])
         assert all("service_tier" not in chunk for chunk in chunks)
+
+    async def test_the_terminal_chunk_reports_the_served_tier(self) -> None:
+        """A stream served on another tier says so once Bedrock names it.
+
+        Amazon Bedrock only names the tier that served the call in the trailing
+        metadata event, by which time the delta chunks are gone: they carry the
+        tier the call was sent on, and the terminal chunk the served one.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStreamMetadataEvent.html
+        """
+        chunks = await self._chunks(
+            [
+                {"contentBlockDelta": {"delta": {"text": "hi"}}},
+                {"messageStop": {"stopReason": "end_turn"}},
+                {
+                    "metadata": {
+                        "usage": {"inputTokens": 1, "outputTokens": 1},
+                        "serviceTier": {"type": "flex"},
+                    }
+                },
+            ],
+            service_tier="priority",
+        )
+        assert chunks[0]["service_tier"] == "priority"
+        assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+        assert chunks[-1]["service_tier"] == "flex"
 
     @pytest.mark.parametrize(
         ("stop_reason", "expected"),

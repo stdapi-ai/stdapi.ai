@@ -9,6 +9,7 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-convers
      stdapi/routes/_moderation.py:apply_request_moderation
 """
 
+from functools import partial
 from json import loads
 from typing import TYPE_CHECKING, Any, cast
 
@@ -21,7 +22,7 @@ from stdapi.models import ModelBase
 from stdapi.models.chat._adapters import _openai_chat_completion as chat_adapter
 from stdapi.monitoring import REQUEST_LOG
 from stdapi.routes import openai_chat_completions, openai_responses
-from stdapi.routes._moderation import apply_request_moderation
+from stdapi.routes._moderation import apply_request_moderation, build_chat_moderation
 from stdapi.types.openai import RequestModeration
 from stdapi.types.openai_chat_completions import ChatCompletion
 from stdapi.types.openai_responses import (
@@ -118,6 +119,7 @@ class _StubChatBackend:
         request: Any,  # noqa: ANN401
         completion_id: str,
         created: int,
+        moderation_builder: Any = None,  # noqa: ANN401 (stream-only contract)
     ) -> ChatCompletion:
         """Capture context and return a canned completion."""
         self._capture()
@@ -623,20 +625,21 @@ class TestGuardrailTraceCapture:
         assert GUARDRAIL_TRACE_VAR.get(None) is None
 
 
-class TestChatStreamingModerationDrop:
-    """Streaming chat completions carry no moderation payload (documented drop).
+class TestChatStreamingModerationReported:
+    """A streamed chat completion reports the verdict on a trailing chunk.
+
+    The guardrail runs on a streamed request exactly as on a buffered one, and
+    upstream carries ``moderation`` on ``ChatCompletionChunk``, so the verdict is
+    reported rather than dropped. ConverseStream only delivers the trace in its
+    trailing metadata event, so the chunk carrying it necessarily comes last.
 
     Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStreamMetadataEvent.html
          stdapi/routes/_moderation.py:build_chat_moderation
     """
 
-    async def test_no_moderation_on_any_chunk(self) -> None:
-        """Even with a captured trace, no streamed chunk carries moderation.
-
-        The guardrail trace only arrives in ConverseStream's trailing metadata
-        event, by which time earlier chunks are already sent, so the gateway
-        deliberately omits ``moderation`` from every chunk rather than emitting it
-        late on the last one.
+    async def test_captured_trace_reaches_the_client_on_the_last_chunk(self) -> None:
+        """The trace captured from the metadata event is reported to the client.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStreamMetadataEvent.html
              stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
@@ -662,7 +665,14 @@ class TestChatStreamingModerationDrop:
             chunks = [
                 sse.data
                 async for sse in chat_adapter.format_stream(
-                    "chatcmpl-1", 1, "tracemodel", stream, None
+                    "chatcmpl-1",
+                    1,
+                    "tracemodel",
+                    stream,
+                    None,
+                    moderation_builder=partial(
+                        build_chat_moderation, RequestModeration(model="gr123")
+                    ),
                 )
             ]
         finally:
@@ -677,9 +687,14 @@ class TestChatStreamingModerationDrop:
                 continue
             payload = loads(chunk) if isinstance(chunk, str) else chunk
             assert isinstance(payload, dict)
-            assert "moderation" not in payload  # ...but never reported on chunks.
             payloads.append(payload)
         assert payloads
+        # ...and reported once, on a chunk of its own, after the content ones.
+        moderation = payloads[-1]["moderation"]  # ...and reported to the client.
+        assert payloads[-1]["choices"] == []
+        assert not any("moderation" in payload for payload in payloads[:-1])
+        _assert_input_result(moderation["input"]["results"][0])
+        _assert_output_result(moderation["output"]["results"][0])
         # The stream itself is intact: the text delta and the finish reason are there.
         choices = [
             choice for payload in payloads for choice in payload.get("choices", [])

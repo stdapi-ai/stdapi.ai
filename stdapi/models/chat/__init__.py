@@ -34,7 +34,7 @@ if TYPE_CHECKING:
         MessageCreateParams,
         ThinkingEffort,
     )
-    from stdapi.types.openai import ResponseModeration
+    from stdapi.types.openai import ChatModeration, ResponseModeration
     from stdapi.types.openai_chat_completions import ChatCompletion, ReasoningEffort
     from stdapi.types.openai_chat_completions import (
         CompletionCreateParams as ChatCompletionCreateParams,
@@ -76,7 +76,11 @@ class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
 
     @abstractmethod
     async def create_completion(
-        self, request: ChatCompletionCreateParams, completion_id: str, created: int
+        self,
+        request: ChatCompletionCreateParams,
+        completion_id: str,
+        created: int,
+        moderation_builder: Callable[[], ChatModeration | None] | None = None,
     ) -> ChatCompletion | EventSourceResponse:
         """Create a chat completion.
 
@@ -84,6 +88,9 @@ class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             request: Chat completion creation request following OpenAI spec.
             completion_id: Stable identifier for the completion.
             created: Unix timestamp (seconds) of the request.
+            moderation_builder: Optional callable building the ``moderation``
+                field of a streamed completion, invoked at stream end once the
+                guardrail trace is complete.
 
         Returns:
             - ChatCompletion when stream is False.

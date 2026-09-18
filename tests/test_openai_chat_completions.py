@@ -2344,20 +2344,21 @@ class TestChatCompletions:
     def test_service_tier(
         self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
-        """A requested ``service_tier`` is echoed, while the Bedrock headers are not.
+        """The reported ``service_tier`` is the tier that served the request.
 
         Only ``priority``, ``flex`` and the Bedrock-only ``reserved`` map to a real
         Bedrock tier; every other requested tier resolves to an effective
         ``default``, which is what the response reports. The
-        ``X-Amzn-Bedrock-*`` headers configure Bedrock directly and deliberately
-        do not populate the OpenAI ``service_tier`` field.  The official lane gets
-        a larger budget because its model bills reasoning tokens against
-        ``max_completion_tokens`` and would otherwise return empty content.
+        ``X-Amzn-Bedrock-Service-Tier`` header selects the tier without going
+        through the ``service_tier`` parameter, and the tier it selects is
+        reported like any other.  The official lane gets a larger budget because
+        its model bills reasoning tokens against ``max_completion_tokens`` and
+        would otherwise return empty content.
 
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
              https://developers.openai.com/api/docs/guides/reasoning
              https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
-             stdapi/models/chat/_adapters/_openai_common.py:map_service_tier
+             stdapi/models/chat/_adapters/_openai_common.py:map_response_service_tier
         """
         response = openai_client.chat.completions.create(
             model=chat_model,
@@ -2379,7 +2380,9 @@ class TestChatCompletions:
                     "X-Amzn-Bedrock-Service-Tier": "default",
                 },
             )
-            assert not getattr(response, "service_tier", None)
+            assert getattr(response, "service_tier", None) == "default", (
+                "the tier the header selected is the one that served the call"
+            )
             assert response.choices[0].message.content
 
     def test_reasoning_effort_parameter(
@@ -4327,6 +4330,105 @@ class TestFastServiceTierIsServedAsPriority:
 
         assert captured["serviceTier"] == {"type": "priority"}
         assert getattr(response, "service_tier", None) == "priority"
+
+
+class TestServedServiceTierIsReported:
+    """The response reports the tier that served the call, not the one asked for.
+
+    Upstream: "the response body will include the ``service_tier`` value based
+    on the processing mode actually used to serve the request. This response
+    value may be different from the value set in the parameter." Amazon Bedrock
+    names that mode in ``ConverseResponse.serviceTier``, and the tier the call
+    was sent on -- which an alias, ``DEFAULT_MODEL_SERVICE_TIERS`` or the
+    ``X-Amzn-Bedrock-Service-Tier`` header can set in the request's place --
+    answers for it when the response names none.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+         stdapi/models/chat/_default.py:ChatModel.create_completion
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    async def _reported_tier(
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        requested: str | None,
+        sent: str | None,
+        served: str | None,
+    ) -> str | None:
+        """Run a completion whose Converse call reports *served*.
+
+        Args:
+            monkeypatch: Fixture used to stub ``ChatModel.converse``.
+            requested: ``service_tier`` the request carries, if any.
+            sent: Tier the prepared Converse request carries, as
+                ``_prepare_converse_request_for_region`` resolves it per region.
+            served: Tier the Converse response reports, if any.
+
+        Returns:
+            The ``service_tier`` the formatted completion reports.
+        """
+
+        async def fake_converse(
+            _self: ChatModel, bedrock_request: ConverseRequestBaseTypeDef
+        ) -> dict[str, Any]:
+            if sent:
+                bedrock_request["serviceTier"] = {"type": sent}  # type: ignore[typeddict-item]
+            response: dict[str, Any] = {
+                "output": {"message": {"role": "assistant", "content": []}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            }
+            if served:
+                response["serviceTier"] = {"type": served}
+            return response
+
+        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        payload: dict[str, Any] = {
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        if requested:
+            payload["service_tier"] = requested
+        completion = await ChatModel("amazon.nova-2-lite-v1:0").create_completion(
+            CompletionCreateParams.model_validate(payload), "chatcmpl-1", 0
+        )
+        return getattr(completion, "service_tier", None)
+
+    async def test_the_served_tier_overrides_the_requested_one(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A call asked on ``priority`` but served on ``flex`` reports ``flex``."""
+        del request_log
+        reported = await self._reported_tier(
+            monkeypatch, requested="priority", sent="priority", served="flex"
+        )
+        assert reported == "flex"
+
+    async def test_a_tier_set_in_the_requests_place_is_reported(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A deployment-configured tier is reported although the request set none.
+
+        Ref: stdapi/aws_bedrock.py:resolve_service_tier
+        """
+        del request_log
+        reported = await self._reported_tier(
+            monkeypatch, requested=None, sent="flex", served=None
+        )
+        assert reported == "flex"
+
+    async def test_an_unreported_tier_falls_back_to_the_request(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """Naming no tier anywhere leaves the requested one, after alias mapping."""
+        del request_log
+        reported = await self._reported_tier(
+            monkeypatch, requested="fast", sent=None, served=None
+        )
+        assert reported == "priority"
 
 
 class TestJsonObjectSystemInstruction:

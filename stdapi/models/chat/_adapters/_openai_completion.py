@@ -195,7 +195,7 @@ def format_response(
         created: Unix timestamp (seconds).
         model_id: Model identifier echoed back to the client.
         responses: Ordered Bedrock responses (``prompt_count * n`` entries).
-        openai_service_tier: Echoed service tier.
+        openai_service_tier: Service tier that served the calls.
         echo_texts: Per-choice prompt prefix to prepend to ``text`` when the
             request set ``echo``, aligned with *responses*; ``None`` when unset.
 
@@ -263,7 +263,7 @@ def _chunk(
         text: Delta text for this chunk (empty for a terminal chunk).
         index: Choice index — the position of the target prompt in the batch.
         finish_reason: Terminal finish reason, or ``None`` for intermediate chunks.
-        openai_service_tier: Echoed service tier.
+        openai_service_tier: Service tier reported on the chunk.
         usage: Aggregated usage totals, populated only on the last terminal chunk
             when ``include_usage`` is ``True``.
 
@@ -298,7 +298,7 @@ def _echo_chunks(
         created: Unix timestamp (seconds).
         model_id: Model identifier echoed back to the client.
         echo_texts: Per-choice prompt prefix, or ``None`` when ``echo`` is unset.
-        openai_service_tier: Echoed service tier.
+        openai_service_tier: Service tier reported on the chunks.
 
     Returns:
         One chunk per non-empty prefix in *echo_texts*, in index order.
@@ -375,7 +375,8 @@ async def format_stream(
         created: Unix timestamp (seconds).
         model_id: Model identifier echoed back to the client.
         streams: Ordered Bedrock stream iterators, one per prompt in the batch.
-        openai_service_tier: Echoed service tier.
+        openai_service_tier: Service tier resolved for the requests, replaced by
+            the one AWS reports as having served them on the terminal chunks.
         include_usage: Populate ``usage`` on the final chunk when ``True``.
         echo_texts: Per-choice prompt prefix to emit as a leading chunk when
             the request set ``echo``, aligned with *streams*; ``None`` when
@@ -422,8 +423,16 @@ async def format_stream(
                     )
                 case {"messageStop": {"stopReason": stop_reason}}:
                     finish_reasons[index] = _map_finish_reason(stop_reason)
-                case {"metadata": _} if usage_total is not None:
-                    if partial := _openai_common.extract_stream_usage(event):
+                case {"metadata": metadata}:
+                    # AWS names the tier that served the call in the metadata
+                    # event only, too late for the deltas already sent: the
+                    # terminal chunks report it.
+                    openai_service_tier = _openai_common.map_response_service_tier(
+                        metadata.get("serviceTier", {}).get("type"), openai_service_tier
+                    )
+                    if usage_total is not None and (
+                        partial := _openai_common.extract_stream_usage(event)
+                    ):
                         usage_total.prompt_tokens += partial.prompt_tokens
                         usage_total.completion_tokens += partial.completion_tokens
                         usage_total.total_tokens += partial.total_tokens

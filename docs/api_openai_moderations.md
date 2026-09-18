@@ -122,7 +122,7 @@ Guardrails are regional: a plain guardrail ID is applied in the primary Bedrock 
 Guardrail checks (`InvokeGuardrailChecks`) are available in a limited set of AWS regions only (currently `us-east-1`, `us-east-2`, `us-west-2`, `eu-west-2`, `eu-north-1`, `ap-northeast-1`, and `ap-southeast-2`): calls run in the configured Bedrock regions that offer the operation, in priority order with multi-region failover, and the backend is unavailable when none of them does.
 
 !!! tip "Moderating generations directly"
-    The guardrail selection and category mapping also power the `moderation` request parameter of the [Chat Completions](api_openai_chat_completions.md) and [Responses](api_openai_responses.md) APIs: the guardrail is applied to the generation itself, and the classification of the input and output is reported in the response's `moderation` field — for Chat Completions on non-streaming requests only, and for Responses also on the terminal event when streaming. The `moderation` parameter requires a guardrail — Comprehend is not available there — and is rejected (`400`) on Amazon Bedrock Mantle-served models.
+    The guardrail selection and category mapping also power the `moderation` request parameter of the [Chat Completions](api_openai_chat_completions.md) and [Responses](api_openai_responses.md) APIs: the guardrail is applied to the generation itself, and the classification of the input and output is reported in the response's `moderation` field — when streaming, in a dedicated trailing chunk for Chat Completions, and on the terminal event for Responses. The `moderation` parameter requires a guardrail — Comprehend is not available there — and is rejected (`400`) on Amazon Bedrock Mantle-served models.
 
 ### Category Mapping
 

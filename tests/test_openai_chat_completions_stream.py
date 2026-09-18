@@ -10,7 +10,8 @@ Ref: https://developers.openai.com/api/reference/resources/chat/subresources/com
 from __future__ import annotations
 
 import json as _json
-from typing import TYPE_CHECKING, Any
+from functools import partial
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import pytest
 
@@ -19,9 +20,12 @@ from stdapi.models.chat._adapters._openai_chat_completion import (
     _LEGACY_FUNCTION,
     format_stream,
 )
+from stdapi.types.openai import ChatModeration, ChatModerationResults, ModerationResult
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncIterator, Callable, Iterator
+
+    from stdapi.types.openai_chat_completions import ServiceTiers
 
 pytestmark = pytest.mark.local
 
@@ -82,13 +86,19 @@ def _adapter_call_context(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 async def _chunks(
-    events: list[dict[str, Any]], *, include_usage: bool = True
+    events: list[dict[str, Any]],
+    *,
+    include_usage: bool = True,
+    moderation_builder: Callable[[], ChatModeration | None] | None = None,
+    service_tier: ServiceTiers | None = None,
 ) -> list[dict[str, Any]]:
     """Drive ``format_stream`` over canned events and decode every chunk.
 
     Args:
         events: Converse stream event dicts to replay.
         include_usage: Value forwarded to ``format_stream``.
+        moderation_builder: Value forwarded to ``format_stream``.
+        service_tier: Value forwarded to ``format_stream``.
 
     Returns:
         The decoded JSON chunks, without the ``[DONE]`` sentinel.
@@ -100,8 +110,9 @@ async def _chunks(
             created=0,
             model_id="model",
             stream=_stub_converse_stream(events),  # type: ignore[arg-type]
-            service_tier=None,
+            service_tier=service_tier,
             include_usage=include_usage,
+            moderation_builder=moderation_builder,
         )
         if isinstance(data := event.data, str) and data != "[DONE]"
     ]
@@ -235,3 +246,141 @@ class TestChunkChoiceAlwaysPresentKeys:
         final_choice = chunks[-1]["choices"][0]
         assert final_choice["finish_reason"] == "stop"
         assert final_choice["logprobs"] is None
+
+
+def _moderation(*, flagged: bool) -> ChatModeration:
+    """Build a canned ``moderation`` payload for a streamed completion.
+
+    Args:
+        flagged: Value carried by both directions of the result.
+
+    Returns:
+        A ``ChatModeration`` a stub builder can return.
+    """
+    result = ModerationResult(
+        flagged=flagged,
+        categories={"hate": flagged},
+        category_scores={"hate": 0.75 if flagged else 0.0},
+        category_applied_input_types={"hate": ["text"]},
+        model="gr123",
+    )
+    return ChatModeration(
+        input=ChatModerationResults(model="gr123", results=[result]),
+        output=ChatModerationResults(model="gr123", results=[result]),
+    )
+
+
+@pytest.mark.usefixtures("_adapter_call_context")
+class TestStreamedServiceTier:
+    """The trailing chunks report the tier AWS says served the stream.
+
+    Upstream sets the streamed ``service_tier`` from the processing mode that
+    actually served the request. Amazon Bedrock only names it in the trailing
+    ``ConverseStreamMetadataEvent``, by which time the content chunks are gone:
+    they carry the tier the call was sent on -- already more accurate than the
+    requested one, since an alias, a configured default or the tier header can
+    set it in the request's place -- and the chunks after that event carry the
+    served one.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStreamMetadataEvent.html
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
+    """
+
+    #: Canned text stream whose metadata event names the tier that served it.
+    _SERVED_EVENTS: ClassVar[list[dict[str, Any]]] = [
+        {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "Hi"}}},
+        {"messageStop": {"stopReason": "end_turn"}},
+        {
+            "metadata": {
+                "usage": {"inputTokens": 10, "outputTokens": 5},
+                "serviceTier": {"type": "flex"},
+            }
+        },
+    ]
+
+    async def test_the_usage_chunk_reports_the_served_tier(self) -> None:
+        """A call sent on ``priority`` but served on ``flex`` ends on ``flex``.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStreamMetadataEvent.html
+        """
+        chunks = await _chunks(self._SERVED_EVENTS, service_tier="priority")
+
+        assert chunks[-1]["usage"]["total_tokens"] == 15
+        assert chunks[-1]["service_tier"] == "flex"
+        # The content chunks were already sent when the metadata event arrived.
+        assert {chunk["service_tier"] for chunk in chunks[:-1]} == {"priority"}
+
+    async def test_a_stream_naming_no_tier_keeps_the_one_it_was_sent_on(self) -> None:
+        """Without a served tier every chunk reports the tier the call carried."""
+        chunks = await _chunks(_TEXT_STREAM_EVENTS, service_tier="flex")
+
+        assert {chunk["service_tier"] for chunk in chunks} == {"flex"}
+
+    async def test_the_moderation_chunk_reports_the_served_tier(self) -> None:
+        """The chunk sent after the usage one agrees with it on the tier."""
+        chunks = await _chunks(
+            self._SERVED_EVENTS,
+            service_tier="priority",
+            moderation_builder=partial(_moderation, flagged=False),
+        )
+
+        assert "moderation" in chunks[-1]
+        assert chunks[-1]["service_tier"] == "flex"
+
+
+@pytest.mark.usefixtures("_adapter_call_context")
+class TestStreamedModeration:
+    """A streamed completion reports its guardrail verdict in its own chunk.
+
+    Upstream carries ``moderation`` on ``ChatCompletionChunk`` and delivers it
+    on a dedicated moderation chunk rather than on a content one. The guardrail
+    runs on a streamed request as it does on a buffered one, so the verdict is
+    reported instead of dropped. Two divergences: Bedrock only sends the
+    guardrail trace with the final metadata event, so the chunk lands after the
+    usage one, and both directions arrive together rather than the input
+    verdict arriving early.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+         openai.types.chat.chat_completion_chunk.ChatCompletionChunk.moderation
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
+    """
+
+    async def test_results_land_on_a_dedicated_trailing_chunk(self) -> None:
+        """The builder result is sent alone, on the last chunk before ``[DONE]``.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+        """
+        chunks = await _chunks(
+            _TEXT_STREAM_EVENTS, moderation_builder=partial(_moderation, flagged=True)
+        )
+
+        moderation_chunk = chunks[-1]
+        assert moderation_chunk["choices"] == []
+        assert moderation_chunk["object"] == "chat.completion.chunk"
+        assert moderation_chunk["id"] == "chatcmpl-1"
+        assert moderation_chunk["moderation"]["input"]["results"][0]["flagged"] is True
+        assert moderation_chunk["moderation"]["output"]["model"] == "gr123"
+        # The verdict rides its own chunk: no content or usage chunk carries it.
+        assert not any("moderation" in chunk for chunk in chunks[:-1])
+        assert chunks[-2]["usage"]["total_tokens"] == 15
+
+    async def test_no_extra_chunk_when_the_builder_returns_nothing(self) -> None:
+        """A request without ``moderation`` keeps the upstream chunk sequence.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+        """
+        chunks = await _chunks(_TEXT_STREAM_EVENTS, moderation_builder=lambda: None)
+
+        assert chunks[-1]["choices"] == []
+        assert chunks[-1]["usage"]["total_tokens"] == 15
+        assert not any("moderation" in chunk for chunk in chunks)
+
+    async def test_no_extra_chunk_without_a_builder(self) -> None:
+        """No builder at all leaves the stream exactly as it was.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
+        """
+        chunks = await _chunks(_TEXT_STREAM_EVENTS)
+
+        assert not any("moderation" in chunk for chunk in chunks)

@@ -9,6 +9,7 @@
 """
 
 from asyncio import gather
+from functools import partial
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Never
 
 from fastapi import APIRouter, Depends, Path, Query, Request
@@ -221,7 +222,12 @@ async def create_chat_completion(
     placeholder_id = f"chatcmpl-{REQUEST_ID.get()}"
     created = int(REQUEST_TIME.get().timestamp())
     generation = get_chat_model(model_id).create_completion(
-        request, placeholder_id, created
+        request,
+        placeholder_id,
+        created,
+        # A streamed completion reports the verdict itself: the trace only
+        # arrives with the last Bedrock event, long after this returns.
+        partial(build_chat_moderation, request.moderation),
     )
     session_id: str | None
     if store:

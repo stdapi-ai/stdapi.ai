@@ -1697,6 +1697,83 @@ class TestStreamedModeration:
         assert moderation["output"]["category_scores"] == {"violence": 0.25}
 
 
+class TestStreamedServiceTier:
+    """The terminal event reports the tier AWS says served the stream.
+
+    Upstream sets the response ``service_tier`` from the processing mode that
+    actually served the request. Amazon Bedrock only names it in the trailing
+    ``ConverseStreamMetadataEvent``, so the lifecycle events sent before it
+    carry the tier the call was sent on -- already more accurate than the
+    requested one, since an alias, ``DEFAULT_MODEL_SERVICE_TIERS`` or the
+    ``X-Amzn-Bedrock-Service-Tier`` header can set it in the request's place.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/streaming
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStreamMetadataEvent.html
+         stdapi/models/chat/_adapters/_openai_responses.py:format_stream
+    """
+
+    @staticmethod
+    async def _events(
+        served: str | None, sent: str | None
+    ) -> list[JSONServerSentEvent]:
+        """Stream a text turn whose metadata event names *served*.
+
+        Args:
+            served: Bedrock tier the metadata event reports, if any.
+            sent: Tier the Converse request was sent on, if any.
+
+        Returns:
+            Every emitted SSE event, in order.
+        """
+        stream_events = _text_stream_events()
+        if served:
+            stream_events[-1] = {
+                "metadata": {
+                    "usage": {"inputTokens": 3, "outputTokens": 5},
+                    "serviceTier": {"type": served},
+                }
+            }
+        return await _collect(
+            format_stream(
+                "resp-1",
+                1.0,
+                "model",
+                _stream(stream_events),
+                _request(service_tier="priority"),
+                service_tier=sent,  # type: ignore[arg-type]
+            )
+        )
+
+    async def test_the_terminal_event_reports_the_served_tier(self) -> None:
+        """A stream sent on ``priority`` but served on ``flex`` completes on ``flex``."""
+        events = await self._events("flex", "priority")
+
+        assert _payload(events[0])["response"]["service_tier"] == "priority"
+        assert _payload(events[-1])["response"]["service_tier"] == "flex"
+
+    async def test_a_stream_naming_no_tier_keeps_the_one_it_was_sent_on(self) -> None:
+        """Without a served tier the terminal event agrees with the first one."""
+        events = await self._events(None, "flex")
+
+        assert _payload(events[0])["response"]["service_tier"] == "flex"
+        assert _payload(events[-1])["response"]["service_tier"] == "flex"
+
+    async def test_reserved_is_reported_as_the_standard_tier(self) -> None:
+        """Responses has no ``reserved``: a call served on it reports ``default``.
+
+        Ref: stdapi/types/openai_responses.py:ServiceTiers
+        """
+        events = await self._events("reserved", None)
+
+        assert _payload(events[-1])["response"]["service_tier"] == "default"
+
+    async def test_no_tier_at_all_falls_back_to_the_requested_one(self) -> None:
+        """Naming no tier anywhere leaves the request's own value reported."""
+        events = await self._events(None, None)
+
+        assert _payload(events[-1])["response"]["service_tier"] == "priority"
+
+
 class TestPolicySwitches:
     """safety_identifier and stream_options are accepted and ignored.
 

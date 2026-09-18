@@ -178,6 +178,7 @@ class _RecordingChatBackend:
         request: Any,  # noqa: ANN401
         completion_id: str,
         created: int,
+        moderation_builder: Any = None,  # noqa: ANN401 (stream-only contract)
     ) -> ChatCompletion:
         """Prefetch tracked input files, record them, return a canned completion."""
         from stdapi.input_file import prefetch_all_content_types  # noqa: PLC0415

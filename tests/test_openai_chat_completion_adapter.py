@@ -34,6 +34,8 @@ from stdapi.models.chat._adapters._openai_common import (
     CACHE_TTL,
     JSON_OBJECT_SYSTEM_INSTRUCTION,
     enforce_json_object,
+    map_response_service_tier,
+    map_responses_service_tier,
     map_service_tier,
     parse_prompt_cache_key,
     resolve_cache_ttl,
@@ -977,6 +979,58 @@ class TestServiceTierMapping:
         paid request while the echoed value stayed unchanged.
         """
         assert map_service_tier(value) == expected  # type: ignore[arg-type]
+
+
+class TestResponseServiceTierMapping:
+    """The reported tier is the one AWS says served the call, not the request's.
+
+    Upstream sets the response ``service_tier`` from the processing mode that
+    actually served the request, and says it may differ from the parameter.
+    Bedrock names that mode in ``ConverseResponse.serviceTier`` (and in the
+    stream's metadata event), so the requested value is only a fallback for a
+    call AWS reports no tier for. The Responses vocabulary has no ``reserved``,
+    a tier only a server-side configuration can select there.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+         stdapi/models/chat/_adapters/_openai_common.py:map_response_service_tier
+    """
+
+    @pytest.mark.parametrize(
+        ("served", "expected"),
+        [
+            ("priority", "priority"),
+            ("flex", "flex"),
+            ("default", "default"),
+            ("reserved", "reserved"),
+        ],
+    )
+    def test_every_bedrock_tier_has_a_chat_completions_word(
+        self, served: str, expected: str
+    ) -> None:
+        """A tier AWS names replaces the requested one on Chat Completions."""
+        assert map_response_service_tier(served, "flex") == expected
+
+    @pytest.mark.parametrize("served", [None, "", "unknown-tier"])
+    def test_an_unnamed_tier_falls_back_to_the_requested_one(
+        self, served: str | None
+    ) -> None:
+        """Without a tier AWS named, the request's own value is reported.
+
+        A tier AWS adds later must not be reported as a value the schema does
+        not publish, so anything unknown falls back too.
+        """
+        assert map_response_service_tier(served, "flex") == "flex"
+        assert map_response_service_tier(served) is None
+
+    def test_reserved_is_reported_as_default_on_responses(self) -> None:
+        """Responses has no ``reserved``: a call served on it reports ``default``.
+
+        Ref: stdapi/types/openai_responses.py:ServiceTiers
+        """
+        assert map_responses_service_tier("reserved", "flex") == "default"
+        assert map_responses_service_tier("flex") == "flex"
+        assert map_responses_service_tier(None, "priority") == "priority"
 
 
 class TestPromptCacheRetention:

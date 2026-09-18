@@ -196,6 +196,7 @@ if TYPE_CHECKING:
         ResponseInputItem,
         ResponseOutputItem,
         ResponseTextConfig,
+        ServiceTiers,
         ToolChoice,
     )
     from stdapi.types.openai_vector_stores import SearchFilter
@@ -2740,6 +2741,7 @@ def _build_response_object(
     error: ResponseError | None,
     usage: ResponseUsage | None,
     request: ResponseCreateParams,
+    service_tier: ServiceTiers | None = None,
 ) -> Response:
     """Construct a Response object from accumulated state.
 
@@ -2753,6 +2755,8 @@ def _build_response_object(
         error: Error details when the response failed, or ``None``.
         usage: Token usage statistics, or ``None`` for in-progress responses.
         request: The original Responses API creation request.
+        service_tier: Tier that served the call, when AWS named one; the tier
+            the request asked for is reported when it did not.
 
     Returns:
         Constructed Response object.
@@ -2783,10 +2787,13 @@ def _build_response_object(
         prompt_cache_retention=request.prompt_cache_retention,
         reasoning=request.reasoning,
         safety_identifier=request.safety_identifier,
-        # Responses' own ServiceTiers excludes the Bedrock-only "reserved" value,
-        # which map_service_tier's wider (Chat Completions) signature allows for;
-        # a Responses request can never actually carry it (rejected upstream).
-        service_tier=_openai_common.map_service_tier(request.service_tier)[1],  # type: ignore[arg-type]
+        # AWS reports the tier that served the call; the requested one, after
+        # alias mapping, answers for it only when AWS names none. Responses' own
+        # ServiceTiers excludes the Bedrock-only "reserved" value, which
+        # map_service_tier's wider (Chat Completions) signature allows for; a
+        # Responses request can never actually carry it (rejected upstream).
+        service_tier=service_tier
+        or _openai_common.map_service_tier(request.service_tier)[1],  # type: ignore[arg-type]
         text=request.text,
         top_logprobs=request.top_logprobs,
         # Reported, not echoed: "disabled" is the only strategy served, and
@@ -2818,6 +2825,7 @@ async def format_response(
     suppress_tool_names: frozenset[str] | None = None,
     web_search_tool_names: frozenset[str] | None = None,
     code_execution_tool_names: frozenset[str] | None = None,
+    service_tier: ServiceTiers | None = None,
 ) -> Response:
     """Build a Response from a Bedrock Converse response.
 
@@ -2832,6 +2840,7 @@ async def format_response(
             items (populated with query and ``citationsContent`` sources).
         code_execution_tool_names: Tool names to emit as ``code_interpreter_call``
             output items (populated with the code and its logs).
+        service_tier: Tier that served the call, when AWS named one.
 
     Returns:
         Completed Response object.
@@ -2871,6 +2880,7 @@ async def format_response(
                 total_tokens=input_tokens + output_tokens,
             ),
             request,
+            service_tier,
         )
     )
 
@@ -2913,6 +2923,8 @@ class _StreamState:
     current_text_len: int = 0
     block_kind: _BlockKind = _BlockKind.NONE
     stop_reason: str | None = None
+    #: Bedrock tier that served the call, named in the trailing metadata event.
+    served_service_tier: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0
@@ -3758,11 +3770,17 @@ def _process_stream_event(
             yield from _handle_block_stop(state)
         case {"messageStop": {"stopReason": stop_reason}}:
             state.stop_reason = stop_reason
-        case {"metadata": {"usage": usage}}:
-            state.input_tokens = usage["inputTokens"]
-            state.output_tokens = usage["outputTokens"]
-            state.cached_tokens = usage.get("cacheReadInputTokens", 0)
-            state.cache_write_tokens = usage.get("cacheWriteInputTokens", 0)
+        case {"metadata": metadata}:
+            if usage := metadata.get("usage"):
+                state.input_tokens = usage["inputTokens"]
+                state.output_tokens = usage["outputTokens"]
+                state.cached_tokens = usage.get("cacheReadInputTokens", 0)
+                state.cache_write_tokens = usage.get("cacheWriteInputTokens", 0)
+            # AWS names the tier that served the call here only, in time for the
+            # terminal event but not for the lifecycle ones already sent.
+            state.served_service_tier = (
+                metadata.get("serviceTier", {}).get("type") or state.served_service_tier
+            )
 
 
 def _classify_stream_error(
@@ -4329,6 +4347,7 @@ async def format_stream(
     web_search_tool_names: frozenset[str] | None = None,
     code_execution_tool_names: frozenset[str] | None = None,
     moderation_builder: Callable[[], ResponseModeration | None] | None = None,
+    service_tier: ServiceTiers | None = None,
 ) -> AsyncGenerator[JSONServerSentEvent]:
     """Stream Bedrock Converse events as OpenAI Responses API SSE events.
 
@@ -4360,6 +4379,8 @@ async def format_stream(
         moderation_builder: Optional callable building the response ``moderation``
             field from the guardrail trace, invoked at stream end so the
             terminal event carries the complete trace.
+        service_tier: Tier resolved for the request, reported until AWS names
+            the one that served it in the trailing metadata event.
 
     Yields:
         ``JSONServerSentEvent`` for each Responses API stream event.
@@ -4387,6 +4408,7 @@ async def format_stream(
             None,
             None,
             request,
+            service_tier,
         )
 
         yield json_sse(
@@ -4458,6 +4480,9 @@ async def format_stream(
                 total_tokens=input_tokens + state.output_tokens,
             ),
             request,
+            _openai_common.map_responses_service_tier(
+                state.served_service_tier, service_tier
+            ),
         )
         if moderation_builder is not None:
             final_response.moderation = moderation_builder()
@@ -4497,6 +4522,9 @@ async def format_stream(
                     ),
                     None,
                     request,
+                    _openai_common.map_responses_service_tier(
+                        state.served_service_tier, service_tier
+                    ),
                 ),
                 sequence_number=state.next_seq(),
                 type="response.failed",

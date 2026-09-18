@@ -18,6 +18,7 @@ from stdapi.models.audio import synthesize_speech
 from stdapi.models.chat._adapters import _common, _openai_common
 from stdapi.monitoring import log_error_details, log_response_params
 from stdapi.types.openai import (
+    ChatModeration,
     FunctionDefinition,
     ResponseFormatJSONObject,
     ResponseFormatJSONSchema,
@@ -54,7 +55,7 @@ from stdapi.types.openai_chat_completions import (
 from stdapi.utils import b64encode, try_parse_json
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Iterable
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable
 
     from pydantic import JsonValue
     from types_aiobotocore_bedrock_runtime.literals import (
@@ -1102,7 +1103,7 @@ async def format_response(
         created: Timestamp indicating when the request was created.
         model_id: The model identifier.
         responses: Pre-executed Converse API responses, one per choice.
-        service_tier: Optional tier of service for the request.
+        service_tier: Optional tier of service that served the request.
         audio_params: Optional parameters for audio generation.
         modalities: List of output modalities such as text or audio.
         suppress_tool_names: Optional set of Bedrock tool names to exclude
@@ -1385,27 +1386,35 @@ async def format_stream(
     include_usage: bool = False,
     suppress_tool_names: frozenset[str] | None = None,
     suppress_reasoning: bool = False,
+    moderation_builder: Callable[[], ChatModeration | None] | None = None,
 ) -> AsyncGenerator[ServerSentEvent]:
     """Stream Bedrock Converse events as OpenAI ChatCompletionChunk SSE events.
 
     When ``include_usage`` is set, usage is reported in its own trailing chunk
     with empty ``choices`` (per OpenAI spec), separate from the finish-reason
     chunk, and every earlier chunk carries a null ``usage`` key. Without it no
-    chunk carries the key at all. The stream always ends with a ``[DONE]``
-    sentinel.
+    chunk carries the key at all. When ``moderation_builder`` returns results,
+    they are reported the way upstream does it, in a dedicated moderation chunk
+    with empty ``choices``; Bedrock only delivers the guardrail trace in the
+    final metadata event, so that chunk comes last, after the usage one. The
+    stream always ends with a ``[DONE]`` sentinel.
 
     Args:
         completion_id: Unique identifier for the completion.
         created: Timestamp when the request was initiated.
         model_id: The model identifier.
         stream: Pre-opened Bedrock ConverseStream event iterator.
-        service_tier: Service tier being used.
+        service_tier: Service tier resolved for the request, replaced by the one
+            AWS reports as having served it once its metadata event arrives.
         include_usage: Whether to include usage information.
         suppress_tool_names: Optional set of Bedrock tool names whose
             contentBlockStart/contentBlockDelta/contentBlockStop events are
             silently dropped (e.g. system tools handled server-side).
         suppress_reasoning: Emit no reasoning delta; the reasoning tokens are
             still generated and reported in usage.
+        moderation_builder: Optional callable building the ``moderation`` field
+            from the guardrail trace, invoked at stream end so the extra chunk
+            it feeds carries the complete trace.
 
     Yields:
         JSONServerSentEvent chunks, terminated by the ``[DONE]`` sentinel.
@@ -1436,6 +1445,12 @@ async def format_stream(
             event, suppress_tool_names, suppressed_indices
         ):
             continue
+        if metadata := event.get("metadata"):
+            # AWS names the tier that served the call in the metadata event only,
+            # too late for the chunks already sent: the trailing ones report it.
+            service_tier = _openai_common.map_response_service_tier(
+                metadata.get("serviceTier", {}).get("type"), service_tier
+            )
         if end_state:
             # Past the finish chunk: only a trailing usage-only chunk remains to emit.
             if include_usage and (usage := _openai_common.extract_stream_usage(event)):
@@ -1490,6 +1505,21 @@ async def format_stream(
                     model=model_id,
                     object="chat.completion.chunk",
                     service_tier=service_tier,
+                ),
+                include_usage=include_usage,
+            )
+        )
+    if moderation_builder is not None and (moderation := moderation_builder()):
+        yield JSONServerSentEvent(
+            data=_dump_chunk(
+                ChatCompletionChunk(
+                    id=completion_id,
+                    choices=[],
+                    created=created,
+                    model=model_id,
+                    object="chat.completion.chunk",
+                    service_tier=service_tier,
+                    moderation=moderation,
                 ),
                 include_usage=include_usage,
             )

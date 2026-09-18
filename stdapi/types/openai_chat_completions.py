@@ -1149,7 +1149,8 @@ class _Completion(BaseModelResponse):
     moderation: ChatModeration | None = Field(
         default=None,
         description="Guardrail moderation results, when the request set "
-        "`moderation` (non-streaming responses only).",
+        "`moderation`. When streaming, they are reported in a dedicated "
+        "moderation chunk with empty `choices`, sent last.",
     )
 
 
@@ -1442,7 +1443,8 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     moderation: RequestModeration | None = Field(
         default=None,
         description="Apply an AWS Bedrock guardrail to this request; results "
-        "are reported in the response `moderation` field (non-streaming only).",
+        "are reported in the response `moderation` field, or, when streaming, "
+        "in a dedicated moderation chunk sent last.",
     )
 
     # Extra validations

@@ -44,6 +44,15 @@ _SERVICES_TIERS: dict[
     "reserved": ("reserved", "reserved"),
 }
 
+#: Bedrock service tiers to the OpenAI tier a response reports
+_RESPONSE_SERVICES_TIERS: dict[ServiceTierTypeType | str, ServiceTiers] = {
+    "priority": "priority",
+    "flex": "flex",
+    "default": "default",
+    # Extra bedrock specific value, absent from the Responses vocabulary
+    "reserved": "reserved",
+}
+
 #: `prompt_cache_options.mode` value disabling the `prompt_cache_key` heuristic
 EXPLICIT_CACHE_MODE = "explicit"
 
@@ -86,10 +95,10 @@ def map_service_tier(
     Only the request's own value is translated here: the alias and
     server-configured tiers resolve where the Bedrock request is built
     (:func:`stdapi.aws_bedrock.resolve_service_tier`), alongside the tier
-    header, and the response echoes the requested tier after alias mapping:
-    ``fast`` is reported as ``priority``, and a tier with no Bedrock equivalent as
-    ``default``. A tier the deployment configures in the request's place is not
-    reflected here.
+    header. The second element is the requested tier after alias mapping
+    (``fast`` becomes ``priority``, a tier with no Bedrock equivalent
+    ``default``), which a response only reports when AWS names no tier of its
+    own -- see :func:`map_response_service_tier`.
 
     Args:
         value: OpenAI service tier.
@@ -102,6 +111,43 @@ def map_service_tier(
     if (tiers := _SERVICES_TIERS.get(value)) is not None:
         return tiers
     return None, "default"
+
+
+def map_response_service_tier(
+    tier: ServiceTierTypeType | str | None, echoed: ServiceTiers | None = None
+) -> ServiceTiers | None:
+    """Map the tier that served a Bedrock call to the tier a response reports.
+
+    Args:
+        tier: Bedrock service tier literal, or ``None``.
+        echoed: Requested tier, reported when AWS names none.
+
+    Returns:
+        The OpenAI service tier of the Chat Completions vocabulary.
+    """
+    return _RESPONSE_SERVICES_TIERS.get(tier or "", echoed)
+
+
+def map_responses_service_tier(
+    tier: ServiceTierTypeType | str | None, echoed: ResponsesServiceTiers | None = None
+) -> ResponsesServiceTiers | None:
+    """Map the tier that served a Bedrock call to the tier a Response reports.
+
+    The Responses vocabulary has no word for Bedrock's ``reserved`` capacity
+    tier, which only a server-side configuration can select there, so a call
+    served on it is reported as the standard tier rather than with a value
+    upstream does not publish.
+
+    Args:
+        tier: Bedrock service tier literal, or ``None``.
+        echoed: Requested tier, reported when AWS names none.
+
+    Returns:
+        The OpenAI service tier of the Responses vocabulary.
+    """
+    if (mapped := _RESPONSE_SERVICES_TIERS.get(tier or "")) is None:
+        return echoed
+    return "default" if mapped == "reserved" else mapped
 
 
 def resolve_cache_ttl(

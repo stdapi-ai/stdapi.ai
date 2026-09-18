@@ -3746,6 +3746,66 @@ class TestServiceTierEchoesTheEffectiveTier:
         assert isinstance(response, Response)
         assert response.service_tier == reported
 
+    @pytest.mark.parametrize(
+        ("requested", "sent", "served", "reported"),
+        [
+            # AWS names the tier that served the call: it wins over the request.
+            ("priority", "priority", "flex", "flex"),
+            # A tier set in the request's place is reported although it asked none.
+            (None, "flex", None, "flex"),
+            # Responses has no word for Bedrock's reserved capacity tier.
+            (None, "reserved", "reserved", "default"),
+            # Nothing named anywhere: the requested value answers for it.
+            ("flex", None, None, "flex"),
+        ],
+    )
+    async def test_the_tier_that_served_the_call_wins(
+        self,
+        requested: str | None,
+        sent: str | None,
+        served: str | None,
+        reported: str,
+        monkeypatch: pytest.MonkeyPatch,
+        request_log: dict[str, Any],
+    ) -> None:
+        """The served tier, then the tier sent, then the requested one is reported.
+
+        ``sent`` is what ``_prepare_converse_request_for_region`` resolves onto
+        the Converse request per region, from a model alias,
+        ``DEFAULT_MODEL_SERVICE_TIERS`` or the ``X-Amzn-Bedrock-Service-Tier``
+        header; ``served`` is what the Converse response reports.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+             stdapi/aws_bedrock.py:resolve_service_tier
+        """
+        del request_log
+
+        async def fake_converse(
+            _self: ChatModel, bedrock_request: dict[str, Any]
+        ) -> dict[str, Any]:
+            if sent:
+                bedrock_request["serviceTier"] = {"type": sent}
+            response: dict[str, Any] = {
+                "output": {"message": {"role": "assistant", "content": []}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            }
+            if served:
+                response["serviceTier"] = {"type": served}
+            return response
+
+        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        payload: dict[str, Any] = {"model": "test-model", "input": "hi"}
+        if requested:
+            payload["service_tier"] = requested
+
+        response = await ChatModel("amazon.nova-2-lite-v1:0").create_response(
+            ResponseCreateParams.model_validate(payload), "resp-1", 0.0
+        )
+
+        assert isinstance(response, Response)
+        assert response.service_tier == reported
+
 
 @pytest.mark.local
 class TestServiceTierAcceptsEveryUpstreamValue:
