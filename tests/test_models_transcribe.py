@@ -44,6 +44,7 @@ from stdapi.models.audio.amazon_transcribe import (
     _build_transcription_job_params,
     _build_transcription_segment,
     _can_stream_live,
+    _delete_transcription_job,
     _dominant_language_code,
     _get_audio_duration,
     _speaker_label,
@@ -236,6 +237,68 @@ class TestTranscribeJobCandidates:
             SETTINGS, "aws_s3_regional_buckets", {"us-east-1": "us-bucket"}
         )
         assert transcribe_job_candidates() == [("us-east-1", "us-bucket")]
+
+
+class _RefusingTranscribeClient:
+    """Stub Transcribe client whose delete always raises the given error."""
+
+    def __init__(self, error: ClientError) -> None:
+        self._error = error
+
+    async def delete_transcription_job(self, **_: str) -> None:
+        """Refuse the delete with the configured error."""
+        raise self._error
+
+
+class TestDeleteTranscriptionJob:
+    """A delete succeeds whenever the job is no longer there.
+
+    The cleanup runs as a detached task, so an answer it refuses to accept
+    surfaces as an unhandled exception in the deployment's logs rather than to
+    the caller. ``DeleteTranscriptionJob`` declares no not-found error, only
+    ``BadRequestException``, so the two already-gone answers are told apart by
+    their wording.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_DeleteTranscriptionJob.html
+         stdapi/models/audio/amazon_transcribe.py:_delete_transcription_job
+    """
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "The requested job couldn't be deleted. Try your request again.",
+            (
+                "The requested job couldn't be found. Check the job name and "
+                "try your request again."
+            ),
+        ],
+    )
+    async def test_a_job_already_gone_is_a_successful_delete(
+        self, message: str
+    ) -> None:
+        """Neither already-gone answer reaches the caller.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:_delete_transcription_job
+        """
+        client = _RefusingTranscribeClient(
+            make_client_error(
+                "BadRequestException", "DeleteTranscriptionJob", message=message
+            )
+        )
+
+        await _delete_transcription_job(client, "job-1")  # type: ignore[arg-type]
+
+    async def test_any_other_refusal_is_raised(self) -> None:
+        """A refusal that does not mean the job is gone still propagates.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:_delete_transcription_job
+        """
+        client = _RefusingTranscribeClient(
+            make_client_error("LimitExceededException", "DeleteTranscriptionJob")
+        )
+
+        with pytest.raises(ClientError):
+            await _delete_transcription_job(client, "job-1")  # type: ignore[arg-type]
 
 
 class _StubTranscribeClient:

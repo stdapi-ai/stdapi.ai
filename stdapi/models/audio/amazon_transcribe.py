@@ -780,10 +780,18 @@ async def _get_transcription_results(
     )["results"]
 
 
+#: Message fragments Transcribe answers a delete with when the job is already gone.
+_JOB_ALREADY_GONE = ("couldn't be deleted", "couldn't be found")
+
+
 async def _delete_transcription_job(
     transcribe: TranscribeServiceClient, job_name: str
 ) -> None:
     """Deletes a transcription job with the specified job name.
+
+    A job that is no longer there is what a delete wants, so both shapes of that
+    answer succeed. They are told apart by wording because ``DeleteTranscriptionJob``
+    declares no not-found error, only ``BadRequestException``.
 
     Args:
         transcribe: Transcribe client
@@ -792,9 +800,9 @@ async def _delete_transcription_job(
     try:
         await transcribe.delete_transcription_job(TranscriptionJobName=job_name)
     except ClientError as error:
-        if (
-            error.response["Error"]["Code"] == "BadRequestException"
-            and "couldn't be deleted" in error.response["Error"]["Message"]
+        info = error.response["Error"]
+        if info["Code"] == "BadRequestException" and any(
+            fragment in info["Message"] for fragment in _JOB_ALREADY_GONE
         ):
             return
         raise
