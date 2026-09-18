@@ -57,7 +57,7 @@ Send the model names [`GET /api/tags`](api_ollama_models.md#get-apitags) publish
 |----------------------------------|:----------------------------------------:|--------------------------------------------------------------------|
 | **Input**                       |                                          |                                                                    |
 | `messages` (text)                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Full support                                                       |
-| `messages[].images`              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Multimodal models only; base64, a URL, a data URI or an `s3://` URI |
+| `messages[].images`              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Multimodal models only; base64, a URL, a data URI or an `s3://` URI. Sent on a `user` or `tool` message; accepted and ignored on a `system` or `assistant` message — see [Images](#images) |
 | `messages[].thinking`            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Replayed as the assistant turn's reasoning text                    |
 | `messages[].tool_calls`          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Replayed tool calls; correlated to results as described [below](#tool-calling) |
 | `tools`                          |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Function tools; support depends on the model                       |
@@ -74,6 +74,7 @@ Send the model names [`GET /api/tags`](api_ollama_models.md#get-apitags) publish
 | `done_reason`                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `stop` or `length` on a generated answer; `load` or `unload` on a message-less request — see [Loading and Unloading](#loading-and-unloading) |
 | **Usage tracking**               |                                          |                                                                    |
 | `prompt_eval_count`, `eval_count`|   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Real token counts                                                   |
+| `prompt_eval_cached_count`       |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Reported only when the backend read a prompt cache; a subset of `prompt_eval_count`, which already includes it |
 | `total_duration`                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Real wall-clock time                                                |
 | `load_duration`                  | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Never reported — there is no model-loading phase to measure         |
 | `prompt_eval_duration`, `eval_duration` |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Reported only when streaming, measured from the stream itself; omitted on a non-streaming response |
@@ -189,6 +190,8 @@ curl -X POST "$BASE/api/chat" \
 
 `messages[].images` accepts base64-encoded image data, as Ollama does. This server additionally accepts a URL, a data URI or an `s3://` URI in the same field, on models that support image input.
 
+Upstream declares `images` on every message role. This server sends them to the model on a **`user`** message and on a **`tool`** message — an agent returning a screenshot as a tool result reaches the model with the image, carried inside the tool result itself, which is where a model reads it. Amazon Bedrock carries no image in a system or an assistant turn, so images on a **`system`** or **`assistant`** message are accepted and ignored. Put the image on the `user` or `tool` message that needs it.
+
 ## Loading and Unloading
 
 A request with an **empty `messages` array** is upstream's way of making a model resident, and the same request with `keep_alive` set to `0` is how it is evicted — what a client's "load model" and "unload model" controls send. A hosted model is always resident, so both are answered without invoking anything:
@@ -211,6 +214,7 @@ A request with an **empty `messages` array** is upstream's way of making a model
 - `keep_alive` does not keep anything loaded: models are never resident. It is read only to tell a message-less request's `done_reason` apart, `load` from `unload`.
 - The option values Ollama uses to mean "off" are read that way rather than refused: a negative `seed` asks for an unseeded answer, a non-positive `top_k` or `top_p` lifts that sampling limit, a non-positive `num_predict` lifts the length limit, and a `temperature` at or below zero asks for the most likely token.
 - Runner options inside `options` (`num_ctx`, `num_gpu`, `num_thread`, `num_batch`, `main_gpu`, `use_mmap`, `min_p`, and any other key a local runner would use) are accepted and ignored.
+- `images` on a `system` or an `assistant` message are accepted and ignored: Amazon Bedrock carries no image in those turns. They are sent to the model on a `user` or a `tool` message — see [Images](#images).
 - `load_duration` is never reported: there is no model-loading phase to measure, and a number there would be invented.
 - `prompt_eval_duration` and `eval_duration` are reported only when streaming. All duration and count fields are optional in the Ollama API, so a client computing tokens-per-second from a non-streamed response has no duration to divide by.
 - A model name learned from ollama.com — `llama3.2:3b`, for one — names nothing this server serves and answers `404`; send a name [`GET /api/tags`](api_ollama_models.md#get-apitags) publishes.

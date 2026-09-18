@@ -161,7 +161,12 @@ class ChatMessage(BaseModelRequest):
     )
     images: list[str] | None = Field(
         default=None,
-        description="Images for multimodal models, base64-encoded or as a URL.",
+        description=(
+            "Images for multimodal models, base64-encoded or as a URL. Honored "
+            "on a `user` or `tool` message; UNSUPPORTED on a `system` or "
+            "`assistant` message, where they are accepted and ignored because "
+            "the backend carries no image in those turns."
+        ),
     )
     tool_calls: list[RequestToolCall] | None = Field(
         default=None, description="Tool calls this assistant message requested."
@@ -434,6 +439,13 @@ class Metrics(BaseModelResponse):
     )
     prompt_eval_count: int | None = Field(
         default=None, description="Number of input tokens."
+    )
+    prompt_eval_cached_count: int | None = Field(
+        default=None,
+        description=(
+            "Number of input tokens read from the cache, included in "
+            "`prompt_eval_count`."
+        ),
     )
     prompt_eval_duration: int | None = Field(
         default=None, description="Time to the first generated token, in nanoseconds."

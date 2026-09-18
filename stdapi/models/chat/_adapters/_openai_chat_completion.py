@@ -49,6 +49,7 @@ from stdapi.types.openai_chat_completions import (
     File,
     FunctionCall,
     PromptTokensDetails,
+    ToolMessageWithImages,
 )
 from stdapi.utils import b64encode, try_parse_json
 
@@ -810,10 +811,14 @@ def _extract_assistant_blocks(
     return content_blocks
 
 
-def _extract_tool_blocks(
+async def _extract_tool_blocks(
     message_param: ChatCompletionToolMessageParam,
 ) -> list[ContentBlockTypeDef]:
     """Convert a tool message to a Bedrock toolResult block.
+
+    Images a tool returned belong inside the result, which is where Bedrock
+    carries them: put behind it instead, in a message of their own, they are
+    tokenised and then largely ignored.
 
     Args:
         message_param: Tool message containing content and tool call ID.
@@ -829,6 +834,11 @@ def _extract_tool_blocks(
     content: list[ToolResultContentBlockUnionTypeDef] = [
         _openai_common.parse_tool_content(text) for text in texts
     ]
+    if isinstance(message_param, ToolMessageWithImages):
+        content += [
+            await image.image_url.url.to_bedrock_content_block()  # type: ignore[misc]
+            for image in message_param.images
+        ]
     return [
         {"toolResult": {"toolUseId": message_param.tool_call_id, "content": content}}
     ]
@@ -905,7 +915,7 @@ async def map_messages(
 
         if role_name == "tool":
             tool_msg: ChatCompletionToolMessageParam = message_param  # type: ignore[assignment]
-            content_blocks = _extract_tool_blocks(tool_msg)
+            content_blocks = await _extract_tool_blocks(tool_msg)
         elif role_name == "function":
             function_msg: ChatCompletionFunctionMessageParam = message_param  # type: ignore[assignment]
             content_blocks = _extract_function_blocks(function_msg)

@@ -44,6 +44,7 @@ from stdapi.types.openai_chat_completions import (
     CompletionCreateParams,
     FunctionCall,
     ImageURL,
+    ToolMessageWithImages,
 )
 from stdapi.utils import to_json_str
 
@@ -173,6 +174,25 @@ def _reasoning_of(message: ChatCompletionMessage | JsonMapping) -> str | None:
     return message.reasoning_content
 
 
+def _image_parts(images: list[str]) -> list[ChatCompletionContentPartImageParam]:
+    """Build one OpenAI image part per image an Ollama message carries.
+
+    Args:
+        images: Base64 images or URLs carried by the message.
+
+    Returns:
+        The equivalent image content parts, in order.
+    """
+    return [
+        ChatCompletionContentPartImageParam(
+            # Base64, data URI, URL or S3 URI: input_file.py owns every form.
+            type="image_url",
+            image_url=ImageURL(url=image),  # type: ignore[arg-type]
+        )
+        for image in images
+    ]
+
+
 def _content_parts(
     text: str, images: list[str] | None
 ) -> str | list[ChatCompletionContentPartParam]:
@@ -192,14 +212,7 @@ def _content_parts(
     parts: list[ChatCompletionContentPartParam] = (
         [ChatCompletionContentPartTextParam(type="text", text=text)] if text else []
     )
-    parts.extend(
-        ChatCompletionContentPartImageParam(
-            # Base64, data URI, URL or S3 URI: input_file.py owns every form.
-            type="image_url",
-            image_url=ImageURL(url=image),  # type: ignore[arg-type]
-        )
-        for image in images
-    )
+    parts.extend(_image_parts(images))
     return parts
 
 
@@ -209,6 +222,11 @@ def _map_messages(messages: list[ChatMessage]) -> list[ChatCompletionMessagePara
     Ollama tool calls carry no identifier, so one is synthesized per call and
     the tool results that follow are correlated to it by ``tool_call_id`` when
     the client sent one, then by tool name, then in call order.
+
+    Images are a field of every Ollama message. A tool result's images ride
+    inside the tool result itself, which is where Bedrock carries them and where
+    a model reads them; a system or assistant message's images are dropped,
+    having no Bedrock equivalent, as the field description says.
 
     Args:
         messages: The conversation, oldest message first.
@@ -259,13 +277,24 @@ def _map_messages(messages: list[ChatMessage]) -> list[ChatCompletionMessagePara
                     )
                 )
             case "tool":
-                mapped.append(
-                    ChatCompletionToolMessageParam(
-                        role="tool",
-                        content=message.content,
-                        tool_call_id=_take_tool_call_id(pending, message),
+                tool_call_id = _take_tool_call_id(pending, message)
+                if message.images:
+                    mapped.append(
+                        ToolMessageWithImages(
+                            role="tool",
+                            content=message.content,
+                            tool_call_id=tool_call_id,
+                            images=_image_parts(message.images),
+                        )
                     )
-                )
+                else:
+                    mapped.append(
+                        ChatCompletionToolMessageParam(
+                            role="tool",
+                            content=message.content,
+                            tool_call_id=tool_call_id,
+                        )
+                    )
     return mapped
 
 
@@ -511,9 +540,12 @@ def _completion_metrics(completion: ChatCompletion) -> Metrics:
         The metrics Ollama reports.
     """
     usage = completion.usage
+    details = usage.prompt_tokens_details if usage else None
     return Metrics(
         total_duration=total_duration(),
         prompt_eval_count=usage.prompt_tokens if usage else None,
+        # Omitted rather than reported as zero when the backend read no cache.
+        prompt_eval_cached_count=(details.cached_tokens or None) if details else None,
         eval_count=usage.completion_tokens if usage else None,
     )
 
@@ -578,6 +610,7 @@ class _StreamState:
     __slots__ = (
         "eval_count",
         "first_token_ns",
+        "prompt_eval_cached_count",
         "prompt_eval_count",
         "start_ns",
         "tool_calls",
@@ -588,6 +621,7 @@ class _StreamState:
         self.start_ns = perf_counter_ns()
         self.first_token_ns: int | None = None
         self.prompt_eval_count: int | None = None
+        self.prompt_eval_cached_count: int | None = None
         self.eval_count: int | None = None
         self.tool_calls: dict[int, tuple[str, list[str]]] = {}
 
@@ -609,6 +643,12 @@ class _StreamState:
                 self.prompt_eval_count = prompt_tokens
             if isinstance(completion_tokens, int):
                 self.eval_count = completion_tokens
+            details = usage.get("prompt_tokens_details")
+            if isinstance(details, dict) and isinstance(
+                cached := details.get("cached_tokens"), int
+            ):
+                # Omitted rather than reported as zero when no cache was read.
+                self.prompt_eval_cached_count = cached or None
 
     def add_tool_call_delta(self, delta: JsonMapping) -> None:
         """Accumulate the tool call fragments of one delta.
@@ -674,6 +714,7 @@ class _StreamState:
         return Metrics(
             total_duration=total_duration(),
             prompt_eval_count=self.prompt_eval_count,
+            prompt_eval_cached_count=self.prompt_eval_cached_count,
             prompt_eval_duration=prompt_eval_duration,
             eval_count=self.eval_count,
             eval_duration=eval_duration,

@@ -22,6 +22,7 @@ from sse_starlette import ServerSentEvent
 
 from stdapi.config import SETTINGS
 from stdapi.models.chat._adapters import _ollama as adapter
+from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapter
 from stdapi.monitoring import REQUEST_TIME
 from stdapi.types.ollama import (
     ChatRequest,
@@ -259,6 +260,104 @@ def test_options_map_onto_the_chat_completion_parameters() -> None:
     # Runner knobs are accepted and ignored rather than sent to the backend.
     assert "num_ctx" not in (params.model_extra or {})
     assert "min_p" not in (params.model_extra or {})
+
+
+#: One image value, sent as the URL form this dialect accepts beside base64.
+_IMAGE: str = "https://example.test/screenshot.png"
+
+#: The same image as a data URI, which resolves to Bedrock bytes without a fetch.
+_IMAGE_DATA_URI: str = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmM"
+    "IQAAAABJRU5ErkJggg=="
+)
+
+
+def _mapped_messages(
+    role: str, tool_name: str | None = None, image: str = _IMAGE
+) -> list[Any]:
+    """Map a one-image message of *role* through the request translation.
+
+    Args:
+        role: Role the image-carrying message is sent under.
+        tool_name: Tool a ``tool`` message answers, which that role needs.
+        image: The image value the message carries.
+
+    Returns:
+        The OpenAI messages the Ollama request translated to.
+    """
+    message: dict[str, Any] = {"role": role, "content": "see this", "images": [image]}
+    if tool_name is not None:
+        message["tool_name"] = tool_name
+    params = adapter.to_chat_completion_params(
+        ChatRequest.model_validate({"model": "m", "messages": [message]}),
+        "amazon.nova-lite-v1:0",
+    )
+    return list(params.messages)
+
+
+def test_a_tool_results_images_ride_in_the_tool_message() -> None:
+    """An image on a tool message stays on that message, with no turn behind it.
+
+    Ollama declares ``images`` on the message object, not on the user message,
+    and an agent returning a screenshot as a tool result is the case that
+    matters. The images are carried on the tool message itself so that the next
+    layer can put them inside the tool result; an extra message here is the
+    shape a model reads past.
+
+    Ref: https://docs.ollama.com/openapi.yaml (ChatMessage.images)
+         stdapi/models/chat/_adapters/_ollama.py:_map_messages
+    """
+    messages = _mapped_messages("tool", tool_name="screenshot")
+
+    assert [message.role for message in messages] == ["tool"]
+    assert messages[0].content == "see this"
+    assert [str(image.image_url.url) for image in messages[0].images] == [_IMAGE]
+
+
+async def test_a_tool_results_images_land_inside_the_bedrock_tool_result() -> None:
+    """The image is a block of the ``toolResult``, not of a message behind it.
+
+    This is the assertion the shape has to answer. Measured on
+    ``amazon.nova-lite-v1:0``: the image inside the tool result is read (12 of
+    12 answers named the colour actually sent), while the same image in a user
+    message appended after the result is tokenised and then ignored (5 of 12).
+    Bedrock's ``ToolResultContentBlock`` carries ``image`` natively, so nothing
+    has to be smuggled into a following turn.
+
+    Ref: bedrock-runtime/2023-09-30/service-2.json (ToolResultContentBlock)
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:_extract_tool_blocks
+    """
+    messages = _mapped_messages("tool", tool_name="screenshot", image=_IMAGE_DATA_URI)
+
+    bedrock, _ = await openai_adapter.map_messages(messages)
+
+    assert len(bedrock) == 1
+    (block,) = bedrock[0]["content"]
+    content = block["toolResult"]["content"]
+    assert [next(iter(part)) for part in content] == ["text", "image"]
+    assert content[0]["text"] == "see this"
+    assert content[1]["image"]["format"] == "png"
+
+
+@pytest.mark.parametrize("role", ["system", "assistant"])
+def test_a_system_or_assistant_image_is_dropped_and_not_smuggled_elsewhere(
+    role: str,
+) -> None:
+    """Amazon Bedrock carries no image in those turns, so none is invented.
+
+    Converse's ``SystemContentBlock`` is text, guard content or a cache point,
+    and the Anthropic-family models reject an image inside an assistant turn.
+    The limitation is stated on the field and in the route documentation rather
+    than enforced with a ``400``, which would refuse what upstream accepts.
+
+    Ref: https://docs.ollama.com/openapi.yaml (ChatMessage.images)
+         stdapi/types/ollama.py:ChatMessage.images
+    """
+    messages = _mapped_messages(role)
+
+    assert [message.role for message in messages] == [role]
+    assert messages[0].content == "see this"
 
 
 def test_negative_num_predict_leaves_the_limit_unset() -> None:
@@ -1262,3 +1361,127 @@ class TestStreamedToolCalls:
         events = await self._translate([{"content": "hello"}])
 
         assert not any(event.get("message", {}).get("tool_calls") for event in events)
+
+
+def _completion_with_cached_tokens(cached: int | None) -> ChatCompletion:
+    """Build a buffered answer whose usage reports *cached* prompt tokens.
+
+    Args:
+        cached: Cached prompt tokens, or None for a usage block that carries
+            no cache detail at all, as a backend reading no cache returns.
+
+    Returns:
+        The complete chat completion.
+    """
+    usage: dict[str, Any] = {
+        "prompt_tokens": 30,
+        "completion_tokens": 4,
+        "total_tokens": 34,
+    }
+    if cached is not None:
+        usage["prompt_tokens_details"] = {"cached_tokens": cached}
+    return ChatCompletion.model_validate(
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "m",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "hi"},
+                }
+            ],
+            "usage": usage,
+        }
+    )
+
+
+async def _stream_with_cached_tokens(
+    cached: int | None,
+) -> AsyncGenerator[ServerSentEvent]:
+    """Serialize a one-token stream whose trailing chunk reports the cache read.
+
+    Args:
+        cached: Cached prompt tokens, or None for a usage block that carries
+            no cache detail at all.
+
+    Yields:
+        The content chunk, the usage chunk, then the terminal ``[DONE]``.
+    """
+    yield ServerSentEvent(
+        data=dumps({"choices": [{"index": 0, "delta": {"content": "hi"}}]})
+    )
+    usage: dict[str, Any] = {"prompt_tokens": 30, "completion_tokens": 4}
+    if cached is not None:
+        usage["prompt_tokens_details"] = {"cached_tokens": cached}
+    yield ServerSentEvent(data=dumps({"choices": [], "usage": usage}))
+    yield ServerSentEvent(data="[DONE]")
+
+
+@pytest.mark.usefixtures("request_time")
+@pytest.mark.parametrize("translate", _BUFFERED_TRANSLATIONS)
+def test_a_buffered_answer_reports_the_prompt_tokens_read_from_the_cache(
+    translate: BufferedTranslation,
+) -> None:
+    """A cache read reaches an Ollama client as ``prompt_eval_cached_count``.
+
+    Ollama carries the field on the shared metrics block, so both inference
+    endpoints report it, and it is a subset of ``prompt_eval_count`` rather
+    than an addition to it -- upstream's own count includes the cached tokens.
+    Without it a client cannot tell a cached prompt from an uncached one, while
+    the same request on the OpenAI dialect reports the number.
+
+    Ref: https://docs.ollama.com/openapi.yaml (ChatResponse, GenerateResponse)
+         stdapi/models/chat/_adapters/_ollama.py:_completion_metrics
+    """
+    answer = translate(_completion_with_cached_tokens(12), "m")
+
+    assert answer.prompt_eval_cached_count == 12
+    assert answer.prompt_eval_count == 30
+
+
+@pytest.mark.usefixtures("request_time")
+@pytest.mark.parametrize("translate", _BUFFERED_TRANSLATIONS)
+@pytest.mark.parametrize("cached", [0, None])
+def test_a_buffered_answer_omits_an_unread_cache(
+    translate: BufferedTranslation, cached: int | None
+) -> None:
+    """No cache read means no field, not a zero.
+
+    The metrics block omits every measurement the gateway does not have, and a
+    Converse-served model never reads a cache on this route, so reporting zero
+    would publish a measurement upstream reserves for a real one.
+
+    Ref: https://docs.ollama.com/openapi.yaml (prompt_eval_cached_count, omitempty)
+         stdapi/models/chat/_adapters/_ollama.py:_completion_metrics
+    """
+    answer = translate(_completion_with_cached_tokens(cached), "m")
+
+    assert answer.prompt_eval_cached_count is None
+    assert "prompt_eval_cached_count" not in answer.model_dump(exclude_none=True)
+
+
+@pytest.mark.usefixtures("request_time")
+@pytest.mark.parametrize("translate", _STREAM_TRANSLATIONS)
+@pytest.mark.parametrize(("cached", "expected"), [(12, 12), (0, None), (None, None)])
+async def test_a_streamed_answer_reports_the_prompt_tokens_read_from_the_cache(
+    translate: StreamTranslation, cached: int | None, expected: int | None
+) -> None:
+    """The terminal event carries the cache read the trailing usage chunk gave.
+
+    A streamed answer reports its counts only on the last event, so a client
+    that never sees the field there never sees it at all.
+
+    Ref: https://docs.ollama.com/openapi.yaml (GenerateStreamEvent)
+         stdapi/models/chat/_adapters/_ollama.py:_StreamState.collect
+    """
+    events = [
+        event async for event in translate(_stream_with_cached_tokens(cached), "m")
+    ]
+
+    terminal = events[-1]
+    assert terminal["done"] is True
+    assert terminal.get("prompt_eval_cached_count") == expected
+    assert terminal["prompt_eval_count"] == 30

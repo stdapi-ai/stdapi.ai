@@ -77,20 +77,40 @@ WEATHER_TOOL: dict[str, Any] = {
     },
 }
 
+#: Tool whose result is an image, as an agent handing back a screenshot sends it.
+SCREENSHOT_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "take_screenshot",
+        "description": "Take a screenshot of the screen.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
 
-def _red_square_png() -> bytes:
-    """Build a plain red PNG, small enough to send inline and easy to describe.
+
+def _square_png(rgb: tuple[int, int, int]) -> bytes:
+    """Build a plain single-colour PNG, small enough to send inline.
+
+    Args:
+        rgb: The colour to fill the square with.
 
     Returns:
         The image bytes; the client base64-encodes them itself.
     """
     buffer = BytesIO()
-    PILImage.new("RGB", (64, 64), (255, 0, 0)).save(buffer, format="PNG")
+    PILImage.new("RGB", (64, 64), rgb).save(buffer, format="PNG")
     return buffer.getvalue()
 
 
 #: The image the vision test sends.
-RED_SQUARE_PNG = _red_square_png()
+RED_SQUARE_PNG = _square_png((255, 0, 0))
+
+#: One square per colour name, so a vision assertion can name the wrong answer.
+#: A test sending only one colour passes on a model that always says that colour.
+SQUARE_BY_COLOUR: dict[str, bytes] = {
+    "red": RED_SQUARE_PNG,
+    "blue": _square_png((0, 0, 255)),
+}
 
 
 def ndjson_lines(response: httpx.Response) -> list[dict[str, Any]]:
@@ -482,6 +502,61 @@ def test_chat_reads_an_image(
     )
     assert answer.message.content
     assert "red" in answer.message.content.lower()
+
+
+@pytest.mark.parametrize("colour", sorted(SQUARE_BY_COLOUR))
+def test_chat_reads_an_image_a_tool_returned(
+    ollama_client: ollama.Client, ollama_vision_model: str, colour: str
+) -> None:
+    """A screenshot returned as a tool result reaches the model, not just its text.
+
+    ``images`` is a field of every Ollama message, and an agent handing back a
+    screenshot is the case that matters: the model used to answer from the tool
+    text alone while the image was dropped without a word.
+
+    Both colours are sent because one colour proves nothing here -- a model
+    answering from the prompt alone said "red" whichever square it was given,
+    so the answer is also asserted not to name the colour that was not sent.
+    ``temperature`` is pinned because the sampling is noise against that claim:
+    at the model default, one answer in five wandered into "I cannot analyse
+    images" on a request whose image the model does read.
+
+    Ref: https://docs.ollama.com/openapi.yaml (ChatMessage.images)
+         stdapi/models/chat/_adapters/_ollama.py:_map_messages
+    """
+    answer = ollama_client.chat(
+        model=ollama_vision_model,
+        messages=[
+            ollama.Message(
+                role="user",
+                content=("Take a screenshot, then say what colour it is in one word."),
+            ),
+            ollama.Message(
+                role="assistant",
+                content="",
+                tool_calls=[
+                    ollama.Message.ToolCall(
+                        function=ollama.Message.ToolCall.Function(
+                            name="take_screenshot", arguments={}
+                        )
+                    )
+                ],
+            ),
+            ollama.Message(
+                role="tool",
+                tool_name="take_screenshot",
+                content="Here is the screenshot.",
+                images=[ollama.Image(value=SQUARE_BY_COLOUR[colour])],
+            ),
+        ],
+        tools=[SCREENSHOT_TOOL],
+        options={"temperature": 0},
+        stream=False,
+    )
+    assert answer.message.content
+    said = answer.message.content.lower()
+    assert colour in said
+    assert not any(other in said for other in SQUARE_BY_COLOUR if other != colour)
 
 
 @pytest.mark.gateway("A Bedrock model ID carries a colon, which Ollama Cloud's do not")

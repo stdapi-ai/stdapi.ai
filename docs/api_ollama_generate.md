@@ -75,6 +75,7 @@ Send the model names [`GET /api/tags`](api_ollama_models.md#get-apitags) publish
 | `context`                         | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Never returned — see [Fields Not Available](#fields-not-available) |
 | **Usage tracking**                |                                          |                                                                    |
 | `prompt_eval_count`, `eval_count` |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Real token counts                                                   |
+| `prompt_eval_cached_count`        |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Reported only when the backend read a prompt cache; a subset of `prompt_eval_count`, which already includes it |
 | `total_duration`                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Real wall-clock time                                                |
 | `load_duration`                   | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Never reported — there is no model-loading phase to measure         |
 | `prompt_eval_duration`, `eval_duration` |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Reported only when streaming, measured from the stream itself; omitted on a non-streaming response |

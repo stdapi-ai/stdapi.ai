@@ -628,6 +628,20 @@ class ChatCompletionToolMessageParam(BaseModelRequest):
     tool_call_id: str = Field(description="Tool call this message responds to.")
 
 
+class ToolMessageWithImages(ChatCompletionToolMessageParam):
+    """Tool message whose result carries images, built by an adapter only.
+
+    Amazon Bedrock's ``ToolResultContentBlock`` holds an image natively, and the
+    Anthropic and Ollama dialects both let a tool return one. OpenAI's own tool
+    message is text-only, so this stays out of ``ChatCompletionMessageParam``:
+    it never reaches the public request schema, and no client can send one.
+    """
+
+    images: list[ChatCompletionContentPartImageParam] = Field(
+        description="Images the tool returned, sent inside the tool result."
+    )
+
+
 # Ref: openai.types.chat.chat_completion_function_message_param.ChatCompletionFunctionMessageParam
 class ChatCompletionFunctionMessageParam(BaseModelRequest):
     """Function role message."""
