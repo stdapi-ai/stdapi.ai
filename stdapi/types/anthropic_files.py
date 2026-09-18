@@ -22,6 +22,13 @@ class FileMetadata(BaseModelResponse):
     created_at: str = Field(
         description="RFC 3339 datetime string representing when the file was created."
     )
+    expires_at: str | None = Field(
+        default=None,
+        description=(
+            "RFC 3339 datetime string representing when the file will expire, "
+            "or `null` if the file does not have an expiry."
+        ),
+    )
     downloadable: bool = Field(
         default=True, description="Whether the file can be downloaded."
     )
@@ -74,4 +81,13 @@ class AnthropicFileUploadJsonBody(BaseModelRequest):
             "HTTPS URL, or S3 URI (``s3://bucket/key``). "
             "The server auto-detects the encoding and MIME type."
         )
+    )
+    expires_in_seconds: int | None = Field(
+        default=None,
+        ge=3600,
+        le=7776000,
+        description=(
+            "Seconds from upload until the file expires (1 hour to 90 days). "
+            "Omit to keep the file until it is manually deleted."
+        ),
     )

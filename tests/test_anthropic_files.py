@@ -7,10 +7,12 @@ implements ``/v1/files`` itself on S3. Only the payload field names
 including files being downloadable, which upstream refuses for uploaded files — are
 gateway behavior.
 
-Anthropic's upload accepts no ``expires_after``, so expiry is covered here only
-for the listing, which shares its namespace — and its storage layer — with the
-OpenAI route that does set expiries; expired retrieval is exercised through
-``TestOpenAIFiles.test_expired_file_returns_404`` instead.
+Anthropic's upload accepts ``expires_in_seconds`` (1 hour to 90 days), reported
+back as ``expires_at`` on every response, null when the file has no TTL; both
+surfaces share one namespace and one storage layer, so a file expired through
+either route disappears from both — expired retrieval itself is exercised
+through ``TestOpenAIFiles.test_expired_file_returns_404`` rather than repeated
+here.
 
 Ref: https://platform.claude.com/docs/en/build-with-claude/files
      stdapi/routes/anthropic_files.py:upload
@@ -137,6 +139,7 @@ class TestAnthropicFiles:
         )
         assert result.mime_type == "application/pdf"
         assert result.filename == "test.pdf"
+        assert result.expires_at is None, "no TTL was requested"
 
     def test_get_metadata(
         self,
@@ -157,6 +160,7 @@ class TestAnthropicFiles:
         assert retrieved.filename == uploaded.filename
         assert retrieved.mime_type == uploaded.mime_type
         assert retrieved.created_at == uploaded.created_at
+        assert retrieved.expires_at == uploaded.expires_at is None
 
     # --- List ---
 
@@ -601,12 +605,176 @@ class TestAnthropicFilesJsonBody:
         assert body["type"] == "file"
         assert body["size_bytes"] == len(b"Hello World")
         assert body["mime_type"].startswith("text/")
+        assert "expires_at" in body, "upstream always carries the `expires_at` key"
+        assert body["expires_at"] is None
         # Clean up: use the Anthropic client to delete
         delete_response = http_client.delete(
             f"{anthropic_client.base_url}v1/files/{body['id']}",
             headers={"Authorization": f"Bearer {openai_client.api_key}"},
         )
         assert delete_response.status_code == 200
+
+
+class TestAnthropicFilesExpiry:
+    """``expires_in_seconds`` on upload and ``expires_at`` on every response.
+
+    Upstream accepts ``expires_in_seconds`` (3600-7776000, one hour to ninety
+    days) on both the multipart and JSON-body upload, and always reports
+    ``expires_at`` — an RFC 3339 string, null when the file has no TTL.
+
+    Ref: https://platform.claude.com/docs/en/api/files
+         stdapi/resources/beta/files.py:upload
+         stdapi/routes/anthropic_files.py:upload
+         stdapi/routes/anthropic_files.py:_to_file_metadata
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_on_bedrock(self, is_bedrock_direct: bool) -> None:
+        """Skip every test in this class when running against AWS Bedrock directly."""
+        if is_bedrock_direct:
+            pytest.skip("Files API not available on Bedrock")
+
+    def test_upload_with_expires_in_seconds_reports_expires_at(
+        self, anthropic_client: Anthropic
+    ) -> None:
+        """A multipart upload's ``expires_in_seconds`` is honoured and echoed back.
+
+        Ref: stdapi/files/_core.py:upload_file
+        """
+        result = anthropic_client.beta.files.upload(
+            file=("expire.txt", io.BytesIO(_TEXT_FILE), "text/plain"),
+            expires_in_seconds=3600,
+        )
+        try:
+            assert result.expires_at is not None
+            assert result.expires_at > datetime.now(UTC)
+            delta = (result.expires_at - result.created_at).total_seconds()
+            assert abs(delta - 3600) <= 60, (
+                f"expires_at {result.expires_at} is not created_at "
+                f"{result.created_at} plus the requested 3600s TTL"
+            )
+        finally:
+            anthropic_client.beta.files.delete(result.id)
+
+    def test_retrieve_reports_the_same_expires_at_as_upload(
+        self, anthropic_client: Anthropic
+    ) -> None:
+        """Retrieving a file with a TTL reports the same ``expires_at`` the upload did.
+
+        Ref: stdapi/routes/anthropic_files.py:retrieve_file
+        """
+        uploaded = anthropic_client.beta.files.upload(
+            file=("expire2.txt", io.BytesIO(_TEXT_FILE), "text/plain"),
+            expires_in_seconds=3600,
+        )
+        try:
+            retrieved = anthropic_client.beta.files.retrieve_metadata(uploaded.id)
+            assert retrieved.expires_at == uploaded.expires_at
+        finally:
+            anthropic_client.beta.files.delete(uploaded.id)
+
+    def test_expires_in_seconds_below_minimum_rejected(
+        self, anthropic_client: Anthropic
+    ) -> None:
+        """A TTL below the 1-hour minimum is rejected with a 400.
+
+        Ref: https://platform.claude.com/docs/en/api/files
+             stdapi/routes/anthropic_files.py:upload
+        """
+        with pytest.raises(BadRequestError) as exc_info:
+            anthropic_client.beta.files.upload(
+                file=("bad_expiry_min.txt", io.BytesIO(_TEXT_FILE), "text/plain"),
+                expires_in_seconds=3599,
+            )
+        message = str(exc_info.value).lower()
+        assert "3600" in message or "hour" in message, message
+
+    def test_expires_in_seconds_above_maximum_rejected(
+        self, anthropic_client: Anthropic
+    ) -> None:
+        """A TTL above the 90-day maximum is rejected with a 400.
+
+        Ref: https://platform.claude.com/docs/en/api/files
+             stdapi/routes/anthropic_files.py:upload
+        """
+        with pytest.raises(BadRequestError) as exc_info:
+            anthropic_client.beta.files.upload(
+                file=("bad_expiry_max.txt", io.BytesIO(_TEXT_FILE), "text/plain"),
+                expires_in_seconds=7_776_001,
+            )
+        message = str(exc_info.value).lower()
+        assert "7776000" in message or "day" in message, message
+
+    def test_json_body_expires_in_seconds_is_honoured(
+        self, openai_client: OpenAI, anthropic_client: Anthropic
+    ) -> None:
+        """The JSON-body upload accepts ``expires_in_seconds`` like the multipart one does.
+
+        Ref: stdapi/types/anthropic_files.py:AnthropicFileUploadJsonBody
+        """
+        http_client = openai_client._client  # noqa: SLF001
+        response = http_client.post(
+            f"{anthropic_client.base_url}v1/files",
+            json={
+                "file": "data:text/plain;base64,SGVsbG8gV29ybGQ=",
+                "expires_in_seconds": 3600,
+            },
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        try:
+            assert body["expires_at"] is not None
+        finally:
+            http_client.delete(
+                f"{anthropic_client.base_url}v1/files/{body['id']}",
+                headers={"Authorization": f"Bearer {openai_client.api_key}"},
+            )
+
+    def test_json_body_expires_in_seconds_out_of_range_rejected(
+        self, openai_client: OpenAI, anthropic_client: Anthropic
+    ) -> None:
+        """The JSON-body upload rejects an out-of-range ``expires_in_seconds`` with a 400.
+
+        Ref: stdapi/types/anthropic_files.py:AnthropicFileUploadJsonBody
+        """
+        http_client = openai_client._client  # noqa: SLF001
+        response = http_client.post(
+            f"{anthropic_client.base_url}v1/files",
+            json={
+                "file": "data:text/plain;base64,SGVsbG8gV29ybGQ=",
+                "expires_in_seconds": 100,
+            },
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
+        )
+        assert response.status_code == 400, response.text
+        assert "expires_in_seconds" in response.json()["error"]["message"]
+
+    def test_cross_surface_expiry_reports_the_same_instant(
+        self, openai_client: OpenAI, anthropic_client: Anthropic
+    ) -> None:
+        """A file expiring set through the OpenAI route reports that same instant here.
+
+        Both surfaces read the same S3 object metadata, so a TTL set through
+        ``expires_after`` on the OpenAI upload must convert to the identical
+        ``expires_at`` instant on the Anthropic retrieve route.
+
+        Ref: stdapi/files/_core.py:upload_file
+             stdapi/routes/anthropic_files.py:_to_file_metadata
+        """
+        created = openai_client.files.create(
+            file=("cross.txt", io.BytesIO(_TEXT_FILE), "text/plain"),
+            purpose="assistants",
+            extra_body={"expires_after": {"anchor": "created_at", "seconds": 3600}},
+        )
+        try:
+            assert created.expires_at is not None
+            payload = created.id.split("-", 1)[1]
+            retrieved = anthropic_client.beta.files.retrieve_metadata(f"file_{payload}")
+            assert retrieved.expires_at is not None
+            assert int(retrieved.expires_at.timestamp()) == created.expires_at
+        finally:
+            openai_client.files.delete(created.id)
 
 
 class TestAnthropicFilesJsonBodySources:
@@ -634,7 +802,9 @@ class TestAnthropicFilesJsonBodySources:
         monkeypatch.setattr(SETTINGS, "aws_s3_bucket", "test-bucket")
         recorded: list[InputFile] = []
 
-        async def _fake_upload_file(file: InputFile, *_args: object) -> FileRecord:
+        async def _fake_upload_file(
+            file: InputFile, *_args: object, **_kwargs: object
+        ) -> FileRecord:
             recorded.append(file)
             return FileRecord(
                 file_id="a" * 32,

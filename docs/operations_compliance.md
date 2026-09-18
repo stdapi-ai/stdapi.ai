@@ -292,7 +292,7 @@ S3 holds two kinds of data, both only in buckets you own and configure: transien
 
     | Object class | Prefix | Default retention |
     |---|---|---|
-    | [Files API](api_openai_files.md) objects | `AWS_S3_FILES_PREFIX`, default `files/` | Until deleted through the API; the module expires objects the API tagged as expiring after 30 days |
+    | [Files API](api_openai_files.md) objects | `AWS_S3_FILES_PREFIX`, default `files/` | Until deleted through the API; the module expires objects the API tagged as expiring after 30 days. A TTL beyond 30 days — reachable only via the [Anthropic Files API](api_anthropic_files.md)'s `expires_in_seconds` — is enforced by the API alone: the object is not tagged, so its bytes can outlive expiry in storage until something reads the file again |
     | Generated [videos](api_openai_videos.md) | `AWS_S3_VIDEOS_PREFIX`, default `videos/` | Until deleted through the API — no expiry unless `AWS_S3_VIDEOS_EXPIRES_AFTER` is set, which also creates a matching lifecycle rule |
     | [Batch API](api_openai_batches.md) requests, results and records | `AWS_S3_BATCHES_PREFIX`, default `batches/` | Until deleted; no lifecycle rule (Batch API is opt-in) |
     | [Vector Stores](api_openai_vector_stores.md) stores, files and file batches | `AWS_S3_VECTOR_STORES_PREFIX`, default `vector_stores/` | Until deleted; no lifecycle rule (Vector Stores API is opt-in) |

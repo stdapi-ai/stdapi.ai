@@ -85,6 +85,9 @@ _FILE_ID_RE = re_compile(FILE_ID_PATTERN).match
 #: The feature name a caller reads when no bucket backs the Files API.
 _FEATURE: str = "The Files API"
 
+#: Longest expiry the Terraform module's S3 Lifecycle rule sweeps; a longer TTL is enforced by the API alone, so its bytes can outlive expiry until something reads the file again.
+_LIFECYCLE_SWEEP_MAX_SECONDS: int = 2592000
+
 
 @dataclass(slots=True)
 class FileRecord:
@@ -341,9 +344,11 @@ async def upload_file(
     """Stream *file* to S3 and return its metadata record.
 
     Metadata is encoded in native S3 object attributes — no database needed.
-    When *expires_after* is set, the object is tagged with
+    When *expires_after* is set and does not exceed
+    :data:`_LIFECYCLE_SWEEP_MAX_SECONDS`, the object is also tagged with
     :data:`EXPIRING_S3_TAG_KEY` for Lifecycle rule cleanup; code-level expiry
-    is enforced by both :func:`get_file` and :func:`list_files`.
+    is enforced by both :func:`get_file` and :func:`list_files` regardless of
+    the tag.
 
     Args:
         file: Input file with content and optional filename / content type.
@@ -389,7 +394,7 @@ async def upload_file(
     )
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
     head = await s3.head_object(Bucket=bucket, Key=s3_key)
-    if expires_at is not None:
+    if expires_after is not None and expires_after <= _LIFECYCLE_SWEEP_MAX_SECONDS:
         await s3.put_object_tagging(
             Bucket=bucket, Key=s3_key, Tagging={"TagSet": EXPIRING_S3_TAG_SET}
         )

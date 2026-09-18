@@ -3,10 +3,11 @@
 from asyncio import gather
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from contextlib import suppress
+from datetime import UTC, datetime
 from re import compile as re_compile
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Path, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Path, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import AfterValidator, StringConstraints
 
@@ -42,6 +43,12 @@ _CONTENT_DOWNLOAD_HEADERS = {
 
 #: Most unique IDs one listing request may name, per the Anthropic Files API.
 _MAX_LIST_IDS: int = 100
+
+#: Minimum accepted value (seconds) for `expires_in_seconds` on upload (1 hour).
+_EXPIRES_IN_SECONDS_MIN: int = 3600
+
+#: Maximum accepted value (seconds) for `expires_in_seconds` on upload (90 days, matching upstream).
+_EXPIRES_IN_SECONDS_MAX: int = 7776000
 
 
 def _strip(fid: str) -> str:
@@ -148,6 +155,13 @@ def _to_file_metadata(record: FileRecord) -> FileMetadata:
         created_at=record.created_at.isoformat(timespec="seconds").replace(
             "+00:00", "Z"
         ),
+        expires_at=(
+            datetime.fromtimestamp(record.expires_at, UTC)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+            if record.expires_at is not None
+            else None
+        ),
         downloadable=True,
     )
 
@@ -170,10 +184,10 @@ def _to_file_metadata(record: FileRecord) -> FileMetadata:
         '`{"file": "data:text/plain;base64,SGVsbG8h"}`. '
         "To ingest a remote file pass its URL: "
         '`{"file": "https://example.com/document.pdf"}`.\n\n'
-        "**File expiry:** Files persist until manually deleted unless an expiry is configured."
+        "**File expiry:** Files persist until manually deleted unless `expires_in_seconds` "
+        "is set (1 hour to 90 days from upload)."
     ),
     response_description="The file metadata.",
-    response_model_exclude_none=True,
     openapi_extra={
         "requestBody": {
             "content": {
@@ -206,6 +220,17 @@ async def upload(
             )
         ),
     ] = None,
+    expires_in_seconds: Annotated[
+        int | None,
+        Form(
+            ge=_EXPIRES_IN_SECONDS_MIN,
+            le=_EXPIRES_IN_SECONDS_MAX,
+            description=(
+                "Seconds from upload until the file expires (1 hour to 90 days). "
+                "Omit to keep the file until it is manually deleted."
+            ),
+        ),
+    ] = None,
     _: Annotated[None, Depends(authenticate)] = None,
 ) -> FileMetadata:
     """Upload a file.
@@ -224,11 +249,19 @@ async def upload(
             body = AnthropicFileUploadJsonBody.model_validate_json(
                 await http_request.body()
             )
-        return log_response_params(_to_file_metadata(await upload_file(body.file)))
+        return log_response_params(
+            _to_file_metadata(
+                await upload_file(body.file, expires_after=body.expires_in_seconds)
+            )
+        )
     if file is None:
         missing_file_error()
     log_request_params({"filename": file.filename})
-    return log_response_params(_to_file_metadata(await upload_file(InputFile(file))))
+    return log_response_params(
+        _to_file_metadata(
+            await upload_file(InputFile(file), expires_after=expires_in_seconds)
+        )
+    )
 
 
 async def _visible_file(payload: str) -> FileRecord | None:
@@ -425,7 +458,6 @@ async def list_files_endpoint(
     operation_id="anthropic_files_get",
     description="Returns metadata (name, size, MIME type, creation date) for a specific file by ID (Anthropic Files API).",
     response_description="The file metadata.",
-    response_model_exclude_none=True,
 )
 async def retrieve_file(
     file_id: _FileId, _: Annotated[None, Depends(authenticate)] = None

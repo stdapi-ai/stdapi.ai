@@ -17,7 +17,7 @@ Upload and manage files via an Anthropic-compatible interface. Files are stored 
 - :material-file-document-multiple: **Messages integration** — Reference uploaded files directly in Messages requests as document or image source blocks using `"type": "file"`.
 - :material-download: **Content download** — Download raw file bytes at any time via the `/content` endpoint.
 - :material-database: **One file store for both dialects** — a file uploaded here is readable and deletable through the [OpenAI Files API](api_openai_files.md), and vice versa; both are backed by the same S3 bucket.
-- :material-swap-horizontal: **Differs from the Anthropic API:** no file size cap beyond S3's ~5 TB object limit, `downloadable` is always `true`, `expires_after` is not implemented, and `scope_id` filtering is refused — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
+- :material-swap-horizontal: **Differs from the Anthropic API:** no file size cap beyond S3's ~5 TB object limit, `downloadable` is always `true`, and `scope_id` filtering is refused — see [Limits and behaviour to know](#limits-and-behaviour-to-know).
 
 !!! info "Base URL and route prefix"
     By default, all Anthropic-compatible routes are prefixed with `/anthropic`. This means the Files API is available at `/anthropic/v1/files` instead of `/v1/files`. You can customize this prefix using the `ANTHROPIC_ROUTES_PREFIX` configuration variable documented in [HTTP Server and MCP](operations_configuration_server.md#anthropic-routes-prefix).
@@ -55,6 +55,8 @@ curl -X POST "$BASE/v1/files" \
 | **Upload**               |                                          |                                                                  |
 | `file` (multipart)       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Required binary form field                                       |
 | `file` (JSON body)       | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents    |
+| `expires_in_seconds`     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 3 600 – 7 776 000 (1 hour – 90 days); omit for no expiry          |
+| `expires_at`             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | RFC 3339 string on every response; `null` when the file has no TTL |
 | **Listing**              |                                          |                                                                  |
 | Listing order            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Most recently created first, by `created_at`                     |
 | `ids` selection          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Up to 100 IDs after de-duplication, served as a single page      |
@@ -102,9 +104,24 @@ curl -X POST "$BASE/v1/files" \
   "mime_type": "application/pdf",
   "size_bytes": 102400,
   "created_at": "2025-04-15T12:00:00Z",
+  "expires_at": null,
   "downloadable": true
 }
 ```
+
+### Upload a File with an Expiry
+
+Add `expires_in_seconds` (3 600 – 7 776 000, one hour to ninety days) to have the file expire automatically instead of persisting until deleted:
+
+```bash
+curl -X POST "$BASE/v1/files" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-beta: files-api-2025-04-14" \
+  -F "file=@document.pdf;type=application/pdf" \
+  -F "expires_in_seconds=3600"
+```
+
+The response's `expires_at` carries the resulting instant as an RFC 3339 string. A file uploaded this way expires at the same time, and is refused the same way, whichever of the [OpenAI](api_openai_files.md) or Anthropic routes reads it afterwards.
 
 ### Upload via JSON Body (MCP and AI Agents)
 
@@ -323,7 +340,7 @@ Files are stored in S3 under the prefix configured by [`AWS_S3_FILES_PREFIX`](op
 
 **`downloadable` is always `true`.** Every file here is stored in S3 and readable through `/content`, so the field never carries the spec's `false` default for user-uploaded files.
 
-**There is no expiry.** The Anthropic surface has no `expires_after`; a file stays until it is deleted, or until an [S3 bucket lifecycle rule](operations_configuration_storage.md#s3-lifecycle) removes it. The [OpenAI Files API](api_openai_files.md) exposes `expires_after` on the same store.
+**Expiry is set with `expires_in_seconds`, enforced on both surfaces.** Pass `expires_in_seconds` (3 600 – 7 776 000, one hour to ninety days) on upload to have the file expire automatically; omit it to keep the file until it is deleted. Expiry is enforced in code on every read — through this route, through the [OpenAI Files API](api_openai_files.md), and as a `file-id:` reference in a Messages request — regardless of which surface set it, since both read the same S3 object. A TTL beyond 30 days is enforced this way alone: it outlives the [S3 bucket lifecycle rule](operations_configuration_storage.md#s3-lifecycle) that otherwise backs up the code-level check, so its bytes can remain in storage past expiry until something reads the file again.
 
 **`file-id:` is refused on upload.** `POST /v1/files` answers `400` for a `file-id:` input, because resolving it there would silently clone an existing file. It is accepted only on string-overloaded file fields — see [the URI scheme](#referencing-uploaded-files-via-the-file-id-uri-scheme).
 
@@ -334,6 +351,7 @@ Files are stored in S3 under the prefix configured by [`AWS_S3_FILES_PREFIX`](op
 | HTTP | Cause                                                                               |
 |------|-------------------------------------------------------------------------------------|
 | 400  | A filename over 500 characters once its path is dropped, or one carrying a double quote or a control character |
+| 400  | `expires_in_seconds` outside 3 600 – 7 776 000 (1 hour – 90 days)                   |
 | 400  | `file-id:` URI passed to the upload endpoint (`POST /v1/files`)                     |
 | 400  | Malformed ID after the `file-id:` prefix in a Messages content block                |
 | 400  | More than 100 distinct `ids` on a listing request, or an `ids` entry that is not a file ID |
