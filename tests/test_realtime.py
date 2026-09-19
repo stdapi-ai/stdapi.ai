@@ -1670,6 +1670,42 @@ class TestServerVadItemIdentifiers:
         assert transcribed == started
         assert len(set(started)) == 2, "each turn needs an item of its own"
 
+    def test_a_detected_turn_commits_itself_and_settles_its_item(
+        self, app_client: TestClient, fake_backend: type[_FakeModel]
+    ) -> None:
+        """A detected turn sends the commit and the item events a manual one sends.
+
+        The caller never sends the commit on the API's default turn mode, so a
+        client waiting for ``input_audio_buffer.committed`` -- or for the item
+        the turn became -- has nothing else to wait for. All three name the item
+        the speech events named.
+        """
+        events = self._speech_turns(app_client, fake_backend, transcribe=True)
+
+        stopped = [
+            event["item_id"]
+            for event in events
+            if event["type"] == "input_audio_buffer.speech_stopped"
+        ]
+        committed = [
+            event["item_id"]
+            for event in events
+            if event["type"] == "input_audio_buffer.committed"
+        ]
+        added = [
+            event["item"]["id"]
+            for event in events
+            if event["type"] == "conversation.item.added"
+        ]
+        settled = [
+            event["item"]["id"]
+            for event in events
+            if event["type"] == "conversation.item.done"
+        ]
+        assert committed == stopped, "the turn was detected but never committed"
+        assert added == stopped, "the committed turn became no conversation item"
+        assert settled == stopped, "the item of the turn never settled"
+
     def test_an_untranscribed_turn_does_not_lend_its_item_to_the_next_one(
         self, app_client: TestClient, fake_backend: type[_FakeModel]
     ) -> None:

@@ -1607,20 +1607,31 @@ class RealtimeSession:
         )
 
     async def _report_speech_stopped(self, offset_ms: int) -> None:
-        """Announce the end of a detected turn.
+        """Announce the end of a detected turn, and the item it commits to.
 
         Args:
             offset_ms: Where the speech ends in the caller's audio.
         """
+        item_id = self._pending_item or f"item_{uuid4().hex}"
+        self._pending_item = item_id
         await self._send_event(
             {
                 "type": "input_audio_buffer.speech_stopped",
                 "audio_end_ms": offset_ms,
-                "item_id": self._pending_item or "",
+                "item_id": item_id,
             }
         )
+        if item_id not in self._items:
+            # A detected turn commits itself, and is reported as one: only a
+            # caller that ended its own turn has already created the item.
+            await self._send_event(
+                {"type": "input_audio_buffer.committed", "item_id": item_id}
+            )
+            item = _Item(item_id, "user", [{"type": "input_audio", "transcript": None}])
+            await self._add_item(item)
+            await self._finish_item(item)
         if self._config.audio.input.transcription is None:
-            # Nothing else ends this turn, and the next one needs its own item.
+            # No transcript will fill the item, and the next turn needs its own.
             self._pending_item = None
 
     async def _report_input_transcript(self, text: str) -> None:

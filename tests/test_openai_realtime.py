@@ -897,25 +897,21 @@ class TestRealtimeSession:
         )
 
     @pytest.mark.slow
-    @pytest.mark.gateway(
-        "upstream sends input_audio_buffer.committed on a detected turn too, "
-        "which this asserts the absence of; see issue #274"
-    )
     async def test_a_silent_pause_ends_the_turn_and_the_answer_starts_itself(
         self,
         async_openai_client: AsyncOpenAI,
         realtime_model: str,
         sample_audio_pcm24: bytes,
     ) -> None:
-        """Default turn detection ends the turn on silence, with no commit sent.
+        """Default turn detection commits the turn itself and answers it.
 
         ``server_vad`` is the default of the API and what every voice framework
         leaves in place, yet every other spoken test here turns it off and ends
-        its turns by hand. Nothing is committed and no response is asked for:
-        the caller speaks, stops, and the only thing that can start an answer
-        is the backend noticing the silence. ``input_audio_buffer.committed``
-        must therefore be absent -- it is the event of the turn the caller ends
-        itself, and its presence would mean this test proved nothing.
+        its turns by hand. The caller commits nothing and asks for nothing: the
+        backend notices the silence, and reports the turn it took with the same
+        events a hand-ended one gets -- ``input_audio_buffer.committed``, then
+        the item added and done. A client waiting on any of them against a
+        detected turn would otherwise wait forever.
 
         Ref: https://developers.openai.com/api/reference/resources/realtime/server-events
              stdapi/realtime.py:RealtimeSession._report_speech_stopped
@@ -948,8 +944,18 @@ class TestRealtimeSession:
         ]
         assert "input_audio_buffer.speech_started" in kinds, kinds
         assert "input_audio_buffer.speech_stopped" in kinds, kinds
-        assert "input_audio_buffer.committed" not in kinds, (
-            f"the turn was committed rather than detected: {kinds}"
+        assert "input_audio_buffer.committed" in kinds, (
+            f"the detected turn was never committed: {kinds}"
+        )
+        assert "conversation.item.added" in kinds, kinds
+        assert kinds.index("input_audio_buffer.committed") < kinds.index(
+            "conversation.item.added"
+        ), f"the item was announced before the commit that takes the turn: {kinds}"
+        stopped = events[kinds.index("input_audio_buffer.speech_stopped")]
+        committed = events[kinds.index("input_audio_buffer.committed")]
+        assert committed.item_id == stopped.item_id, (
+            f"the commit names another turn than the one detected: "
+            f"{committed.item_id} != {stopped.item_id}"
         )
         assert events[-1].type == "response.done", kinds
         assert events[-1].response.output, (
