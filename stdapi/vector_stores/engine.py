@@ -718,6 +718,32 @@ async def _read_attached_files(
         raise
 
 
+def _refuse_unindexable(
+    store: StoreRecord, sources: Sequence[StoredFile], batch_id: str
+) -> None:
+    """Check the uploaded files against what the store's backend indexes.
+
+    A type the store cannot index is refused on the attach, as upstream refuses
+    it. A batch keeps reporting it on the file it belongs to instead, which is
+    how a batch reports everything that fails in it.
+
+    Args:
+        store: The store the files are attached to.
+        sources: The uploaded files being attached.
+        batch_id: The batch the files belong to, or ``""``.
+
+    Raises:
+        ApiError: When one of them is of a type the store cannot index (400).
+    """
+    if batch_id:
+        return
+    backend = backend_for(store)
+    for source in sources:
+        media_type = source.content_type.split(";", 1)[0].strip()
+        if not backend.capabilities.may_ingest(media_type):
+            raise ApiError(_unsupported_message(media_type, backend))
+
+
 async def attach_files(
     store: StoreRecord, pending: Sequence[PendingFile], *, batch_id: str
 ) -> list[FileRecord]:
@@ -735,8 +761,9 @@ async def attach_files(
         The created file records, in the order of *pending*.
 
     Raises:
-        ApiError: When one of the files does not exist (404), or the store has
-            expired and no longer has an index to write into (400).
+        ApiError: When one of the files does not exist (404), the store has
+            expired and no longer has an index to write into (400), or a file
+            attached on its own is of a type the store cannot index (400).
     """
     external = external_store_for(store)
     if external is not None:
@@ -754,6 +781,7 @@ async def attach_files(
         unique.setdefault(entry.file_id, entry)
     pending = list(unique.values())
     sources, existing_records = await _read_attached_files(store.id, pending)
+    _refuse_unindexable(store, sources, batch_id)
     records = [
         FileRecord(
             id=entry.file_id,

@@ -237,12 +237,15 @@ client around it.
 Files must be **text**: plain text, Markdown, source code, CSV, JSON, XML,
 YAML and anything else whose bytes decode as UTF-8 and whose content type is
 not a known binary one — a text file uploaded as `application/octet-stream` or
-`application/pdf` is refused on its content type, before its bytes are read.
+`application/pdf`, or under any `image/`, `audio/` or `video/` type, is refused
+on its content type, before its bytes are read.
 
-A file that is not text settles as `status="failed"` with
-`last_error.code="unsupported_file"`. The message names what **that** store
-indexes, and — when another kind of store would take the file as it stands —
-where to send it instead:
+A file that is not text is **refused by the attach itself**, with `400`: its
+content type settles the question before a byte is read, so there is nothing to
+poll for. A file attached in a batch is reported on the file instead, as
+`status="failed"` with `last_error.code="unsupported_file"`. Either way the
+message names what **that** store indexes, and — when another kind of store
+would take the file as it stands — where to send it instead:
 
 > This file type cannot be indexed by this vector store. It indexes text only.
 > Provide the content as a text file. A knowledge base store indexes this file
@@ -254,7 +257,7 @@ that produces Markdown from PDF and office formats.
 
 | `last_error.code` | Meaning                                                        |
 |-------------------|----------------------------------------------------------------|
-| `unsupported_file`| The file is not one this store indexes.                         |
+| `unsupported_file`| The file is not one this store indexes; the bytes are not what the content type claims, or the file was attached in a batch. |
 | `invalid_file`    | The file is text but holds nothing to index, or is too large.   |
 | `server_error`    | Indexing failed, or was interrupted; attach the file again.     |
 

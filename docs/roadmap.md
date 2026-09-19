@@ -75,6 +75,7 @@ This release is about being the API it claims to mirror. The bulk of it is a com
     - **A queued vector-store indexing job is refused for a tenant-credential key**, rather than running that tenant's embeddings on the deployment's AWS account. This matches the refusal batch jobs already carry, and is a [documented limitation](api_openai_vector_stores.md).
     - **A knowledge-base vector store served search-only refuses corpus deletion.** Any caller could previously delete documents from the underlying knowledge base through a store that was meant to read it.
     - **An expired Files API object is refused when referenced by `file_id`.** Expiry was honoured on every other path; a `file_id` input bypassed it and kept feeding inference until the storage lifecycle rule swept the bytes.
+    - **A file of a type a vector store cannot index is refused by the attach**, with a `400` naming what that store does index, where it was previously accepted and settled `failed` with `unsupported_file` a moment later. Image, audio and video types are now unindexable on their content type alone, as the archive and office types already were, which is what the official API answers. A file attached in a **batch** is still reported on the file, as a batch reports everything that fails in it, and a file whose bytes turn out not to be what its content type claims still settles `failed`.
 
 #### :material-api: New API Features
 

@@ -115,6 +115,8 @@ class IndexCapabilities:
             beyond text.
         refused_media_types: Media types that are never indexable text, refused
             before their bytes are read.
+        refused_media_type_families: Top-level types — ``image``, ``audio`` — no
+            member of which is indexable text, refused the same way.
         ingests_decodable_text: Whether any payload that decodes as text is
             indexed, whatever its media type.
         chunks_on_ingestion: Whether the backend chooses the passage boundaries
@@ -135,6 +137,7 @@ class IndexCapabilities:
     chunks_on_ingestion: bool
     normalised_score: bool
     max_chunk_bytes: int
+    refused_media_type_families: frozenset[str] = frozenset()
 
     def may_ingest(self, media_type: str) -> bool:
         """Whether a payload of *media_type* is worth reading at all.
@@ -147,6 +150,8 @@ class IndexCapabilities:
             still refuses bytes that turn out not to be text.
         """
         if media_type in self.refused_media_types:
+            return False
+        if media_type.split("/", 1)[0] in self.refused_media_type_families:
             return False
         return self.ingests_decodable_text or media_type in self.ingested_media_types
 

@@ -123,6 +123,9 @@ _BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset(
     }
 )
 
+#: Top-level types holding no member this backend could index as text.
+_BINARY_CONTENT_FAMILIES: Final[frozenset[str]] = frozenset({"audio", "image", "video"})
+
 #: What this backend can express, as the engine reads it.
 _CAPABILITIES: Final = IndexCapabilities(
     filter_operators=frozenset(_FILTER_OPERATORS),
@@ -130,6 +133,7 @@ _CAPABILITIES: Final = IndexCapabilities(
     # Nothing is ingested as a document: the passages are text this server cut.
     ingested_media_types=frozenset(),
     refused_media_types=_BINARY_CONTENT_TYPES,
+    refused_media_type_families=_BINARY_CONTENT_FAMILIES,
     ingests_decodable_text=True,
     chunks_on_ingestion=False,
     normalised_score=True,

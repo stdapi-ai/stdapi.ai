@@ -30,7 +30,7 @@ import pytest
 from botocore.exceptions import ClientError
 from botocore.session import get_session as botocore_session
 from fastapi.exceptions import RequestValidationError
-from openai import NotFoundError, OpenAI
+from openai import BadRequestError, NotFoundError, OpenAI
 from pydantic import ValidationError
 from pydantic_core import from_json
 
@@ -1279,7 +1279,9 @@ class _FakeBackend:
         if payload not in self.uploads:
             msg = f"No file found with id 'file-{payload}'."
             raise ApiError(msg, status=404)
-        return SimpleNamespace(filename=f"{payload}.txt")
+        return SimpleNamespace(
+            filename=f"{payload}.txt", content_type=self.uploads[payload][1]
+        )
 
     async def get_file_content(self, payload: str) -> tuple[Any, str]:
         """Return the uploaded file's content as the Files API streams it."""
@@ -2068,33 +2070,28 @@ class TestFileAttachment:
                 "file-" + "0" * 32, vector_store_id=empty_store
             )
 
-    @pytest.mark.gateway(
-        "upstream refuses the attach itself for an unsupported extension, so no "
-        "file ever settles; see issue #275"
-    )
-    def test_non_text_file_fails_with_unsupported_file(
+    def test_non_text_file_is_refused_on_attach(
         self, empty_store: str, openai_client: OpenAI
     ) -> None:
-        """A file whose bytes are not text settles as ``failed``/``unsupported_file``.
+        """A file of a type the store cannot index is refused by the attach itself.
 
-        Ref: openai.types.vector_stores.vector_store_file.LastError
+        The type is known before a byte is read, so the refusal is the answer
+        to the attach rather than an outcome the caller has to poll for, and
+        nothing is left attached to a store that will never index it.
+
+        Ref: https://platform.openai.com/docs/api-reference/vector-stores-files/createFile
         """
         file_id = openai_client.files.create(
             file=("picture.png", red_png(), "image/png"), purpose="assistants"
         ).id
         try:
-            openai_client.vector_stores.files.create(
-                vector_store_id=empty_store, file_id=file_id
-            )
-            settled = _wait_for_file(openai_client, empty_store, file_id)
-            assert settled.status == "failed"
-            assert settled.last_error is not None
-            assert settled.last_error.code == "unsupported_file"
-            # The store must settle too, or it stays `in_progress` for good.
-            store = _wait_for_store(openai_client, empty_store, files=1)
-            assert store.status == "completed"
-            assert store.file_counts.failed == 1
-            assert store.file_counts.in_progress == 0
+            with pytest.raises(BadRequestError):
+                openai_client.vector_stores.files.create(
+                    vector_store_id=empty_store, file_id=file_id
+                )
+            assert not list(openai_client.vector_stores.files.list(empty_store))
+            store = openai_client.vector_stores.retrieve(empty_store)
+            assert store.file_counts.total == 0, store.file_counts
             assert store.usage_bytes == 0
         finally:
             openai_client.files.delete(file_id)
@@ -3157,17 +3154,21 @@ class TestIndexingOffline:
         assert settled.file_counts.failed == 1
         assert settled.status == "completed"
 
-    async def test_a_non_text_file_fails_and_the_store_still_settles(
+    async def test_a_non_text_file_in_a_batch_fails_and_the_store_still_settles(
         self, vector_backend: _FakeBackend
     ) -> None:
         """A file that is not text settles ``failed`` and leaves no store in progress.
 
+        A batch reports what it cannot index on the file it belongs to, where a
+        file attached on its own is refused by the attach itself.
+
         Ref: openai.types.vector_stores.vector_store_file.LastError
         """
         store = await _create_store()
+        batch_id = new_batch_id()
         file_id = vector_backend.upload(red_png(), "image/png")
-        await _attach(store, [file_id])
-        await index_files(store.id, [file_id], "", "test-request")
+        await _attach(store, [file_id], batch_id=batch_id)
+        await index_files(store.id, [file_id], batch_id, "test-request")
 
         record = await read_file(store.id, file_id)
         assert record.status == "failed"
@@ -3284,7 +3285,8 @@ class TestIndexingOffline:
         await index_files(store.id, [file_id], "", "test-request")
         assert vector_backend.vectors.indexes[index_name(store.id)]
 
-        vector_backend.uploads[file_id[5:]] = (red_png(), "image/png")
+        # Bytes the attach cannot judge: the content type says text, they are not.
+        vector_backend.uploads[file_id[5:]] = (red_png(), "text/plain")
         await _attach(store, [file_id])
         await index_files(store.id, [file_id], "", "test-request")
         assert (await read_file(store.id, file_id)).status == "failed"
@@ -3956,29 +3958,27 @@ class TestBackendCapabilities:
         # The default strategy is still accepted, so the store can be created.
         assert app_client.post("/v1/vector_stores", json={}).status_code == 200
 
-    async def test_a_media_type_the_backend_refuses_settles_as_unsupported_file(
+    async def test_a_media_type_the_backend_refuses_is_refused_on_attach(
         self, fake_index: Callable[..., _FakeVectorIndex], vector_backend: _FakeBackend
     ) -> None:
         """The refused-format list is the backend's, not the engine's.
 
-        Ref: openai.types.vector_stores.vector_store_file.LastError
+        Ref: stdapi/vector_stores/engine.py:attach_files
         """
         fake_index(refused_media_types=frozenset({"text/csv"}))
         store = await _create_store()
         file_id = vector_backend.upload(b"a,b\n1,2\n", "text/csv")
-        await _attach(store, [file_id])
-        await index_files(store.id, [file_id], "", "test-request")
-        record = await read_file(store.id, file_id)
-        assert record.status == "failed"
-        assert record.last_error is not None
-        assert record.last_error.code == "unsupported_file"
+        with pytest.raises(ApiError) as refused:
+            await _attach(store, [file_id])
+        assert refused.value.status == 400
+        assert (await read_store(store.id)).file_counts.total == 0
 
     async def test_a_backend_taking_no_text_refuses_a_text_file(
         self, fake_index: Callable[..., _FakeVectorIndex], vector_backend: _FakeBackend
     ) -> None:
         """A backend ingesting only named formats refuses everything else.
 
-        Ref: openai.types.vector_stores.vector_store_file.LastError
+        Ref: stdapi/vector_stores/backend.py:IndexCapabilities.may_ingest
         """
         fake_index(
             ingests_decodable_text=False,
@@ -3987,12 +3987,10 @@ class TestBackendCapabilities:
         )
         store = await _create_store()
         file_id = vector_backend.upload(_TEXT_FILE)
-        await _attach(store, [file_id])
-        await index_files(store.id, [file_id], "", "test-request")
-        record = await read_file(store.id, file_id)
-        assert record.status == "failed"
-        assert record.last_error is not None
-        assert record.last_error.code == "unsupported_file"
+        with pytest.raises(ApiError) as refused:
+            await _attach(store, [file_id])
+        assert refused.value.status == 400
+        assert (await read_store(store.id)).file_counts.total == 0
 
     async def test_the_engine_serves_a_whole_store_through_the_protocol(
         self,
@@ -4062,8 +4060,8 @@ class TestUnsupportedFileMessage:
     Two backends disagree about what they take, so one fixed sentence would
     describe the wrong store on one of them. The explanation is built from the
     serving backend's own declaration and names where the file would be indexed
-    instead, while the settled shape — ``failed`` with ``unsupported_file`` —
-    stays exactly what upstream defines.
+    instead, whether it refuses the attach or settles the file ``failed`` with
+    ``unsupported_file``.
 
     Ref: stdapi/vector_stores/backend.py:unsupported_file_message
          openai.types.vector_stores.vector_store_file.LastError
@@ -4074,18 +4072,14 @@ class TestUnsupportedFileMessage:
     ) -> None:
         """A PDF refused by a text-only store is pointed at a store that indexes it.
 
-        Ref: stdapi/vector_stores/engine.py:_load_chunks
+        Ref: stdapi/vector_stores/engine.py:attach_files
         """
         store = await _create_store()
         file_id = vector_backend.upload(b"%PDF-1.7\x00binary", "application/pdf")
-        await _attach(store, [file_id])
-        await index_files(store.id, [file_id], "", "test-request")
+        with pytest.raises(ApiError) as refused:
+            await _attach(store, [file_id])
 
-        record = await read_file(store.id, file_id)
-        assert record.status == "failed"
-        assert record.last_error is not None
-        assert record.last_error.code == "unsupported_file"
-        message = record.last_error.message
+        message = str(refused.value)
         assert "text" in message
         assert "knowledge base store" in message
         # What another backend takes is never listed as what this store takes.
@@ -4100,14 +4094,10 @@ class TestUnsupportedFileMessage:
         """
         store = await _create_store()
         file_id = vector_backend.upload(b"PK\x03\x04binary", "application/zip")
-        await _attach(store, [file_id])
-        await index_files(store.id, [file_id], "", "test-request")
+        with pytest.raises(ApiError) as refused:
+            await _attach(store, [file_id])
 
-        record = await read_file(store.id, file_id)
-        assert record.status == "failed"
-        assert record.last_error is not None
-        assert record.last_error.code == "unsupported_file"
-        assert "knowledge base" not in record.last_error.message
+        assert "knowledge base" not in str(refused.value)
 
     def test_the_same_file_is_explained_differently_per_backend(self) -> None:
         """The two shipped backends refuse the same archive with different sentences.
@@ -4134,14 +4124,10 @@ class TestUnsupportedFileMessage:
         )
         store = await _create_store()
         file_id = vector_backend.upload(_TEXT_FILE)
-        await _attach(store, [file_id])
-        await index_files(store.id, [file_id], "", "test-request")
+        with pytest.raises(ApiError) as refused:
+            await _attach(store, [file_id])
 
-        record = await read_file(store.id, file_id)
-        assert record.status == "failed"
-        assert record.last_error is not None
-        assert record.last_error.code == "unsupported_file"
-        assert "application/x-parquet" in record.last_error.message
+        assert "application/x-parquet" in str(refused.value)
 
 
 #: A well-formed queue URL, the one shape the setting accepts.

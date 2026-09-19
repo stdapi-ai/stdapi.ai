@@ -270,8 +270,8 @@ def _pending(
         "Indexing runs in the background: the store is returned immediately with "
         "`status=in_progress` and becomes `completed` once every file is indexed. "
         "Poll `openai_vector_store_get`, or `openai_vector_store_file_get` for one file.\n\n"
-        "Only text files can be indexed; any other file is reported with "
-        "`status=failed` and `last_error.code=unsupported_file`."
+        "Only text files can be indexed; a file of any other type is refused "
+        "with `400`, since its type says so before its bytes are read."
     ),
     response_description="The created vector store.",
     response_model_exclude_none=True,
@@ -289,7 +289,8 @@ async def create_vector_store(
 
     Raises:
         ApiError: With 503 when vector storage is not configured; 404 when one
-            of the files does not exist.
+            of the files does not exist; 400 when one of them is of a type the
+            store cannot index.
     """
     log_request_params(request)
     size, overlap = _chunking(request.chunking_strategy)
@@ -559,7 +560,9 @@ async def search_vector_store(
         "Stores API). Upload the file first with `openai_file`.\n\n"
         "Indexing runs in the background: the file is returned with "
         "`status=in_progress` and becomes `completed` once searchable. Use "
-        "`openai_vector_store_file_batch_create` to attach several files at once."
+        "`openai_vector_store_file_batch_create` to attach several files at once.\n\n"
+        "A file of a type the store cannot index is refused with `400` here, "
+        "rather than attached and settled `failed` afterwards."
     ),
     response_description="The attached file.",
     response_model_exclude_none=True,
@@ -580,7 +583,8 @@ async def create_vector_store_file(
 
     Raises:
         ApiError: With 404 when the vector store or the file does not exist;
-            400 when the attributes exceed the per-file budget.
+            400 when the attributes exceed the per-file budget, or the file is
+            of a type the store cannot index.
     """
     log_request_params(request)
     store = await read_store(parse_store_id(vector_store_id))
