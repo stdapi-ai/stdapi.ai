@@ -55,6 +55,7 @@ if TYPE_CHECKING:
         RegisterUsageResultTypeDef,
     )
 
+    from stdapi.models.chat._adapters._responses_context import ContextOverflow
     from stdapi.monitoring_otel import OpenTelemetryManager
     from stdapi.types import JsonList, JsonMappingOrList
     from stdapi.usage import ModelInvocationState, UsageKey, UsageRecord
@@ -1075,6 +1076,197 @@ def _api_error_sse_event(exc: ApiError) -> ServerSentEvent:
     )
 
 
+#: Anthropic's refusal of a prompt over the context window, as its API words it.
+_PROMPT_TOO_LONG = "prompt is too long: {observed} tokens > {limit} maximum"
+
+#: Anthropic's refusal when the backend did not state the sizes.
+_PROMPT_TOO_LONG_UNSIZED = "prompt is too long"
+
+#: Anthropic's refusal of an input that fits alone but not with ``max_tokens``, as its API words it.
+_INPUT_AND_OUTPUT_TOO_LONG = (
+    "input length and `max_tokens` exceed context limit: {observed} + {output} > "
+    "{limit}, decrease input length or `max_tokens` and try again"
+)
+
+#: Anthropic's refusal of an input and ``max_tokens`` when the backend did not state the input size.
+_INPUT_AND_OUTPUT_TOO_LONG_UNSIZED = (
+    "input length and `max_tokens` exceed context limit, decrease input length "
+    "or `max_tokens` and try again"
+)
+
+#: Chat Completions' refusal of messages over the context window, as its API words it.
+_MESSAGES_TOO_LONG = (
+    "Input tokens exceed the configured limit of {limit} tokens. Your messages "
+    "resulted in {observed} tokens. Please reduce the length of the messages."
+)
+
+#: Chat Completions' refusal when the backend did not state the sizes.
+_MESSAGES_TOO_LONG_UNSIZED = (
+    "Input tokens exceed the context window of this model. Please reduce the "
+    "length of the messages."
+)
+
+#: Chat Completions' refusal of messages that fit alone but not with the completion, as its API words it.
+_MESSAGES_AND_COMPLETION_TOO_LONG = (
+    "This model's maximum context length is {limit} tokens. However, you "
+    "requested {total} tokens ({observed} in the messages, {output} in the "
+    "completion). Please reduce the length of the messages or completion."
+)
+
+#: Chat Completions' refusal of messages and completion when the backend did not state the input size.
+_MESSAGES_AND_COMPLETION_TOO_LONG_UNSIZED = (
+    "The messages and the requested completion tokens exceed the context window "
+    "of this model. Please reduce the length of the messages or completion."
+)
+
+#: Legacy Completions' refusal of a prompt and completion over the context window, as its API words it.
+_PROMPT_AND_COMPLETION_TOO_LONG = (
+    "This model's maximum context length is {limit} tokens, however you requested "
+    "{total} tokens ({observed} in your prompt; {output} for the completion). "
+    "Please reduce your prompt; or completion length."
+)
+
+#: Legacy Completions' refusal when the backend stated the sizes but not the completion tokens.
+_LEGACY_PROMPT_TOO_LONG = (
+    "This model's maximum context length is {limit} tokens, however your prompt "
+    "is {observed} tokens. Please reduce your prompt; or completion length."
+)
+
+#: Legacy Completions' refusal naming the completion when the backend did not state the sizes.
+_LEGACY_PROMPT_AND_COMPLETION_TOO_LONG_UNSIZED = (
+    "This model's maximum context length was exceeded by your prompt and the "
+    "requested completion. Please reduce your prompt; or completion length."
+)
+
+#: Legacy Completions' refusal when the backend did not state the sizes.
+_LEGACY_PROMPT_TOO_LONG_UNSIZED = (
+    "This model's maximum context length was exceeded by your prompt. Please "
+    "reduce your prompt; or completion length."
+)
+
+#: Parameter holding the input, by the route path fragment naming the API.
+_CONTEXT_PARAMS: tuple[tuple[str, str], ...] = (("/responses", "input"),)
+
+
+def context_length_error(exc: BaseException) -> ApiError | None:
+    """Word a backend's context-window refusal as the calling API words it.
+
+    Args:
+        exc: The exception a model call raised.
+
+    Returns:
+        The caller dialect's ``context_length_exceeded`` error, a plain 400
+        when the output tokens requested alone fill the window, or None when the
+        exception is not a context-window refusal, or already that error.
+    """
+    # Imported here: the model packages import this module.
+    from stdapi.api_providers.anthropic import TAG_ANTHROPIC  # noqa: PLC0415
+    from stdapi.models.chat._adapters._responses_context import (  # noqa: PLC0415
+        OUTPUT_BUDGET_TOO_LARGE,
+        ContextLengthExceededError,
+        context_overflow,
+        output_budget_exceeded,
+    )
+
+    if isinstance(exc, ContextLengthExceededError):
+        return None
+    if output_budget_exceeded(exc):
+        return ApiError(OUTPUT_BUDGET_TOO_LARGE)
+    if (overflow := context_overflow(exc)) is None:
+        return None
+    request = REQUEST.get(None)
+    route = request.scope.get("route") if request is not None else None
+    path = str(getattr(route, "path", ""))
+    if TAG_ANTHROPIC in (getattr(route, "tags", None) or ()):
+        message = _overflow_message(
+            overflow,
+            _PROMPT_TOO_LONG,
+            _INPUT_AND_OUTPUT_TOO_LONG,
+            _INPUT_AND_OUTPUT_TOO_LONG_UNSIZED,
+            _PROMPT_TOO_LONG_UNSIZED,
+        )
+        param = None
+    elif "/chat/completions" in path:
+        message = _overflow_message(
+            overflow,
+            _MESSAGES_TOO_LONG,
+            _MESSAGES_AND_COMPLETION_TOO_LONG,
+            _MESSAGES_AND_COMPLETION_TOO_LONG_UNSIZED,
+            _MESSAGES_TOO_LONG_UNSIZED,
+        )
+        param = "messages"
+    elif "/completions" in path:
+        return _legacy_completion_refusal(overflow)
+    else:
+        param = next((name for marker, name in _CONTEXT_PARAMS if marker in path), None)
+        return ContextLengthExceededError(overflow, param=param)
+    return ContextLengthExceededError(overflow, message=message, param=param)
+
+
+def _overflow_message(
+    overflow: ContextOverflow, sized: str, combined: str, with_output: str, unsized: str
+) -> str:
+    """Pick and fill a dialect's wording for a context-window refusal.
+
+    Args:
+        overflow: The refusal, with the sizes the backend stated.
+        sized: Wording for an input over the window, with its sizes.
+        combined: Wording for an input over it only with the output requested.
+        with_output: Wording naming the output requested, sizes unknown.
+        unsized: Wording without sizes.
+
+    Returns:
+        The message.
+    """
+    if overflow.sized:
+        return sized.format(observed=overflow.observed, limit=overflow.limit)
+    if overflow.combined:
+        observed, output = overflow.observed or 0, overflow.output or 0
+        return combined.format(
+            observed=observed,
+            output=output,
+            limit=overflow.limit,
+            total=observed + output,
+        )
+    return with_output if overflow.output else unsized
+
+
+def _legacy_completion_refusal(overflow: ContextOverflow) -> ApiError:
+    """Word a context-window refusal as the legacy Completions API does.
+
+    That API names neither a code nor a parameter, and always states the
+    prompt and completion tokens; the wording degrades when the backend did
+    not state them.
+
+    Args:
+        overflow: The refusal, with the sizes the backend stated.
+
+    Returns:
+        The error.
+    """
+    # Imported here: the model packages import this module.
+    from stdapi.models.chat._adapters._responses_context import (  # noqa: PLC0415
+        ContextLengthExceededError,
+    )
+
+    observed, limit, output = overflow.observed, overflow.limit, overflow.output
+    if observed is not None and limit is not None and output is not None:
+        message = _PROMPT_AND_COMPLETION_TOO_LONG.format(
+            limit=limit, total=observed + output, observed=observed, output=output
+        )
+    else:
+        message = _overflow_message(
+            overflow,
+            _LEGACY_PROMPT_TOO_LONG,
+            _PROMPT_AND_COMPLETION_TOO_LONG,
+            _LEGACY_PROMPT_AND_COMPLETION_TOO_LONG_UNSIZED,
+            _LEGACY_PROMPT_TOO_LONG_UNSIZED,
+        )
+    error = ContextLengthExceededError(overflow, message=message, param=None)
+    error.code = None
+    return error
+
+
 def _stream_backend_error(
     exc: ClientError | HTTPClientError | BotocoreConnectionError,
 ) -> ApiError | tuple[int, str]:
@@ -1093,6 +1285,9 @@ def _stream_backend_error(
     if isinstance(exc, ClientError):
         if (denied := denied_feature_unavailable(exc)) is not None:
             return denied
+        if (overflow := context_length_error(exc)) is not None:
+            log_error_details(exc.response["Error"]["Message"], status=overflow.status)
+            return overflow
         error = exc.response["Error"]
         status = AWS_ERROR_MAP.get(error["Code"], (502, "server_error"))[0]
         log_error_details(error["Message"], status=status)
@@ -1131,7 +1326,7 @@ async def log_request_sse_stream_event(
         # The adapter already emitted spec-compliant error events; log only.
         log_error_details(exc.args[0], status=exc.status, level=exc.level)
     except ApiError as exc:
-        yield _api_error_sse_event(exc)
+        yield _api_error_sse_event(context_length_error(exc) or exc)
     except (ClientError, HTTPClientError, BotocoreConnectionError) as exc:
         detail = _stream_backend_error(exc)
         if isinstance(detail, ApiError):

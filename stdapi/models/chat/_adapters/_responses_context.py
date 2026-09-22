@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from itertools import pairwise
-from re import DOTALL, IGNORECASE
+from re import IGNORECASE
 from re import compile as re_compile
 from typing import TYPE_CHECKING, Any, Final
 
@@ -28,6 +28,7 @@ from stdapi.types.openai_responses import (
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator, Sequence
+    from re import Pattern
 
 #: Upstream's message for an input larger than the model's context window.
 _CONTEXT_LENGTH_EXCEEDED: Final = (
@@ -43,16 +44,41 @@ _OVERFLOW_PATTERN: Final = re_compile(
     IGNORECASE,
 )
 
+#: Refusal of output tokens that leave the input no room in the context window.
+OUTPUT_BUDGET_TOO_LARGE: Final = (
+    "The requested maximum output tokens leave no room for the input in the "
+    "context window of this model. Lower the maximum output tokens."
+)
+
 #: Refusals stating the input size first, then the window.
 _OBSERVED_LIMIT_PATTERNS: Final = (
     re_compile(r"(\d+) tokens > (\d+) maximum"),
     re_compile(r"Input length \((\d+)\) exceeds [^(]*\((\d+)\)"),
 )
 
-#: Refusals stating the window first, then the input size.
-_LIMIT_OBSERVED_PATTERN: Final = re_compile(
-    r"maximum context length is (\d+) tokens.*?contains (?:at least )?(\d+) input tokens",
-    DOTALL,
+#: Refusals stating the window in the OpenAI wording.
+_WINDOW_PATTERN: Final = re_compile(
+    r"maximum context length is (\d+) tokens", IGNORECASE
+)
+
+#: Refusals stating the prompt's tokens, or a lower bound of them, after the window.
+_PROMPT_TOKENS_PATTERN: Final = re_compile(
+    r"contains (at least )?(\d+) input tokens", IGNORECASE
+)
+
+#: Refusals naming the output tokens requested.
+_REQUESTED_OUTPUT_PATTERN: Final = re_compile(
+    r"requested (\d+) output tokens", IGNORECASE
+)
+
+#: Refusals splitting the tokens requested between the messages and the completion.
+_MESSAGES_COMPLETION_PATTERN: Final = re_compile(
+    r"(\d+) in the messages, (\d+) in the completion", IGNORECASE
+)
+
+#: Refusals stating the input tokens the window leaves beside the output requested.
+_INPUT_BOUND_PATTERN: Final = re_compile(
+    r"upper bound for (\d+) input tokens", IGNORECASE
 )
 
 #: Heading of the user message a compaction summary is replayed as.
@@ -106,13 +132,26 @@ _STREAM_OPEN_ERRORS: ContextVar[list[BaseException] | None] = ContextVar(
 class ContextLengthExceededError(ApiError):
     """The input does not fit the model's context window."""
 
-    code = "context_length_exceeded"
-    param = "input"
+    code: str | None = "context_length_exceeded"
     disclosed = True
 
-    def __init__(self) -> None:
-        """Create the error with upstream's message."""
-        super().__init__(_CONTEXT_LENGTH_EXCEEDED)
+    def __init__(
+        self,
+        overflow: ContextOverflow | None = None,
+        *,
+        message: str = _CONTEXT_LENGTH_EXCEEDED,
+        param: str | None = "input",
+    ) -> None:
+        """Create the error, worded as the caller's API words it.
+
+        Args:
+            overflow: The refusal it reports, with the sizes the backend stated.
+            message: The message, the Responses API's by default.
+            param: The parameter holding the input, if the API names one.
+        """
+        super().__init__(message)
+        self.overflow = overflow or ContextOverflow()
+        self.param = param
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +162,29 @@ class ContextOverflow:
     observed: int | None = None
     #: Tokens the context window takes.
     limit: int | None = None
+    #: Output tokens the request asked for, when the refusal states them.
+    output: int | None = None
+    #: Whether ``observed`` is only a lower bound, the backend having stopped counting.
+    bounded: bool = False
+
+    @property
+    def sized(self) -> bool:
+        """Whether the stated input alone exceeds the stated window."""
+        return (
+            self.observed is not None
+            and self.limit is not None
+            and self.observed > self.limit
+        )
+
+    @property
+    def combined(self) -> bool:
+        """Whether the stated input fits the window alone, but not with the output."""
+        return (
+            self.observed is not None
+            and self.limit is not None
+            and self.output is not None
+            and self.observed <= self.limit < self.observed + self.output
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,8 +199,47 @@ class CompactionSplit:
     after: list[ResponseInputItem]
 
 
+def _validation_message(exc: BaseException) -> str | None:
+    """Return the message of a backend's validation refusal.
+
+    Args:
+        exc: The exception a model call raised.
+
+    Returns:
+        The message, or None when the exception is no validation refusal.
+    """
+    if isinstance(exc, ClientError):
+        error = exc.response.get("Error") or {}
+        if str(error.get("Code") or "").lower() != "validationexception":
+            return None
+        return str(error.get("Message") or "")
+    if isinstance(exc, ApiError) and exc.status == 400 and exc.args:
+        return str(exc.args[0])
+    return None
+
+
+def _refusal_message(exc: BaseException) -> str | None:
+    """Return the message of a backend's context-window refusal.
+
+    Args:
+        exc: The exception a model call raised.
+
+    Returns:
+        The message, or None when the exception is no such refusal.
+    """
+    if (message := _validation_message(exc)) is None:
+        return None
+    if isinstance(exc, ApiError) and exc.code == "context_length_exceeded":
+        return message
+    return message if _OVERFLOW_PATTERN.search(message) else None
+
+
 def context_overflow(exc: BaseException) -> ContextOverflow | None:
-    """Recognize a backend's refusal of an input larger than the context window.
+    """Recognize a backend's refusal of an input the context window cannot hold.
+
+    The input overflows alone, or only with the output tokens requested: either
+    way a shorter input fits. A refusal of output tokens filling the window
+    alone is not one, since no input trimming answers it.
 
     Args:
         exc: The exception a model call raised.
@@ -148,23 +249,78 @@ def context_overflow(exc: BaseException) -> ContextOverflow | None:
         exception is anything else.
     """
     if isinstance(exc, ContextLengthExceededError):
-        return ContextOverflow()
-    if isinstance(exc, ClientError):
-        error = exc.response.get("Error") or {}
-        if str(error.get("Code") or "").lower() != "validationexception":
-            return None
-        message = str(error.get("Message") or "")
-    elif isinstance(exc, ApiError) and exc.status == 400 and exc.args:
-        message = str(exc.args[0])
-        if exc.code == "context_length_exceeded":
-            return _overflow_sizes(message)
-    else:
+        return exc.overflow
+    if (message := _refusal_message(exc)) is None or _output_fills_window(message):
         return None
-    return _overflow_sizes(message) if _OVERFLOW_PATTERN.search(message) else None
+    overflow = _overflow_sizes(message)
+    if overflow.observed is not None and overflow.limit is not None:
+        # Stated sizes that fit the window do not describe this refusal.
+        return overflow if overflow.sized or overflow.combined else None
+    return overflow
+
+
+def capped_output_budget(overflow: ContextOverflow | None) -> int | None:
+    """Return the output budget that fits beside an input the window holds alone.
+
+    Upstream Responses and Messages answer such a request with its output
+    capped, so a refusal of it is retried once with this budget.
+
+    Args:
+        overflow: The refusal, if the error was one.
+
+    Returns:
+        The tokens the window leaves beside the input, or None unless the
+        refusal stated both sizes and the input fits the window alone.
+    """
+    # vLLM counts only up to what the output leaves, so a bound sizes nothing.
+    if (
+        overflow is None
+        or overflow.bounded
+        or overflow.observed is None
+        or overflow.limit is None
+        or not overflow.combined
+    ):
+        return None
+    budget = overflow.limit - overflow.observed
+    return budget if budget > 0 else None
+
+
+def output_budget_exceeded(exc: BaseException) -> bool:
+    """Whether a backend refused output tokens that alone fill the context window.
+
+    Args:
+        exc: The exception a model call raised.
+
+    Returns:
+        True for a context-window refusal no input trimming answers.
+    """
+    if isinstance(exc, ContextLengthExceededError):
+        return False
+    message = _refusal_message(exc)
+    return message is not None and _output_fills_window(message)
+
+
+def _output_fills_window(message: str) -> bool:
+    """Whether a refusal states output tokens leaving the input no room.
+
+    Args:
+        message: The backend's refusal message.
+
+    Returns:
+        True when the output requested takes the whole window.
+    """
+    if _number(_INPUT_BOUND_PATTERN, message) == 0:
+        return True
+    sizes = _overflow_sizes(message)
+    return (
+        sizes.output is not None
+        and sizes.limit is not None
+        and sizes.output >= sizes.limit
+    )
 
 
 def _overflow_sizes(message: str) -> ContextOverflow:
-    """Read the input size and the window out of a refusal message.
+    """Read the input size, the window and the output out of a refusal message.
 
     Args:
         message: The backend's refusal message.
@@ -175,9 +331,26 @@ def _overflow_sizes(message: str) -> ContextOverflow:
     for pattern in _OBSERVED_LIMIT_PATTERNS:
         if match := pattern.search(message):
             return ContextOverflow(int(match[1]), int(match[2]))
-    if match := _LIMIT_OBSERVED_PATTERN.search(message):
-        return ContextOverflow(int(match[2]), int(match[1]))
-    return ContextOverflow()
+    output = _number(_REQUESTED_OUTPUT_PATTERN, message)
+    observed, bounded = None, False
+    if match := _PROMPT_TOKENS_PATTERN.search(message):
+        observed, bounded = int(match[2]), bool(match[1])
+    if match := _MESSAGES_COMPLETION_PATTERN.search(message):
+        observed, output = int(match[1]), int(match[2])
+    return ContextOverflow(observed, _number(_WINDOW_PATTERN, message), output, bounded)
+
+
+def _number(pattern: Pattern[str], message: str) -> int | None:
+    """Return the number a pattern's first group captures in a message.
+
+    Args:
+        pattern: A pattern capturing digits.
+        message: The message.
+
+    Returns:
+        The number, or None when the pattern does not match.
+    """
+    return int(match[1]) if (match := pattern.search(message)) else None
 
 
 def record_stream_open_error(exc: BaseException) -> None:
@@ -357,9 +530,11 @@ def _keep_share(overflow: ContextOverflow, attempt: int) -> float:
     Returns:
         A share between 0 and 1.
     """
-    if overflow.observed and overflow.limit and overflow.observed > overflow.limit:
+    observed, limit, output = overflow.observed, overflow.limit, overflow.output or 0
+    if observed and limit and output < limit < observed + output:
+        # The input fits what the window leaves beside the output requested.
         target = max(_TRIM_TARGET - _TRIM_TIGHTENING * attempt, _TRIM_TARGET_FLOOR)
-        return target * overflow.limit / overflow.observed
+        return target * (limit - output) / observed
     return _UNSIZED_KEEP_SHARE
 
 

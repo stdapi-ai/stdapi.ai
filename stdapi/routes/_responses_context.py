@@ -11,7 +11,7 @@ from sys import maxsize
 from typing import TYPE_CHECKING, Any, Final, Never
 
 from botocore.exceptions import BotoCoreError, ClientError
-from sse_starlette import EventSourceResponse
+from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from stdapi.api_errors import ApiError
 from stdapi.models import reject_unsupported_token_counting
@@ -30,16 +30,23 @@ from stdapi.models.chat._adapters._openai_responses import (
     with_user_text,
 )
 from stdapi.models.chat._adapters._responses_context import (
+    OUTPUT_BUDGET_TOO_LARGE,
     CompactionSplit,
     ContextLengthExceededError,
+    capped_output_budget,
     collect_stream_open_errors,
     context_overflow,
     estimate_tokens,
+    output_budget_exceeded,
     split_everything,
     split_for_compaction,
     truncate_input,
 )
-from stdapi.monitoring import REQUEST_ID, log_request_sse_stream_event
+from stdapi.monitoring import (
+    REQUEST_ID,
+    log_error_details,
+    log_request_sse_stream_event,
+)
 from stdapi.types.openai_responses import (
     CompactionItemParam,
     CompactionTrigger,
@@ -52,12 +59,16 @@ from stdapi.types.openai_responses import (
     ResponseOutputText,
     ResponseUsage,
 )
-from stdapi.utils import hide_security_details
+from stdapi.utils import hide_security_details, to_json_str, try_parse_json
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
-
-    from sse_starlette import ServerSentEvent
+    from collections.abc import (
+        AsyncGenerator,
+        AsyncIterable,
+        Awaitable,
+        Callable,
+        Sequence,
+    )
 
     from stdapi.models import ModelDetails
     from stdapi.models.chat import ChatModelBase
@@ -504,8 +515,11 @@ async def open_response(
 ) -> tuple[ResponseCreateParams, Response | EventSourceResponse]:
     """Generate a response, dropping the oldest input when it overflows.
 
-    Under ``truncation: "auto"``, an input refused as larger than the context
-    window is trimmed and sent again, at most three times.
+    An input the window holds alone, but not beside its output, is first sent
+    again with the output capped to what the window leaves; the response still
+    echoes the requested ``max_output_tokens``. Under ``truncation: "auto"``,
+    an input refused as larger than the context window is trimmed and sent
+    again, at most three times.
 
     Args:
         chat_model: The model.
@@ -520,8 +534,9 @@ async def open_response(
     Raises:
         ContextLengthExceededError: When the input does not fit and cannot
             be trimmed to fit.
+        ApiError: When the output tokens requested alone fill the window.
     """
-    return await truncating(
+    answered, result = await truncating(
         request,
         partial(
             _open_once,
@@ -531,6 +546,59 @@ async def open_response(
             moderation_builder=moderation_builder,
         ),
     )
+    if answered.max_output_tokens != request.max_output_tokens:
+        result = _echoing_requested_output(result, request.max_output_tokens)
+    return answered, result
+
+
+def _echoing_requested_output(
+    result: Response | EventSourceResponse, requested: int | None
+) -> Response | EventSourceResponse:
+    """Echo the requested ``max_output_tokens`` on a response generated with it capped.
+
+    Args:
+        result: The response, or its stream.
+        requested: The ``max_output_tokens`` the client sent.
+
+    Returns:
+        The response, or its stream, echoing *requested*.
+    """
+    if isinstance(result, Response):
+        result.max_output_tokens = requested
+        return result
+    result.body_iterator = _echoed_output_events(result.body_iterator, requested)
+    return result
+
+
+async def _echoed_output_events(
+    events: AsyncIterable[Any], requested: int | None
+) -> AsyncGenerator[Any]:
+    """Relay a stream, its response snapshots echoing the requested output tokens.
+
+    Args:
+        events: The stream events.
+        requested: The ``max_output_tokens`` the client sent.
+
+    Yields:
+        The stream events, response snapshots rewritten.
+    """
+    try:
+        async for event in events:
+            # Only response snapshots carry the field.
+            if (
+                isinstance(event, ServerSentEvent)
+                and isinstance(event.data, str)
+                and '"max_output_tokens"' in event.data
+            ):
+                payload = try_parse_json(event.data)
+                if isinstance(payload, dict) and isinstance(
+                    snapshot := payload.get("response"), dict
+                ):
+                    snapshot["max_output_tokens"] = requested
+                    event = ServerSentEvent(to_json_str(payload), event=event.event)
+            yield event
+    finally:
+        await close_stream(events)
 
 
 async def truncating[RequestT: (ResponseCreateParams, InputTokenCountParams), T](
@@ -539,12 +607,15 @@ async def truncating[RequestT: (ResponseCreateParams, InputTokenCountParams), T]
     """Run a model call, dropping the oldest input when it overflows the window.
 
     Under ``truncation: "auto"``, an input refused as larger than the context
-    window is trimmed and sent again, at most three times.
+    window is trimmed and sent again, at most three times. Whatever
+    ``truncation`` says, a generation whose input fits the window alone but
+    not beside its output is first sent again once, its output capped to what
+    the window leaves, as upstream serves it.
 
     Args:
         request: The request.
         call: Runs the call on a request; its second argument says whether an
-            overflow will be retried, so a stream need not report it.
+            overflow may be retried, so a stream need not report it.
 
     Returns:
         The request the call succeeded with, and its result.
@@ -552,22 +623,33 @@ async def truncating[RequestT: (ResponseCreateParams, InputTokenCountParams), T]
     Raises:
         ContextLengthExceededError: When the input does not fit and cannot
             be trimmed to fit.
+        ApiError: When the output tokens requested alone fill the window.
     """
     attempt = 0
+    caps = isinstance(request, ResponseCreateParams)
     while True:
-        retryable = request.truncation == "auto" and attempt < _MAX_TRUNCATION_RETRIES
+        trims = request.truncation == "auto" and attempt < _MAX_TRUNCATION_RETRIES
         try:
-            return request, await call(request, retryable)
+            return request, await call(request, trims or caps)
         except Exception as exc:
+            if output_budget_exceeded(exc):
+                # No trimming answers it, and the backend's wording stays internal.
+                raise ApiError(OUTPUT_BUDGET_TOO_LARGE) from exc
             if (overflow := context_overflow(exc)) is None:
                 raise
+            budget = capped_output_budget(overflow) if caps else None
+            caps = False
+            if budget is not None:
+                request = request.model_copy(update={"max_output_tokens": budget})
+                continue
             retry = (
-                await _truncated(request.input, overflow, attempt)
-                if retryable
-                else None
+                await _truncated(request.input, overflow, attempt) if trims else None
             )
             if retry is None:
-                raise ContextLengthExceededError from exc
+                if not isinstance(exc, ContextLengthExceededError):
+                    # A refusal raised from a stream was not logged when mapped.
+                    log_error_details(str(exc), status=400)
+                raise ContextLengthExceededError(overflow) from exc
         request = request.model_copy(update={"input": retry})
         attempt += 1
 

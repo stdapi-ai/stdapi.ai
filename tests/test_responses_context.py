@@ -34,11 +34,14 @@ from stdapi.models.chat._adapters._openai_responses import (
     with_user_text,
 )
 from stdapi.models.chat._adapters._responses_context import (
+    OUTPUT_BUDGET_TOO_LARGE,
     ContextLengthExceededError,
     ContextOverflow,
+    capped_output_budget,
     collect_stream_open_errors,
     context_overflow,
     estimate_tokens,
+    output_budget_exceeded,
     record_stream_open_error,
     split_everything,
     split_for_compaction,
@@ -127,9 +130,52 @@ _RECORDED_OVERFLOWS: list[tuple[str, str, int | None, int | None]] = [
             "length is 8192 tokens. Please reduce the length of the prompt"
         ),
         None,
-        None,
+        8192,
     ),
 ]
+
+#: vLLM's refusal of a prompt that fits, but not with the output tokens requested, fully counted.
+_COMBINED = (
+    "This model's maximum context length is 131072 tokens. However, you requested "
+    "8192 output tokens and your prompt contains 125000 input tokens, for a total "
+    "of 133192 tokens."
+)
+
+#: vLLM's refusal counting the prompt only up to what the output leaves, recorded 2026-09-23.
+_COMBINED_BOUND = (
+    'ErrorEvent { error: APIError { type: "BadRequestError", code: Some(400), '
+    "message: \"This model's maximum context length is 131072 tokens. However, you "
+    "requested 30000 output tokens and your prompt contains at least 101073 input "
+    "tokens, for a total of at least 131073 tokens. Please reduce the length of the "
+    "input prompt or the number of requested output tokens. (parameter=input_tokens, "
+    'value=101073)", param: None } }'
+)
+
+#: vLLM's refusal of a prompt over the input tokens the output requested leaves.
+_COMBINED_UNSIZED = (
+    "This model's maximum context length is 4096 tokens. However, you requested "
+    "100 output tokens and your prompt contains at least 50000 characters (more "
+    "than 15984 characters, which is the upper bound for 3996 input tokens). "
+    "Please reduce the length of the input prompt or the number of requested "
+    "output tokens."
+)
+
+#: Refusals of output tokens that alone fill the window, as Palmyra and vLLM word them.
+_OUTPUT_ONLY = (
+    (
+        "This model's maximum context length is 4096 tokens. However, you "
+        "requested 4096 output tokens and your prompt contains 196 characters. "
+        "Please reduce the length of the input prompt or the number of requested "
+        "output tokens."
+    ),
+    (
+        "This model's maximum context length is 4096 tokens. However, you "
+        "requested 4096 output tokens and your prompt contains at least 1 "
+        "characters (more than 0 characters, which is the upper bound for 0 input "
+        "tokens). Please reduce the length of the input prompt or the number of "
+        "requested output tokens."
+    ),
+)
 
 
 def _user(text: str) -> EasyInputMessage:
@@ -183,7 +229,9 @@ class TestContextOverflow:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
         """
         error = make_client_error("ValidationException", "Converse", message=message)
-        assert context_overflow(error) == ContextOverflow(observed, limit)
+        overflow = context_overflow(error)
+        assert overflow is not None
+        assert (overflow.observed, overflow.limit) == (observed, limit)
 
     def test_an_in_stream_refusal_is_an_overflow(self) -> None:
         """The first-event refusal of a stream, lowercase code, is recognized.
@@ -208,7 +256,9 @@ class TestContextOverflow:
         """
         error = MantleError(_RECORDED_OVERFLOWS[4][1], status=400)
         assert error.code is None
-        assert context_overflow(error) == ContextOverflow(242008, 131072)
+        assert context_overflow(error) == ContextOverflow(
+            242008, 131072, 5, bounded=True
+        )
 
     def test_an_upstream_shaped_error_is_an_overflow(self) -> None:
         """A relayed OpenAI-shaped refusal is recognized by its code.
@@ -219,6 +269,92 @@ class TestContextOverflow:
         error.code = "context_length_exceeded"
         assert context_overflow(error) == ContextOverflow()
         assert context_overflow(ContextLengthExceededError()) == ContextOverflow()
+
+    @pytest.mark.parametrize(
+        ("message", "overflow"),
+        [
+            (_COMBINED, ContextOverflow(125000, 131072, 8192)),
+            (
+                (
+                    "This model's maximum context length is 4096 tokens. However, "
+                    "you requested 4200 tokens (3700 in the messages, 500 in the "
+                    "completion). Please reduce the length of the messages or "
+                    "completion."
+                ),
+                ContextOverflow(3700, 4096, 500),
+            ),
+            (_COMBINED_UNSIZED, ContextOverflow(None, 4096, 100)),
+            (_COMBINED_BOUND, ContextOverflow(101073, 131072, 30000, bounded=True)),
+        ],
+        ids=["vllm", "openai-wording", "vllm-characters", "vllm-lower-bound"],
+    )
+    def test_an_input_over_the_window_only_with_the_output_is_an_overflow(
+        self, message: str, overflow: ContextOverflow
+    ) -> None:
+        """A prompt fitting the window alone, but not with the output, is trimmable.
+
+        A shorter input fits beside the output requested, so ``truncation``
+        trims it and the caller gets ``context_length_exceeded``.
+
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+             stdapi/models/chat/_adapters/_responses_context.py:context_overflow
+        """
+        error = make_client_error("ValidationException", message=message)
+        assert context_overflow(error) == overflow
+        assert not output_budget_exceeded(error)
+
+    def test_a_lower_bound_plans_no_capped_retry(self) -> None:
+        """A count the backend stopped at what the output leaves sizes nothing.
+
+        Recorded from gemma-3-4b and Palmyra Vision 7B: asked for 30000 then
+        29999 output tokens, gemma reported at least 101073 then 101074 input
+        tokens, the window minus the output plus one each time. A retry capped
+        by that bound is always refused again, so none is planned.
+
+        Ref: stdapi/models/chat/_adapters/_responses_context.py:capped_output_budget
+        """
+        overflow = context_overflow(
+            make_client_error("ValidationException", message=_COMBINED_BOUND)
+        )
+        assert overflow is not None
+        assert overflow.bounded
+        assert capped_output_budget(overflow) is None
+
+    @pytest.mark.parametrize(
+        ("overflow", "budget"),
+        [
+            (ContextOverflow(125000, 131072, 8192), 6072),
+            (ContextOverflow(131072, 131072, 5), None),
+            (ContextOverflow(242008, 131072, 5), None),
+            (ContextOverflow(None, 4096, 100), None),
+            (ContextOverflow(), None),
+            (None, None),
+        ],
+        ids=["combined", "no-room-left", "prompt", "unsized", "bare", "no-overflow"],
+    )
+    def test_only_a_sized_combined_overflow_gets_a_capped_budget(
+        self, overflow: ContextOverflow | None, budget: int | None
+    ) -> None:
+        """The capped retry asks for what the window leaves, by the backend's numbers.
+
+        Ref: stdapi/models/chat/_adapters/_responses_context.py:capped_output_budget
+        """
+        assert capped_output_budget(overflow) == budget
+
+    @pytest.mark.parametrize("message", _OUTPUT_ONLY, ids=["palmyra", "vllm-bound-0"])
+    def test_output_tokens_filling_the_window_are_not_an_overflow(
+        self, message: str
+    ) -> None:
+        """Output tokens that alone fill the window leave no input to trim.
+
+        Ref: stdapi/models/chat/_adapters/_responses_context.py:output_budget_exceeded
+        """
+        error = make_client_error("ValidationException", message=message)
+        assert context_overflow(error) is None
+        assert output_budget_exceeded(error)
+        assert not output_budget_exceeded(
+            make_client_error("ValidationException", message=_RECORDED_OVERFLOWS[4][1])
+        )
 
     @pytest.mark.parametrize(
         "error",
@@ -320,6 +456,23 @@ class TestTruncateInput:
         ]
         trimmed = truncate_input(items, ContextOverflow(110, 100), 0)
         assert trimmed == items[2:]
+
+    def test_an_input_over_the_window_with_the_output_keeps_room_for_it(self) -> None:
+        """A combined overflow keeps what fits beside the output requested.
+
+        100 input tokens fit a window of 110 but not with 50 output tokens: the
+        retry aims at 90% of the 60 the output leaves, so two of four equal
+        turns go where the whole window would drop only one.
+
+        Ref: stdapi/models/chat/_adapters/_responses_context.py:truncate_input
+        """
+        items: list[ResponseInputItem] = [
+            item
+            for index in range(4)
+            for item in (_user(f"u{index} " * 200), _assistant(f"a{index}"))
+        ]
+        trimmed = truncate_input(items, ContextOverflow(100, 110, 50), 0)
+        assert trimmed == items[4:]
 
     def test_the_latest_turn_is_not_cut_once_older_turns_went(self) -> None:
         """Dropping older turns leaves the latest one whole, however large.
@@ -793,6 +946,48 @@ class TestStreamRendering:
         assert events[2]["param"] == "input"
         assert "8192" not in events[2]["message"], "the backend text stays internal"
         assert events[3]["response"]["error"]["code"] == "context_length_exceeded"
+
+    @pytest.mark.parametrize(
+        ("message", "code"),
+        [
+            (_RECORDED_OVERFLOWS[1][1], "context_length_exceeded"),
+            (_COMBINED, "context_length_exceeded"),
+            (_OUTPUT_ONLY[0], None),
+        ],
+        ids=["prompt", "combined", "output-only"],
+    )
+    @pytest.mark.parametrize(
+        "error_code", ["validationException", "ValidationException"]
+    )
+    async def test_each_kind_of_window_refusal_is_reported_as_classified(
+        self, message: str, code: str | None, error_code: str
+    ) -> None:
+        """A streamed window refusal follows the one rule, the backend text withheld.
+
+        A prompt over the window, alone or with its output, is
+        ``context_length_exceeded``; output tokens filling the window alone
+        are a plain 400 asking for fewer output tokens.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/models/chat/_adapters/_openai_responses.py:_classify_stream_error
+        """
+        refusal = make_client_error(error_code, "ConverseStream", message=message)
+
+        async def _refused() -> AsyncGenerator[Any]:
+            raise refusal
+            yield  # pragma: no cover - makes this an async generator
+
+        events = await _collect(
+            format_stream("resp-1", 0.0, "m", _refused(), self._request())
+        )
+        error = events[2]
+        assert error["type"] == "error"
+        assert error.get("code") == code
+        assert error["error"].get("code") == code
+        for size in ("286028", "131072", "4096"):
+            assert size not in error["message"], "the backend text stays internal"
+        if code is None:
+            assert error["message"] == OUTPUT_BUDGET_TOO_LARGE
 
     async def test_a_refusal_before_the_stream_is_streamed_as_upstream_does(
         self,

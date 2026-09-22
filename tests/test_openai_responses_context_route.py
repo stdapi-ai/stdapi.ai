@@ -24,6 +24,7 @@ from stdapi.models.chat._adapters._openai_responses import (
     encode_compaction_state,
     merge_usage,
 )
+from stdapi.models.chat._adapters._responses_context import OUTPUT_BUDGET_TOO_LARGE
 from stdapi.models.chat._default import ChatModel
 from stdapi.models.chat._mantle._convert import _reject_local_compaction_items
 from stdapi.routes import _responses_context, openai_responses
@@ -53,6 +54,19 @@ _NOVA_OVERFLOW = (
     "input tokens exceeds maximum length. Please update the input to try again."
 )
 
+#: vLLM's refusal of a prompt that fits, but not with the output tokens requested.
+_COMBINED_OVERFLOW = (
+    "This model's maximum context length is 131072 tokens. However, you requested "
+    "8192 output tokens and your prompt contains 125000 input tokens, for a total "
+    "of 133192 tokens."
+)
+
+#: Palmyra's refusal of output tokens that alone fill the window.
+_OUTPUT_ONLY = (
+    "This model's maximum context length is 4096 tokens. However, you requested "
+    "4096 output tokens and your prompt contains 196 characters."
+)
+
 #: The token counter's refusal of a model it cannot count, as recorded.
 _UNCOUNTABLE = "The provided model doesn't support counting tokens."
 
@@ -77,16 +91,17 @@ def _text_of(request: ConverseRequestBaseTypeDef) -> str:
     )
 
 
-def _overflow(code: str) -> Exception:
-    """Return Nova Micro's refusal of an input over its window.
+def _overflow(code: str, message: str = _NOVA_OVERFLOW) -> Exception:
+    """Return a backend's refusal of an input over its window.
 
     Args:
         code: The error code, capitalized off-stream and not in-stream.
+        message: The refusal, Nova Micro's by default.
 
     Returns:
         The error.
     """
-    return make_client_error(code, "Converse", message=_NOVA_OVERFLOW)
+    return make_client_error(code, "Converse", message=message)
 
 
 class _Backend:
@@ -99,6 +114,12 @@ class _Backend:
         self.limit = 1_000_000
         #: Whether a streamed refusal comes on the first event instead of at open.
         self.refuse_in_stream = False
+        #: Wording of the refusal.
+        self.message = _NOVA_OVERFLOW
+        #: Largest output budget accepted beside the input, when the window leaves one.
+        self.output_room: int | None = None
+        #: Why an answer stops.
+        self.stop_reason = "end_turn"
         #: Token counts the counter returns, or the error it raises.
         self.count: int | Exception = make_client_error(
             "ValidationException", "CountTokens", message=_UNCOUNTABLE
@@ -106,11 +127,19 @@ class _Backend:
         #: Calls the token counter received.
         self.counted = 0
 
+    def _refuses(self, request: ConverseRequestBaseTypeDef) -> bool:
+        if len(_text_of(request)) > self.limit:
+            return True
+        output = request.get("inferenceConfig", {}).get("maxTokens")
+        return self.output_room is not None and (
+            output is None or output > self.output_room
+        )
+
     def _check(self, request: ConverseRequestBaseTypeDef) -> None:
         self.requests.append(request)
-        if len(_text_of(request)) > self.limit:
+        if self._refuses(request):
             code = "ValidationException"
-            raise _overflow(code)
+            raise _overflow(code, self.message)
 
     @staticmethod
     def _answer(request: ConverseRequestBaseTypeDef) -> str:
@@ -125,7 +154,7 @@ class _Backend:
                     "content": [{"text": self._answer(request)}],
                 }
             },
-            "stopReason": "end_turn",
+            "stopReason": self.stop_reason,
             "usage": {
                 "inputTokens": len(self.requests) * 100,
                 "outputTokens": 10,
@@ -141,13 +170,15 @@ class _Backend:
             self._check(request)
         else:
             self.requests.append(request)
-        refused = in_stream and len(_text_of(request)) > self.limit
+        refused = in_stream and self._refuses(request)
         answer = self._answer(request)
+        message = self.message
+        stop_reason = self.stop_reason
 
         async def _events() -> AsyncGenerator[dict[str, Any]]:
             if refused:
                 code = "validationException"
-                raise _overflow(code)
+                raise _overflow(code, message)
             for event in (
                 {"messageStart": {"role": "assistant"}},
                 {"contentBlockStart": {"start": {}, "contentBlockIndex": 0}},
@@ -158,7 +189,7 @@ class _Backend:
                     }
                 },
                 {"contentBlockStop": {"contentBlockIndex": 0}},
-                {"messageStop": {"stopReason": "end_turn"}},
+                {"messageStop": {"stopReason": stop_reason}},
                 {"metadata": {"usage": {"inputTokens": 7, "outputTokens": 3}}},
             ):
                 yield event
@@ -316,6 +347,28 @@ class TestTruncationRetries:
         assert "error" not in [event["type"] for event in events]
         assert len(backend.requests) >= 2
 
+    def test_a_stream_refused_on_its_first_event_logs_the_backend_text(
+        self,
+        app_client: TestClient,
+        backend: _Backend,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A first-event refusal nothing retries is logged in the backend's own words.
+
+        The client gets upstream's error; only the request log keeps the text.
+
+        Ref: stdapi/routes/_responses_context.py:truncating
+        """
+        backend.limit = 0
+        backend.refuse_in_stream = True
+        response = _post(app_client, input=_turns(2), stream=True)
+        assert response.status_code == 200
+        error = next(e for e in _events(response) if e["type"] == "error")
+        assert error["code"] == "context_length_exceeded"
+        assert "Input Tokens Exceeded" not in error["message"]
+        assert "Input Tokens Exceeded" in capsys.readouterr().out
+        assert len(backend.requests) == 1
+
     def test_a_stream_refused_at_open_streams_the_refusal(
         self, app_client: TestClient, backend: _Backend
     ) -> None:
@@ -334,6 +387,141 @@ class TestTruncationRetries:
             "response.failed",
         ]
         assert events[2]["code"] == "context_length_exceeded"
+
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_an_input_over_the_window_with_the_output_is_trimmed(
+        self, app_client: TestClient, backend: _Backend, stream: bool
+    ) -> None:
+        """A combined refusal the capped output does not answer is then trimmed.
+
+        Ref: stdapi/routes/_responses_context.py:truncating
+        """
+        backend.limit = 1000
+        backend.refuse_in_stream = stream
+        backend.message = _COMBINED_OVERFLOW
+        response = _post(app_client, input=_turns(8), truncation="auto", stream=stream)
+        assert response.status_code == 200, response.text
+        if stream:
+            assert _events(response)[-1]["type"] == "response.completed"
+        assert len(backend.requests) >= 3
+        assert _text_of(backend.requests[1]) == _text_of(backend.requests[0])
+        assert backend.requests[1]["inferenceConfig"]["maxTokens"] == 6072
+        assert "u0 " not in _text_of(backend.requests[-1])
+
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_output_tokens_filling_the_window_are_refused_untrimmed(
+        self, app_client: TestClient, backend: _Backend, stream: bool
+    ) -> None:
+        """Output tokens filling the window alone cost one call and a plain 400.
+
+        No trimming answers them, so none is tried, and the backend text stays
+        internal.
+
+        Ref: stdapi/models/chat/_adapters/_responses_context.py:output_budget_exceeded
+        """
+        backend.limit = 0
+        backend.refuse_in_stream = stream
+        backend.message = _OUTPUT_ONLY
+        response = _post(app_client, input=_turns(8), truncation="auto", stream=stream)
+        if stream:
+            assert response.status_code == 200
+            error = next(e for e in _events(response) if e["type"] == "error")
+        else:
+            assert response.status_code == 400, response.text
+            error = response.json()["error"]
+        assert error.get("code") is None
+        assert error["message"] == OUTPUT_BUDGET_TOO_LARGE
+        assert len(backend.requests) == 1
+
+    @pytest.mark.parametrize(
+        ("stop_reason", "status"),
+        [("end_turn", "completed"), ("max_tokens", "incomplete")],
+        ids=["answered", "ran-out"],
+    )
+    @pytest.mark.parametrize("truncation", ["auto", "disabled"])
+    @pytest.mark.parametrize("refused", ["off-stream", "at-open", "first-event"])
+    def test_an_input_the_window_holds_alone_is_answered_with_capped_output(
+        self,
+        app_client: TestClient,
+        backend: _Backend,
+        refused: str,
+        truncation: str,
+        stop_reason: str,
+        status: str,
+    ) -> None:
+        """A prompt fitting alone, but not with its output, is served with less output.
+
+        Upstream answers it with the output capped, whatever ``truncation``
+        says: the retry keeps the input and asks for what the window leaves,
+        before any byte of a stream is sent, and only the served call counts.
+        Every response snapshot echoes the requested ``max_output_tokens``,
+        and an answer running out of room is ``incomplete`` on
+        ``max_output_tokens``, as the OpenAI API answers both
+        (``TestLiveCappedOutput.test_responses``).
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/routes/_responses_context.py:open_response
+        """
+        stream = refused != "off-stream"
+        backend.message = _COMBINED_OVERFLOW
+        backend.output_room = 6072
+        backend.stop_reason = stop_reason
+        backend.refuse_in_stream = refused == "first-event"
+        response = _post(
+            app_client,
+            input=_turns(2),
+            max_output_tokens=8192,
+            truncation=truncation,
+            stream=stream,
+        )
+        assert response.status_code == 200, response.text
+        first, served = backend.requests
+        assert first["inferenceConfig"]["maxTokens"] == 8192
+        assert served["inferenceConfig"]["maxTokens"] == 131072 - 125000
+        assert _text_of(served) == _text_of(first)
+        if stream:
+            events = _events(response)
+            assert "error" not in [event["type"] for event in events]
+            assert [event["sequence_number"] for event in events] == list(
+                range(len(events))
+            )
+            snapshots = [event["response"] for event in events if "response" in event]
+            assert len(snapshots) == 3
+            assert {s["max_output_tokens"] for s in snapshots} == {8192}
+            body = events[-1]["response"]
+            assert body["usage"]["input_tokens"] == 7
+        else:
+            body = response.json()
+            assert body["usage"]["input_tokens"] == 200, "the served call alone"
+        assert body["max_output_tokens"] == 8192, "the requested value is echoed"
+        assert body["status"] == status
+        assert body.get("incomplete_details") == (
+            {"reason": "max_output_tokens"} if status == "incomplete" else None
+        )
+        assert body["output"][0]["content"][0]["text"] == "ANSWER"
+
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_a_capped_retry_refused_again_gets_the_refusal(
+        self, app_client: TestClient, backend: _Backend, stream: bool
+    ) -> None:
+        """The capped retry happens once; refused again, the usual error follows.
+
+        Ref: stdapi/routes/_responses_context.py:truncating
+        """
+        backend.limit = 0
+        backend.message = _COMBINED_OVERFLOW
+        response = _post(app_client, input=_turns(2), stream=stream)
+        if stream:
+            assert response.status_code == 200
+            error = next(e for e in _events(response) if e["type"] == "error")
+        else:
+            assert response.status_code == 400, response.text
+            error = response.json()["error"]
+        assert error["code"] == "context_length_exceeded"
+        assert error["param"] == "input"
+        assert "131072" not in error["message"]
+        assert len(backend.requests) == 2
+        assert backend.requests[1]["inferenceConfig"]["maxTokens"] == 6072
 
     def test_input_token_count_retries_the_same_way(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -413,6 +601,35 @@ class TestCompactionPass:
         assert body["output"][1]["type"] == "message"
         assert body["usage"]["input_tokens"] == 100 + 200
         assert body["usage"]["total_tokens"] == 110 + 210
+
+    def test_a_compacted_stream_capping_its_answer_echoes_one_output_limit(
+        self, app_client: TestClient, backend: _Backend
+    ) -> None:
+        """Every snapshot of a compacted stream echoes the requested output tokens.
+
+        The answer after the compaction is served with its output capped;
+        ``response.created`` and ``response.completed`` still agree.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/routes/_responses_context.py:open_response
+        """
+        backend.count = 5000
+        backend.message = _COMBINED_OVERFLOW
+        backend.output_room = 6072
+        response = _post(
+            app_client,
+            input=_turns(3),
+            max_output_tokens=8192,
+            stream=True,
+            context_management=[{"type": "compaction", "compact_threshold": 3000}],
+        )
+        assert response.status_code == 200, response.text
+        events = _events(response)
+        assert "error" not in [event["type"] for event in events]
+        assert events[-1]["type"] == "response.completed"
+        snapshots = [event["response"] for event in events if "response" in event]
+        assert {s["max_output_tokens"] for s in snapshots} == {8192}
+        assert backend.requests[-1]["inferenceConfig"]["maxTokens"] == 6072
 
     def test_below_the_counted_threshold_nothing_is_compacted(
         self, app_client: TestClient, backend: _Backend
@@ -1018,3 +1235,37 @@ class TestMantleServedModels:
         assert isinstance(request.input, list)
         assert _DIRECTIVE in str(request.input[-1])
         assert "Summary of the earlier conversation" in str(request.input[-1])
+
+
+@pytest.mark.parametrize("requested", [8192, None])
+async def test_echo_relay_rewrites_snapshots_and_closes_the_stream(
+    requested: int | None,
+) -> None:
+    """Snapshots echo what the client sent, even nothing; closing reaches the source.
+
+    A client that sent no ``max_output_tokens`` reads ``null``, never the
+    capped budget, and closing the relay closes the stream it relays.
+
+    Ref: stdapi/routes/_responses_context.py:_echoed_output_events
+    """
+    closed: list[bool] = []
+    snapshot = {"type": "response.created", "response": {"max_output_tokens": 6072}}
+    delta = {"type": "response.output_text.delta", "delta": '"max_output_tokens"'}
+
+    async def events() -> AsyncGenerator[ServerSentEvent]:
+        """Yield a snapshot and a delta quoting the field, then wait to be closed."""
+        try:
+            yield ServerSentEvent(dumps(snapshot), event="response.created")
+            yield ServerSentEvent(dumps(delta), event="response.output_text.delta")
+            while True:
+                yield ServerSentEvent("{}")
+        finally:
+            closed.append(True)
+
+    relay = _responses_context._echoed_output_events(events(), requested)  # noqa: SLF001
+    first, second = await anext(relay), await anext(relay)
+    await relay.aclose()
+    assert first.event == "response.created"
+    assert loads(first.data)["response"]["max_output_tokens"] == requested
+    assert loads(second.data) == delta, "text quoting the field is left alone"
+    assert closed == [True]

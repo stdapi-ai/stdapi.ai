@@ -40,10 +40,12 @@ from stdapi.models.chat._adapters._anthropic_message import (
     _synthesize_tool_config_from_history,
 )
 from stdapi.models.chat._adapters._responses_context import (
+    OUTPUT_BUDGET_TOO_LARGE,
     SUMMARY_HEADING,
     ContextLengthExceededError,
     context_overflow,
     is_summary,
+    output_budget_exceeded,
     record_stream_open_error,
 )
 from stdapi.models.image import get_image_model
@@ -4025,13 +4027,16 @@ def _classify_stream_error(
         and (denied := denied_feature_unavailable(exc)) is not None
     ):
         exc = denied
+    detail = (
+        exc.response["Error"]["Message"]
+        if isinstance(exc, ClientError)
+        else str(exc.args[0] if exc.args else exc)
+    )
+    # The backend's wording of a context-window refusal is never relayed.
+    if output_budget_exceeded(exc):
+        return (400, OUTPUT_BUDGET_TOO_LARGE, None, None, detail, None)
     if not isinstance(exc, ContextLengthExceededError) and context_overflow(exc):
         overflow = ContextLengthExceededError()
-        detail = (
-            exc.response["Error"]["Message"]
-            if isinstance(exc, ClientError)
-            else str(exc.args[0] if exc.args else exc)
-        )
         return (400, overflow.args[0], overflow.param, overflow.code, detail, None)
     if isinstance(exc, ApiError):
         return (
@@ -4788,7 +4793,7 @@ async def replay_stream[T](
         await close_stream(rest)
 
 
-async def close_stream(stream: AsyncIterator[Any]) -> None:
+async def close_stream(stream: AsyncIterable[Any]) -> None:
     """Close a stream, when it can be closed.
 
     Args:

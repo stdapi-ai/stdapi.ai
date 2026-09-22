@@ -1,8 +1,9 @@
 """Anthropic-compatible Messages API endpoints using AWS Bedrock."""
 
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, Depends
+from sse_starlette import ServerSentEvent
 
 from stdapi.api_providers.anthropic import TAG_ANTHROPIC
 from stdapi.auth import authenticate
@@ -21,6 +22,11 @@ from stdapi.models.chat._adapters._anthropic_message import (
     count_tokens_via_bedrock,
     warn_mcp_connector_ignored,
 )
+from stdapi.models.chat._adapters._openai_responses import close_stream
+from stdapi.models.chat._adapters._responses_context import (
+    capped_output_budget,
+    context_overflow,
+)
 from stdapi.models.chat._mantle import get_mantle_chat_model
 from stdapi.models.chat._mantle._convert import messages_payload
 from stdapi.models.chat._mantle._default import ChatModel as MantleChatModel
@@ -33,8 +39,11 @@ from stdapi.types.anthropic_messages import (
     MessageCreateParams,
     MessageTokensCount,
 )
+from stdapi.utils import to_json_str, try_parse_json
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterable
+
     from sse_starlette import EventSourceResponse
     from types_aiobotocore_bedrock.literals import RegionName
 
@@ -58,6 +67,54 @@ router: APIRouter = APIRouter(
 
 #: Mantle path serving the Anthropic count_tokens API.
 _MANTLE_COUNT_TOKENS_PATH = API_PATHS["messages"] + "/count_tokens"
+
+
+def _stopped_at_window(
+    result: Message | EventSourceResponse,
+) -> Message | EventSourceResponse:
+    """Report a capped answer that used its whole output budget as stopped by the window.
+
+    Args:
+        result: The answer, its output capped to what the context window leaves.
+
+    Returns:
+        The answer, a ``max_tokens`` stop reported as ``model_context_window_exceeded``.
+    """
+    if isinstance(result, Message):
+        if result.stop_reason == "max_tokens":
+            result.stop_reason = "model_context_window_exceeded"
+        return result
+    result.body_iterator = _window_stop_events(result.body_iterator)
+    return result
+
+
+async def _window_stop_events(events: AsyncIterable[Any]) -> AsyncGenerator[Any]:
+    """Relay a capped answer's stream, its ``max_tokens`` stop reported as the window's.
+
+    Args:
+        events: The stream events.
+
+    Yields:
+        The stream events, ``message_delta`` rewritten when it stops on ``max_tokens``.
+    """
+    try:
+        async for event in events:
+            if (
+                isinstance(event, ServerSentEvent)
+                and event.event == "message_delta"
+                and isinstance(event.data, str)
+            ):
+                payload = try_parse_json(event.data)
+                if (
+                    isinstance(payload, dict)
+                    and isinstance(delta := payload.get("delta"), dict)
+                    and delta.get("stop_reason") == "max_tokens"
+                ):
+                    delta["stop_reason"] = "model_context_window_exceeded"
+                    event = ServerSentEvent(to_json_str(payload), event=event.event)
+            yield event
+    finally:
+        await close_stream(events)
 
 
 async def _count_tokens_via_mantle(
@@ -220,7 +277,7 @@ async def create_message(
         request, user_id=request.metadata.user_id if request.metadata else None
     )
     warn_mcp_connector_ignored(request)
-    return await get_chat_model(
+    chat_model = get_chat_model(
         (
             await validate_model(
                 request.model,
@@ -229,7 +286,19 @@ async def create_message(
                 route="anthropic_message",
             )
         ).id
-    ).create_message(request, f"msg_{REQUEST_ID.get()}")
+    )
+    message_id = f"msg_{REQUEST_ID.get()}"
+    try:
+        return await chat_model.create_message(request, message_id)
+    except Exception as exc:
+        # Upstream serves an input the window holds alone with its output capped.
+        if (budget := capped_output_budget(context_overflow(exc))) is None:
+            raise
+    return _stopped_at_window(
+        await chat_model.create_message(
+            request.model_copy(update={"max_tokens": budget}), message_id
+        )
+    )
 
 
 @router.post(

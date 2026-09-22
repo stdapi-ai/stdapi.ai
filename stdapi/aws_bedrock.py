@@ -1050,14 +1050,18 @@ def handle_bedrock_client_error() -> Generator[None]:
         None
 
     Raises:
-        ApiError: For recognised error codes (model errors, S3 credential issues, etc.).
+        ApiError: For recognised error codes (model errors, S3 credential issues,
+            an input over the context window, etc.).
             Unrecognised errors are re-raised as-is.
     """
     try:
         yield
     except ClientError as error:
         # Imported here: stdapi.monitoring imports stdapi.aws_bedrock (import cycle).
-        from stdapi.monitoring import log_error_details  # noqa: PLC0415
+        from stdapi.monitoring import (  # noqa: PLC0415
+            context_length_error,
+            log_error_details,
+        )
 
         error_message = error.response["Error"]["Message"]
         match error.response["Error"]["Code"]:
@@ -1067,6 +1071,12 @@ def handle_bedrock_client_error() -> Generator[None]:
                     "Ensure the S3 bucket is in the same region as the Bedrock model that is called."
                 )
                 raise ApiError(msg) from error
+            case "ValidationException" if (
+                overflow := context_length_error(error)
+            ) is not None:
+                # The backend's own wording names internals: logged, not sent.
+                log_error_details(error_message, status=overflow.status)
+                raise overflow from error
             case code if code in _BEDROCK_MODEL_ERROR_CODES:  # pragma: no cover
                 log_error_details(error_message, status=500)
                 msg = "The model failed to process the request."
