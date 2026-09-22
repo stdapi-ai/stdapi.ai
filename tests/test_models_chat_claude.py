@@ -13,11 +13,13 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
 from stdapi.models.chat import get_chat_model
 from stdapi.models.chat._anthropic_claude import _STUB_INPUT_SCHEMAS
 from stdapi.models.chat._default import ChatModel
 from stdapi.models.chat.anthropic_claude_37_to_45 import _REASONING_BUDGET_MINIMAL
+from stdapi.models.chat.anthropic_claude_opus_5 import FORCED_TOOL_CHOICE_REFUSED
 from stdapi.monitoring import REQUEST
 from stdapi.types.anthropic_messages import (
     CacheControlEphemeralParam,
@@ -70,8 +72,8 @@ _COMPUTER_TOOL_TYPES = {
     "anthropic.claude-sonnet-4-6": "computer_20251124",
     "anthropic.claude-sonnet-5": "computer_20251124",
     "anthropic.claude-fable-5": "computer_20251124",
-    # Opus 5 accepts no computer use tool version at all.
-    "anthropic.claude-opus-5": None,
+    "anthropic.claude-opus-5": "computer_20251124",
+    "anthropic.claude-opus-5-5": "computer_20251124",
 }
 
 
@@ -92,17 +94,12 @@ _BETA_FLAGS_CURRENT = {
     "memory": "context-management-2025-06-27",
 }
 
-#: The same flags without computer use, for the generations advertising no computer tool.
-_BETA_FLAGS_NO_COMPUTER = {
-    name: flag for name, flag in _BETA_FLAGS_CURRENT.items() if name != "computer"
-}
-
 
 #: Model IDs of unreleased versions, mapped to the behavior they must inherit.
 _FUTURE_MODELS = {
-    "anthropic.claude-opus-5-1": None,
-    "anthropic.claude-opus-6": None,
-    "anthropic.claude-opus-10": None,
+    "anthropic.claude-opus-5-6": "computer_20251124",
+    "anthropic.claude-opus-6": "computer_20251124",
+    "anthropic.claude-opus-10": "computer_20251124",
     "anthropic.claude-sonnet-5-1": "computer_20251124",
     "anthropic.claude-sonnet-6": "computer_20251124",
     "anthropic.claude-haiku-6": "computer_20251124",
@@ -150,22 +147,89 @@ def test_every_claude_model_promotes_the_universally_supported_tools(
     assert tools["memory"] == "memory_20250818"
 
 
-def test_opus_5_requires_no_computer_use_beta_flag() -> None:
-    """Opus 5 advertises no computer use tool, so it needs no computer use beta.
+@pytest.mark.parametrize(
+    "model_id", ["anthropic.claude-opus-5", "anthropic.claude-opus-5-5"]
+)
+def test_opus_5_computer_tool_carries_its_versioned_beta_flag(model_id: str) -> None:
+    """Opus 5.x promotes ``computer`` with the beta flag of its tool version.
 
-    The ``anthropic_beta`` flag is version-keyed: with no computer tool version in the
-    table there is nothing to gate, and sending the flag would be rejected.
+    Bedrock accepts ``computer_20251124`` with ``computer-use-2025-11-24`` on Opus 5
+    and 5.5 and rejects ``computer_20250124`` there, so the promoted tool must
+    bring the flag keyed on its own ``type``.
 
     Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool
-         stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
+         stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_anthropic_beta
     """
-    model = _claude_model("anthropic.claude-opus-5")
+    model = _claude_model(model_id)
+    fields: JsonMapping = {}
 
-    assert "computer" not in model.TOOL_BETA_FLAGS
-    assert "computer" not in model.SERVER_TOOL_NAME_TO_TYPE
-    assert model.SERVER_TOOL_NAME_TO_TYPE["bash"] == "bash_20250124", (
-        "only the computer tool is missing, not the whole server tool table"
+    model._req_configure_anthropic_beta(  # noqa: SLF001
+        fields,
+        [{"name": "computer", "type": model.SERVER_TOOL_NAME_TO_TYPE["computer"]}],
     )
+
+    assert fields["anthropic_beta"] == ["computer-use-2025-11-24"]
+
+
+class TestForcedToolChoice:
+    """Opus 5.5 and later refuse a forced tool choice before the request is sent.
+
+    Bedrock and the official API reject ``any``/``tool`` on these models with a
+    message in Anthropic terms; the gateway answers every route, and the legacy
+    ``function_call`` field, with one message naming ``auto`` as the way forward.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use#forcing-tool-use
+         stdapi/models/chat/anthropic_claude_opus_5.py:ChatModel._req_configure_tools
+    """
+
+    @staticmethod
+    def _configure(model_id: str, choice: JsonMapping) -> JsonMapping:
+        """Run ``_req_configure_tools`` with one client tool and *choice*."""
+        tool_config: JsonMapping = {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "name": "get_weather",
+                        "inputSchema": {"json": {"type": "object"}},
+                    }
+                }
+            ],
+            "toolChoice": choice,
+        }
+        _claude_model(model_id)._req_configure_tools(  # noqa: SLF001
+            tool_config=tool_config,  # type: ignore[arg-type]
+            additional_request_fields={},
+            server_tools=[],
+        )
+        return tool_config
+
+    @pytest.mark.parametrize(
+        "model_id", ["anthropic.claude-opus-5-5", "anthropic.claude-opus-6"]
+    )
+    @pytest.mark.parametrize(
+        "choice", [{"any": {}}, {"tool": {"name": "get_weather"}}], ids=["any", "tool"]
+    )
+    def test_forced_choice_is_refused(self, model_id: str, choice: JsonMapping) -> None:
+        """A forced choice raises a 400 naming ``auto`` as the way forward."""
+        with pytest.raises(ApiError) as raised:
+            self._configure(model_id, choice)
+
+        assert raised.value.status == 400
+        assert raised.value.args[0] == FORCED_TOOL_CHOICE_REFUSED
+
+    @pytest.mark.parametrize(
+        ("model_id", "choice"),
+        [
+            ("anthropic.claude-opus-5-5", {"auto": {}}),
+            ("anthropic.claude-opus-5", {"any": {}}),
+            ("anthropic.claude-opus-5", {"tool": {"name": "get_weather"}}),
+        ],
+    )
+    def test_other_choices_are_forwarded(
+        self, model_id: str, choice: JsonMapping
+    ) -> None:
+        """``auto`` on Opus 5.5, and any choice on Opus 5, reach the request unchanged."""
+        assert self._configure(model_id, choice)["toolChoice"] == choice
 
 
 def test_claude_3_5_keeps_the_tool_versions_of_its_own_generation() -> None:
@@ -200,8 +264,9 @@ def test_claude_3_5_keeps_the_tool_versions_of_its_own_generation() -> None:
         ("anthropic.claude-sonnet-5", _BETA_FLAGS_CURRENT),
         ("anthropic.claude-fable-5", _BETA_FLAGS_CURRENT),
         ("anthropic.claude-mythos-preview", _BETA_FLAGS_CURRENT),
-        ("anthropic.claude-opus-5", _BETA_FLAGS_NO_COMPUTER),
-        ("anthropic.claude-opus-6", _BETA_FLAGS_NO_COMPUTER),
+        ("anthropic.claude-opus-5", _BETA_FLAGS_CURRENT),
+        ("anthropic.claude-opus-5-5", _BETA_FLAGS_CURRENT),
+        ("anthropic.claude-opus-6", _BETA_FLAGS_CURRENT),
     ],
 )
 def test_beta_flags_gate_exactly_the_tools_the_generation_promotes(
@@ -358,7 +423,8 @@ class TestReasoningDisabled:
         "model_id",
         [
             "anthropic.claude-opus-5",
-            "anthropic.claude-opus-6",
+            "anthropic.claude-opus-5-20260115-v1:0",
+            "anthropic.claude-opus-5-1",
             "anthropic.claude-sonnet-5",
             "anthropic.claude-sonnet-6",
         ],
@@ -366,7 +432,10 @@ class TestReasoningDisabled:
     def test_disabled_reasoning_is_forwarded_when_supported(
         self, model_id: str
     ) -> None:
-        """Models accepting a disabled configuration receive it."""
+        """Models accepting a disabled configuration receive it.
+
+        Opus 5 and its dated variants keep it: only Opus 5.5 and later always reason.
+        """
         fields: JsonMapping = {}
 
         _claude_model(model_id)._req_configure_reasoning(fields, enabled=False)  # noqa: SLF001
@@ -376,6 +445,11 @@ class TestReasoningDisabled:
     @pytest.mark.parametrize(
         "model_id",
         [
+            "anthropic.claude-opus-5-5",
+            "anthropic.claude-opus-5-5-20270101-v1:0",
+            "anthropic.claude-opus-5-10",
+            "anthropic.claude-opus-6",
+            "anthropic.claude-opus-10",
             "anthropic.claude-fable-5",
             "anthropic.claude-fable-5-1",
             "anthropic.claude-fable-6",
@@ -387,7 +461,11 @@ class TestReasoningDisabled:
     def test_disabled_reasoning_is_dropped_when_the_model_always_reasons(
         self, model_id: str, request_log: EventLog
     ) -> None:
-        """Fable and Mythos always reason, so the rejected configuration is dropped with a warning."""
+        """Opus 5.5+, Fable and Mythos always reason, so the rejected configuration is dropped with a warning.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
+             stdapi/models/chat/anthropic_claude_opus_5.py:ChatModel
+        """
         fields: JsonMapping = {}
 
         _claude_model(model_id)._req_configure_reasoning(fields, enabled=False)  # noqa: SLF001

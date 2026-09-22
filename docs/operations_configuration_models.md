@@ -1054,7 +1054,7 @@ export ANTHROPIC_BETA_ALLOWLIST='new-feature-2026-03-01,another-flag-2026-04-01'
 |------------------------------------|-------------------------------|
 | `computer-use-2024-10-22`          | Computer use (Claude 3.5)     |
 | `computer-use-2025-01-24`          | Computer use (Claude 3.7)     |
-| `computer-use-2025-11-24`          | Computer use (Claude 4.5/4.6) |
+| `computer-use-2025-11-24`          | Computer use (Claude 4.5 and later) |
 | `token-efficient-tools-2025-02-19` | Token efficient tools         |
 | `Interleaved-thinking-2025-05-14`  | Interleaved thinking          |
 | `output-128k-2025-02-19`           | 128K output                   |

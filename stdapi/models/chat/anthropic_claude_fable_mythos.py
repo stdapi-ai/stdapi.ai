@@ -5,6 +5,9 @@ from typing import ClassVar
 
 from stdapi.models.chat._anthropic_claude import AnthropicClaudeChatModel
 
+#: Every Fable and Mythos version, released or not.
+FABLE_MYTHOS_MATCHER = re_compile(r"^anthropic\.claude-(?:fable|mythos)-")
+
 
 class ChatModel(AnthropicClaudeChatModel):
     """Anthropic Claude Fable and Mythos chat model implementation.
@@ -18,6 +21,6 @@ class ChatModel(AnthropicClaudeChatModel):
 
     __slots__ = ()
 
-    MATCHER = re_compile(r"^anthropic\.claude-(?:fable|mythos)-")
+    MATCHER = FABLE_MYTHOS_MATCHER
     REASONING_DISABLE_SUPPORTED: ClassVar[bool] = False
     SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED: ClassVar[bool] = True

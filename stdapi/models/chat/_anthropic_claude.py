@@ -163,6 +163,12 @@ _REASONING_CONFIG: dict[str, str] = {"type": "adaptive"}
 #: Regex to match a date suffix in model ID
 _DATE_SUFFIX = re_compile(r"^(.+)-(\d{8})$")
 
+#: Warning logged when a request disables reasoning on a model that always reasons.
+REASONING_NOT_DISABLED = (
+    "Reasoning cannot be disabled on this model: "
+    "its default adaptive mode is used instead"
+)
+
 
 def _split_beta_flags(header: str) -> list[str]:
     """Split an ``anthropic-beta`` header into its flags.
@@ -567,11 +573,7 @@ class AnthropicClaudeChatModel(_BaseChatModel):
         """
         if not enabled:
             if not self.REASONING_DISABLE_SUPPORTED:
-                log_error_details(
-                    "Reasoning cannot be disabled on this model: "
-                    "its default adaptive mode is used instead",
-                    level="warning",
-                )
+                log_error_details(REASONING_NOT_DISABLED, level="warning")
                 return
             additional_request_fields["reasoning_config"] = {"type": "disabled"}
         elif budget_tokens:

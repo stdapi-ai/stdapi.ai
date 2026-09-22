@@ -76,6 +76,7 @@ from stdapi.models.chat._mantle.openai_gpt5 import ChatModel as GptChatModel
 from stdapi.models.chat._mantle.openai_gpt_oss import ChatModel as GptOssChatModel
 from stdapi.models.chat._mantle.qwen_vl import ChatModel as QwenVisionChatModel
 from stdapi.models.chat._mantle.xai_grok import ChatModel as GrokChatModel
+from stdapi.models.chat.anthropic_claude_opus_5 import FORCED_TOOL_CHOICE_REFUSED
 from stdapi.models.chat.openai_gpt import ChatModel as OpenAiGptChatModel
 from stdapi.monitoring import REQUEST, REQUEST_ID, EventLog
 from stdapi.pricing import Service
@@ -2762,11 +2763,268 @@ class TestServiceTierAndEffortMapping:
         ],
     )
     def test_effort_mapped_toward_messages(self, effort: str, expected: str) -> None:
-        """OpenAI reasoning efforts map to Anthropic ``output_config.effort``."""
+        """OpenAI reasoning efforts map to Anthropic ``output_config.effort``.
+
+        A model not known to take ``xhigh``/``max`` gets them capped to ``high``.
+        """
         out = mantle_convert._chat_to_messages_request(  # noqa: SLF001
             {"model": "m", "messages": [], "reasoning_effort": effort}
         )
         assert out["output_config"] == {"effort": expected}
+
+    @pytest.mark.parametrize("effort", ["xhigh", "max"])
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic.claude-opus-4-7",
+            "anthropic.claude-opus-4-8",
+            "anthropic.claude-opus-5",
+            "anthropic.claude-opus-5-5",
+            "anthropic.claude-sonnet-5",
+            "anthropic.claude-fable-5",
+            "anthropic.claude-mythos-5",
+            "anthropic.claude-opus-6",
+        ],
+    )
+    def test_top_efforts_passed_through_on_claude_4_7_and_later(
+        self, model: str, effort: str
+    ) -> None:
+        """Claude 4.7+ receives ``xhigh`` and ``max`` as requested, not capped.
+
+        Mantle accepts both on Opus 4.7, 4.8, 5, 5.5 and Sonnet 5; Fable, Mythos
+        and later versions are assumed to keep them, as the same models do on the
+        runtime path.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
+             stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+        """
+        out = mantle_convert._chat_to_messages_request(  # noqa: SLF001
+            {"model": model, "messages": [], "reasoning_effort": effort}
+        )
+        assert out["output_config"] == {"effort": effort}
+
+    @pytest.mark.parametrize(
+        "model", ["anthropic.claude-opus-4-6", "anthropic.claude-sonnet-4-6"]
+    )
+    def test_claude_4_6_takes_max_but_not_xhigh(self, model: str) -> None:
+        """Claude 4.6 receives ``max`` as requested and ``xhigh`` capped to ``high``.
+
+        Mantle does not serve 4.6, so this mirrors the runtime class for the day it
+        does: ``max`` is forwarded, ``xhigh`` is mapped down.
+
+        Ref: stdapi/models/chat/anthropic_claude_46.py:ChatModel
+             stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+        """
+        efforts = {
+            effort: mantle_convert._chat_to_messages_request(  # noqa: SLF001
+                {"model": model, "messages": [], "reasoning_effort": effort}
+            )["output_config"]
+            for effort in ("xhigh", "max")
+        }
+
+        assert efforts == {"xhigh": {"effort": "high"}, "max": {"effort": "max"}}
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic.claude-haiku-4-5",
+            "anthropic.claude-sonnet-4-20250514-v1:0",
+            "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        ],
+    )
+    def test_top_efforts_capped_before_claude_4_6(self, model: str) -> None:
+        """Earlier Claude generations keep ``xhigh``/``max`` capped to ``high``.
+
+        The dated 4.0 and 4.5 IDs pin the version boundary of the matchers.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+        """
+        for effort in ("xhigh", "max"):
+            out = mantle_convert._chat_to_messages_request(  # noqa: SLF001
+                {"model": model, "messages": [], "reasoning_effort": effort}
+            )
+            assert out["output_config"] == {"effort": "high"}
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic.claude-opus-5-5",
+            "anthropic.claude-opus-6",
+            "anthropic.claude-fable-5",
+            "anthropic.claude-mythos-5",
+        ],
+    )
+    async def test_disabled_thinking_dropped_on_always_reasoning_claude(
+        self, model: str, request_log: EventLog
+    ) -> None:
+        """The Messages passthrough drops a disabled ``thinking`` on models that always reason.
+
+        Mantle rejects ``thinking.type.disabled`` on these models, so the request is
+        served with their adaptive default and a warning, as on the runtime path.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
+             stdapi/models/chat/_mantle/_convert.py:messages_payload
+        """
+        request = MessageCreateParams.model_validate(
+            {
+                "model": model,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                "thinking": {"type": "disabled"},
+            }
+        )
+
+        payload = await mantle_convert.messages_payload(request, model)
+
+        assert "thinking" not in payload
+        assert request_log["level"] == "warning"
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic.claude-opus-5",
+            "anthropic.claude-opus-5-5",
+            "anthropic.claude-opus-6",
+            "anthropic.claude-sonnet-5",
+            "anthropic.claude-haiku-4-5",
+            "anthropic.claude-fable-5",
+            "anthropic.claude-mythos-5",
+            "anthropic.claude-mythos-preview",
+        ],
+    )
+    def test_always_reasoning_rule_matches_the_runtime_classes(
+        self, model: str
+    ) -> None:
+        """The Mantle path treats as always reasoning exactly the models the runtime path does.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_ALWAYS_REASONING_MATCHER
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel.REASONING_DISABLE_SUPPORTED
+        """
+        runtime = cast(
+            "AnthropicClaudeChatModel", get_chat_model(model, allow_mantle=False)
+        )
+
+        assert (
+            mantle_convert._ALWAYS_REASONING_MATCHER.match(model) is not None  # noqa: SLF001
+        ) is not runtime.REASONING_DISABLE_SUPPORTED
+
+    async def test_disabled_thinking_kept_on_opus_5(self) -> None:
+        """Opus 5 accepts a disabled ``thinking``, so the passthrough forwards it.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:messages_payload
+        """
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "anthropic.claude-opus-5",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                "thinking": {"type": "disabled"},
+            }
+        )
+
+        payload = await mantle_convert.messages_payload(
+            request, "anthropic.claude-opus-5"
+        )
+
+        assert payload["thinking"] == {"type": "disabled"}
+
+    @pytest.mark.parametrize(
+        "model", ["anthropic.claude-opus-5-5", "anthropic.claude-mythos-5"]
+    )
+    @pytest.mark.parametrize(
+        "thinking",
+        [{"type": "adaptive"}, {"type": "enabled", "budget_tokens": 1024}],
+        ids=["adaptive", "enabled"],
+    )
+    async def test_other_thinking_values_reach_always_reasoning_claude(
+        self, model: str, thinking: dict[str, Any], request_log: EventLog
+    ) -> None:
+        """Only a disabled ``thinking`` is dropped; any other value is forwarded silently.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:messages_payload
+        """
+        request = MessageCreateParams.model_validate(
+            {
+                "model": model,
+                "max_tokens": 2048,
+                "messages": [{"role": "user", "content": "hi"}],
+                "thinking": thinking,
+            }
+        )
+
+        payload = await mantle_convert.messages_payload(request, model)
+
+        assert payload["thinking"] == thinking
+        assert request_log["level"] == "info"
+
+    @pytest.mark.parametrize(
+        "tool_choice",
+        [{"type": "any"}, {"type": "tool", "name": "get_weather"}],
+        ids=["any", "tool"],
+    )
+    async def test_forced_tool_choice_refused_on_messages_passthrough(
+        self, tool_choice: dict[str, str]
+    ) -> None:
+        """Opus 5.5 refuses a forced ``tool_choice`` before it reaches Mantle.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_refuse_forced_tool_choice
+             stdapi/models/chat/anthropic_claude_opus_5.py:FORCED_TOOL_CHOICE_REFUSED
+        """
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "anthropic.claude-opus-5-5",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"name": "get_weather", "input_schema": {"type": "object"}}],
+                "tool_choice": tool_choice,
+            }
+        )
+
+        with pytest.raises(ApiError) as raised:
+            await mantle_convert.messages_payload(request, "anthropic.claude-opus-5-5")
+
+        assert raised.value.status == 400
+        assert raised.value.args[0] == FORCED_TOOL_CHOICE_REFUSED
+
+    @pytest.mark.parametrize(
+        ("model", "refused"),
+        [
+            ("anthropic.claude-opus-5-5", True),
+            ("anthropic.claude-opus-6", True),
+            ("anthropic.claude-opus-5", False),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "tool_choice",
+        ["required", {"type": "function", "function": {"name": "get_weather"}}],
+        ids=["required", "function"],
+    )
+    def test_forced_tool_choice_refused_on_conversion(
+        self, model: str, refused: bool, tool_choice: object
+    ) -> None:
+        """A forced choice converted from Chat Completions or Responses is refused on Opus 5.5+.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+        """
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "get_weather", "parameters": {}},
+                }
+            ],
+            "tool_choice": tool_choice,
+        }
+
+        if refused:
+            with pytest.raises(ApiError) as raised:
+                mantle_convert._chat_to_messages_request(payload)  # noqa: SLF001
+            assert raised.value.args[0] == FORCED_TOOL_CHOICE_REFUSED
+        else:
+            out = mantle_convert._chat_to_messages_request(payload)  # noqa: SLF001
+            assert out["tool_choice"]["type"] in {"any", "tool"}
 
     def test_none_effort_omitted_toward_messages(self) -> None:
         """``reasoning_effort=none`` emits no ``output_config``."""

@@ -74,6 +74,7 @@ CLAUDE_ALL = (
     "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-8",
     "anthropic.claude-opus-5",
+    "anthropic.claude-opus-5-5",
     # "anthropic.claude-sonnet-4-20250514-v1:0", # Disabled, no more available
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-sonnet-4-6",
@@ -1633,11 +1634,12 @@ class TestAnthropicClaudeChatCompletions:
         The cheap Haiku model is excluded because
         ``test_reasoning_effort_none_explicit_disable`` already issues that exact
         request with a stricter assertion.  Absence of thinking is deliberately not
-        asserted here: the Fable and Mythos families always reason, so the gateway logs
-        a warning and falls back to their adaptive default instead of sending a disabled
-        ``reasoning_config``.
+        asserted here: Opus 5.5 and later and the Fable and Mythos families always
+        reason, so the gateway logs a warning and falls back to their adaptive default
+        instead of sending a disabled ``reasoning_config``, which Bedrock rejects.
 
         Ref: stdapi/models/chat/anthropic_claude_fable_mythos.py:ChatModel
+             stdapi/models/chat/anthropic_claude_opus_5.py:ChatModel
              https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
         """
         try:

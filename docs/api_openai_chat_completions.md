@@ -64,7 +64,7 @@ Two outcomes are possible for a parameter no model behind this API can honor, an
 | Parallel tool calls                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Multiple tools in one turn                                      |
 | Disable parallel tool calls              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | `parallel_tool_calls: false` is accepted for every model and honored by models able to constrain tool use; the response reports the tool calls actually made |
 | Server tools                             | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Provider system tools and Claude server tools                   |
-| `tool_choice`                             |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `auto`, `none`, `required`, and named-function choice are supported; `none` withdraws every declared tool, but a conversation already containing a `tool_calls` message keeps the tools it names callable; `tool_choice: {"type": "allowed_tools"}` is rejected with `400` — supported on the [Responses API](api_openai_responses.md) |
+| `tool_choice`                             |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `auto`, `none`, `required`, and named-function choice are supported; `none` withdraws every declared tool, but a conversation already containing a `tool_calls` message keeps the tools it names callable; `tool_choice: {"type": "allowed_tools"}` is rejected with `400` — supported on the [Responses API](api_openai_responses.md); Claude Opus 5.5 and later refuse `required`, a named function and a named legacy `function_call` with `400` |
 | Changing `tools` between turns            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | The tools declared on a turn are the only ones the model may call, whatever the replayed history names |
 | `custom` tools (free-form)               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with `400`, in `tools`, in a named `tool_choice`, and inside `allowed_tools`; declare the tool as a `function` tool instead — accepted and dropped on the [Responses API](api_openai_responses.md) |
 | **Generation Control**                   |                                          |                                                                 |
@@ -555,13 +555,13 @@ Use the `reasoning_effort` parameter with predefined effort levels. This format 
 
 **Available Levels:**
 
-- `none` - Disable reasoning (accepted but not honored on Claude Fable and Mythos, which always reason: the model's default adaptive mode is used, the response still carries reasoning content and its output tokens are still billed)
+- `none` - Disable reasoning (accepted but not honored on Claude Opus 5.5 and later, Fable and Mythos, which always reason: the model's default adaptive mode is used, the response still carries reasoning content and its output tokens are still billed)
 - `minimal` - Quick responses with minimal reasoning
 - `low` - Light reasoning for straightforward tasks
 - `medium` - Balanced reasoning for most use cases
 - `high` - Deep reasoning for complex problems
 - `xhigh` - Maximum reasoning for complex problems
-- `max` - Its own (higher) effort tier on the adaptive Claude models served by the Converse API (Sonnet/Opus 4.6 and later, plus Fable), which forward it unchanged; collapsed onto the model's top reasoning tier on the fixed-scale models (Claude 3.7 - 4.5, Amazon Nova 2, DeepSeek, Kimi). On Amazon Bedrock Mantle, Claude models — Mythos among them — are reached over the Anthropic Messages API, and that conversion maps `max` to `high`; every other Mantle-served model receives the level as sent. Claude 4.6 also maps `xhigh` down to `high`
+- `max` - Its own (higher) effort tier on the adaptive Claude models served by the Converse API (Sonnet/Opus 4.6 and later, plus Fable), which forward it unchanged; collapsed onto the model's top reasoning tier on the fixed-scale models (Claude 3.7 - 4.5, Amazon Nova 2, DeepSeek, Kimi). Claude 4.6 also maps `xhigh` down to `high`. Amazon Bedrock Mantle applies the same rules to Claude, and maps both levels to `high` on the generations before 4.6; every other Mantle-served model receives the level as sent
 
 **What You Get:**
 

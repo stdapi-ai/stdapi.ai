@@ -62,7 +62,7 @@ curl -X POST "$BASE/v1/messages" \
 | Files API (`file_id`)                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Reference uploaded files in document/image sources — see [Files API](api_anthropic_files.md) |
 | **Tool Calling**                      |                                          |                                                                                              |
 | Tool use (`tools`)                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Full Anthropic-compatible schema                                                             |
-| Tool choice (`auto`, `any`, `tool`)   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Control tool selection behavior                                                              |
+| Tool choice (`auto`, `any`, `tool`)   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Control tool selection behavior; Claude Opus 5.5 and later refuse `any` and `tool` with `400` |
 | Tool choice `none`                    |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Withdraws every declared tool; a conversation already containing a `tool_use` block keeps the tools that block names callable, and the model may call one again |
 | Changing `tools` between turns        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | The tools declared on a turn are the only ones the model may call, whatever the replayed history names |
 | Parallel tool calls                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Multiple tools in one turn                                                                   |
@@ -508,7 +508,7 @@ Anthropic Claude models support server-side tools that are executed by the model
 | `computer` | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } |
 | `memory` | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } |
 
-On Claude 4.6 and later, a bare `computer` tool is promoted to the newer `computer_20251124` tool type — except on Claude Opus 5 and later, which support no computer-use tool version: there, `computer` is passed through as a regular custom tool instead of a server tool.
+On Claude 4.6 and later, a bare `computer` tool is promoted to the newer `computer_20251124` tool type.
 
 **Usage:**
 
@@ -666,8 +666,8 @@ On models whose reasoning depth is an effort level rather than a token budget (A
 !!! note "`display` Not Honored"
     The `display` field (`summarized`/`omitted`) is accepted but has no effect: Bedrock's reasoning configuration has no equivalent, so full thinking text is always returned.
 
-!!! note "Disabled Thinking Not Honored on Claude Fable and Mythos"
-    These two families always reason. The request is accepted and a warning is recorded in the request log, but the disabled configuration is dropped and the model's default adaptive mode is used: the response still carries thinking blocks and their output tokens are still billed. Use `output_config.effort` to lower the depth instead.
+!!! note "Disabled Thinking Not Honored on Claude Opus 5.5+, Fable and Mythos"
+    These models always reason. The request is accepted and a warning is recorded in the request log, but the disabled configuration is dropped and the model's default adaptive mode is used: the response still carries thinking blocks and their output tokens are still billed. Use `output_config.effort` to lower the depth instead.
 
 **Response with Thinking:**
 

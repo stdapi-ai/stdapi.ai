@@ -20,6 +20,7 @@ it, since a ``thinking`` block requires a signature that cannot be produced.
 from asyncio import gather
 from dataclasses import dataclass, field
 from hashlib import sha256
+from re import compile as re_compile
 from time import time
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -35,6 +36,15 @@ from stdapi.models.chat._adapters._common import (
     resolve_external_web_access,
 )
 from stdapi.models.chat._adapters._openai_responses import COMPACTION_CONTENT_PREFIX
+from stdapi.models.chat._anthropic_claude import (
+    REASONING_NOT_DISABLED as _REASONING_NOT_DISABLED,
+)
+from stdapi.models.chat.anthropic_claude_fable_mythos import FABLE_MYTHOS_MATCHER
+from stdapi.models.chat.anthropic_claude_opus_5 import (
+    FORCED_TOOL_CHOICE_REFUSED,
+    OPUS_5_5_MATCHER,
+)
+from stdapi.monitoring import log_error_details
 from stdapi.types.anthropic_messages import (
     Base64ImageSource,
     Base64PDFSource,
@@ -154,6 +164,26 @@ _EFFORT_TO_ANTHROPIC = {
     "xhigh": "high",
     "max": "high",
 }
+
+#: Claude versions taking an effort above ``high`` as it stands, per effort; others get ``high``.
+_TOP_EFFORT_MATCHERS = {
+    "xhigh": re_compile(
+        r"^anthropic\.claude-(?:(?:fable|mythos)-"
+        r"|(?:opus|sonnet|haiku)-(?:4-(?:[7-9]|\d{2})|[5-9]|\d{2})(?:\D|$))"
+    ),
+    "max": re_compile(
+        r"^anthropic\.claude-(?:(?:fable|mythos)-"
+        r"|(?:opus|sonnet|haiku)-(?:4-(?:[6-9]|\d{2})|[5-9]|\d{2})(?:\D|$))"
+    ),
+}
+
+#: Anthropic ``tool_choice`` types forcing tool use.
+_FORCED_TOOL_CHOICES = frozenset({"any", "tool"})
+
+#: Claude models that always reason, as the runtime model classes match them.
+_ALWAYS_REASONING_MATCHER = re_compile(
+    f"{OPUS_5_5_MATCHER.pattern}|{FABLE_MYTHOS_MATCHER.pattern}"
+)
 
 #: Anthropic server tool and toolset type prefixes (no Chat Completions equivalent).
 _ANTHROPIC_SERVER_TOOL_PREFIXES = (
@@ -645,9 +675,10 @@ async def messages_payload(
 
     File-backed image and document sources (URLs, S3 URIs, Files API
     references) are inlined as base64 sources, inline ``system``-role
-    messages are folded into the ``system`` field, and the
+    messages are folded into the ``system`` field, the
     ``anthropic_version`` body field is dropped (Mantle takes the version as
-    an HTTP header).
+    an HTTP header), and a disabled ``thinking`` is dropped with a warning on
+    the models that always reason.
 
     Args:
         request: Anthropic-format message creation request.
@@ -661,7 +692,8 @@ async def messages_payload(
         JSON-ready request payload.
 
     Raises:
-        ApiError: When the request asks for web access this API cannot give it.
+        ApiError: When the request asks for web access this API cannot give it,
+            or forces tool use on a model refusing it.
     """
     await prefetch_all_content_types()
     payload = request.model_dump(mode="json", by_alias=True, exclude_unset=True)
@@ -674,6 +706,12 @@ async def messages_payload(
     payload.pop("anthropic_version", None)
     if payload.get("max_tokens") is None:
         payload["max_tokens"] = _DEFAULT_MAX_TOKENS
+    if (payload.get("thinking") or {}).get(
+        "type"
+    ) == "disabled" and _ALWAYS_REASONING_MATCHER.match(model_id):
+        del payload["thinking"]
+        log_error_details(_REASONING_NOT_DISABLED, level="warning")
+    _refuse_forced_tool_choice(model_id, payload.get("tool_choice"))
     await gather(
         *(
             _resolve_anthropic_blocks(message.content, dumped["content"])
@@ -1552,7 +1590,8 @@ def _chat_to_messages_request(payload: dict[str, Any]) -> dict[str, Any]:
         Anthropic Messages request payload.
 
     Raises:
-        ApiError: When the payload requests more than one choice.
+        ApiError: When the payload requests more than one choice, or forces
+            tool use on a model refusing it.
     """
     _ensure_single_choice(payload)
     system, turns = _anthropic_messages_from_chat(payload.get("messages") or [])
@@ -1569,7 +1608,12 @@ def _chat_to_messages_request(payload: dict[str, Any]) -> dict[str, Any]:
     out.update(_optional_fields(payload, ("top_p", "stream")))
     if tier := _map_service_tier(payload.get("service_tier")):
         out["service_tier"] = tier
-    if effort := _EFFORT_TO_ANTHROPIC.get(str(payload.get("reasoning_effort"))):
+    requested = str(payload.get("reasoning_effort"))
+    if (matcher := _TOP_EFFORT_MATCHERS.get(requested)) and matcher.match(
+        str(out["model"])
+    ):
+        out["output_config"] = {"effort": requested}
+    elif effort := _EFFORT_TO_ANTHROPIC.get(requested):
         out["output_config"] = {"effort": effort}
     if stop := payload.get("stop"):
         out["stop_sequences"] = [stop] if isinstance(stop, str) else stop
@@ -1581,8 +1625,27 @@ def _chat_to_messages_request(payload: dict[str, Any]) -> dict[str, Any]:
     if (
         choice := _anthropic_tool_choice_from_chat(payload.get("tool_choice"), parallel)
     ) is not None:
+        _refuse_forced_tool_choice(str(out["model"]), choice)
         out["tool_choice"] = choice
     return out
+
+
+def _refuse_forced_tool_choice(model: str, choice: object) -> None:
+    """Refuse an Anthropic ``tool_choice`` forcing tool use on a model rejecting it.
+
+    Args:
+        model: Mantle model identifier.
+        choice: Anthropic ``tool_choice`` value, if any.
+
+    Raises:
+        ApiError: When *choice* forces tool use on Claude Opus 5.5 or later.
+    """
+    if (
+        isinstance(choice, dict)
+        and choice.get("type") in _FORCED_TOOL_CHOICES
+        and OPUS_5_5_MATCHER.match(model)
+    ):
+        raise ApiError(FORCED_TOOL_CHOICE_REFUSED)
 
 
 def _anthropic_messages_from_chat(

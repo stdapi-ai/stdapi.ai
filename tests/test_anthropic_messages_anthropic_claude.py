@@ -39,8 +39,7 @@ import pytest
 from anthropic import Anthropic, BadRequestError
 from anthropic.types import Message, ToolUseBlock
 
-#: Claude models covering every system-tool code branch (old and new computer-use
-#: tool types, and the unsupported-model skip), for tools billed on every call.
+#: Claude models covering both computer-use tool types, for tools billed on every call.
 _CLAUDE_SYSTEM_TOOLS = (
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-6",
@@ -161,9 +160,6 @@ _COMPUTER_USE_BETA_OLD = "computer-use-2025-01-24"
 _COMPUTER_USE_NEW_MODELS = re.compile(
     r"claude-(?:opus|sonnet)-4-[6-9]|claude-(?:opus|sonnet|haiku|fable|mythos)-(?:[5-9]|\d\d)"
 )
-
-#: Models rejecting every computer-use tool type (Claude Opus 5 and later).
-_COMPUTER_USE_UNSUPPORTED_MODELS = re.compile(r"claude-opus-(?:[5-9]|\d\d)")
 
 #: Memory tool beta flag (required on official API; auto-injected by the gateway).
 _MEMORY_BETA = "context-management-2025-06-27"
@@ -1214,7 +1210,7 @@ class TestCodeExecutionTool:
 
 @pytest.mark.parametrize("model_id", _CLAUDE_SYSTEM_TOOLS)
 class TestComputerUseTool:
-    """Computer use tool (name ``computer``) on the Claude models that still accept it.
+    """Computer use tool (name ``computer``) on Claude models.
 
     Computer use stays in beta and its beta flag is keyed on the tool ``type``, not on
     the model: ``computer_20251124`` requires ``computer-use-2025-11-24`` while
@@ -1231,12 +1227,6 @@ class TestComputerUseTool:
     #: Display dimensions matching the sample desktop screenshot (desktop.jpg).
     _DISPLAY_WIDTH = 1024
     _DISPLAY_HEIGHT = 576
-
-    @pytest.fixture(autouse=True)
-    def _skip_without_computer_use(self, anthropic_chat_model: str) -> None:
-        """Skip when the model under test supports no computer-use tool type."""
-        if _COMPUTER_USE_UNSUPPORTED_MODELS.search(anthropic_chat_model):
-            pytest.skip("Computer use is not supported by this model")
 
     @pytest.fixture(scope="class")
     @staticmethod
