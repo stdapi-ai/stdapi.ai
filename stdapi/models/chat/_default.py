@@ -63,6 +63,7 @@ if TYPE_CHECKING:
         Message,
         MessageCreateParams,
         ServerTools,
+        ThinkingDisplay,
     )
     from stdapi.types.openai import ChatModeration, ResponseModeration
     from stdapi.types.openai_chat_completions import (
@@ -1028,6 +1029,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,
         max_tokens: int | None = None,
+        display: ThinkingDisplay | None = None,
     ) -> None:
         """Override this method in model subclasses that support reasoning.
 
@@ -1037,6 +1039,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             reasoning_effort: Reasoning effort level.
             budget_tokens: Explicit token budget for reasoning.
             max_tokens: Used by overrides to derive budget.
+            display: Used by overrides to summarize or omit thinking text.
         """
 
     def _resp_map_tool_result(

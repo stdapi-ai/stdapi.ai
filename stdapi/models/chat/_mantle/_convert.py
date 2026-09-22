@@ -12,9 +12,10 @@ silently dropped (Anthropic thinking blocks and budgets, Responses reasoning
 items, Chat Completions audio parts, penalties, logit biases, seeds).
 
 A reasoning model's thinking text is the exception: the Chat Completions
-``reasoning_content`` field carries it, and the Responses conversion re-emits
-it as a ``reasoning`` output item. The Anthropic Messages shape cannot carry
-it, since a ``thinking`` block requires a signature that cannot be produced.
+``reasoning_content`` field carries it (Claude's thinking blocks included,
+without their signature), and the Responses conversion re-emits it as a
+``reasoning`` output item. The Anthropic Messages shape cannot carry it,
+since a ``thinking`` block requires a signature that cannot be produced.
 """
 
 from asyncio import gather
@@ -2261,7 +2262,10 @@ def convert_payload(
     """Convert a request payload between Mantle wire formats.
 
     Conversion composes through the Chat Completions shape; fields without
-    an equivalent there (e.g. Anthropic thinking budgets) are dropped.
+    an equivalent there (e.g. Anthropic thinking budgets) are dropped, except
+    a Responses reasoning summary, which asks Claude for summarized thinking.
+    A Responses ``reasoning`` object without ``effort`` reasons at ``medium``
+    on Claude, as on the runtime path.
 
     Args:
         inbound: Wire format of *payload*.
@@ -2273,11 +2277,47 @@ def convert_payload(
     """
     if inbound == upstream:
         return payload
+    converted = payload
+    if (
+        inbound == "responses"
+        and upstream == "messages"
+        and isinstance(reasoning := payload.get("reasoning"), dict)
+        and not reasoning.get("effort")
+    ):
+        converted = {**payload, "reasoning": {**reasoning, "effort": "medium"}}
     if inbound != "chat_completions":
-        payload = _TO_CHAT_REQUEST[inbound](payload)
+        converted = _TO_CHAT_REQUEST[inbound](converted)
     if upstream != "chat_completions":
-        payload = _FROM_CHAT_REQUEST[upstream](payload)
-    return payload
+        converted = _FROM_CHAT_REQUEST[upstream](converted)
+    if inbound == "responses" and upstream == "messages":
+        _request_thinking_summary(payload.get("reasoning"), converted)
+    return converted
+
+
+def _request_thinking_summary(
+    reasoning: object, messages_request: dict[str, Any]
+) -> None:
+    """Ask Claude for summarized thinking when a reasoning summary is requested.
+
+    ``effort: "none"`` keeps reasoning off, except on the models that always
+    reason. Claude 3.7 to 4.5 summarize by default and think only on a budget,
+    so they get no thinking configuration they did not already have.
+
+    Args:
+        reasoning: ``reasoning`` object of the Responses request.
+        messages_request: Converted Anthropic Messages payload, updated in place.
+    """
+    if not isinstance(reasoning, dict) or not (
+        reasoning.get("summary") or reasoning.get("generate_summary")
+    ):
+        return
+    model = str(messages_request.get("model"))
+    if reasoning.get("effort") == "none" and not _ALWAYS_REASONING_MATCHER.match(model):
+        return
+    if isinstance(thinking := messages_request.get("thinking"), dict):
+        thinking["display"] = "summarized"
+    elif not _BUDGET_THINKING_MATCHER.match(model):
+        messages_request["thinking"] = {"type": "adaptive", "display": "summarized"}
 
 
 # ---------------------------------------------------------------------------
@@ -2352,7 +2392,8 @@ def _responses_to_chat_response(raw: dict[str, Any]) -> dict[str, Any]:
 def _messages_to_chat_response(raw: dict[str, Any]) -> dict[str, Any]:
     """Convert an Anthropic Messages response to the Chat Completions shape.
 
-    Thinking blocks are dropped.
+    Thinking text becomes ``reasoning_content``; signatures and redacted
+    thinking are dropped.
 
     Args:
         raw: Anthropic Messages response dict.
@@ -2361,11 +2402,14 @@ def _messages_to_chat_response(raw: dict[str, Any]) -> dict[str, Any]:
         Chat Completions response dict.
     """
     texts: list[str] = []
+    thoughts: list[str] = []
     tool_calls: list[dict[str, Any]] = []
     for block in raw.get("content") or []:
         match block.get("type"):
             case "text":
                 texts.append(block.get("text") or "")
+            case "thinking":
+                thoughts.append(block.get("thinking") or "")
             case "tool_use":
                 tool_calls.append(
                     {
@@ -2380,6 +2424,8 @@ def _messages_to_chat_response(raw: dict[str, Any]) -> dict[str, Any]:
             case _:
                 pass
     message: dict[str, Any] = {"role": "assistant", "content": "".join(texts) or None}
+    if reasoning := "".join(thoughts):
+        message[_REASONING_CONTENT_KEY] = reasoning
     if tool_calls:
         message["tool_calls"] = tool_calls
     finish = (
@@ -2399,7 +2445,9 @@ def _messages_to_chat_response(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _chat_to_responses_response(raw: dict[str, Any]) -> dict[str, Any]:
+def _chat_to_responses_response(
+    raw: dict[str, Any], *, summary: bool = False
+) -> dict[str, Any]:
     """Convert a Chat Completions response to the Responses API shape.
 
     Reasoning text becomes a ``reasoning`` output item preceding the message,
@@ -2408,6 +2456,8 @@ def _chat_to_responses_response(raw: dict[str, Any]) -> dict[str, Any]:
 
     Args:
         raw: Chat Completions response dict.
+        summary: Whether the client asked for a reasoning summary, which puts
+            the reasoning text in the item's ``summary`` instead of ``content``.
 
     Returns:
         Responses API response dict.
@@ -2423,8 +2473,12 @@ def _chat_to_responses_response(raw: dict[str, Any]) -> dict[str, Any]:
             {
                 "type": "reasoning",
                 "id": f"{response_id}-rs-0",
-                "summary": [],
-                "content": [{"type": "reasoning_text", "text": reasoning}],
+                "summary": [{"type": "summary_text", "text": reasoning}]
+                if summary
+                else [],
+                "content": []
+                if summary
+                else [{"type": "reasoning_text", "text": reasoning}],
                 "status": "completed",
             }
         )
@@ -2525,15 +2579,13 @@ _TO_CHAT_RESPONSE: dict[MantleApi, Callable[[dict[str, Any]], dict[str, Any]]] =
     "messages": _messages_to_chat_response,
 }
 
-#: Response converters out of the Chat Completions shape, keyed by target API.
-_FROM_CHAT_RESPONSE: dict[MantleApi, Callable[[dict[str, Any]], dict[str, Any]]] = {
-    "responses": _chat_to_responses_response,
-    "messages": _chat_to_messages_response,
-}
-
 
 def convert_response(
-    upstream: MantleApi, inbound: MantleApi, raw: dict[str, Any]
+    upstream: MantleApi,
+    inbound: MantleApi,
+    raw: dict[str, Any],
+    *,
+    reasoning_summary: bool = False,
 ) -> dict[str, Any]:
     """Convert a complete upstream response between Mantle wire formats.
 
@@ -2545,6 +2597,8 @@ def convert_response(
         upstream: Wire format of *raw*.
         inbound: Target wire format.
         raw: Complete upstream response dict.
+        reasoning_summary: Whether a Responses client asked for a reasoning
+            summary.
 
     Returns:
         Response dict in the *inbound* shape (unchanged when identical).
@@ -2553,8 +2607,10 @@ def convert_response(
         return raw
     if upstream != "chat_completions":
         raw = _TO_CHAT_RESPONSE[upstream](raw)
-    if inbound != "chat_completions":
-        raw = _FROM_CHAT_RESPONSE[inbound](raw)
+    if inbound == "responses":
+        return _chat_to_responses_response(raw, summary=reasoning_summary)
+    if inbound == "messages":
+        return _chat_to_messages_response(raw)
     return raw
 
 
@@ -2763,8 +2819,9 @@ async def _messages_stream_to_chat(
 ) -> AsyncGenerator[SseEvent]:
     """Convert an Anthropic SSE stream to Chat Completions chunks.
 
-    Thinking deltas are dropped. A final usage chunk is always emitted,
-    combining ``message_start`` input usage with ``message_delta`` usage.
+    Thinking text streams as ``reasoning_content``; signatures are dropped. A
+    final usage chunk is always emitted, combining ``message_start`` input
+    usage with ``message_delta`` usage.
 
     Args:
         events: Upstream Anthropic SSE events.
@@ -2854,6 +2911,8 @@ def _chat_delta_from_messages(
     """
     if (text := delta.get("text")) is not None:
         return {"content": text}
+    if thinking := delta.get("thinking"):
+        return {_REASONING_CONTENT_KEY: thinking}
     if tool_block and (fragment := delta.get("partial_json")) is not None:
         return {
             "tool_calls": [{"index": tool_index, "function": {"arguments": fragment}}]
@@ -2878,6 +2937,8 @@ class _ResponsesStreamState:
     finish_reason: str | None = None
     usage: dict[str, Any] | None = None
     completed: bool = False
+    #: Whether the client asked for a reasoning summary.
+    summary: bool = False
 
     def next_seq(self) -> int:
         """Return the current sequence number and advance the counter.
@@ -2908,7 +2969,10 @@ def _responses_event(
 
 
 async def _chat_stream_to_responses(
-    events: AsyncGenerator[SseEvent], response_id: str | None = None
+    events: AsyncGenerator[SseEvent],
+    response_id: str | None = None,
+    *,
+    summary: bool = False,
 ) -> AsyncGenerator[SseEvent]:
     """Convert Chat Completions chunks to a Responses SSE stream.
 
@@ -2919,6 +2983,8 @@ async def _chat_stream_to_responses(
         events: Chat Completions chunk events.
         response_id: Route-assigned response ID carried by every emitted
             event, so the streamed ID is the one the route can retrieve.
+        summary: Whether the client asked for a reasoning summary, which
+            streams the reasoning text as summary part 0.
 
     Yields:
         Named Responses SSE events, ending with ``response.completed``.
@@ -2926,7 +2992,7 @@ async def _chat_stream_to_responses(
     Raises:
         MantleError: When the upstream stream reports an in-band error.
     """
-    state = _ResponsesStreamState()
+    state = _ResponsesStreamState(summary=summary)
     async for _, data in events:
         if '"error"' in data and (message := _stream_error_message(data)):
             raise MantleError(message, status=502)
@@ -3000,6 +3066,9 @@ def _responses_reasoning_delta(
 ) -> list[SseEvent]:
     """Emit the events for one reasoning delta, opening a reasoning item if needed.
 
+    With a requested summary, the text streams as summary part 0, opened by
+    ``response.reasoning_summary_part.added`` on the first delta.
+
     Args:
         state: Mutable stream state.
         content: Reasoning text delta.
@@ -3008,6 +3077,18 @@ def _responses_reasoning_delta(
         Responses SSE events.
     """
     events: list[SseEvent] = []
+    if state.summary:
+        part_added, delta_name = (
+            "response.reasoning_summary_part.added",
+            "response.reasoning_summary_text.delta",
+        )
+        part_type, index = "summary_text", {"summary_index": 0}
+    else:
+        part_added, delta_name = (
+            "response.content_part.added",
+            "response.reasoning_text.delta",
+        )
+        part_type, index = "reasoning_text", {"content_index": 0}
     if state.kind != "reasoning":
         events += _close_responses_item(state)
         state.output_index += 1
@@ -3030,12 +3111,12 @@ def _responses_reasoning_delta(
         events.append(
             _responses_event(
                 state,
-                "response.content_part.added",
+                part_added,
                 {
                     "item_id": state.item_id,
                     "output_index": state.output_index,
-                    "content_index": 0,
-                    "part": {"type": "reasoning_text", "text": ""},
+                    **index,
+                    "part": {"type": part_type, "text": ""},
                 },
             )
         )
@@ -3043,11 +3124,11 @@ def _responses_reasoning_delta(
     events.append(
         _responses_event(
             state,
-            "response.reasoning_text.delta",
+            delta_name,
             {
                 "item_id": state.item_id,
                 "output_index": state.output_index,
-                "content_index": 0,
+                **index,
                 "delta": content,
             },
         )
@@ -3262,25 +3343,35 @@ def _close_responses_reasoning(state: _ResponsesStreamState) -> list[SseEvent]:
         Responses SSE events closing the reasoning item.
     """
     text = "".join(state.text_parts)
-    part = {"type": "reasoning_text", "text": text}
+    common: dict[str, Any] = {
+        "item_id": state.item_id,
+        "output_index": state.output_index,
+    }
+    if state.summary:
+        part = {"type": "summary_text", "text": text}
+        common["summary_index"] = 0
+        text_done, part_done = (
+            "response.reasoning_summary_text.done",
+            "response.reasoning_summary_part.done",
+        )
+    else:
+        part = {"type": "reasoning_text", "text": text}
+        common["content_index"] = 0
+        text_done, part_done = (
+            "response.reasoning_text.done",
+            "response.content_part.done",
+        )
     item = {
         "type": "reasoning",
         "id": state.item_id,
-        "summary": [],
-        "content": [part],
+        "summary": [part] if state.summary else [],
+        "content": [] if state.summary else [part],
         "status": "completed",
     }
     state.output.append(item)
-    common = {
-        "item_id": state.item_id,
-        "output_index": state.output_index,
-        "content_index": 0,
-    }
     return [
-        _responses_event(
-            state, "response.reasoning_text.done", {**common, "text": text}
-        ),
-        _responses_event(state, "response.content_part.done", {**common, "part": part}),
+        _responses_event(state, text_done, {**common, "text": text}),
+        _responses_event(state, part_done, {**common, "part": part}),
         _responses_event(
             state,
             "response.output_item.done",
@@ -3475,13 +3566,11 @@ def _messages_event(name: str, payload: dict[str, Any]) -> SseEvent:
 
 async def _chat_stream_to_messages(
     events: AsyncGenerator[SseEvent],
-    response_id: str | None = None,  # noqa: ARG001 (uniform converter signature)
 ) -> AsyncGenerator[SseEvent]:
     """Convert Chat Completions chunks to an Anthropic SSE stream.
 
     Args:
         events: Chat Completions chunk events.
-        response_id: Unused; Anthropic message IDs are not retrievable.
 
     Yields:
         Named Anthropic SSE events, ending with ``message_delta`` (carrying
@@ -3675,25 +3764,21 @@ _TO_CHAT_STREAM: dict[
     MantleApi, Callable[[AsyncGenerator[SseEvent]], AsyncGenerator[SseEvent]]
 ] = {"responses": _responses_stream_to_chat, "messages": _messages_stream_to_chat}
 
-#: Stream converters out of the Chat Completions shape, keyed by target API.
-_FROM_CHAT_STREAM: dict[
-    MantleApi,
-    Callable[[AsyncGenerator[SseEvent], str | None], AsyncGenerator[SseEvent]],
-] = {"responses": _chat_stream_to_responses, "messages": _chat_stream_to_messages}
-
 
 def convert_stream(
     upstream: MantleApi,
     inbound: MantleApi,
     events: AsyncGenerator[SseEvent],
     response_id: str | None = None,
+    *,
+    reasoning_summary: bool = False,
 ) -> AsyncGenerator[SseEvent]:
     """Convert an upstream SSE stream between Mantle wire formats.
 
-    Conversion composes through the Chat Completions chunk shape. Chat
-    Completions reasoning deltas become Responses ``reasoning_text`` content
-    events on a reasoning output item; Anthropic thinking deltas and Responses
-    reasoning events are dropped in the other direction. Chat Completions
+    Conversion composes through the Chat Completions chunk shape. Anthropic
+    thinking deltas become Chat Completions reasoning deltas, and those become
+    Responses ``reasoning_text`` content events on a reasoning output item;
+    Responses reasoning events are dropped in the other direction. Chat Completions
     output always ends with a usage chunk (the caller strips it when the client
     did not opt in) and never includes a ``[DONE]`` sentinel.
 
@@ -3703,6 +3788,8 @@ def convert_stream(
         events: Upstream SSE event generator.
         response_id: Route-assigned response ID stamped on converted
             Responses events, so the streamed ID stays retrievable.
+        reasoning_summary: Whether a Responses client asked for a reasoning
+            summary, which streams the reasoning as ``summary_text`` events.
 
     Returns:
         SSE event generator in the *inbound* shape (unchanged when identical).
@@ -3711,8 +3798,10 @@ def convert_stream(
         return events
     if upstream != "chat_completions":
         events = _TO_CHAT_STREAM[upstream](events)
-    if inbound != "chat_completions":
-        events = _FROM_CHAT_STREAM[inbound](events, response_id)
+    if inbound == "responses":
+        return _chat_stream_to_responses(events, response_id, summary=reasoning_summary)
+    if inbound == "messages":
+        return _chat_stream_to_messages(events)
     return events
 
 

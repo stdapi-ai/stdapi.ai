@@ -84,6 +84,8 @@ from stdapi.types.openai_responses import (
     OutputTokensDetails,
     PromptVariables,
     ReasoningItemContent,
+    ReasoningItemSummary,
+    ReasoningSummaryPart,
     Response,
     ResponseCodeInterpreterCallCodeDeltaEvent,
     ResponseCodeInterpreterCallCodeDoneEvent,
@@ -128,6 +130,10 @@ from stdapi.types.openai_responses import (
     ResponseOutputTextAnnotationAddedEvent,
     ResponseOutputTextContent,
     ResponseReasoningItem,
+    ResponseReasoningSummaryPartAddedEvent,
+    ResponseReasoningSummaryPartDoneEvent,
+    ResponseReasoningSummaryTextDeltaEvent,
+    ResponseReasoningSummaryTextDoneEvent,
     ResponseReasoningTextDeltaEvent,
     ResponseReasoningTextDoneEvent,
     ResponseTextDeltaEvent,
@@ -1438,7 +1444,8 @@ def extract_reasoning(
         Reasoning parameters to configure, or None if the request has no
         ``reasoning`` field set.  A ``reasoning`` object without ``effort``
         enables reasoning at the upstream default ``medium`` effort; only
-        ``effort="none"`` disables it.
+        ``effort="none"`` disables it.  A requested summary asks for the
+        summarized reasoning text.
     """
     if request.reasoning is None:
         return None
@@ -1450,7 +1457,25 @@ def extract_reasoning(
         "max_tokens": request.max_output_tokens
         if isinstance(request, ResponseCreateParams)
         else None,
+        "display": "summarized" if requests_reasoning_summary(request) else None,
     }
+
+
+def requests_reasoning_summary(
+    request: ResponseCreateParams | InputTokenCountParams,
+) -> bool:
+    """Whether the request asks for a reasoning summary.
+
+    Args:
+        request: Responses API creation or input-token count request.
+
+    Returns:
+        True when ``reasoning.summary`` or ``reasoning.generate_summary`` is set,
+        so the reasoning text goes in the item's ``summary``.
+    """
+    return request.reasoning is not None and bool(
+        request.reasoning.summary or request.reasoning.generate_summary
+    )
 
 
 def _input_content_file(part: ResponseInputImage | ResponseInputFile) -> InputFile:
@@ -2268,7 +2293,9 @@ def _with_text(
     )
 
 
-def encode_reasoning_content(signatures: list[str], redacted: list[bytes]) -> str:
+def encode_reasoning_content(
+    signatures: list[str], redacted: list[bytes], *, summary: bool = False
+) -> str:
     """Encode reasoning signatures and redacted payloads as opaque content.
 
     The content is self-contained so that reasoning round-trips work without
@@ -2278,24 +2305,30 @@ def encode_reasoning_content(signatures: list[str], redacted: list[bytes]) -> st
     Args:
         signatures: Bedrock ``reasoningText`` signatures, in block order.
         redacted: Bedrock ``redactedContent`` payloads, in block order.
+        summary: Whether the signed texts are in the item's ``summary``
+            rather than its ``content``.
 
     Returns:
         Opaque ``encrypted_content`` value for a reasoning item.
     """
-    payload = {
+    payload: dict[str, object] = {
         "signatures": signatures,
         "redacted": [b64encode(data).decode() for data in redacted],
     }
+    if summary:
+        payload["summary"] = True
     return urlsafe_b64encode(to_json(payload)).decode()
 
 
 def decode_reasoning_content(
-    encrypted_content: str,
+    encrypted_content: str, *, summary: bool = False
 ) -> tuple[list[str], list[bytes]] | None:
     """Decode an ``encrypted_content`` envelope produced by this gateway.
 
     Args:
         encrypted_content: Opaque reasoning content from an echoed item.
+        summary: Whether the texts being replayed come from the item's
+            ``summary``; signatures bound to the other field are dropped.
 
     Returns:
         Tuple of ``(signatures, redacted)``, or ``None`` when the content is
@@ -2305,6 +2338,7 @@ def decode_reasoning_content(
         payload = from_json(b64decode(encrypted_content, altchars=b"-_", validate=True))
         signatures = payload["signatures"]
         redacted = [b64decode(data, validate=True) for data in payload["redacted"]]
+        signed_summary = payload.get("summary") is True
     except ValueError, TypeError, KeyError:
         return None
     if not (
@@ -2312,7 +2346,7 @@ def decode_reasoning_content(
         and all(isinstance(signature, str) for signature in signatures)
     ):
         return None
-    return signatures, redacted
+    return signatures if signed_summary is summary else [], redacted
 
 
 def _map_reasoning_item(
@@ -2328,9 +2362,10 @@ def _map_reasoning_item(
     entries) are converted to Bedrock ``reasoningText`` blocks and merged into
     the current assistant message.  A local ``encrypted_content`` envelope
     re-attaches signatures and appends ``redactedContent`` blocks; foreign
-    envelopes are ignored.  Signatures are computed over ``content`` blocks, so
-    they are never attached to summary fallback texts.  Empty items are dropped
-    without logging.
+    envelopes are ignored.  Signatures attach only to the field the envelope
+    says they were computed over: ``content``, or ``summary`` when the gateway
+    returned the reasoning as a summary.  Empty items are dropped without
+    logging.
 
     Models requiring a signature reject a text that lost its envelope, so those
     texts are dropped with a warning; ``redactedContent`` blocks are unaffected.
@@ -2352,11 +2387,11 @@ def _map_reasoning_item(
     signatures: list[str] = []
     redacted: list[bytes] = []
     if item.encrypted_content and (
-        decoded := decode_reasoning_content(item.encrypted_content)
+        decoded := decode_reasoning_content(
+            item.encrypted_content, summary=from_summary
+        )
     ):
         signatures, redacted = decoded
-    if from_summary:
-        signatures = []
     if signature_required and len(texts) > len(signatures):
         log_error_details(
             "Dropped the replayed reasoning content of a reasoning item: "
@@ -2403,6 +2438,7 @@ def _build_reasoning_item(
     redacted: list[bytes],
     *,
     include_encrypted_reasoning: bool,
+    summary: bool = False,
 ) -> ResponseReasoningItem:
     """Build a completed ``reasoning`` output item from accumulated block data.
 
@@ -2412,19 +2448,28 @@ def _build_reasoning_item(
         signatures: Bedrock ``reasoningText`` signatures, in block order.
         redacted: Bedrock ``redactedContent`` payloads, in block order.
         include_encrypted_reasoning: Whether to attach the round-trip envelope.
+        summary: Whether the client asked for a reasoning summary.
 
     Returns:
-        Completed reasoning item with an empty ``summary``.
+        Completed reasoning item carrying the text as a ``summary_text`` part
+        with empty ``content`` when a summary was requested, as a
+        ``reasoning_text`` part with an empty ``summary`` otherwise.
     """
     return ResponseReasoningItem(
         id=item_id,
-        summary=[],
+        summary=(
+            [ReasoningItemSummary(text=text, type="summary_text")]
+            if summary and text
+            else []
+        ),
         type="reasoning",
         content=(
-            [ReasoningItemContent(text=text, type="reasoning_text")] if text else []
+            [ReasoningItemContent(text=text, type="reasoning_text")]
+            if text and not summary
+            else []
         ),
         encrypted_content=(
-            encode_reasoning_content(signatures, redacted)
+            encode_reasoning_content(signatures, redacted, summary=summary)
             if include_encrypted_reasoning and (signatures or redacted)
             else None
         ),
@@ -2587,6 +2632,7 @@ def _reasoning_block_item(
     item_id: str,
     *,
     include_encrypted_reasoning: bool,
+    summary: bool,
 ) -> ResponseReasoningItem | None:
     """Build a ``reasoning`` item from a single Bedrock ``reasoningContent`` block.
 
@@ -2594,6 +2640,7 @@ def _reasoning_block_item(
         reasoning_content: The ``reasoningContent`` payload of a block.
         item_id: Identifier for the reasoning item.
         include_encrypted_reasoning: Whether to attach the round-trip envelope.
+        summary: Whether the client asked for a reasoning summary.
 
     Returns:
         Completed reasoning item, or ``None`` when the block is empty.
@@ -2610,6 +2657,7 @@ def _reasoning_block_item(
         [signature] if signature else [],
         [data] if data is not None else [],
         include_encrypted_reasoning=include_encrypted_reasoning,
+        summary=summary,
     )
 
 
@@ -2809,6 +2857,7 @@ def _extract_output_items(
     code_execution_tool_names: frozenset[str] | None = None,
     *,
     include_encrypted_reasoning: bool = False,
+    reasoning_summary: bool = False,
 ) -> list[ResponseOutputItem]:
     """Extract ResponseOutputItem objects from Bedrock response content.
 
@@ -2833,6 +2882,8 @@ def _extract_output_items(
         include_encrypted_reasoning: Whether the request's ``include`` asked
             for ``reasoning.encrypted_content`` (adds the round-trip envelope
             to reasoning items).
+        reasoning_summary: Whether the request asked for a reasoning summary
+            (puts reasoning text in the items' ``summary``).
 
     Returns:
         List of output items in Bedrock block order.  ``message`` items carry
@@ -2857,6 +2908,7 @@ def _extract_output_items(
                 reasoning_content,
                 f"{response_id}-rs-{reasoning_count}",
                 include_encrypted_reasoning=include_encrypted_reasoning,
+                summary=reasoning_summary,
             ):
                 output_items.append(reasoning_item)
                 reasoning_count += 1
@@ -3095,6 +3147,7 @@ async def format_response(
                 web_search_tool_names,
                 code_execution_tool_names,
                 include_encrypted_reasoning=_includes_encrypted_reasoning(request),
+                reasoning_summary=requests_reasoning_summary(request),
             ),
             *_map_stop_reason(bedrock_response.get("stopReason")),
             ResponseUsage(
@@ -3159,6 +3212,8 @@ class _StreamState:
     cache_write_tokens: int = 0
     #: Whether ``include`` requested ``reasoning.encrypted_content``.
     include_encrypted_reasoning: bool = False
+    #: Whether the request asked for a reasoning summary.
+    reasoning_summary: bool = False
     #: Signatures from reasoning deltas of the current block.
     reasoning_signatures: list[str] = field(default_factory=list)
     #: Redacted reasoning payloads from the current block.
@@ -3444,7 +3499,10 @@ def _handle_reasoning_delta(
     (``response.output_item.added`` with empty content) followed by
     ``response.content_part.added`` for the reasoning-text part.  Text deltas
     emit ``response.reasoning_text.delta``; signature and redacted deltas are
-    accumulated silently for the ``encrypted_content`` envelope.
+    accumulated silently for the ``encrypted_content`` envelope.  When the
+    request asked for a summary, the text streams as summary part 0 instead:
+    ``response.reasoning_summary_part.added`` on the first text delta, then
+    ``response.reasoning_summary_text.delta``.
 
     Args:
         state: Mutable stream state.
@@ -3473,23 +3531,27 @@ def _handle_reasoning_delta(
                 type="response.output_item.added",
             ),
         )
-        yield json_sse(
-            "response.content_part.added",
-            ResponseContentPartAddedEvent(
-                item_id=state.current_item_id,
-                output_index=state.output_index,
-                content_index=0,
-                part=ContentPartReasoningText(text="", type="reasoning_text"),
-                sequence_number=state.next_seq(),
-                type="response.content_part.added",
-            ),
-        )
+        if not state.reasoning_summary:
+            yield json_sse(
+                "response.content_part.added",
+                ResponseContentPartAddedEvent(
+                    item_id=state.current_item_id,
+                    output_index=state.output_index,
+                    content_index=0,
+                    part=ContentPartReasoningText(text="", type="reasoning_text"),
+                    sequence_number=state.next_seq(),
+                    type="response.content_part.added",
+                ),
+            )
     if signature := reasoning_delta.get("signature"):
         state.reasoning_signatures.append(signature)
     if (data := reasoning_delta.get("redactedContent")) is not None:
         state.reasoning_redacted.append(data)
-    if (text_delta := reasoning_delta.get("text")) and state.current_item_id:
-        state.current_text_parts.append(text_delta)
+    if not (text_delta := reasoning_delta.get("text")) or not state.current_item_id:
+        return
+    first_text = not state.current_text_parts
+    state.current_text_parts.append(text_delta)
+    if not state.reasoning_summary:
         yield json_sse(
             "response.reasoning_text.delta",
             ResponseReasoningTextDeltaEvent(
@@ -3501,14 +3563,116 @@ def _handle_reasoning_delta(
                 type="response.reasoning_text.delta",
             ),
         )
+        return
+    if first_text:
+        yield json_sse(
+            "response.reasoning_summary_part.added",
+            ResponseReasoningSummaryPartAddedEvent(
+                item_id=state.current_item_id,
+                output_index=state.output_index,
+                part=ReasoningSummaryPart(text="", type="summary_text"),
+                summary_index=0,
+                sequence_number=state.next_seq(),
+                type="response.reasoning_summary_part.added",
+            ),
+        )
+    yield json_sse(
+        "response.reasoning_summary_text.delta",
+        ResponseReasoningSummaryTextDeltaEvent(
+            item_id=state.current_item_id,
+            output_index=state.output_index,
+            delta=text_delta,
+            summary_index=0,
+            sequence_number=state.next_seq(),
+            type="response.reasoning_summary_text.delta",
+        ),
+    )
+
+
+def _close_reasoning_text_part(
+    state: _StreamState, item_id: str, text: str
+) -> Generator[JSONServerSentEvent]:
+    """Close the ``reasoning_text`` content part of a reasoning item.
+
+    Args:
+        state: Mutable stream state.
+        item_id: Identifier of the reasoning item.
+        text: Reasoning text streamed for the item, possibly empty.
+
+    Yields:
+        ``reasoning_text.done`` (only when text was streamed) and
+        ``content_part.done``.
+    """
+    if text:
+        yield json_sse(
+            "response.reasoning_text.done",
+            ResponseReasoningTextDoneEvent(
+                item_id=item_id,
+                output_index=state.output_index,
+                content_index=0,
+                text=text,
+                sequence_number=state.next_seq(),
+                type="response.reasoning_text.done",
+            ),
+        )
+    yield json_sse(
+        "response.content_part.done",
+        ResponseContentPartDoneEvent(
+            item_id=item_id,
+            output_index=state.output_index,
+            content_index=0,
+            part=ContentPartReasoningText(text=text, type="reasoning_text"),
+            sequence_number=state.next_seq(),
+            type="response.content_part.done",
+        ),
+    )
+
+
+def _close_reasoning_summary_part(
+    state: _StreamState, item_id: str, text: str
+) -> Generator[JSONServerSentEvent]:
+    """Close summary part 0 of a reasoning item, when text opened it.
+
+    Args:
+        state: Mutable stream state.
+        item_id: Identifier of the reasoning item.
+        text: Reasoning text streamed for the item, possibly empty.
+
+    Yields:
+        ``reasoning_summary_text.done`` and ``reasoning_summary_part.done``,
+        or nothing when no text was streamed.
+    """
+    if not text:
+        return
+    yield json_sse(
+        "response.reasoning_summary_text.done",
+        ResponseReasoningSummaryTextDoneEvent(
+            item_id=item_id,
+            output_index=state.output_index,
+            summary_index=0,
+            text=text,
+            sequence_number=state.next_seq(),
+            type="response.reasoning_summary_text.done",
+        ),
+    )
+    yield json_sse(
+        "response.reasoning_summary_part.done",
+        ResponseReasoningSummaryPartDoneEvent(
+            item_id=item_id,
+            output_index=state.output_index,
+            part=ReasoningSummaryPart(text=text, type="summary_text"),
+            summary_index=0,
+            sequence_number=state.next_seq(),
+            type="response.reasoning_summary_part.done",
+        ),
+    )
 
 
 def _close_reasoning_block(state: _StreamState) -> Generator[JSONServerSentEvent]:
     """Close an open reasoning block, if any.
 
-    Emits ``reasoning_text.done`` (only when text was streamed),
-    ``content_part.done`` and ``output_item.done``, records the completed item
-    and resets the per-block state.  No-op outside a reasoning block.
+    Closes its text or summary part, emits ``output_item.done``, records the
+    item and resets the per-block state. No-op outside a reasoning block.
 
     Args:
         state: Mutable stream state.
@@ -3518,35 +3682,22 @@ def _close_reasoning_block(state: _StreamState) -> Generator[JSONServerSentEvent
     """
     if state.block_kind is not _BlockKind.REASONING or state.current_item_id is None:
         return
-    if reasoning_text := "".join(state.current_text_parts):
-        yield json_sse(
-            "response.reasoning_text.done",
-            ResponseReasoningTextDoneEvent(
-                item_id=state.current_item_id,
-                output_index=state.output_index,
-                content_index=0,
-                text=reasoning_text,
-                sequence_number=state.next_seq(),
-                type="response.reasoning_text.done",
-            ),
+    reasoning_text = "".join(state.current_text_parts)
+    if state.reasoning_summary:
+        yield from _close_reasoning_summary_part(
+            state, state.current_item_id, reasoning_text
         )
-    yield json_sse(
-        "response.content_part.done",
-        ResponseContentPartDoneEvent(
-            item_id=state.current_item_id,
-            output_index=state.output_index,
-            content_index=0,
-            part=ContentPartReasoningText(text=reasoning_text, type="reasoning_text"),
-            sequence_number=state.next_seq(),
-            type="response.content_part.done",
-        ),
-    )
+    else:
+        yield from _close_reasoning_text_part(
+            state, state.current_item_id, reasoning_text
+        )
     done_item = _build_reasoning_item(
         state.current_item_id,
         reasoning_text,
         state.reasoning_signatures,
         state.reasoning_redacted,
         include_encrypted_reasoning=state.include_encrypted_reasoning,
+        summary=state.reasoning_summary,
     )
     yield json_sse(
         "response.output_item.done",
@@ -4628,7 +4779,9 @@ async def format_stream(
             to the client via spec error events.
     """
     state = _StreamState(
-        response_id, include_encrypted_reasoning=_includes_encrypted_reasoning(request)
+        response_id,
+        include_encrypted_reasoning=_includes_encrypted_reasoning(request),
+        reasoning_summary=requests_reasoning_summary(request),
     )
     # Gateway-served: its calls never reach the client as function calls.
     if file_search_tool := get_file_search_tool(request):

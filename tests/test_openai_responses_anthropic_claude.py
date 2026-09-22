@@ -35,8 +35,8 @@ class TestClaudeReasoning:
         thinking tokens cannot starve the visible answer and truncate the response.
 
         The presence of a ``reasoning`` output item is deliberately not asserted:
-        Claude models served through Bedrock Mantle answer on the Messages API and
-        their thinking blocks are dropped by the Responses conversion.
+        at low effort adaptive thinking may skip reasoning, and without a summary
+        request recent generations omit the thinking text.
 
         Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
              stdapi/models/chat/_mantle/_convert.py:_chat_to_responses_response

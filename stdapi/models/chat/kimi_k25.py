@@ -8,6 +8,7 @@ from stdapi.models.chat._default import ChatModel as _BaseChatModel
 if TYPE_CHECKING:
     from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
+    from stdapi.types.anthropic_messages import ThinkingDisplay
 
 type KimiReasoning = Literal["low", "medium", "high"]
 
@@ -43,6 +44,7 @@ class ChatModel(_BaseChatModel):
         reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,  # noqa: ARG002
         max_tokens: int | None = None,  # noqa: ARG002
+        display: ThinkingDisplay | None = None,  # noqa: ARG002
     ) -> None:
         """Configure thinking parameters for Kimi K2 models.
 
@@ -58,6 +60,7 @@ class ChatModel(_BaseChatModel):
             reasoning_effort: Requested effort level, mapped onto Kimi's own scale.
             budget_tokens: Not supported by Kimi.
             max_tokens: Not used by Kimi.
+            display: Unused.
         """
         additional_request_fields["thinking"] = {
             "type": "enabled" if enabled else "disabled"

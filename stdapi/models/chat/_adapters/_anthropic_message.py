@@ -1235,6 +1235,7 @@ def extract_reasoning(
         ),
         # MessageCountTokensParams has no max_tokens field.
         "max_tokens": getattr(request, "max_tokens", None),
+        "display": getattr(request.thinking, "display", None),
     }
 
 

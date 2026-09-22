@@ -12,6 +12,7 @@ from stdapi.models.chat._anthropic_claude import (
 if TYPE_CHECKING:
     from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
+    from stdapi.types.anthropic_messages import ThinkingDisplay
 
 
 class ChatModel(AnthropicClaudeChatModel):
@@ -45,6 +46,7 @@ class ChatModel(AnthropicClaudeChatModel):
         reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,
         max_tokens: int | None = None,
+        display: ThinkingDisplay | None = None,
     ) -> None:
         """No reasoning support for Anthropic Claude 3.5.
 
@@ -54,4 +56,5 @@ class ChatModel(AnthropicClaudeChatModel):
             reasoning_effort: The reasoning effort level.
             budget_tokens: Maximum token budget for reasoning.
             max_tokens: Unused.
+            display: Unused.
         """

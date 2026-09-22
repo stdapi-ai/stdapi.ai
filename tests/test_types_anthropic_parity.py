@@ -96,7 +96,7 @@ class TestToolInputSchemaParity:
 
 
 class TestThinkingConfigAdaptiveParamParity:
-    """Unknown client fields (e.g. display) on ThinkingConfigAdaptiveParam.
+    """Unknown client fields on ThinkingConfigAdaptiveParam.
 
     Adaptive thinking is the current upstream shape and keeps gaining fields, so
     unmodelled ones must be preserved instead of failing the request.
@@ -106,19 +106,19 @@ class TestThinkingConfigAdaptiveParamParity:
     """
 
     def test_unknown_field_is_accepted(self) -> None:
-        """An unknown 'display' field validates without error."""
+        """An unknown field validates without error."""
         config = ThinkingConfigAdaptiveParam.model_validate(
-            {"type": "adaptive", "display": "compact"}
+            {"type": "adaptive", "future_field": "compact"}
         )
         assert config.type == "adaptive"
-        assert config.model_extra == {"display": "compact"}
+        assert config.model_extra == {"future_field": "compact"}
 
     def test_unknown_field_survives_model_dump(self) -> None:
         """The unknown field is retained on the model (available via model_dump)."""
         config = ThinkingConfigAdaptiveParam.model_validate(
-            {"type": "adaptive", "display": "compact"}
+            {"type": "adaptive", "future_field": "compact"}
         )
-        assert config.model_dump()["display"] == "compact"
+        assert config.model_dump()["future_field"] == "compact"
 
 
 class TestThinkingConfigEnabledParamParity:
@@ -138,7 +138,7 @@ class TestThinkingConfigEnabledParamParity:
         )
         assert config.type == "enabled"
         assert config.budget_tokens == 1024
-        assert config.model_extra == {"display": "omitted"}
+        assert config.display == "omitted"
 
     def test_display_field_survives_model_dump(self) -> None:
         """The 'display' field is retained on the model (available via model_dump)."""

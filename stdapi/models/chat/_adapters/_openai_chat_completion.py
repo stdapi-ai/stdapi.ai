@@ -536,6 +536,8 @@ def extract_reasoning(request: CompletionCreateParams) -> ReasoningParams | None
         "reasoning_effort": request.reasoning_effort,
         "budget_tokens": request.thinking_budget,
         "max_tokens": request.max_completion_tokens or request.max_tokens,
+        # Chat Completions has no reasoning summary request.
+        "display": None,
     }
 
 

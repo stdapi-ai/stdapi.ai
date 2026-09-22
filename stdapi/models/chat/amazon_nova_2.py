@@ -31,7 +31,11 @@ if TYPE_CHECKING:
     from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
     from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
-    from stdapi.types.anthropic_messages import ContentBlock, ContentBlockParam
+    from stdapi.types.anthropic_messages import (
+        ContentBlock,
+        ContentBlockParam,
+        ThinkingDisplay,
+    )
 
     class _NovaCodeInterpreterResult(TypedDict, total=False):
         """JSON payload returned by Bedrock for a ``nova_code_interpreter`` toolResult."""
@@ -79,6 +83,7 @@ class ChatModel(_BaseChatModel):
         reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,  # noqa: ARG002
         max_tokens: int | None = None,  # noqa: ARG002
+        display: ThinkingDisplay | None = None,  # noqa: ARG002
     ) -> None:
         """Configure Nova reasoning parameters.
 
@@ -92,6 +97,7 @@ class ChatModel(_BaseChatModel):
                 and on the Anthropic Messages route a budget is the only way a
                 request can ask for reasoning at all.
             max_tokens: Unused.
+            display: Unused.
         """
         if not enabled:
             additional_request_fields["reasoningConfig"] = {"type": "disabled"}

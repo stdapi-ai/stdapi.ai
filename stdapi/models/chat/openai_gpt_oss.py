@@ -9,6 +9,7 @@ from stdapi.monitoring import log_error_details
 if TYPE_CHECKING:
     from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
+    from stdapi.types.anthropic_messages import ThinkingDisplay
 
 #: Values the flat ``reasoning_effort`` field accepts on gpt-oss.
 type GptOssReasoning = Literal["low", "medium", "high"]
@@ -45,6 +46,7 @@ class ChatModel(_GptChatModel):
         reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,  # noqa: ARG002
         max_tokens: int | None = None,  # noqa: ARG002
+        display: ThinkingDisplay | None = None,  # noqa: ARG002
     ) -> None:
         """Set the flat reasoning effort from the requested level.
 
@@ -54,6 +56,7 @@ class ChatModel(_GptChatModel):
             reasoning_effort: Requested effort level, mapped onto gpt-oss's scale.
             budget_tokens: Not supported: reasoning is sized by effort only.
             max_tokens: Not used.
+            display: Unused.
         """
         if not enabled:
             log_error_details(REASONING_DISABLE_IGNORED, level="warning")

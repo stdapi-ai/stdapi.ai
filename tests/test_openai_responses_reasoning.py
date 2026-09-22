@@ -16,6 +16,18 @@ from openai.types.responses.response_content_part_added_event import (
 from openai.types.responses.response_content_part_done_event import (
     ResponseContentPartDoneEvent as SDKResponseContentPartDoneEvent,
 )
+from openai.types.responses.response_reasoning_summary_part_added_event import (
+    ResponseReasoningSummaryPartAddedEvent as SDKReasoningSummaryPartAddedEvent,
+)
+from openai.types.responses.response_reasoning_summary_part_done_event import (
+    ResponseReasoningSummaryPartDoneEvent as SDKReasoningSummaryPartDoneEvent,
+)
+from openai.types.responses.response_reasoning_summary_text_delta_event import (
+    ResponseReasoningSummaryTextDeltaEvent as SDKReasoningSummaryTextDeltaEvent,
+)
+from openai.types.responses.response_reasoning_summary_text_done_event import (
+    ResponseReasoningSummaryTextDoneEvent as SDKReasoningSummaryTextDoneEvent,
+)
 
 import stdapi.models.chat._adapters._openai_responses as responses_adapter
 from stdapi.models.chat._adapters._openai_responses import (
@@ -65,6 +77,19 @@ _USAGE = {"inputTokens": 3, "outputTokens": 5}
 _SIGNED_REASONING_BLOCK = {
     "reasoningContent": {"reasoningText": {"text": "think", "signature": "sig-1"}}
 }
+
+#: Bedrock stream: one reasoning block (text + signature) then a text block.
+_REASONING_STREAM: list[dict[str, Any]] = [
+    {"messageStart": {"role": "assistant"}},
+    {"contentBlockDelta": {"delta": {"reasoningContent": {"text": "thi"}}}},
+    {"contentBlockDelta": {"delta": {"reasoningContent": {"text": "nk"}}}},
+    {"contentBlockDelta": {"delta": {"reasoningContent": {"signature": "sig-1"}}}},
+    {"contentBlockStop": {"contentBlockIndex": 0}},
+    {"contentBlockDelta": {"delta": {"text": "Hello"}}},
+    {"contentBlockStop": {"contentBlockIndex": 1}},
+    {"messageStop": {"stopReason": "end_turn"}},
+    {"metadata": {"usage": _USAGE}},
+]
 
 
 def _bedrock_response(contents: list[dict[str, Any]]) -> ConverseResponseTypeDef:
@@ -151,6 +176,40 @@ class TestReasoningContentCodec:
         for payload in payloads:
             encoded = urlsafe_b64encode(json.dumps(payload).encode()).decode()
             assert decode_reasoning_content(encoded) is None
+
+    def test_envelope_without_a_summary_mark_stays_content_bound(self) -> None:
+        """An envelope issued before the ``summary`` mark existed still decodes.
+
+        Its signatures bind to ``content``, so a replayed conversation keeps its
+        signed reasoning; replayed as a summary, they are dropped.
+        """
+        issued = "eyJzaWduYXR1cmVzIjpbInNpZy0xIl0sInJlZGFjdGVkIjpbXX0="  # no mark
+
+        assert decode_reasoning_content(issued) == (["sig-1"], [])
+        assert decode_reasoning_content(issued, summary=True) == ([], [])
+
+    def test_json_true_marks_the_signatures_summary_bound(self) -> None:
+        """A JSON ``true`` mark binds the signatures to ``summary``."""
+        encoded = urlsafe_b64encode(
+            json.dumps(
+                {"signatures": ["sig-1"], "redacted": [], "summary": True}
+            ).encode()
+        ).decode()
+
+        assert decode_reasoning_content(encoded, summary=True) == (["sig-1"], [])
+        assert decode_reasoning_content(encoded) == ([], [])
+
+    @pytest.mark.parametrize("mark", ["true", 1, "false", False, None])
+    def test_only_json_true_is_the_summary_mark(self, mark: object) -> None:
+        """Any other ``summary`` value leaves the signatures bound to ``content``."""
+        encoded = urlsafe_b64encode(
+            json.dumps(
+                {"signatures": ["sig-1"], "redacted": [], "summary": mark}
+            ).encode()
+        ).decode()
+
+        assert decode_reasoning_content(encoded) == (["sig-1"], [])
+        assert decode_reasoning_content(encoded, summary=True) == ([], [])
 
 
 @pytest.mark.local
@@ -312,17 +371,7 @@ class TestReasoningStreaming:
     """
 
     #: Bedrock stream: one reasoning block (text + signature) then a text block.
-    _EVENTS: ClassVar[list[dict[str, Any]]] = [
-        {"messageStart": {"role": "assistant"}},
-        {"contentBlockDelta": {"delta": {"reasoningContent": {"text": "thi"}}}},
-        {"contentBlockDelta": {"delta": {"reasoningContent": {"text": "nk"}}}},
-        {"contentBlockDelta": {"delta": {"reasoningContent": {"signature": "sig-1"}}}},
-        {"contentBlockStop": {"contentBlockIndex": 0}},
-        {"contentBlockDelta": {"delta": {"text": "Hello"}}},
-        {"contentBlockStop": {"contentBlockIndex": 1}},
-        {"messageStop": {"stopReason": "end_turn"}},
-        {"metadata": {"usage": _USAGE}},
-    ]
+    _EVENTS: ClassVar[list[dict[str, Any]]] = _REASONING_STREAM
 
     async def _collect(
         self, events: list[dict[str, Any]], request: ResponseCreateParams
@@ -492,6 +541,213 @@ class TestReasoningStreaming:
         assert done_item["item"]["content"] == [
             {"text": "think", "type": "reasoning_text"}
         ], "only the envelope is withheld, not the reasoning text"
+
+
+@pytest.mark.local
+class TestReasoningSummaryShape:
+    """A requested ``reasoning.summary`` puts the reasoning in ``summary``, as upstream does.
+
+    Upstream (probed on gpt-5-nano, 2026-09-23) returns ``summary_text`` parts
+    with ``content: []``, streams them through the ``reasoning_summary_part`` /
+    ``reasoning_summary_text`` events and sends no reasoning content part.
+    Without a summary request the item keeps its ``reasoning_text`` content.
+
+    Ref: https://developers.openai.com/api/docs/guides/reasoning#reasoning-summaries
+         https://developers.openai.com/api/reference/resources/responses/streaming-events
+         stdapi/models/chat/_adapters/_openai_responses.py:_build_reasoning_item
+         stdapi/models/chat/_adapters/_openai_responses.py:_handle_reasoning_delta
+    """
+
+    #: Request asking for a reasoning summary and the round-trip envelope.
+    _SUMMARY_REQUEST: ClassVar[ResponseCreateParams] = _request(
+        reasoning=Reasoning(effort="low", summary="auto"),
+        include=["reasoning.encrypted_content"],
+    )
+
+    async def _collect(
+        self, events: list[dict[str, Any]], request: ResponseCreateParams
+    ) -> list[JSONServerSentEvent]:
+        return [
+            sse
+            async for sse in format_stream(
+                "resp-1", 0.0, "model", _stream(events), request
+            )
+        ]
+
+    @pytest.mark.parametrize(
+        "reasoning",
+        [
+            Reasoning(summary="auto"),
+            Reasoning(summary="concise"),
+            Reasoning(summary="detailed"),
+            Reasoning(generate_summary="auto"),
+        ],
+    )
+    async def test_summary_request_fills_summary(self, reasoning: Reasoning) -> None:
+        """Every summary request returns the text as ``summary_text`` with empty content."""
+        response = await format_response(
+            "resp-1",
+            0.0,
+            "model",
+            _bedrock_response([_SIGNED_REASONING_BLOCK, {"text": "Hello"}]),
+            _request(reasoning=reasoning),
+        )
+        item = response.output[0]
+        assert isinstance(item, ResponseReasoningItem)
+        assert item.summary == [ReasoningItemSummary(text="think", type="summary_text")]
+        assert item.content == []
+
+    async def test_no_summary_request_keeps_content(self) -> None:
+        """Without a summary request the text stays ``reasoning_text`` content."""
+        response = await format_response(
+            "resp-1",
+            0.0,
+            "model",
+            _bedrock_response([_SIGNED_REASONING_BLOCK, {"text": "Hello"}]),
+            _request(reasoning=Reasoning(effort="low")),
+        )
+        item = response.output[0]
+        assert isinstance(item, ResponseReasoningItem)
+        assert item.summary == []
+        assert item.content is not None
+        assert [(part.type, part.text) for part in item.content] == [
+            ("reasoning_text", "think")
+        ]
+
+    async def test_stream_event_sequence(self) -> None:
+        """The summary streams through upstream's summary events, never content parts.
+
+        Every payload validates against the openai SDK's own event model, which
+        pins the field names (``summary_index``, no ``content_index``).
+        """
+        sses = await self._collect(_REASONING_STREAM, self._SUMMARY_REQUEST)
+        assert [sse.event for sse in sses[:9]] == [
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.reasoning_summary_part.added",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.done",
+            "response.reasoning_summary_part.done",
+            "response.output_item.done",
+        ]
+        added, part_added, delta_1, delta_2, text_done, part_done, done = [
+            _payload(sse) for sse in sses[2:9]
+        ]
+        assert added["item"]["summary"] == []
+        assert added["item"]["content"] == []
+        for payload, model in (
+            (part_added, SDKReasoningSummaryPartAddedEvent),
+            (delta_1, SDKReasoningSummaryTextDeltaEvent),
+            (delta_2, SDKReasoningSummaryTextDeltaEvent),
+            (text_done, SDKReasoningSummaryTextDoneEvent),
+            (part_done, SDKReasoningSummaryPartDoneEvent),
+        ):
+            model.model_validate(payload)
+            assert payload["item_id"] == "resp-1-rs-0"
+            assert payload["output_index"] == 0
+            assert payload["summary_index"] == 0
+            assert "content_index" not in payload
+        assert part_added["part"] == {"type": "summary_text", "text": ""}
+        assert [delta_1["delta"], delta_2["delta"]] == ["thi", "nk"]
+        assert text_done["text"] == "think"
+        assert part_done["part"] == {"type": "summary_text", "text": "think"}
+        assert done["item"]["summary"] == [{"type": "summary_text", "text": "think"}]
+        assert done["item"]["content"] == []
+        assert not any(
+            sse.event is not None
+            and (
+                sse.event.startswith("response.reasoning_text")
+                or (
+                    sse.event.startswith("response.content_part")
+                    and _payload(sse)["item_id"] == "resp-1-rs-0"
+                )
+            )
+            for sse in sses
+        )
+        sequence_numbers = [_payload(sse)["sequence_number"] for sse in sses]
+        assert sequence_numbers == list(range(len(sses)))
+
+    async def test_stream_matches_non_streaming(self) -> None:
+        """The streamed and non-streamed summary items are identical, envelope included."""
+        sses = await self._collect(_REASONING_STREAM, self._SUMMARY_REQUEST)
+        completed = Response(**_payload(sses[-1])["response"])
+        non_streaming = await format_response(
+            "resp-1",
+            0.0,
+            "model",
+            _bedrock_response([_SIGNED_REASONING_BLOCK, {"text": "Hello"}]),
+            self._SUMMARY_REQUEST,
+        )
+        assert completed.output[0] == non_streaming.output[0]
+
+    async def test_redacted_only_stream_opens_no_summary_part(self) -> None:
+        """A redacted-only block streams no summary part and closes with ``summary: []``."""
+        events: list[dict[str, Any]] = [
+            {
+                "contentBlockDelta": {
+                    "delta": {"reasoningContent": {"redactedContent": b"\x01"}}
+                }
+            },
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+            {"contentBlockDelta": {"delta": {"text": "Hi"}}},
+            {"contentBlockStop": {"contentBlockIndex": 1}},
+            {"messageStop": {"stopReason": "end_turn"}},
+            {"metadata": {"usage": _USAGE}},
+        ]
+        sses = await self._collect(events, self._SUMMARY_REQUEST)
+        assert [sse.event for sse in sses[2:4]] == [
+            "response.output_item.added",
+            "response.output_item.done",
+        ]
+        done = _payload(sses[3])
+        assert done["item"]["summary"] == []
+        assert decode_reasoning_content(
+            done["item"]["encrypted_content"], summary=True
+        ) == ([], [b"\x01"])
+
+    @pytest.mark.parametrize("stream", [False, True])
+    async def test_summary_item_replays_with_its_signature(self, stream: bool) -> None:
+        """A summary item echoed back as input replays signed, for a model requiring it.
+
+        The client serializes the item and sends it back as the next turn's
+        input: the summary text must return to Bedrock with its signature, or a
+        signature-requiring model drops it.
+
+        Ref: https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-without-stored-responses
+             stdapi/models/chat/_adapters/_openai_responses.py:_map_reasoning_item
+        """
+        if stream:
+            sses = await self._collect(_REASONING_STREAM, self._SUMMARY_REQUEST)
+            output = _payload(sses[-1])["response"]["output"]
+        else:
+            response = await format_response(
+                "resp-1",
+                0.0,
+                "model",
+                _bedrock_response([_SIGNED_REASONING_BLOCK, {"text": "Hello"}]),
+                self._SUMMARY_REQUEST,
+            )
+            output = [item.model_dump(exclude_none=True) for item in response.output]
+        echoed = ResponseReasoningItemInput.model_validate(
+            json.loads(json.dumps(output[0]))
+        )
+        messages, _ = await map_input(
+            cast(
+                "list[ResponseInputItem]",
+                [echoed, EasyInputMessage(role="user", content="next")],
+            ),
+            None,
+            reasoning_signature_required=True,
+        )
+        assert messages[0]["content"] == [
+            {
+                "reasoningContent": {
+                    "reasoningText": {"text": "think", "signature": "sig-1"}
+                }
+            }
+        ]
 
 
 @pytest.mark.local
@@ -1009,3 +1265,58 @@ class TestReasoningLive:
             )
             assert reasoning_item.content
             assert reasoning_item.content[0].text
+
+    @pytest.mark.expensive
+    def test_reasoning_summary_request(
+        self, openai_client: OpenAI, chat_reasoning_model: str
+    ) -> None:
+        """``reasoning.summary`` returns the reasoning text, streamed as it is produced.
+
+        The summary fills the item's ``summary`` with ``summary_text`` parts and
+        leaves ``content`` empty, streamed through
+        ``response.reasoning_summary_part.added``,
+        ``response.reasoning_summary_text.delta`` / ``.done`` and
+        ``response.reasoning_summary_part.done``, so a client reading only
+        ``summary`` gets the reasoning.
+
+        Ref: https://developers.openai.com/api/docs/guides/reasoning#reasoning-summaries
+             https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/models/chat/_adapters/_openai_responses.py:format_stream
+        """
+        event_types: list[str] = []
+        with openai_client.responses.stream(
+            model=chat_reasoning_model,
+            input=(
+                "How many positive integers below 60 are divisible by 3 or 5? "
+                "Answer with the number only."
+            ),
+            reasoning={"effort": "low", "summary": "detailed"},
+            store=False,
+            max_output_tokens=4096,
+        ) as stream:
+            event_types.extend(event.type for event in stream)
+        final = stream.get_final_response()
+
+        assert final.status == "completed"
+        assert final.reasoning is not None
+        assert final.reasoning.summary == "detailed", "reasoning.summary is echoed"
+        item = next(item for item in final.output if item.type == "reasoning")
+        assert item.summary
+        assert all(part.type == "summary_text" for part in item.summary)
+        assert all(part.text for part in item.summary)
+        assert not item.content, "the reasoning is in summary, not content"
+        assert not any(
+            event_type.startswith("response.reasoning_text.")
+            for event_type in event_types
+        ), event_types
+        expected = (
+            "response.reasoning_summary_part.added",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.done",
+            "response.reasoning_summary_part.done",
+        )
+        firsts = [event_types.index(event_type) for event_type in expected]
+        assert firsts == sorted(firsts), event_types
+        assert firsts[-1] < event_types.index("response.output_text.delta"), (
+            "the reasoning streams before the answer"
+        )

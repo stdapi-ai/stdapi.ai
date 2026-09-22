@@ -39,6 +39,7 @@ from stdapi.models.chat import ChatModelBase
 from stdapi.models.chat._adapters._anthropic_message import (
     warn_context_management_ignored,
 )
+from stdapi.models.chat._adapters._openai_responses import requests_reasoning_summary
 from stdapi.models.chat._anthropic_claude import (
     _BETA_CONTEXT_MANAGEMENT_2025,
     client_beta_flags,
@@ -366,6 +367,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         *,
         region: RegionName | None = None,
         exclude_reasoning: bool = False,
+        reasoning_summary: bool = False,
     ) -> tuple[MantleApi, RegionName, dict[str, Any]]:
         """Serve a non-streaming request, billing it and converting the result.
 
@@ -377,6 +379,8 @@ class ChatModel(ChatModelBase[Any, Any]):
             payload: Inbound request body, normalized to *inbound* wire format.
             region: Pinned region, if any.
             exclude_reasoning: Drop the reasoning text from the response.
+            reasoning_summary: Return converted reasoning as a Responses
+                summary.
 
         Returns:
             Tuple of (upstream API used, serving region, response converted
@@ -396,7 +400,9 @@ class ChatModel(ChatModelBase[Any, Any]):
         if api == "chat_completions":
             convert.rename_reasoning_field(raw, exclude=exclude_reasoning)
         if api != inbound:
-            raw = convert.convert_response(api, inbound, raw)
+            raw = convert.convert_response(
+                api, inbound, raw, reasoning_summary=reasoning_summary
+            )
         return api, serving_region, raw
 
     async def _stream_serve(
@@ -413,6 +419,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         ]
         | None = None,
         exclude_reasoning: bool = False,
+        reasoning_summary: bool = False,
     ) -> EventSourceResponse:
         """Serve a streaming request as a logged ``EventSourceResponse``.
 
@@ -428,6 +435,8 @@ class ChatModel(ChatModelBase[Any, Any]):
                 Responses events (ignored when served natively).
             wrap: Optional converter applied to the relayed event stream.
             exclude_reasoning: Drop the reasoning deltas from the stream.
+            reasoning_summary: Stream converted reasoning as a Responses
+                summary.
 
         Returns:
             Streaming response relaying the upstream events.
@@ -444,6 +453,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             id_rewrites=id_rewrites,
             response_id=response_id,
             exclude_reasoning=exclude_reasoning,
+            reasoning_summary=reasoning_summary,
         )
         if wrap is not None:
             relayed = wrap(relayed)
@@ -491,6 +501,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         id_rewrites: dict[str, str] | None = None,
         response_id: str | None = None,
         exclude_reasoning: bool = False,
+        reasoning_summary: bool = False,
     ) -> AsyncGenerator[ServerSentEvent]:
         """Relay upstream SSE events to the client, recording billed usage.
 
@@ -511,6 +522,8 @@ class ChatModel(ChatModelBase[Any, Any]):
             response_id: Route-assigned response ID stamped on converted
                 Responses events (native streams keep their tagged upstream ID).
             exclude_reasoning: Drop the reasoning deltas from the stream.
+            reasoning_summary: Stream converted reasoning as a Responses
+                summary.
 
         Yields:
             Server-sent events in the inbound wire format.
@@ -520,7 +533,9 @@ class ChatModel(ChatModelBase[Any, Any]):
         if api == "chat_completions" and inbound != "chat_completions":
             observed = _rename_stream_reasoning(observed, exclude=exclude_reasoning)
         if api != inbound:
-            observed = convert.convert_stream(api, inbound, observed, response_id)
+            observed = convert.convert_stream(
+                api, inbound, observed, response_id, reasoning_summary=reasoning_summary
+            )
         if inbound == "chat_completions":
             observed = _rename_stream_reasoning(
                 observed,
@@ -800,9 +815,13 @@ class ChatModel(ChatModelBase[Any, Any]):
                 # A minted ID is not retrievable, and its `resp_` form would be
                 # parsed as Mantle-tagged.
                 response_id=response_id,
+                reasoning_summary=requests_reasoning_summary(request),
             )
         api, region, raw = await self._serve_validated(
-            "responses", payload, region=pinned_region
+            "responses",
+            payload,
+            region=pinned_region,
+            reasoning_summary=requests_reasoning_summary(request),
         )
         if not request.background and raw.get("status") == "failed":
             # A synchronous request must not swallow an upstream failure into a

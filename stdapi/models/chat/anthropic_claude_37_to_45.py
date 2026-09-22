@@ -14,6 +14,7 @@ from stdapi.monitoring import log_error_details
 if TYPE_CHECKING:
     from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
+    from stdapi.types.anthropic_messages import ThinkingDisplay
 
 #: Reasoning models: Budget factor over the token max count
 _REASONING_EFFORT_BUDGET_FACTOR: dict[Effort, float] = {
@@ -102,6 +103,7 @@ class ChatModel(AnthropicClaudeChatModel):
         reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,
         max_tokens: int | None = None,
+        display: ThinkingDisplay | None = None,
     ) -> None:
         """Configure reasoning parameters for Claude 3.7-4.5.
 
@@ -116,6 +118,8 @@ class ChatModel(AnthropicClaudeChatModel):
             reasoning_effort: The reasoning effort level.
             budget_tokens: Optional explicit token budget for reasoning.
             max_tokens: Maximum number of tokens allowed for the model.
+            display: Whether thinking text is summarized or omitted, or the
+                model default when ``None``.
         """
         if not enabled:
             additional_request_fields["reasoning_config"] = {"type": "disabled"}
@@ -126,7 +130,10 @@ class ChatModel(AnthropicClaudeChatModel):
             budget_tokens = reasoning_budget(reasoning_effort, max_tokens)
             if budget_tokens is None:
                 return
-        additional_request_fields["reasoning_config"] = {
+        reasoning_config: JsonMapping = {
             "type": "enabled",
             "budget_tokens": budget_tokens,
         }
+        if display:
+            reasoning_config["display"] = display
+        additional_request_fields["reasoning_config"] = reasoning_config

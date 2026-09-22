@@ -7,6 +7,7 @@ from stdapi.models.chat._default import ChatModel as _BaseChatModel
 if TYPE_CHECKING:
     from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
+    from stdapi.types.anthropic_messages import ThinkingDisplay
 
 DeepseekReasoning = Literal["low", "medium", "high"]
 
@@ -36,6 +37,7 @@ class ChatModel(_BaseChatModel):
         reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,  # noqa: ARG002
         max_tokens: int | None = None,  # noqa: ARG002
+        display: ThinkingDisplay | None = None,  # noqa: ARG002
     ) -> None:
         """Configure reasoning parameters for DeepSeek models.
 
@@ -51,6 +53,7 @@ class ChatModel(_BaseChatModel):
                 effort, and on the Anthropic Messages route a budget is the only
                 way a request can ask for reasoning at all.
             max_tokens: Not used for Deep Seek models.
+            display: Unused.
         """
         if enabled:
             additional_request_fields["reasoning_config"] = _REASONING_OVERRIDE.get(

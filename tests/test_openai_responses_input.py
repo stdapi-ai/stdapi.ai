@@ -1051,6 +1051,7 @@ class TestCountInputTokensToolConfig:
                 reasoning_effort: str | None = None,
                 budget_tokens: int | None = None,
                 max_tokens: int | None = None,
+                display: str | None = None,
             ) -> None:
                 """Record the reasoning arguments without writing any request field."""
                 received.update(
@@ -1058,6 +1059,7 @@ class TestCountInputTokensToolConfig:
                     reasoning_effort=reasoning_effort,
                     budget_tokens=budget_tokens,
                     max_tokens=max_tokens,
+                    display=display,
                 )
 
         request = InputTokenCountParams.model_validate(
@@ -1074,6 +1076,7 @@ class TestCountInputTokensToolConfig:
             "reasoning_effort": "high",
             "budget_tokens": None,
             "max_tokens": None,
+            "display": None,
         }
 
     async def test_no_reasoning_leaves_the_request_bare(
@@ -1439,6 +1442,7 @@ class TestExtractReasoning:
             "reasoning_effort": "medium",
             "budget_tokens": None,
             "max_tokens": None,
+            "display": None,
         }
 
     def test_effort_none_disables_reasoning(self) -> None:
@@ -1526,11 +1530,13 @@ class TestToolChoiceAllowedTools:
 
 
 class TestReasoningSummarySignatures:
-    """Envelope signatures are never attached to summary fallback texts.
+    """Envelope signatures attach only to the field they were issued for.
 
-    Bedrock computes a ``reasoningText.signature`` over the raw reasoning text;
-    replaying it against a summary would be a signature/content mismatch, which
-    Bedrock rejects.  Redacted payloads carry no such binding and survive.
+    Bedrock computes a ``reasoningText.signature`` over the text it returned;
+    replaying it against any other text is a signature/content mismatch, which
+    Bedrock rejects.  An envelope issued with a ``summary`` item marks that its
+    signatures cover the summary text; any other envelope covers ``content``
+    only.  Redacted payloads carry no such binding and survive.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html
          stdapi/models/chat/_adapters/_openai_responses.py:_map_reasoning_item
@@ -1548,6 +1554,42 @@ class TestReasoningSummarySignatures:
         assert messages[0]["content"] == [
             {"reasoningContent": {"reasoningText": {"text": "sum"}}}
         ], "a signature must not be bound to text it was not computed over"
+
+    async def test_signature_attached_to_the_summary_it_was_issued_for(self) -> None:
+        """A summary-marked envelope re-attaches its signature to the summary text."""
+        item = ResponseReasoningItem(
+            id="rs_1",
+            summary=[ReasoningItemSummary(text="sum", type="summary_text")],
+            type="reasoning",
+            content=[],
+            encrypted_content=encode_reasoning_content(["sig-1"], [], summary=True),
+        )
+        messages, _ = await map_input(
+            cast("list[ResponseInputItem]", [item]),
+            None,
+            reasoning_signature_required=True,
+        )
+        assert messages[0]["content"] == [
+            {
+                "reasoningContent": {
+                    "reasoningText": {"text": "sum", "signature": "sig-1"}
+                }
+            }
+        ]
+
+    async def test_summary_signature_not_attached_to_content(self) -> None:
+        """A summary-marked envelope binds no signature to ``content`` text."""
+        item = ResponseReasoningItem(
+            id="rs_1",
+            summary=[],
+            type="reasoning",
+            content=[ReasoningItemContent(text="raw", type="reasoning_text")],
+            encrypted_content=encode_reasoning_content(["sig-1"], [], summary=True),
+        )
+        messages, _ = await map_input(cast("list[ResponseInputItem]", [item]), None)
+        assert messages[0]["content"] == [
+            {"reasoningContent": {"reasoningText": {"text": "raw"}}}
+        ]
 
     async def test_redacted_blocks_survive_summary_fallback(self) -> None:
         """Redacted payloads are still replayed when signatures are discarded."""

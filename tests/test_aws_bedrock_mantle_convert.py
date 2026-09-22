@@ -2263,8 +2263,8 @@ class TestMessagesToChatStream:
     async def test_full_event_sequence_with_tool_use_and_text_deltas(self) -> None:
         """A tool_use, arguments, a text delta, a thinking delta and ping convert.
 
-        ``thinking_delta`` has no Chat Completions field and ``ping`` is keep-alive only, so
-        neither yields a chunk; usage arrives as a final choice-less chunk.
+        ``thinking_delta`` becomes a ``reasoning_content`` delta, ``ping`` is keep-alive
+        only and yields no chunk; usage arrives as a final choice-less chunk.
 
         Ref: stdapi/models/chat/_mantle/_convert.py:_chat_delta_from_messages
         """
@@ -2343,7 +2343,7 @@ class TestMessagesToChatStream:
             )
         )
         chunks = _payloads(events)
-        assert len(chunks) == 6  # thinking_delta and ping produce no chunk
+        assert len(chunks) == 7  # ping produces no chunk
         assert chunks[0]["choices"][0]["delta"] == {"role": "assistant", "content": ""}
         assert (
             chunks[1]["choices"][0]["delta"]["tool_calls"][0]["function"]["name"]
@@ -2354,8 +2354,9 @@ class TestMessagesToChatStream:
             == '{"city": "Paris"}'
         )
         assert chunks[3]["choices"][0]["delta"] == {"content": "hello"}
-        assert chunks[4]["choices"][0]["finish_reason"] == "tool_calls"
-        assert chunks[5]["usage"] == {
+        assert chunks[4]["choices"][0]["delta"] == {"reasoning_content": "pondering"}
+        assert chunks[5]["choices"][0]["finish_reason"] == "tool_calls"
+        assert chunks[6]["usage"] == {
             "prompt_tokens": 10,
             "completion_tokens": 5,
             "total_tokens": 15,

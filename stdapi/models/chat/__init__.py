@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from stdapi.types.anthropic_messages import (
         Message,
         MessageCreateParams,
+        ThinkingDisplay,
         ThinkingEffort,
     )
     from stdapi.types.openai import ChatModeration, ResponseModeration
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
         reasoning_effort: Effort | None
         budget_tokens: int | None
         max_tokens: int | None
+        display: ThinkingDisplay | None
 
 
 class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):

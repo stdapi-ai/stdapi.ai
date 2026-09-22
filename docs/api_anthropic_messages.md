@@ -719,20 +719,19 @@ curl -X POST "$BASE/v1/messages" \
   -d '{
     "model": "anthropic.claude-sonnet-5",
     "max_tokens": 2048,
-    "thinking": {"type": "enabled", "budget_tokens": 1024},
+    "thinking": {"type": "adaptive", "display": "summarized"},
     "messages": [{"role":"user","content":"Solve a complex problem"}]
   }'
 ```
 
 `thinking` accepts `{"type": "enabled", "budget_tokens": <n>}` (the budget must be less than `max_tokens`), `{"type": "disabled"}`, or `{"type": "adaptive"}`. Alternatively, control reasoning depth with `output_config.effort` (`low`, `medium`, `high`, `xhigh`, `max`).
 
+`display` on an enabled or adaptive configuration chooses what the thinking blocks carry: `summarized` returns a summary of the reasoning, `omitted` returns empty `thinking` fields with their signature. Claude Opus 4.7 and later, Sonnet 5, Fable and Mythos omit the text by default, so set `"display": "summarized"` to read their reasoning; earlier Claude models summarize by default. The thinking tokens are billed the same either way. Other models accept the field and ignore it. The beta `updates` value is not available and is refused with a `400`, with or without its beta header; use `summarized` or `omitted`.
+
 On models whose reasoning depth is an effort level rather than a token budget (Amazon Nova 2, DeepSeek V3), `budget_tokens` turns reasoning on and the depth follows that model's own scale. Set `output_config.effort` to choose it.
 
 !!! note "A small `max_tokens` turns reasoning off on Converse-served Claude 3.7–4.5"
     Thinking tokens are spent out of the output limit, and Converse takes no budget below 1,024 tokens nor one that is not smaller than `max_tokens`. An effort level asked for alongside a `max_tokens` of 1,024 or less therefore leaves no budget to derive, and the request is served **without** reasoning rather than refused — a warning is logged. Raise `max_tokens` above 1,024 to get reasoning back.
-
-!!! note "`display` Not Honored"
-    The `display` field (`summarized`/`omitted`) is accepted but has no effect: Bedrock's reasoning configuration has no equivalent, so full thinking text is always returned.
 
 !!! note "Disabled Thinking Not Honored on Claude Opus 5.5+, Fable, Mythos, OpenAI GPT-6 Astra and gpt-oss"
     These models always reason. The request is accepted and a warning is recorded in the request log, but the disabled configuration is dropped and the model's default reasoning is used (adaptive mode on Claude): the response may still carry thinking blocks, and their output tokens are still billed. Use `output_config.effort` to lower the depth instead.

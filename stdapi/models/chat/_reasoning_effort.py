@@ -8,6 +8,7 @@ from stdapi.monitoring import log_error_details
 if TYPE_CHECKING:
     from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
+    from stdapi.types.anthropic_messages import ThinkingDisplay
 
 #: Values the ``reasoning.effort`` field accepts.
 type ReasoningObjectEffort = Literal["none", "low", "medium", "high", "xhigh", "max"]
@@ -51,6 +52,7 @@ class ReasoningEffortChatModel(_BaseChatModel):
         reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,  # noqa: ARG002
         max_tokens: int | None = None,  # noqa: ARG002
+        display: ThinkingDisplay | None = None,  # noqa: ARG002
     ) -> None:
         """Set the reasoning effort object from the requested level.
 
@@ -63,6 +65,7 @@ class ReasoningEffortChatModel(_BaseChatModel):
             reasoning_effort: Requested effort level, mapped onto the accepted values.
             budget_tokens: Not supported: reasoning is sized by effort only.
             max_tokens: Not used.
+            display: Unused.
         """
         effort = _REASONING_EFFORT.get(reasoning_effort) if enabled else "none"
         if effort == "none" and not self.REASONING_DISABLE_SUPPORTED:

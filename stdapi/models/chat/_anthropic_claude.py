@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from stdapi.types.anthropic_messages import (
         ContextManagementConfigParam,
         ServerTools,
+        ThinkingDisplay,
         ThinkingEffort,
     )
 
@@ -168,9 +169,6 @@ _STUB_INPUT_SCHEMAS: dict[str, dict[str, object]] = {
     "computer_20250124": _COMPUTER_STUB_SCHEMA,
     "computer_20251124": _COMPUTER_STUB_SCHEMA,
 }
-
-#: Default reasoning config for Claude models
-_REASONING_CONFIG: dict[str, str] = {"type": "adaptive"}
 
 #: Regex to match a date suffix in model ID
 _DATE_SUFFIX = re_compile(r"^(.+)-(\d{8})$")
@@ -676,13 +674,15 @@ class AnthropicClaudeChatModel(_BaseChatModel):
         reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,
         max_tokens: int | None = None,  # noqa: ARG002
+        display: ThinkingDisplay | None = None,
     ) -> None:
         """Configure reasoning parameters for Claude models.
 
         When ``budget_tokens`` is explicitly provided (> 0), uses budget-based
         reasoning. Otherwise uses adaptive reasoning with an optional effort level.
         When ``enabled`` is ``False``, reasoning is explicitly disabled, unless the
-        model rejects that configuration and always reasons in adaptive mode.
+        model rejects that configuration and always reasons in adaptive mode,
+        which then still honours ``display``.
 
         Args:
             additional_request_fields: Additional request fields dict to update.
@@ -690,25 +690,34 @@ class AnthropicClaudeChatModel(_BaseChatModel):
             reasoning_effort: The reasoning effort level.
             budget_tokens: Maximum token budget for reasoning.
             max_tokens: Unused.
+            display: Whether thinking text is summarized or omitted, or the
+                model default when ``None``.
         """
         if not enabled:
             if not self.REASONING_DISABLE_SUPPORTED:
                 log_error_details(REASONING_NOT_DISABLED, level="warning")
+                if display:
+                    additional_request_fields["reasoning_config"] = {
+                        "type": "adaptive",
+                        "display": display,
+                    }
                 return
             additional_request_fields["reasoning_config"] = {"type": "disabled"}
-        elif budget_tokens:
-            additional_request_fields["reasoning_config"] = {
-                "type": "enabled",
-                "budget_tokens": budget_tokens,
+            return
+        reasoning_config: JsonMapping = (
+            {"type": "enabled", "budget_tokens": budget_tokens}
+            if budget_tokens
+            else {"type": "adaptive"}
+        )
+        if display:
+            reasoning_config["display"] = display
+        additional_request_fields["reasoning_config"] = reasoning_config
+        if not budget_tokens and reasoning_effort:
+            additional_request_fields["output_config"] = {
+                "effort": self.REASONING_OVERRIDE.get(
+                    reasoning_effort, reasoning_effort
+                )
             }
-        else:
-            additional_request_fields["reasoning_config"] = _REASONING_CONFIG  # type: ignore[assignment]
-            if reasoning_effort:
-                additional_request_fields["output_config"] = {
-                    "effort": self.REASONING_OVERRIDE.get(
-                        reasoning_effort, reasoning_effort
-                    )
-                }
 
     @classmethod
     def get_aliases(cls, all_models: dict[str, ModelDetails]) -> dict[str, str]:

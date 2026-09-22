@@ -73,6 +73,16 @@ ServerTools = Literal[
 #: Thinking effort level
 ThinkingEffort = Literal["low", "medium", "high", "xhigh", "max"]
 
+#: Whether thinking blocks carry their summarized text or omit it
+ThinkingDisplay = Literal["summarized", "omitted"]
+
+#: Description shared by the ``display`` field of the thinking configurations.
+_THINKING_DISPLAY_DESCRIPTION = (
+    "`summarized` returns a summary of the thinking; `omitted` returns thinking "
+    "blocks with an empty `thinking` field and their signature. The default "
+    "depends on the model: recent models omit it. Billing is the same either way."
+)
+
 
 # Ref: anthropic.types.citation_char_location.CitationCharLocation
 class CitationCharLocation(BaseModelResponse):
@@ -3142,11 +3152,7 @@ class OutputConfigParam(BaseModelRequest):
 
 # Ref: anthropic.types.thinking_config_enabled_param.ThinkingConfigEnabledParam
 class ThinkingConfigEnabledParam(BaseModelRequestWithExtra):
-    """Enabled thinking configuration.
-
-    Newer client fields (e.g. ``display``) are accepted and ignored where the
-    backend does not support them.
-    """
+    """Enabled thinking configuration."""
 
     type: Literal["enabled"] = Field(
         description="Thinking config type. Always `enabled`."
@@ -3155,6 +3161,9 @@ class ThinkingConfigEnabledParam(BaseModelRequestWithExtra):
         description="Determines how many tokens the model can use for its internal reasoning process. "
         "Larger budgets can enable more thorough analysis for complex problems, improving response quality. "
         "Must be less than `max_tokens`."
+    )
+    display: ThinkingDisplay | None = Field(
+        default=None, description=_THINKING_DISPLAY_DESCRIPTION
     )
 
 
@@ -3169,14 +3178,13 @@ class ThinkingConfigDisabledParam(BaseModelRequest):
 
 # Ref: anthropic.types.thinking_config_adaptive_param.ThinkingConfigAdaptiveParam
 class ThinkingConfigAdaptiveParam(BaseModelRequestWithExtra):
-    """Adaptive thinking configuration.
-
-    Newer client fields (e.g. ``display``) are accepted and ignored where the
-    backend does not support them.
-    """
+    """Adaptive thinking configuration."""
 
     type: Literal["adaptive"] = Field(
         description="Thinking config type. Always `adaptive`."
+    )
+    display: ThinkingDisplay | None = Field(
+        default=None, description=_THINKING_DISPLAY_DESCRIPTION
     )
 
 

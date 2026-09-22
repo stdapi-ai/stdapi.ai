@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from gc import collect as gc_collect
 from json import JSONDecodeError, dumps, loads
 from re import Pattern
-from typing import TYPE_CHECKING, Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, ClassVar, NoReturn, cast
 from urllib.parse import unquote
 
 import pytest
@@ -93,7 +93,12 @@ from stdapi.types.openai_chat_completions import (
     CompletionCreateParams as ChatCompletionCreateParams,
 )
 from stdapi.types.openai_completions import Completion, CompletionCreateParams
-from stdapi.types.openai_responses import Response, ResponseCreateParams
+from stdapi.types.openai_responses import (
+    Reasoning,
+    Response,
+    ResponseCreateParams,
+    ResponseReasoningItem,
+)
 from tests._helpers import make_event_log, make_model_details
 from tests.conftest import REPO_ROOT
 
@@ -6208,3 +6213,176 @@ class TestMantleHttpSessionOwnership:
         monkeypatch.setattr(aws_bedrock_mantle, "_SESSION", None)
         async with aws_bedrock_mantle.mantle_http_session() as session:
             assert session.trust_env is True
+
+
+class TestReasoningSummaryPlumbing:
+    """A Responses summary request reaches the Mantle conversion; native streams pass through.
+
+    A converted response puts the reasoning in ``summary`` when the client asked
+    for one, as the Converse path does. A model serving the Responses API
+    natively already emits upstream's summary events, which are relayed as-is.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+         stdapi/models/chat/_mantle/_default.py:ChatModel.create_response
+         stdapi/models/chat/_mantle/_default.py:ChatModel._relay_stream
+    """
+
+    #: Chat Completions chunks carrying one reasoning delta, then the answer.
+    _CHUNKS: ClassVar[list[dict[str, Any]]] = [
+        {
+            "id": "chatcmpl-1",
+            "created": 1,
+            "model": "qwen.summary-model",
+            "choices": [{"index": 0, "delta": {"reasoning_content": "step"}}],
+        },
+        {
+            "choices": [
+                {"index": 0, "delta": {"content": "hi"}, "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        },
+    ]
+
+    @pytest.mark.parametrize(
+        ("reasoning", "delta_event"),
+        [
+            (Reasoning(summary="auto"), "response.reasoning_summary_text.delta"),
+            (Reasoning(effort="low"), "response.reasoning_text.delta"),
+        ],
+    )
+    async def test_converted_stream_follows_the_summary_request(
+        self, monkeypatch: pytest.MonkeyPatch, reasoning: Reasoning, delta_event: str
+    ) -> None:
+        """A converted stream carries summary events only when a summary was asked for."""
+
+        async def fake_invoke_stream(
+            region: RegionName,  # noqa: ARG001
+            path: str,  # noqa: ARG001
+            payload: Mapping[str, Any],  # noqa: ARG001
+            *,
+            single_region: bool,  # noqa: ARG001
+            headers: Mapping[str, str] | None = None,  # noqa: ARG001
+        ) -> AsyncGenerator[SseEvent]:
+            return _fake_stream([(None, dumps(chunk)) for chunk in self._CHUNKS])
+
+        _capture_usage_records(monkeypatch)
+        monkeypatch.setattr(mantle_default, "invoke_stream", fake_invoke_stream)
+        model = OpenWeightChatModel("qwen.summary-model")
+        request = ResponseCreateParams(
+            model="qwen.summary-model", input="hi", stream=True, reasoning=reasoning
+        )
+        result = await model.create_response(request, "resp-summary1", 0.0)
+        assert isinstance(result, EventSourceResponse)
+        token = REQUEST_ID.set("req-summary")
+        try:
+            events = cast(
+                "list[ServerSentEvent]", [event async for event in result.body_iterator]
+            )
+        finally:
+            REQUEST_ID.reset(token)
+        deltas = [
+            loads(_event_data(event))["delta"]
+            for event in events
+            if event.event == delta_event
+        ]
+        assert deltas == ["step"]
+
+    async def test_converted_response_follows_the_summary_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A converted non-streamed response puts the reasoning in ``summary``."""
+
+        async def fake_invoke(
+            region: RegionName,  # noqa: ARG001
+            path: str,  # noqa: ARG001
+            payload: Mapping[str, Any],  # noqa: ARG001
+            *,
+            single_region: bool,  # noqa: ARG001
+            headers: Mapping[str, str] | None = None,  # noqa: ARG001
+        ) -> dict[str, Any]:
+            return {
+                "id": "chatcmpl-1",
+                "created": 1,
+                "model": "qwen.summary-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "hi",
+                            "reasoning_content": "step",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 2,
+                    "total_tokens": 3,
+                },
+            }
+
+        _capture_usage_records(monkeypatch)
+        monkeypatch.setattr(mantle_default, "invoke", fake_invoke)
+        model = OpenWeightChatModel("qwen.summary-model")
+        request = ResponseCreateParams(
+            model="qwen.summary-model", input="hi", reasoning=Reasoning(summary="auto")
+        )
+        response = await model.create_response(request, "resp-summary2", 0.0)
+        assert isinstance(response, Response)
+        item = response.output[0]
+        assert isinstance(item, ResponseReasoningItem)
+        assert [(part.type, part.text) for part in item.summary] == [
+            ("summary_text", "step")
+        ]
+        assert not item.content
+
+    async def test_native_summary_events_pass_through(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A native Responses stream's summary events reach the client unchanged."""
+        _capture_usage_records(monkeypatch)
+        model = mantle_default.ChatModel("test.native-summary-model")
+        summary_events: list[SseEvent] = [
+            (
+                "response.reasoning_summary_part.added",
+                dumps(
+                    {
+                        "item_id": "rs_1",
+                        "output_index": 0,
+                        "summary_index": 0,
+                        "part": {"type": "summary_text", "text": ""},
+                    }
+                ),
+            ),
+            (
+                "response.reasoning_summary_text.delta",
+                dumps(
+                    {
+                        "item_id": "rs_1",
+                        "output_index": 0,
+                        "summary_index": 0,
+                        "delta": "step",
+                    }
+                ),
+            ),
+        ]
+        upstream = _responses_stream_events()
+        upstream[1:1] = summary_events
+        events = [
+            event
+            async for event in model._relay_stream(  # noqa: SLF001
+                "responses",
+                "responses",
+                _fake_stream(upstream),
+                "us-east-1",
+                strip_usage_chunk=False,
+                reasoning_summary=True,
+            )
+        ]
+        relayed = [
+            (event.event, loads(_event_data(event)))
+            for event in events
+            if event.event is not None and "reasoning" in event.event
+        ]
+        assert relayed == [(name, loads(data)) for name, data in summary_events]
