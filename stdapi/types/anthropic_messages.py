@@ -3,7 +3,7 @@
 from itertools import groupby
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import AliasChoices, ConfigDict, Field, field_validator, model_validator
 
 from stdapi.api_errors import ApiError
 from stdapi.input_file import FileIdInputFile, InputFile
@@ -2413,6 +2413,105 @@ class RefusalStopDetails(BaseModelResponse):
     )
 
 
+# Ref: anthropic.types.beta.beta_clear_tool_uses_20250919_edit_response.BetaClearToolUses20250919EditResponse
+class ClearToolUses20250919EditResponse(BaseModelResponse):
+    """A tool-result clearing edit applied to the prompt."""
+
+    #: Tolerates fields upstream adds, so a newer report never fails the response.
+    model_config = ConfigDict(extra="ignore")
+
+    type: Literal["clear_tool_uses_20250919"] = Field(description="Edit type.")
+    cleared_input_tokens: int = Field(description="Input tokens cleared by the edit.")
+    cleared_tool_uses: int = Field(description="Tool uses cleared by the edit.")
+
+
+# Ref: anthropic.types.beta.beta_clear_thinking_20251015_edit_response.BetaClearThinking20251015EditResponse
+class ClearThinking20251015EditResponse(BaseModelResponse):
+    """A thinking clearing edit applied to the prompt."""
+
+    #: Tolerates fields upstream adds, so a newer report never fails the response.
+    model_config = ConfigDict(extra="ignore")
+
+    type: Literal["clear_thinking_20251015"] = Field(description="Edit type.")
+    cleared_input_tokens: int = Field(description="Input tokens cleared by the edit.")
+    cleared_thinking_turns: int = Field(
+        description="Assistant turns whose thinking was cleared."
+    )
+
+
+# Ref: anthropic.types.beta.beta_context_management_response.AppliedEdit
+AppliedContextManagementEdit = Annotated[
+    ClearToolUses20250919EditResponse | ClearThinking20251015EditResponse,
+    Field(discriminator="type"),
+]
+
+#: Applied edit types the response models; any other one is dropped from ``applied_edits``.
+APPLIED_EDIT_TYPES: frozenset[str] = frozenset(
+    {"clear_tool_uses_20250919", "clear_thinking_20251015"}
+)
+
+
+# Ref: anthropic.types.beta.beta_context_management_response.BetaContextManagementResponse
+class ContextManagementResponse(BaseModelResponse):
+    """Context edits applied to the prompt of this request."""
+
+    #: Tolerates fields upstream adds, so a newer report never fails the response.
+    model_config = ConfigDict(extra="ignore")
+
+    applied_edits: list[AppliedContextManagementEdit] = Field(
+        description="Edits that were applied."
+    )
+
+    @field_validator("applied_edits", mode="before")
+    @classmethod
+    def _drop_unknown_edits(cls, edits: Any) -> Any:  # noqa: ANN401
+        """Drop the applied edits of a type this API does not describe.
+
+        Args:
+            edits: Raw ``applied_edits`` value, before validation.
+
+        Returns:
+            The value without the edits of an unknown type.
+        """
+        if not isinstance(edits, list):
+            return edits
+        known: list[Any] = []
+        unknown: list[str] = []
+        for edit in edits:
+            if isinstance(edit, dict) and edit.get("type") not in APPLIED_EDIT_TYPES:
+                unknown.append(str(edit.get("type")))
+            else:
+                known.append(edit)
+        if unknown:
+            from stdapi.monitoring import log_error_details  # noqa: PLC0415
+
+            log_error_details(
+                "Dropped context_management applied edits of an unknown type: "
+                + ", ".join(unknown),
+                level="warning",
+            )
+        return known
+
+
+# Ref: anthropic.types.beta.beta_count_tokens_context_management_response.BetaCountTokensContextManagementResponse
+class CountTokensContextManagementResponse(BaseModelResponse):
+    """Context editing details of a token count."""
+
+    #: Tolerates fields upstream adds, so a newer report never fails the response.
+    model_config = ConfigDict(extra="ignore")
+
+    original_input_tokens: int = Field(
+        description="Input tokens before context editing was applied."
+    )
+
+
+#: Description of the ``context_management`` response field.
+_APPLIED_CONTEXT_MANAGEMENT_DESCRIPTION = (
+    "Context edits applied to the prompt; present when context management is "
+    "enabled on a Claude model."
+)
+
+
 # Ref: anthropic.types.message.Message
 class Message(BaseModelResponse):
     """Messages API response."""
@@ -2456,6 +2555,9 @@ class Message(BaseModelResponse):
     container: Container | None = Field(
         description="Information about the container used in the request (for the code execution tool).",
         default=None,
+    )
+    context_management: ContextManagementResponse | None = Field(
+        default=None, description=_APPLIED_CONTEXT_MANAGEMENT_DESCRIPTION
     )
 
 
@@ -2615,6 +2717,9 @@ class RawMessageDeltaEvent(BaseModelResponse):
         "visible content one-to-one; total input tokens = `input_tokens` + "
         "`cache_creation_input_tokens` + `cache_read_input_tokens`."
     )
+    context_management: ContextManagementResponse | None = Field(
+        default=None, description=_APPLIED_CONTEXT_MANAGEMENT_DESCRIPTION
+    )
 
 
 # Ref: anthropic.types.raw_message_stop_event.RawMessageStopEvent
@@ -2670,6 +2775,130 @@ class ContainerParams(BaseModelRequest):
     )
 
 
+# Ref: anthropic.types.beta.beta_input_tokens_trigger_param.BetaInputTokensTriggerParam
+class InputTokensTriggerParam(BaseModelRequest):
+    """Context editing trigger on the prompt size."""
+
+    type: Literal["input_tokens"] = Field(description="Trigger type.")
+    value: int = Field(ge=1, description="Input tokens that trigger the edit.")
+
+
+# Ref: anthropic.types.beta.beta_tool_uses_trigger_param.BetaToolUsesTriggerParam
+class ToolUsesTriggerParam(BaseModelRequest):
+    """Context editing trigger on the number of tool uses."""
+
+    type: Literal["tool_uses"] = Field(description="Trigger type.")
+    value: int = Field(ge=1, description="Tool uses that trigger the edit.")
+
+
+# Ref: anthropic.types.beta.beta_tool_uses_keep_param.BetaToolUsesKeepParam
+class ToolUsesKeepParam(BaseModelRequest):
+    """Number of most recent tool uses kept by a context edit."""
+
+    type: Literal["tool_uses"] = Field(description="Keep type.")
+    value: int = Field(ge=0, description="Most recent tool uses to keep.")
+
+
+# Ref: anthropic.types.beta.beta_input_tokens_clear_at_least_param.BetaInputTokensClearAtLeastParam
+class InputTokensClearAtLeastParam(BaseModelRequest):
+    """Minimum amount of input tokens a context edit must clear."""
+
+    type: Literal["input_tokens"] = Field(description="Threshold type.")
+    value: int = Field(ge=0, description="Input tokens to clear at least.")
+
+
+# Ref: anthropic.types.beta.beta_thinking_turns_param.BetaThinkingTurnsParam
+class ThinkingTurnsParam(BaseModelRequest):
+    """Number of most recent assistant turns whose thinking is kept."""
+
+    type: Literal["thinking_turns"] = Field(description="Keep type.")
+    value: int = Field(ge=1, description="Most recent thinking turns to keep.")
+
+
+# Ref: anthropic.types.beta.beta_all_thinking_turns_param.BetaAllThinkingTurnsParam
+class AllThinkingTurnsParam(BaseModelRequest):
+    """Keep the thinking of every assistant turn."""
+
+    type: Literal["all"] = Field(description="Keep type.")
+
+
+# Ref: anthropic.types.beta.beta_clear_tool_uses_20250919_edit_param.BetaClearToolUses20250919EditParam
+class ClearToolUses20250919EditParam(BaseModelRequest):
+    """Clear the oldest tool results once the context grows past a trigger."""
+
+    type: Literal["clear_tool_uses_20250919"] = Field(description="Edit type.")
+    trigger: (
+        Annotated[
+            InputTokensTriggerParam | ToolUsesTriggerParam, Field(discriminator="type")
+        ]
+        | None
+    ) = Field(
+        default=None, description="When to clear; defaults to 100,000 input tokens."
+    )
+    keep: ToolUsesKeepParam | None = Field(
+        default=None, description="Most recent tool uses left untouched; defaults to 3."
+    )
+    clear_at_least: InputTokensClearAtLeastParam | None = Field(
+        default=None,
+        description="Clear only when at least this many input tokens can be removed.",
+    )
+    exclude_tools: list[str] | None = Field(
+        default=None, description="Tool names whose uses are never cleared."
+    )
+    clear_tool_inputs: bool | list[str] | None = Field(
+        default=None,
+        description="Also clear the tool call inputs: all of them, or those of "
+        "the named tools.",
+    )
+
+
+# Ref: anthropic.types.beta.beta_clear_thinking_20251015_edit_param.BetaClearThinking20251015EditParam
+class ClearThinking20251015EditParam(BaseModelRequest):
+    """Clear the thinking blocks of older assistant turns.
+
+    Requires thinking enabled or adaptive, and must be the first edit.
+    """
+
+    type: Literal["clear_thinking_20251015"] = Field(description="Edit type.")
+    keep: (
+        Annotated[
+            ThinkingTurnsParam | AllThinkingTurnsParam, Field(discriminator="type")
+        ]
+        | Literal["all"]
+        | None
+    ) = Field(
+        default=None,
+        description="Most recent assistant turns whose thinking is kept; the "
+        "default depends on the model.",
+    )
+
+
+# Ref: anthropic.types.beta.beta_context_management_config_param.Edit
+ContextManagementEditParam = Annotated[
+    ClearToolUses20250919EditParam | ClearThinking20251015EditParam,
+    Field(discriminator="type"),
+]
+
+
+# Ref: anthropic.types.beta.beta_context_management_config_param.BetaContextManagementConfigParam
+class ContextManagementConfigParam(BaseModelRequest):
+    """Context editing applied before the prompt reaches the model."""
+
+    edits: list[ContextManagementEditParam] | None = Field(
+        default=None,
+        description="Edits to apply, in order. `clear_thinking_20251015` must be "
+        "first and requires thinking enabled or adaptive.",
+    )
+
+
+#: Description of the ``context_management`` request field (messages and count_tokens).
+_CONTEXT_MANAGEMENT_DESCRIPTION = (
+    "Context editing: clear older tool results or thinking blocks server-side "
+    "once the conversation grows, keeping the full history on your side. "
+    "Applied on Claude models; ignored on other models."
+)
+
+
 # Ref: anthropic.types.message_create_params.MessageCreateParamsBase
 class MessageCreateParams(BaseModelRequestWithExtra):
     """Create message request following the Messages API specification."""
@@ -2692,6 +2921,9 @@ class MessageCreateParams(BaseModelRequestWithExtra):
     )
     cache_control: CacheControlEphemeralParam | None = Field(
         default=None, description="Cache control applied to the last cacheable block."
+    )
+    context_management: ContextManagementConfigParam | None = Field(
+        default=None, description=_CONTEXT_MANAGEMENT_DESCRIPTION
     )
     max_tokens: int | None = Field(
         default=None,
@@ -3019,6 +3251,9 @@ class MessageCountTokensParams(BaseModelRequestWithExtra):
     cache_control: CacheControlEphemeralParam | None = Field(
         default=None, description="Cache control applied to last cacheable block."
     )
+    context_management: ContextManagementConfigParam | None = Field(
+        default=None, description=_CONTEXT_MANAGEMENT_DESCRIPTION
+    )
 
     @field_validator("messages", mode="before")
     @classmethod
@@ -3069,6 +3304,11 @@ class MessageTokensCount(BaseModelResponse):
     input_tokens: int = Field(
         description="The total number of tokens across the provided list of messages, "
         "system prompt, and tools."
+    )
+    context_management: CountTokensContextManagementResponse | None = Field(
+        default=None,
+        description="Count before context editing; present when the request "
+        "sets `context_management` on a Claude model.",
     )
 
 

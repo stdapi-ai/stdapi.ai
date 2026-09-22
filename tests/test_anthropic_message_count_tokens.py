@@ -113,7 +113,9 @@ async def test_count_tokens_forwards_reasoning(
     tokens = await count_tokens_via_bedrock(
         request, _CLAUDE_MODEL, "us-east-1", _chat_model(_CLAUDE_MODEL)
     )
-    assert tokens == 42, "the Bedrock inputTokens value is returned unchanged"
+    assert tokens.input_tokens == 42, (
+        "the Bedrock inputTokens value is returned unchanged"
+    )
     (call,) = fake_client.calls
     assert call["modelId"] == _CLAUDE_MODEL
     additional_fields = call["input"]["converse"]["additionalModelRequestFields"]

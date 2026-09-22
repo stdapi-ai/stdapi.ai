@@ -6,10 +6,11 @@ close to Bedrock's native format, so many mappings are near 1:1.
 """
 
 import re
+from asyncio import gather
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from pydantic_core import to_json
 from sse_starlette import JSONServerSentEvent
 
@@ -48,6 +49,8 @@ from stdapi.types.anthropic_messages import (
     ContentBlock,
     ContentBlockParam,
     ContentBlockSourceParam,
+    ContextManagementResponse,
+    CountTokensContextManagementResponse,
     DocumentBlockParam,
     FileSource,
     ImageBlockParam,
@@ -60,6 +63,7 @@ from stdapi.types.anthropic_messages import (
     MessageDelta,
     MessageDeltaUsage,
     MessageParam,
+    MessageTokensCount,
     OutputConfigParam,
     PlainTextSourceParam,
     RawContentBlockDeltaEvent,
@@ -1063,6 +1067,27 @@ def warn_mcp_connector_ignored(
     log_error_details(_MCP_CONNECTOR_IGNORED, level="warning")
 
 
+#: Operator-facing warning for ``context_management`` sent to a model that does not apply it.
+_CONTEXT_MANAGEMENT_IGNORED = (
+    "Ignored the `context_management` of this request: context editing is only "
+    "applied on Claude models, so this model received the conversation unedited."
+)
+
+
+def warn_context_management_ignored() -> None:
+    """Tell the operator that a request's context editing was ignored.
+
+    Written at most once per request log, which a batch shares across its
+    requests.
+    """
+    log = REQUEST_LOG.get(None)
+    if log is not None and _CONTEXT_MANAGEMENT_IGNORED in (
+        log.get("error_detail") or ()
+    ):
+        return
+    log_error_details(_CONTEXT_MANAGEMENT_IGNORED, level="warning")
+
+
 #: ``set_inference_configuration`` argument names a request extra cannot reuse
 _RESERVED_INFERENCE_PARAMS: frozenset[str] = frozenset(
     {
@@ -1429,6 +1454,7 @@ async def format_response(
     | None = None,
     *,
     service_tier: ResponseServiceTiers | None = None,
+    context_management: Mapping[str, Any] | None = None,
 ) -> Message:
     """Format a Bedrock Converse response as an Anthropic ``Message``.
 
@@ -1449,6 +1475,7 @@ async def format_response(
             default ``_map_content_block_from_bedrock`` mapping.
         service_tier: Tier the call was served on, echoed in ``usage``.  Left
             ``None`` when it was served on a tier Anthropic has no word for.
+        context_management: Applied context edits the model reported, if any.
 
     Returns:
         Anthropic Message object.
@@ -1517,7 +1544,33 @@ async def format_response(
         model=model_id,
         stop_reason=_map_stop_reason(stop_reason),
         usage=anthropic_usage,
+        context_management=_map_context_management(context_management),
     )
+
+
+def _map_context_management(
+    context_management: Mapping[str, Any] | None,
+) -> ContextManagementResponse | None:
+    """Validate the applied context edits a Claude model reported.
+
+    Args:
+        context_management: Raw ``context_management`` response object, if any.
+
+    Returns:
+        The applied edits, or ``None`` when the model reported none or a shape
+        this API does not describe, which is logged rather than failing the
+        already generated answer.
+    """
+    if context_management is None:
+        return None
+    try:
+        return ContextManagementResponse.model_validate(context_management)
+    except ValidationError:
+        log_error_details(
+            "Dropped a context_management report of an unexpected shape",
+            level="warning",
+        )
+        return None
 
 
 def _make_block_start_event(
@@ -1690,7 +1743,9 @@ def _make_block_stop_event(index: int) -> JSONServerSentEvent:
 
 
 def _make_message_delta_event(
-    stop_reason: StopReason | None, usage_data: dict[str, int]
+    stop_reason: StopReason | None,
+    usage_data: dict[str, int],
+    context_management: Mapping[str, Any] | None = None,
 ) -> JSONServerSentEvent:
     """Create the ``message_delta`` SSE event.
 
@@ -1704,6 +1759,8 @@ def _make_message_delta_event(
             unterminated; it is what the non-streamed path answers for the same
             backend, so the two agree.
         usage_data: Token usage data from Bedrock metadata.
+        context_management: Applied context edits the model reported, if any;
+            upstream sends them on this event only.
 
     Returns:
         JSON server-sent event.
@@ -1717,6 +1774,7 @@ def _make_message_delta_event(
             cache_read_input_tokens=usage_data.get("cacheReadInputTokens"),
             cache_creation_input_tokens=usage_data.get("cacheWriteInputTokens"),
         ),
+        context_management=_map_context_management(context_management),
     ).model_dump(mode="json", exclude_none=True)
     # Anthropic always includes `stop_sequence` (null when unmatched); exclude_none drops it.
     data["delta"].setdefault("stop_sequence", None)
@@ -2106,6 +2164,7 @@ async def _process_stream_events(
     """
     stop_reason: StopReason | None = None
     usage_data: dict[str, int] = {}
+    context_management: Mapping[str, Any] | None = None
     state = _StreamState()
 
     async for event in stream:
@@ -2125,10 +2184,13 @@ async def _process_stream_events(
                     yield sse
             case {"messageStop": message_stop}:
                 stop_reason = _map_stop_reason(message_stop["stopReason"])
+                context_management = (
+                    message_stop.get("additionalModelResponseFields") or {}
+                ).get("context_management")
             case {"metadata": metadata}:
                 usage_data = metadata["usage"]  # type: ignore[assignment]
 
-    yield _make_message_delta_event(stop_reason, usage_data)
+    yield _make_message_delta_event(stop_reason, usage_data, context_management)
 
 
 async def format_stream(
@@ -2176,7 +2238,7 @@ async def count_tokens_via_bedrock(
     model_id: str,
     region: RegionName,
     chat_model: ChatModel,
-) -> int:
+) -> MessageTokensCount:
     """Count tokens using the AWS Bedrock Runtime CountTokens API.
 
     Builds a Converse-compatible input from the Anthropic request the same way
@@ -2188,6 +2250,9 @@ async def count_tokens_via_bedrock(
     fully promoted natively), a permissive one is synthesized, mirroring the
     fallback ``create_message`` applies via ``_prepare_converse_request``.
 
+    Context editing is counted as applied; the count without it is taken
+    concurrently and reported as ``original_input_tokens``, as upstream does.
+
     Args:
         request: The count tokens request containing messages, system prompt, and tools.
         model_id: The Bedrock model identifier.
@@ -2195,7 +2260,8 @@ async def count_tokens_via_bedrock(
         chat_model: Model instance providing the request-building hooks.
 
     Returns:
-        The total number of input tokens.
+        The input token count, with the unedited count when context editing
+        applies.
     """
     # Mirrors translate_request: explicit per-block cache_control markers are only
     # honored when the top-level cache_control (automatic caching) is unset.
@@ -2257,11 +2323,37 @@ async def count_tokens_via_bedrock(
             bedrock_messages, exclude=native_tool_names
         ):
             req["toolConfig"] = synthesized_tool_config
+    if request.context_management is not None:
+        chat_model._req_configure_context_management(  # noqa: SLF001
+            additional_request_fields, request.context_management
+        )
     if additional_request_fields:
         req["additionalModelRequestFields"] = additional_request_fields
 
+    client = get_client("bedrock-runtime", region)
+    if "context_management" not in additional_request_fields:
+        with handle_bedrock_client_error():
+            resp: CountTokensResponseTypeDef = await client.count_tokens(
+                modelId=model_id, input={"converse": req}
+            )
+        return MessageTokensCount(input_tokens=resp["inputTokens"])
+
+    # CountTokens is free, so the unedited count upstream reports costs nothing extra.
+    unedited = req | {
+        "additionalModelRequestFields": {
+            key: value
+            for key, value in additional_request_fields.items()
+            if key != "context_management"
+        }
+    }
     with handle_bedrock_client_error():
-        resp: CountTokensResponseTypeDef = await get_client(
-            "bedrock-runtime", region
-        ).count_tokens(modelId=model_id, input={"converse": req})
-    return resp["inputTokens"]
+        edited_resp, unedited_resp = await gather(
+            client.count_tokens(modelId=model_id, input={"converse": req}),
+            client.count_tokens(modelId=model_id, input={"converse": unedited}),
+        )
+    return MessageTokensCount(
+        input_tokens=edited_resp["inputTokens"],
+        context_management=CountTokensContextManagementResponse(
+            original_input_tokens=unedited_resp["inputTokens"]
+        ),
+    )

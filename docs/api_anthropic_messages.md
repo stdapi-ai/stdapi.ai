@@ -1,7 +1,7 @@
 ---
 title: Messages API - Amazon Bedrock with Anthropic Compatibility
 description: Anthropic-compatible Messages API for Amazon Bedrock models including Claude, Nova, Llama. Supports streaming, extended thinking, tool calling, prompt caching, and multi-modal inputs.
-keywords: anthropic messages API, claude messages API, AWS Bedrock chat, streaming messages API, AI assistant API, anthropic API, tool calling API, multi-modal messages
+keywords: anthropic messages API, claude messages API, AWS Bedrock chat, streaming messages API, AI assistant API, anthropic API, tool calling API, multi-modal messages, context editing, context_management, clear_tool_uses_20250919, clear_thinking_20251015, applied_edits, original_input_tokens, count_tokens
 ---
 
 # Messages API (Anthropic Compatible)
@@ -81,6 +81,7 @@ curl -X POST "$BASE/v1/messages" \
 | `stop_sequences`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Custom stop strings                                                                          |
 | Thinking                              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       |                                                                                              |
 | Prompt caching                        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Cache prompts to reduce costs and latency                                                    |
+| Context editing (`context_management`) |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Claude models: clears older tool results and thinking blocks, reports `applied_edits`, and is honored by `count_tokens`. Accepted and ignored on other models. Compaction is not available — see [Context Editing](#context-editing) |
 | Extra model-specific params           | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra model-specific parameters not supported by the Anthropic API                           |
 | **Streaming & Output**                |                                          |                                                                                              |
 | Text                                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Text messages                                                                                |
@@ -131,6 +132,7 @@ Mantle-only Claude models are passed through to the upstream Anthropic Messages 
 | Browser & computer toolsets (`browser_toolset_*`, `computer_toolset_*`) | Forwarded verbatim, with the `browser_state` blocks that answer them | Rejected with `400`, `browser_state` results included |
 | MCP connector (`mcp_servers`, `mcp_toolset`) | Dropped before the request leaves — see [MCP Connector](#mcp-connector) | Dropped |
 | `thinking` | Forwarded | Dropped on conversion (use `output_config.effort` for portable reasoning control) |
+| `context_management` | Forwarded — see [Context Editing](#context-editing) | Dropped |
 | `thinking` response blocks | Returned as sent upstream | Not returned — a converted model's chain of thought is only available on the OpenAI-compatible APIs |
 | `output_config.effort` | Forwarded | Mapped to reasoning effort |
 | `output_config.format` | Fails upstream — not supported by the Mantle Messages API | `json_schema` mapped to OpenAI structured output |
@@ -274,6 +276,71 @@ In subsequent requests with cache hits:
   }
 }
 ```
+
+### :material-content-cut: Context Editing { #context-editing }
+
+An agent loop grows its prompt with every tool result and thinking block it replays. `context_management` ([context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing)) clears the oldest of them before the prompt reaches the model, while your client keeps sending the full history.
+
+The request below replays three weather lookups and keeps only the latest result; a real agent would trigger on `input_tokens` instead, well below its context window:
+
+```bash
+curl -X POST "$BASE/v1/messages" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-haiku-4-5",
+    "max_tokens": 256,
+    "tools": [{
+      "name": "get_weather",
+      "description": "Get the weather for a city",
+      "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+    }],
+    "messages": [
+      {"role": "user", "content": "What is the weather in Paris, Lyon and Nice?"},
+      {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Paris"}}]},
+      {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "Paris: sunny, 21 degrees, humidity 55%, wind 12 km/h from the west, UV index 5, sunrise 07:31, sunset 19:52, visibility 10 km, pressure 1016 hPa, no rain expected in the next 48 hours, overnight low 12 degrees, air quality good, pollen count moderate, tomorrow similar with a light breeze in the afternoon and scattered high clouds in the evening"}]},
+      {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_02", "name": "get_weather", "input": {"city": "Lyon"}}]},
+      {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_02", "content": "Lyon: cloudy, 18 degrees, humidity 55%, wind 12 km/h from the west, UV index 5, sunrise 07:31, sunset 19:52, visibility 10 km, pressure 1016 hPa, no rain expected in the next 48 hours, overnight low 12 degrees, air quality good, pollen count moderate, tomorrow similar with a light breeze in the afternoon and scattered high clouds in the evening"}]},
+      {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_03", "name": "get_weather", "input": {"city": "Nice"}}]},
+      {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_03", "content": "Nice: sunny, 24 degrees, humidity 55%, wind 12 km/h from the west, UV index 5, sunrise 07:31, sunset 19:52, visibility 10 km, pressure 1016 hPa, no rain expected in the next 48 hours, overnight low 12 degrees, air quality good, pollen count moderate, tomorrow similar with a light breeze in the afternoon and scattered high clouds in the evening"}]}
+    ],
+    "context_management": {
+      "edits": [{
+        "type": "clear_tool_uses_20250919",
+        "trigger": {"type": "tool_uses", "value": 2},
+        "keep": {"type": "tool_uses", "value": 1}
+      }]
+    }
+  }'
+```
+
+The two oldest results are cleared before the model sees the prompt, and the response says so:
+
+```json
+{
+  "context_management": {
+    "applied_edits": [
+      {"type": "clear_tool_uses_20250919", "cleared_input_tokens": 150, "cleared_tool_uses": 2}
+    ]
+  }
+}
+```
+
+| Edit | Clears | Options |
+|------|--------|---------|
+| `clear_tool_uses_20250919` | The oldest tool results, and optionally the tool inputs | `trigger` (`input_tokens` or `tool_uses`; 100,000 input tokens by default), `keep` (3 tool uses by default), `clear_at_least`, `exclude_tools`, `clear_tool_inputs` (`true` or a list of tool names) |
+| `clear_thinking_20251015` | The thinking blocks of older assistant turns | `keep`: `{"type": "thinking_turns", "value": N}`, or `"all"`. Must be the first edit, and needs `thinking` enabled or adaptive |
+
+**Behaviour:**
+
+- **Claude models** apply the edits. The `context-management-2025-06-27` flag the Anthropic API requires in `anthropic-beta` is added for you, so the header is optional here.
+- **Applied edits** are reported in `context_management.applied_edits` — with the number of tool uses or thinking turns cleared, and the input tokens saved — and, when streaming, on the final `message_delta` event. The field is present whenever context management is enabled, including when the flag arrives only in `anthropic-beta`; a model that clears older thinking by default reports that as a `clear_thinking_20251015` entry you did not ask for. `usage.input_tokens` counts the edited prompt, which is what is billed.
+- **Short tool results** are left in place, as the Anthropic API does: a reached trigger over one-line results can still report an empty `applied_edits`.
+- **`count_tokens`** counts the edited prompt and reports the unedited count in `context_management.original_input_tokens`.
+- **Other models** accept the field and ignore it: the conversation reaches the model unedited, the response carries no `context_management`, and the server log records a warning. Clients such as Claude Code send the field on every turn with thinking on, so refusing it would break them.
+- **Batch results** do not report `applied_edits`.
+- **Compaction** (`compact_20260112`) is not available and is refused as an unknown edit type, like any other edit type the API does not define.
 
 ### System Prompt
 

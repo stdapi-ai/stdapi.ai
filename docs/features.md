@@ -296,6 +296,7 @@ A deployment spanning several AWS regions draws on more than one Bedrock quota a
 |------------------------------------|------------------------------------------------------------------------------------------------------------------------|
 | **Prompt Caching**                 | Cache system prompts, messages and tools section by section, at the TTL you choose — a long system prompt is billed at the cache-read rate on later turns instead of in full, with cache metrics in the response |
 | **Reasoning Modes**                | Extended thinking on Claude and Nova, driven by effort level or by a token budget                                      |
+| **Context Editing**                | Claude clears the oldest tool results and thinking blocks of a long agent conversation before it reaches the model — Anthropic's [`context_management`](api_anthropic_messages.md#context-editing), with the applied edits reported back and honored by token counting |
 | **Bedrock Guardrails**             | Content filtering and safety policies applied to traffic from every client, with the trace detail you choose           |
 | **Service Tiers**                  | Priority, default, flex and reserved tiers, per request or as a default per model — a latency-sensitive workload and a cheap bulk one share the deployment |
 | **Application Inference Profiles** | Isolate a workload and see it separately on the AWS bill                                                               |

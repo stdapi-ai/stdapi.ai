@@ -60,6 +60,7 @@ from stdapi.types.anthropic_messages import (
     MessageDelta,
     MessageDeltaUsage,
     MessageParam,
+    MessageTokensCount,
     ToolParam,
 )
 
@@ -3785,8 +3786,8 @@ class TestAnthropicCountTokensDispatch:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
              stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
         """
-        classic = AsyncMock(return_value=7)
-        mantle = AsyncMock(return_value=99)
+        classic = AsyncMock(return_value=MessageTokensCount(input_tokens=7))
+        mantle = AsyncMock(return_value=MessageTokensCount(input_tokens=99))
         monkeypatch.setattr(anthropic_messages, "count_tokens_via_bedrock", classic)
         monkeypatch.setattr(anthropic_messages, "_count_tokens_via_mantle", mantle)
 
@@ -3818,8 +3819,8 @@ class TestAnthropicCountTokensDispatch:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
              stdapi/routes/anthropic_messages.py:_count_tokens_via_mantle
         """
-        classic = AsyncMock(return_value=7)
-        mantle = AsyncMock(return_value=99)
+        classic = AsyncMock(return_value=MessageTokensCount(input_tokens=7))
+        mantle = AsyncMock(return_value=MessageTokensCount(input_tokens=99))
         monkeypatch.setattr(anthropic_messages, "count_tokens_via_bedrock", classic)
         monkeypatch.setattr(anthropic_messages, "_count_tokens_via_mantle", mantle)
 
@@ -4080,7 +4081,7 @@ class TestCountTokensViaMantleSingleRegion:
         tokens = await anthropic_messages._count_tokens_via_mantle(  # noqa: SLF001
             request, "test.fake-mantle-model"
         )
-        assert tokens == 5
+        assert tokens.input_tokens == 5
         return bool(captured["single_region"])
 
     async def test_single_region_true_with_region_router_disabled(
@@ -4420,7 +4421,7 @@ class TestCountTokensViaMantlePayload:
         tokens = await anthropic_messages._count_tokens_via_mantle(  # noqa: SLF001
             request, "test.fake-mantle-model"
         )
-        assert tokens == 3
+        assert tokens.input_tokens == 3
         return captured
 
     async def test_payload_drops_max_tokens(
@@ -5748,7 +5749,9 @@ class TestMCPConnectorRouteWiring:
             monkeypatch, "test.mcp-count-model", "MCP Count Test"
         )
         monkeypatch.setattr(
-            anthropic_messages, "count_tokens_via_bedrock", AsyncMock(return_value=7)
+            anthropic_messages,
+            "count_tokens_via_bedrock",
+            AsyncMock(return_value=MessageTokensCount(input_tokens=7)),
         )
         monkeypatch.setattr(anthropic_messages, "get_chat_model", lambda _: None)
         capsys.readouterr()
@@ -5847,7 +5850,9 @@ class TestMCPConnectorRouteWiring:
             monkeypatch, "test.mcp-count-quiet-model", "MCP Count Quiet Test"
         )
         monkeypatch.setattr(
-            anthropic_messages, "count_tokens_via_bedrock", AsyncMock(return_value=7)
+            anthropic_messages,
+            "count_tokens_via_bedrock",
+            AsyncMock(return_value=MessageTokensCount(input_tokens=7)),
         )
         monkeypatch.setattr(anthropic_messages, "get_chat_model", lambda _: None)
         capsys.readouterr()

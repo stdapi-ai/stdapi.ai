@@ -1062,7 +1062,7 @@ export ANTHROPIC_BETA_ALLOWLIST='new-feature-2026-03-01,another-flag-2026-04-01'
 | `output-128k-2025-02-19`           | 128K output                   |
 | `dev-full-thinking-2025-05-14`     | Raw thinking dev mode         |
 | `context-1m-2025-08-07`            | 1M context                    |
-| `context-management-2025-06-27`    | Context management (memory)   |
+| `context-management-2025-06-27`    | Context management (memory tool, context editing) |
 | `effort-2025-11-24`                | Effort control                |
 | `tool-search-tool-2025-10-19`      | Tool search                   |
 | `tool-examples-2025-10-29`         | Tool use examples             |

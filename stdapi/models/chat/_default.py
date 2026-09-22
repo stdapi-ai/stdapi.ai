@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from stdapi.types.anthropic_messages import (
         ContentBlock,
         ContentBlockParam,
+        ContextManagementConfigParam,
         Message,
         MessageCreateParams,
         ServerTools,
@@ -547,6 +548,10 @@ class ChatModel(ChatModelBase[Any, Any]):
             self._req_configure_reasoning(
                 additional_request_fields=additional_request_fields, **reasoning
             )
+        if request.context_management is not None:
+            self._req_configure_context_management(
+                additional_request_fields, request.context_management
+            )
 
         if prompt_caching is not None:
             self._req_enable_prompt_caching(
@@ -625,6 +630,9 @@ class ChatModel(ChatModelBase[Any, Any]):
                     (response.get("serviceTier") or {}).get("type")
                     or bedrock_request.get("serviceTier", {}).get("type")
                 ),
+                context_management=(
+                    response.get("additionalModelResponseFields") or {}
+                ).get("context_management"),
             )
         )
 
@@ -997,6 +1005,19 @@ class ChatModel(ChatModelBase[Any, Any]):
         if header_fields := self._get_passthrough_header_fields():
             return header_fields | additional_request_fields
         return additional_request_fields
+
+    def _req_configure_context_management(
+        self,
+        additional_request_fields: dict[str, Any],  # noqa: ARG002
+        context_management: ContextManagementConfigParam,  # noqa: ARG002
+    ) -> None:
+        """Ignore context editing, which only Claude models apply.
+
+        Args:
+            additional_request_fields: Mutable in overrides.
+            context_management: Context editing requested by the client.
+        """
+        anthropic_adapter.warn_context_management_ignored()
 
     def _req_configure_reasoning(
         self,

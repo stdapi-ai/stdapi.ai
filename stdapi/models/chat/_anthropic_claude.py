@@ -3,7 +3,7 @@
 from copy import deepcopy
 from re import compile as re_compile
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from stdapi.config import SETTINGS
 from stdapi.models import MANTLE_SERVICE
@@ -11,15 +11,24 @@ from stdapi.models.chat._default import ChatModel as _BaseChatModel
 from stdapi.monitoring import log_error_details
 
 if TYPE_CHECKING:
+    from types_aiobotocore_bedrock_runtime.literals import ServiceTierTypeType
     from types_aiobotocore_bedrock_runtime.type_defs import (
+        InferenceConfigurationTypeDef,
+        JsonSchemaDefinitionTypeDef,
         MessageTypeDef,
+        SystemContentBlockTypeDef,
         ToolConfigurationTypeDef,
     )
 
+    from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
     from stdapi.models import ModelDetails
     from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
-    from stdapi.types.anthropic_messages import ServerTools, ThinkingEffort
+    from stdapi.types.anthropic_messages import (
+        ContextManagementConfigParam,
+        ServerTools,
+        ThinkingEffort,
+    )
 
 #: ``anthropic_beta`` flag for computer-use tools (2025-01-24 version)
 _BETA_COMPUTER_USE_2025 = "computer-use-2025-01-24"
@@ -32,6 +41,9 @@ _BETA_COMPUTER_USE_2025_11 = "computer-use-2025-11-24"
 
 #: ``anthropic_beta`` flag for context management tools
 _BETA_CONTEXT_MANAGEMENT_2025 = "context-management-2025-06-27"
+
+#: Converse response path returning the applied context edits.
+_CONTEXT_MANAGEMENT_RESPONSE_PATHS = ("/context_management",)
 
 #: Beta flags keyed by versioned tool type, taking precedence over name-based ``TOOL_BETA_FLAGS``.
 _VERSIONED_TYPE_BETA_FLAGS: dict[str, str] = {
@@ -547,6 +559,78 @@ class AnthropicClaudeChatModel(_BaseChatModel):
             else:
                 del additional_request_fields["anthropic_beta"]
         return additional_request_fields
+
+    def _req_configure_context_management(
+        self,
+        additional_request_fields: dict[str, Any],
+        context_management: ContextManagementConfigParam,
+    ) -> None:
+        """Forward context editing with the beta flag it requires.
+
+        The flag is added rather than required from the client, as it is for the
+        memory tool: the field alone states the intent.
+
+        Args:
+            additional_request_fields: Mutable ``additionalModelRequestFields`` dict.
+            context_management: Context editing requested by the client.
+        """
+        additional_request_fields["context_management"] = context_management.model_dump(
+            mode="json", exclude_none=True
+        )
+        existing: list[str] = additional_request_fields.get("anthropic_beta", [])
+        if _BETA_CONTEXT_MANAGEMENT_2025 not in existing:
+            additional_request_fields["anthropic_beta"] = [
+                *existing,
+                _BETA_CONTEXT_MANAGEMENT_2025,
+            ]
+
+    async def _prepare_converse_request(
+        self,
+        bedrock_messages: list[MessageTypeDef],
+        inference_cfg: InferenceConfigurationTypeDef,
+        system_blocks: list[SystemContentBlockTypeDef] | None,
+        tool_config: ToolConfigurationTypeDef | None,
+        additional_request_fields: dict[str, Any],
+        service_tier: ServiceTierTypeType | None,
+        output_config: JsonSchemaDefinitionTypeDef | None = None,
+        request_metadata: dict[str, str] | None = None,
+    ) -> ConverseRequestBaseTypeDef:
+        """Build the Converse request, asking for the applied context edits when enabled.
+
+        The context management beta flag, however it arrived (the field, the
+        memory tool or the ``anthropic-beta`` header), makes upstream report the
+        applied edits, so the response path is requested on the final flag list.
+
+        Args:
+            bedrock_messages: Converted Bedrock message list.
+            inference_cfg: Bedrock inference configuration.
+            system_blocks: Optional top-level system instruction blocks.
+            tool_config: Optional Bedrock tool configuration.
+            additional_request_fields: Additional request fields.
+            service_tier: Service tier configuration.
+            output_config: Optional Bedrock output JSON Schema configuration.
+            request_metadata: Optional Bedrock ``requestMetadata``.
+
+        Returns:
+            Bedrock Converse request payload.
+        """
+        request = await super()._prepare_converse_request(
+            bedrock_messages,
+            inference_cfg,
+            system_blocks,
+            tool_config,
+            additional_request_fields,
+            service_tier,
+            output_config,
+            request_metadata,
+        )
+        if _BETA_CONTEXT_MANAGEMENT_2025 in request.get(
+            "additionalModelRequestFields", {}
+        ).get("anthropic_beta", ()):
+            request["additionalModelResponseFieldPaths"] = (
+                _CONTEXT_MANAGEMENT_RESPONSE_PATHS
+            )
+        return request
 
     def _req_configure_reasoning(
         self,

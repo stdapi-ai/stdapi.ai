@@ -36,6 +36,10 @@ from stdapi.aws_bedrock_mantle import (
 from stdapi.config import SETTINGS
 from stdapi.models import MANTLE_MODELS, route_and_execute, set_effective_region
 from stdapi.models.chat import ChatModelBase
+from stdapi.models.chat._adapters._anthropic_message import (
+    warn_context_management_ignored,
+)
+from stdapi.models.chat._anthropic_claude import _BETA_CONTEXT_MANAGEMENT_2025
 from stdapi.models.chat._mantle import _convert as convert
 from stdapi.monitoring import (
     log_error_details,
@@ -86,6 +90,25 @@ _REASONING_MARKER = '"reasoning"'
 _REASONING_CONTENT_MARKER = '"reasoning_content"'
 
 
+def messages_request_headers(payload: Mapping[str, Any]) -> dict[str, str] | None:
+    """Build the outbound Messages API headers for *payload*.
+
+    Context editing is refused by the Messages API without its beta flag, so
+    the flag is sent whenever the payload carries ``context_management``; no
+    other client beta flag is forwarded.
+
+    Args:
+        payload: Messages or count_tokens request body.
+
+    Returns:
+        Header mapping, or ``None`` when no headers are required.
+    """
+    headers = mantle_request_headers("messages")
+    if "context_management" in payload:
+        headers = (headers or {}) | {"anthropic-beta": _BETA_CONTEXT_MANAGEMENT_2025}
+    return headers
+
+
 class ChatModel(ChatModelBase[Any, Any]):
     """Default Mantle chat model (unknown models assume the Responses API)."""
 
@@ -105,6 +128,20 @@ class ChatModel(ChatModelBase[Any, Any]):
 
     #: Model IDs natively handling mid-conversation ``system``-role messages.
     SYSTEM_MESSAGE_AS_MESSAGES_MATCHER: ClassVar[Pattern[str] | None] = None
+
+    #: Whether the model applies Anthropic context editing (``context_management``).
+    CONTEXT_MANAGEMENT_SUPPORTED: ClassVar[bool] = False
+
+    def drop_unapplied_context_management(self, payload: dict[str, Any]) -> None:
+        """Drop ``context_management`` from a Messages payload the model does not apply.
+
+        Args:
+            payload: Messages or count_tokens request body, updated in place.
+        """
+        if not self.CONTEXT_MANAGEMENT_SUPPORTED and payload.pop(
+            "context_management", None
+        ):
+            warn_context_management_ignored()
 
     def _system_message_as_messages(self) -> bool:
         """Whether the served model natively handles ``system``-role messages.
@@ -215,7 +252,11 @@ class ChatModel(ChatModelBase[Any, Any]):
         # generated content, and the transport also carries token counting,
         # which generates none and is served with a guardrail configured.
         refuse_unappliable_guardrail()
-        headers = mantle_request_headers(api)
+        headers = (
+            messages_request_headers(payload)
+            if api == "messages"
+            else mantle_request_headers(api)
+        )
         regions = self._mantle_regions(region)
         # route_and_execute retries across regions only with the router on and
         # more than one candidate; otherwise it calls the first candidate once
@@ -693,6 +734,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             self._model_id,
             system_message_as_messages=self._system_message_as_messages(),
         )
+        self.drop_unapplied_context_management(payload)
         if request.stream:
             return await self._stream_serve(
                 "messages", payload, strip_usage_chunk=False

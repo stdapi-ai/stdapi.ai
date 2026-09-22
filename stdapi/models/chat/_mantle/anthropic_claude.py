@@ -31,6 +31,9 @@ class ChatModel(MantleChatModel):
     #: Vision-capable (image + text input).
     INPUT_MODALITIES: ClassVar[tuple[str, ...]] = ("TEXT", "IMAGE")
 
+    #: Context editing is applied natively by the Messages API.
+    CONTEXT_MANAGEMENT_SUPPORTED: ClassVar[bool] = True
+
     #: Native on the 4.8+/5+ generations of every family, plus Fable and Mythos.
     SYSTEM_MESSAGE_AS_MESSAGES_MATCHER: ClassVar[Pattern[str] | None] = (
         _SYSTEM_MESSAGE_AS_MESSAGES_MATCHER

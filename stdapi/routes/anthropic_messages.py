@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 
 from stdapi.api_providers.anthropic import TAG_ANTHROPIC
 from stdapi.auth import authenticate
-from stdapi.aws_bedrock_mantle import API_PATHS, invoke, mantle_request_headers
+from stdapi.aws_bedrock_mantle import API_PATHS, invoke, validate_pruning_extras
 from stdapi.config import SETTINGS
 from stdapi.models import (
     MANTLE_MODELS,
@@ -21,7 +21,10 @@ from stdapi.models.chat._adapters._anthropic_message import (
     count_tokens_via_bedrock,
     warn_mcp_connector_ignored,
 )
+from stdapi.models.chat._mantle import get_mantle_chat_model
 from stdapi.models.chat._mantle._convert import messages_payload
+from stdapi.models.chat._mantle._default import ChatModel as MantleChatModel
+from stdapi.models.chat._mantle._default import messages_request_headers
 from stdapi.monitoring import REQUEST_ID, log_request_params, log_response_params
 from stdapi.region_routing import REGION_ROUTER
 from stdapi.types.anthropic_messages import (
@@ -59,7 +62,7 @@ _MANTLE_COUNT_TOKENS_PATH = API_PATHS["messages"] + "/count_tokens"
 
 async def _count_tokens_via_mantle(
     request: MessageCountTokensParams, model_id: str
-) -> int:
+) -> MessageTokensCount:
     """Count tokens via the Mantle Anthropic count_tokens API.
 
     Mantle-only models are not reachable through the Bedrock Runtime
@@ -71,7 +74,7 @@ async def _count_tokens_via_mantle(
         model_id: Mantle model identifier.
 
     Returns:
-        The input token count.
+        The token count, as the Mantle endpoint reports it.
 
     Raises:
         MantleError: When the Mantle upstream rejects the request.
@@ -80,6 +83,8 @@ async def _count_tokens_via_mantle(
     # folding, extension stripping); drop its generation-only default.
     payload = await messages_payload(request, model_id)  # type: ignore[arg-type]
     payload.pop("max_tokens", None)
+    if isinstance(mantle_model := get_mantle_chat_model(model_id), MantleChatModel):
+        mantle_model.drop_unapplied_context_management(payload)
     model = MANTLE_MODELS.get(model_id)
     regions = model.regions if model else SETTINGS.aws_bedrock_mantle_regions
     # route_and_execute only retries across regions when the region router is
@@ -87,7 +92,7 @@ async def _count_tokens_via_mantle(
     # candidate exactly once, so the in-region retry below must cover it instead.
     single_region = len(regions) == 1 or REGION_ROUTER is None
 
-    async def call(region: RegionName) -> int:
+    async def call(region: RegionName) -> MessageTokensCount:
         """Count the request's tokens via one region's Mantle endpoint."""
         set_effective_region(model_id, region)
         result = await invoke(
@@ -95,9 +100,9 @@ async def _count_tokens_via_mantle(
             _MANTLE_COUNT_TOKENS_PATH,
             payload,
             single_region=single_region,
-            headers=mantle_request_headers("messages"),
+            headers=messages_request_headers(payload),
         )
-        return int(result.get("input_tokens", 0))
+        return validate_pruning_extras(MessageTokensCount, result)
 
     return await route_and_execute(model_id, regions, call)
 
@@ -309,19 +314,13 @@ async def count_tokens(
     reject_unsupported_token_counting(model)
     model_id = model.get_id()
     if serves_via_mantle(model_id):
-        return log_response_params(
-            MessageTokensCount(
-                input_tokens=await _count_tokens_via_mantle(request, model_id)
-            )
-        )
+        return log_response_params(await _count_tokens_via_mantle(request, model_id))
     return log_response_params(
-        MessageTokensCount(
-            input_tokens=await count_tokens_via_bedrock(
-                request,
-                model_id,
-                model.regions[0],
-                # Not Mantle-served, so this is always a Converse chat model.
-                get_chat_model(model_id),  # type: ignore[arg-type]
-            )
+        await count_tokens_via_bedrock(
+            request,
+            model_id,
+            model.regions[0],
+            # Not Mantle-served, so this is always a Converse chat model.
+            get_chat_model(model_id),  # type: ignore[arg-type]
         )
     )
