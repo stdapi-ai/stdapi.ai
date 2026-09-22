@@ -68,6 +68,9 @@ if TYPE_CHECKING:
 #: Beta flag the vendor requires for ``context_management``.
 _BETA = "context-management-2025-06-27"
 
+#: Client beta flag Claude Code sends with thinking on.
+_CLIENT_BETA = "interleaved-thinking-2025-05-14"
+
 #: Client tool the recorded history calls.
 _WEATHER_TOOL: Any = {
     "name": "get_weather",
@@ -259,6 +262,30 @@ class TestContextManagement:
         assert edited.context_management is not None
         assert edited.context_management.original_input_tokens == unedited.input_tokens
         assert 0 < edited.input_tokens < unedited.input_tokens
+
+    @pytest.mark.parametrize("edited", [False, True])
+    def test_count_tokens_accepts_client_beta_flags(
+        self,
+        anthropic_client: Anthropic,
+        anthropic_count_tokens_model: str,
+        *,
+        edited: bool,
+    ) -> None:
+        """``count_tokens`` answers with a client beta flag set, with or without edits.
+
+        Ref: https://platform.claude.com/docs/en/api/beta/messages/count_tokens
+             stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
+        """
+        count = anthropic_client.beta.messages.count_tokens(
+            model=anthropic_count_tokens_model,
+            messages=_HISTORY,
+            tools=[_WEATHER_TOOL],
+            betas=[_CLIENT_BETA, _BETA],
+            **({"context_management": _CLEAR_TOOL_USES} if edited else {}),
+        )
+
+        assert count.input_tokens > 0
+        assert (count.context_management is not None) is edited
 
     def test_count_tokens_rejects_an_invalid_edit(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
@@ -601,6 +628,50 @@ class TestContextManagementGateway:
 
         assert count.context_management is not None
         assert 0 < count.input_tokens < count.context_management.original_input_tokens
+
+    def test_mantle_claude_forwards_client_beta_flags(
+        self, anthropic_client: Anthropic
+    ) -> None:
+        """A Mantle-served Claude model is sent the client's beta flags and still answers.
+
+        Ref: https://platform.claude.com/docs/en/api/beta-headers
+             stdapi/models/chat/_mantle/_default.py:messages_request_headers
+        """
+        message = anthropic_client.beta.messages.create(
+            model=_CLAUDE_MANTLE,
+            max_tokens=20,
+            messages=_HISTORY,
+            tools=[_WEATHER_TOOL],
+            context_management=_CLEAR_TOOL_USES,
+            betas=[_CLIENT_BETA],
+        )
+        count = anthropic_client.beta.messages.count_tokens(
+            model=_CLAUDE_MANTLE,
+            messages=_HISTORY,
+            tools=[_WEATHER_TOOL],
+            betas=[_CLIENT_BETA, _BETA],
+        )
+
+        assert message.context_management is not None
+        assert message.context_management.applied_edits
+        assert count.input_tokens > 0
+
+    def test_mantle_claude_reports_edits_on_the_header_flag_alone(
+        self, anthropic_client: Anthropic
+    ) -> None:
+        """The context-management header flag alone makes a Mantle Claude model report.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/context-editing
+             stdapi/models/chat/_mantle/_default.py:messages_request_headers
+        """
+        message = anthropic_client.beta.messages.create(
+            model=_CLAUDE_MANTLE,
+            max_tokens=5,
+            messages=[{"role": "user", "content": "Say OK."}],
+            betas=[_BETA],
+        )
+
+        assert message.context_management is not None
 
     def test_non_claude_model_ignores_context_management(
         self, anthropic_client: Anthropic
@@ -1078,7 +1149,7 @@ class TestContextManagementOffline:
         assert warned is not forwarded
 
     def test_mantle_headers_carry_the_beta_flag_only_with_edits(self) -> None:
-        """Only the context-management beta is sent to Mantle, and only when needed.
+        """Without client flags, the context-management beta is sent only with edits.
 
         Ref: stdapi/models/chat/_mantle/_default.py:messages_request_headers
         """
@@ -1088,6 +1159,22 @@ class TestContextManagementOffline:
         assert messages_request_headers({"context_management": {}}) == base | {
             "anthropic-beta": _BETA
         }
+
+    @pytest.mark.parametrize("edits", [False, True])
+    def test_mantle_headers_forward_the_allowed_client_flags(
+        self, *, edits: bool
+    ) -> None:
+        """The client's allowed beta flags reach Mantle, with the context flag once.
+
+        Ref: stdapi/models/chat/_mantle/_default.py:messages_request_headers
+        """
+        header = f"{_CLIENT_BETA}, not-a-bedrock-flag-2099-01-01, {_BETA}"
+        payload: dict[str, Any] = {"context_management": {}} if edits else {}
+        with _request_headers({"anthropic-beta": header}):
+            headers = messages_request_headers(payload)
+
+        assert headers is not None
+        assert headers["anthropic-beta"] == f"{_CLIENT_BETA},{_BETA}"
 
     @pytest.mark.parametrize(
         ("model_id", "forwarded"), [(_CLAUDE_MANTLE, True), (_NON_CLAUDE_MANTLE, False)]

@@ -974,11 +974,12 @@ class ChatModel(ChatModelBase[Any, Any]):
         """Extract additional request fields from passthrough HTTP headers.
 
         Returns:
-            A dict of field names to transformed header values.
+            A dict of field names to transformed header values; empty outside a
+            request.
         """
-        if not self.PASSTHROUGH_HEADERS:
+        if not self.PASSTHROUGH_HEADERS or (request := REQUEST.get(None)) is None:
             return {}
-        headers = REQUEST.get().headers
+        headers = request.headers
         return {
             field_name: transform(headers[header_name])
             for header_name, (field_name, transform) in self.PASSTHROUGH_HEADERS.items()

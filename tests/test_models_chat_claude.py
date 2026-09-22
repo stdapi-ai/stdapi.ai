@@ -13,9 +13,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+import stdapi.models.chat._adapters._anthropic_message as anthropic_message_adapter
 from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
 from stdapi.models.chat import get_chat_model
+from stdapi.models.chat._adapters._anthropic_message import count_tokens_via_bedrock
 from stdapi.models.chat._anthropic_claude import _STUB_INPUT_SCHEMAS
 from stdapi.models.chat._default import ChatModel
 from stdapi.models.chat.anthropic_claude_37_to_45 import _REASONING_BUDGET_MINIMAL
@@ -23,6 +25,7 @@ from stdapi.models.chat.anthropic_claude_opus_5 import FORCED_TOOL_CHOICE_REFUSE
 from stdapi.monitoring import REQUEST
 from stdapi.types.anthropic_messages import (
     CacheControlEphemeralParam,
+    MessageCountTokensParams,
     MessageCreateParams,
     MessageParam,
     TextBlockParam,
@@ -346,6 +349,117 @@ async def test_interleaved_thinking_flag_is_forwarded_as_clients_spell_it() -> N
         REQUEST.reset(token)
 
     assert request["additionalModelRequestFields"]["anthropic_beta"] == flags
+
+
+#: Client ``anthropic-beta`` header flags, as Claude Code sends them.
+_CLIENT_BETA_FLAGS = ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"]
+
+#: Request fields making the gateway add a beta flag of its own, with that flag.
+_GATEWAY_BETA_SOURCES = [
+    pytest.param(
+        {"tools": [{"type": "memory_20250818", "name": "memory"}]},
+        "context-management-2025-06-27",
+        id="memory-tool",
+    ),
+    pytest.param(
+        {
+            "tools": [
+                {
+                    "type": "computer_20250124",
+                    "name": "computer",
+                    "display_width_px": 1024,
+                    "display_height_px": 768,
+                }
+            ]
+        },
+        "computer-use-2025-01-24",
+        id="computer-use",
+    ),
+    pytest.param(
+        {"context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}},
+        "context-management-2025-06-27",
+        id="context-management",
+    ),
+]
+
+
+@pytest.mark.parametrize(("fields", "gateway_flag"), _GATEWAY_BETA_SOURCES)
+@pytest.mark.parametrize("header_has_gateway_flag", [False, True])
+async def test_client_beta_flags_survive_a_gateway_added_flag(
+    fields: dict[str, Any], gateway_flag: str, *, header_has_gateway_flag: bool
+) -> None:
+    """Header beta flags are kept when the gateway adds its own, each flag once.
+
+    The gateway writes the flag a server tool or context editing needs into the
+    body's ``anthropic_beta``; that list must be combined with the header's, not
+    replace it, or a Claude Code turn loses interleaved thinking and its 1M
+    context window.
+
+    Ref: https://platform.claude.com/docs/en/api/beta-headers
+         stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._prepare_additional_request_fields
+    """
+    model_id = "anthropic.claude-haiku-4-5-20251001-v1:0"
+    header = [*_CLIENT_BETA_FLAGS, *([gateway_flag] if header_has_gateway_flag else [])]
+    request = MessageCreateParams.model_validate(
+        {
+            "model": model_id,
+            "max_tokens": 20,
+            "messages": [{"role": "user", "content": "Hello"}],
+            **fields,
+        }
+    )
+    token = REQUEST.set(
+        cast("Request", _StubRequest({"anthropic-beta": ", ".join(header)}))
+    )
+    try:
+        payload, _ = await _claude_model(model_id).build_message_request(request)
+    finally:
+        REQUEST.reset(token)
+
+    assert payload["additionalModelRequestFields"]["anthropic_beta"] == [
+        gateway_flag,
+        *_CLIENT_BETA_FLAGS,
+    ]
+
+
+async def test_count_tokens_merges_the_client_beta_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``count_tokens`` merges and filters the header beta flags as a message does.
+
+    Ref: stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
+    """
+    calls: list[dict[str, Any]] = []
+
+    class _Client:
+        async def count_tokens(self, **kwargs: Any) -> dict[str, int]:  # noqa: ANN401
+            calls.append(kwargs)
+            return {"inputTokens": 7}
+
+    monkeypatch.setattr(
+        anthropic_message_adapter, "get_client", lambda *_a, **_k: _Client()
+    )
+    model_id = "anthropic.claude-haiku-4-5-20251001-v1:0"
+    request = MessageCountTokensParams.model_validate(
+        {
+            "model": model_id,
+            "messages": [{"role": "user", "content": "Hello"}],
+            "tools": [{"type": "memory_20250818", "name": "memory"}],
+        }
+    )
+    header = ", ".join([*_CLIENT_BETA_FLAGS, "not-a-bedrock-flag-2099-01-01"])
+    token = REQUEST.set(cast("Request", _StubRequest({"anthropic-beta": header})))
+    try:
+        await count_tokens_via_bedrock(
+            request, model_id, "us-east-1", _claude_model(model_id)
+        )
+    finally:
+        REQUEST.reset(token)
+
+    (call,) = calls
+    assert call["input"]["converse"]["additionalModelRequestFields"][
+        "anthropic_beta"
+    ] == ["context-management-2025-06-27", *_CLIENT_BETA_FLAGS]
 
 
 class TestReasoningSignatureRequirement:

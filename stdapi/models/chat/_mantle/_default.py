@@ -39,7 +39,11 @@ from stdapi.models.chat import ChatModelBase
 from stdapi.models.chat._adapters._anthropic_message import (
     warn_context_management_ignored,
 )
-from stdapi.models.chat._anthropic_claude import _BETA_CONTEXT_MANAGEMENT_2025
+from stdapi.models.chat._anthropic_claude import (
+    _BETA_CONTEXT_MANAGEMENT_2025,
+    client_beta_flags,
+    filter_beta_flags,
+)
 from stdapi.models.chat._mantle import _convert as convert
 from stdapi.monitoring import (
     log_error_details,
@@ -93,9 +97,9 @@ _REASONING_CONTENT_MARKER = '"reasoning_content"'
 def messages_request_headers(payload: Mapping[str, Any]) -> dict[str, str] | None:
     """Build the outbound Messages API headers for *payload*.
 
-    Context editing is refused by the Messages API without its beta flag, so
-    the flag is sent whenever the payload carries ``context_management``; no
-    other client beta flag is forwarded.
+    The client's ``anthropic-beta`` flags are forwarded through the same
+    allowlist as on the classic path, plus the context editing flag whenever
+    the payload carries ``context_management``, which the API refuses without it.
 
     Args:
         payload: Messages or count_tokens request body.
@@ -104,8 +108,11 @@ def messages_request_headers(payload: Mapping[str, Any]) -> dict[str, str] | Non
         Header mapping, or ``None`` when no headers are required.
     """
     headers = mantle_request_headers("messages")
-    if "context_management" in payload:
-        headers = (headers or {}) | {"anthropic-beta": _BETA_CONTEXT_MANAGEMENT_2025}
+    flags = client_beta_flags()
+    if "context_management" in payload and _BETA_CONTEXT_MANAGEMENT_2025 not in flags:
+        flags.append(_BETA_CONTEXT_MANAGEMENT_2025)
+    if flags := filter_beta_flags(flags):
+        headers = (headers or {}) | {"anthropic-beta": ",".join(flags)}
     return headers
 
 

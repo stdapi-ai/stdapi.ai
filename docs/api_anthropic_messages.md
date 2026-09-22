@@ -128,7 +128,7 @@ Mantle-only Claude models are passed through to the upstream Anthropic Messages 
 
 | Parameter | Claude passthrough | Converted to an OpenAI shape |
 |-----------|--------------------|------------------------------|
-| Server tools (`web_search`, `code_execution`, `bash`, `text_editor`, `computer`, …) | Forwarded verbatim (`anthropic-beta` flags are **not** auto-injected on the Mantle path — pass them yourself) | Rejected with `400` |
+| Server tools (`web_search`, `code_execution`, `bash`, `text_editor`, `computer`, …) | Forwarded verbatim (`anthropic-beta` flags are **not** auto-injected on the Mantle path — send them in the `anthropic-beta` header) | Rejected with `400` |
 | Browser & computer toolsets (`browser_toolset_*`, `computer_toolset_*`) | Forwarded verbatim, with the `browser_state` blocks that answer them | Rejected with `400`, `browser_state` results included |
 | MCP connector (`mcp_servers`, `mcp_toolset`) | Dropped before the request leaves — see [MCP Connector](#mcp-connector) | Dropped |
 | `thinking` | Forwarded | Dropped on conversion (use `output_config.effort` for portable reasoning control) |
@@ -598,13 +598,13 @@ curl -X POST "$BASE/v1/messages" \
 ```
 
 !!! tip "Beta Headers"
-    Claude server tools require specific `anthropic-beta` flags on Bedrock. On the classic Bedrock (Converse) path these flags are **automatically injected** when the corresponding server tools are included in the request — no manual header required (on the [Mantle](#bedrock-mantle) path they are not auto-injected; pass them yourself):
+    Claude server tools require specific `anthropic-beta` flags on Bedrock. On the classic Bedrock (Converse) path these flags are **automatically injected** when the corresponding server tools are included in the request — no manual header required (on the [Mantle](#bedrock-mantle) path they are not auto-injected; send them in the `anthropic-beta` header):
 
     - `bash`, `text_editor` → `computer-use-2024-10-22` (Claude 3.5) or `computer-use-2025-01-24` (Claude 3.7+)
     - `computer` → `computer-use-2024-10-22` (Claude 3.5), `computer-use-2025-01-24` (Claude 3.7 – 4.5), or `computer-use-2025-11-24` (Claude 4.6+, tool type `computer_20251124`)
     - `memory` → `context-management-2025-06-27` (Claude 3.7+)
 
-    You can still pass additional `anthropic-beta` flags via the HTTP header or request body for non-tool beta features (e.g., `output-128k-2025-02-19`).
+    You can still pass additional `anthropic-beta` flags for non-tool beta features (e.g., `output-128k-2025-02-19`): in the HTTP header on both paths, or in the request body on the classic path. Header flags are added to the ones the gateway injects, never replaced by them, and on both paths a flag outside the [allowlist](operations_configuration_models.md#anthropic-beta-allowlist) is dropped.
 
 !!! note "Model Compatibility"
     Requesting a server tool on a model that does not support it will return a `400 Bad Request` error. Non-Claude models do not support these tools.

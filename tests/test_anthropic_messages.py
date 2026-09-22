@@ -2949,6 +2949,33 @@ class TestAnthropicMessages:
         assert response.stop_reason == "end_turn"
         assert any(block.type == "thinking" for block in response.content)
 
+    def test_client_beta_flag_kept_next_to_context_editing(
+        self, anthropic_client: Anthropic, anthropic_chat_reasoning_model: str
+    ) -> None:
+        """A client beta flag still applies when the request enables context editing.
+
+        The header lists ``interleaved-thinking-2025-05-14`` with the context
+        editing flag, and the thinking budget exceeds ``max_tokens``, which only
+        interleaved thinking permits: the request is served, and reports its
+        context edits, only when neither flag is lost.
+
+        Ref: https://platform.claude.com/docs/en/api/beta-headers
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._prepare_additional_request_fields
+        """
+        response = anthropic_client.beta.messages.create(
+            model=anthropic_chat_reasoning_model,
+            max_tokens=_INTERLEAVED_MAX_TOKENS,
+            messages=[{"role": "user", "content": "Say OK."}],
+            thinking={"type": "enabled", "budget_tokens": _INTERLEAVED_BUDGET},
+            context_management={"edits": [{"type": "clear_tool_uses_20250919"}]},
+            betas=[_INTERLEAVED_THINKING_BETA, "context-management-2025-06-27"],
+        )
+
+        assert response.stop_reason == "end_turn"
+        assert any(block.type == "thinking" for block in response.content)
+        assert response.context_management is not None
+        assert response.context_management.applied_edits == []
+
     def test_document_plain_text(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:

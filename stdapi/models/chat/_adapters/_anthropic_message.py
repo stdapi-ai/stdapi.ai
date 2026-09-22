@@ -2327,7 +2327,10 @@ async def count_tokens_via_bedrock(
         chat_model._req_configure_context_management(  # noqa: SLF001
             additional_request_fields, request.context_management
         )
-    if additional_request_fields:
+    # Header beta flags are merged and filtered as for the message itself.
+    if additional_request_fields := chat_model._prepare_additional_request_fields(  # noqa: SLF001
+        additional_request_fields
+    ):
         req["additionalModelRequestFields"] = additional_request_fields
 
     client = get_client("bedrock-runtime", region)

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from stdapi.config import SETTINGS
 from stdapi.models import MANTLE_SERVICE
 from stdapi.models.chat._default import ChatModel as _BaseChatModel
-from stdapi.monitoring import log_error_details
+from stdapi.monitoring import REQUEST, log_error_details
 
 if TYPE_CHECKING:
     from types_aiobotocore_bedrock_runtime.literals import ServiceTierTypeType
@@ -196,6 +196,38 @@ def _split_beta_flags(header: str) -> list[str]:
         The beta flags it names, without the empty ones.
     """
     return [flag for raw in header.split(",") if (flag := raw.strip())]
+
+
+def filter_beta_flags(flags: list[str]) -> list[str]:
+    """Drop the beta flags outside the allowlist, when filtering is enabled.
+
+    Args:
+        flags: Beta flags to forward, in order.
+
+    Returns:
+        The flags kept, in their original order.
+    """
+    if not SETTINGS.anthropic_beta_filter or not (
+        rejected := set(flags) - SETTINGS.anthropic_beta_allowlist
+    ):
+        return flags
+    log_error_details(
+        f"Filtered unsupported anthropic_beta flags: {', '.join(rejected)}",
+        level="warning",
+    )
+    return [flag for flag in flags if flag not in rejected]
+
+
+def client_beta_flags() -> list[str]:
+    """Return the beta flags of the current request's ``anthropic-beta`` header.
+
+    Returns:
+        The header's flags, or an empty list outside a request or without one.
+    """
+    request = REQUEST.get(None)
+    if request is None or not (header := request.headers.get("anthropic-beta")):
+        return []
+    return _split_beta_flags(header)
 
 
 def _history_tool_use_names(messages: list[MessageTypeDef] | None) -> set[str]:
@@ -534,30 +566,34 @@ class AnthropicClaudeChatModel(_BaseChatModel):
     ) -> JsonMapping:
         """Filter unsupported ``anthropic_beta`` flags after merging passthrough headers.
 
+        The ``anthropic-beta`` header flags are combined with the body's
+        ``anthropic_beta`` list rather than replaced by it, since the body list
+        also carries the flags the gateway adds for a server tool or context
+        editing.
+
         Args:
             additional_request_fields: Fields from request body and defaults.
 
         Returns:
             Merged and filtered additional request fields.
         """
+        body_flags = additional_request_fields.get("anthropic_beta")
+        header_flags = self._get_passthrough_header_fields().get("anthropic_beta")
         additional_request_fields = super()._prepare_additional_request_fields(
             additional_request_fields
         )
-        if not (
-            SETTINGS.anthropic_beta_filter
-            and "anthropic_beta" in additional_request_fields
-        ):
+        if isinstance(body_flags, list) and header_flags:
+            additional_request_fields["anthropic_beta"] = [
+                *body_flags,
+                *(flag for flag in header_flags if flag not in body_flags),
+            ]
+        if "anthropic_beta" not in additional_request_fields:
             return additional_request_fields
         flags: list[str] = additional_request_fields["anthropic_beta"]  # type: ignore[assignment]
-        if rejected := set(flags) - SETTINGS.anthropic_beta_allowlist:
-            log_error_details(
-                f"Filtered unsupported anthropic_beta flags: {', '.join(rejected)}",
-                level="warning",
-            )
-            if allowed := [f for f in flags if f not in rejected]:
-                additional_request_fields["anthropic_beta"] = allowed  # type: ignore[assignment]
-            else:
-                del additional_request_fields["anthropic_beta"]
+        if allowed := filter_beta_flags(flags):
+            additional_request_fields["anthropic_beta"] = allowed  # type: ignore[assignment]
+        else:
+            del additional_request_fields["anthropic_beta"]
         return additional_request_fields
 
     def _req_configure_context_management(
