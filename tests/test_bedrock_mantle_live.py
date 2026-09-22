@@ -65,6 +65,9 @@ _CLAUDE_MANTLE = "anthropic.claude-haiku-4-5"
 #: Dual-homed model kept on bedrock-runtime (service-header routing target).
 _GEMMA3_DUAL = "google.gemma-3-12b-it"
 
+#: Cheapest GPT-6 model, dual-homed and Mantle-preferred by default.
+_GPT6_LUNA = "openai.gpt-6-luna"
+
 #: Service name recorded for Mantle-served usage entries.
 _MANTLE_USAGE_SERVICE = "bedrock-mantle"
 
@@ -473,6 +476,48 @@ class TestMantleChatCompletions:
         assert len(entries) == 1, "Usage must be recorded exactly once"
         assert entries[0]["input_tokens"] > 0
         assert entries[0]["output_tokens"] > 0
+
+    @pytest.mark.slow
+    def test_gpt_6_answers_chat_completions_natively(
+        self,
+        openai_client: OpenAI,
+        test_client: TestClientType | None,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A chat completion on GPT-6 is served by Mantle's own Chat Completions API, billed once.
+
+        Unlike GPT-5.6, GPT-6 answers Chat Completions on Mantle, so the request
+        is passed through rather than converted to Responses; a change in what
+        Mantle accepts there would fail every GPT-6 chat request while the
+        unit tests, which only read the class, stay green.
+
+        Ref: stdapi/models/chat/_mantle/openai_gpt6.py:ChatModel
+             stdapi/aws_bedrock_mantle.py:usage_from_chat_completion
+        """
+        capfd.readouterr()
+        response = openai_client.chat.completions.create(
+            model=_GPT6_LUNA,
+            messages=[{"role": "user", "content": "Reply with the single word: hi"}],
+            max_completion_tokens=_LUNA_MAX_TOKENS,
+            reasoning_effort="low",
+        )
+        assert response.choices[0].message.role == "assistant"
+        assert response.choices[0].message.content
+        assert response.usage is not None
+        assert response.usage.prompt_tokens > 0
+        assert response.usage.completion_tokens > 0
+        if test_client is None:
+            return
+        from stdapi.models import MANTLE_MODELS  # noqa: PLC0415
+        from stdapi.models.chat import get_chat_model  # noqa: PLC0415
+
+        assert "chat_completions" in get_chat_model(_GPT6_LUNA).NATIVE_APIS  # type: ignore[attr-defined]
+        entries = logged_usage_entries(
+            capfd.readouterr().out, service=_MANTLE_USAGE_SERVICE, model=_GPT6_LUNA
+        )
+        assert len(entries) == 1, "Usage must be recorded exactly once"
+        assert entries[0]["output_tokens"] > 0
+        assert entries[0]["region"] in MANTLE_MODELS[_GPT6_LUNA].regions
 
     @pytest.mark.slow
     def test_luna_converted_streaming(self, openai_client: OpenAI) -> None:
@@ -925,6 +970,46 @@ class TestMantleWebSearch:
 
     #: Synthetic model the per-query rate is recorded against.
     _SEARCH_USAGE_MODEL = "amazon.bedrock-web-search"
+
+    @pytest.mark.expensive
+    @pytest.mark.usefixtures("local_test_client")
+    def test_gpt_6_web_search_needs_no_header(
+        self, openai_client: OpenAI, capfd: pytest.CaptureFixture[str]
+    ) -> None:
+        """GPT-6 Luna runs a web search with no header, served by Mantle where it is listed.
+
+        The GPT-6 family is Mantle-preferred by default, and the test
+        environment mirrors that for Luna, so a plain request carrying the tool
+        reaches the endpoint that serves it. The billed usage entry has to name
+        Mantle and a Region whose Mantle catalogue lists the model: Mantle
+        serves GPT-6 in far fewer Regions than bedrock-runtime.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
+             stdapi/config.py:DEFAULT_MANTLE_PREFERRED_MODELS
+             stdapi/models/chat/_mantle/openai_gpt6.py:ChatModel
+        """
+        from stdapi.models import MANTLE_MODELS, is_mantle_served  # noqa: PLC0415
+
+        if not is_mantle_served(_GPT6_LUNA):
+            pytest.skip("GPT-6 Luna is not listed by a configured Mantle region")
+        capfd.readouterr()
+        response = openai_client.responses.create(
+            model=_GPT6_LUNA,
+            input=self._PROMPT,
+            tools=[{"type": "web_search"}],
+            tool_choice="required",
+            reasoning={"effort": "low"},
+            max_output_tokens=_LUNA_MAX_TOKENS,
+        )
+        output = [item.model_dump() for item in response.output]
+        assert _billed_queries(output) >= 1
+        entries = logged_usage_entries(
+            capfd.readouterr().out, service=_MANTLE_USAGE_SERVICE, model=_GPT6_LUNA
+        )
+        assert entries, "Expected the request to bill under bedrock-mantle"
+        assert {entry["region"] for entry in entries} <= set(
+            MANTLE_MODELS[_GPT6_LUNA].regions
+        )
 
     @pytest.mark.expensive
     @pytest.mark.retry("the model decides whether a question needs a web search")

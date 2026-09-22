@@ -385,7 +385,8 @@ environ.setdefault("log_level", "info")
 environ.setdefault("aws_bedrock_mantle_regions", "us-east-1")
 # Serve the dual-homed Gemma 3 and Luna test models via Mantle, not bedrock-runtime.
 environ.setdefault(
-    "aws_bedrock_mantle_preferred_models", "google.gemma-3-4b-it,openai.gpt-5.6-luna"
+    "aws_bedrock_mantle_preferred_models",
+    "google.gemma-3-4b-it,openai.gpt-5.6-luna,openai.gpt-6-luna",
 )
 
 # Model mappings for different test contexts

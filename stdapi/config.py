@@ -175,7 +175,7 @@ AWS_BEDROCK_MANTLE_REGIONS: frozenset[str] = frozenset(
 )
 
 #: Model IDs, or ID prefixes, served by Bedrock Mantle by default where both endpoints offer them.
-DEFAULT_MANTLE_PREFERRED_MODELS: tuple[str, ...] = ("openai.gpt-5.6",)
+DEFAULT_MANTLE_PREFERRED_MODELS: tuple[str, ...] = ("openai.gpt-5.6", "openai.gpt-6")
 
 #: Settings with a non-empty default whose documented way to clear it is an empty value.
 EMPTY_CLEARS: frozenset[str] = frozenset({"aws_bedrock_mantle_preferred_models"})
@@ -663,7 +663,7 @@ class _Settings(BaseSettings):
             "responses, messages and completions routes. Models available on both "
             "the classic bedrock-runtime endpoint and Mantle are served by "
             "bedrock-runtime unless listed in aws_bedrock_mantle_preferred_models, "
-            "which defaults to the OpenAI GPT-5.6 family.\n\n"
+            "which defaults to the OpenAI GPT-5.6 and GPT-6 families.\n\n"
             "When Bedrock Mantle is unreachable or the IAM role lacks "
             "bedrock-mantle permissions, Mantle models are simply not listed and "
             "a warning is logged at startup.\n\n"
@@ -700,20 +700,22 @@ class _Settings(BaseSettings):
             "also available on the classic bedrock-runtime endpoint. Useful to "
             "leverage Mantle's independent throughput quotas, native response "
             "storage or built-in server tools for selected models.\n\n"
-            "Defaults to the OpenAI GPT-5.6 family ('openai.gpt-5.6'), whose web "
-            "search and code interpreter tools Amazon Bedrock serves on Mantle "
-            "alone. Mantle has no cross-Region inference profiles, so those "
+            "Defaults to the OpenAI GPT-5.6 and GPT-6 families ('openai.gpt-5.6', "
+            "'openai.gpt-6'), whose web search and code interpreter tools Amazon "
+            "Bedrock serves on Mantle alone. A model is moved only where a "
+            "configured Mantle region lists it, and is then served from those "
+            "regions alone. Mantle has no cross-Region inference profiles, so those "
             "models are billed at the In-Region rate: exactly 10% above the "
             "Global cross-Region rate bedrock-runtime serves them at. Amazon "
             "Bedrock Guardrails and token counting do not apply to them either. "
             "Set this to an empty value to serve every dual-homed model on "
             "bedrock-runtime.\n\n"
             "An explicit value replaces the default entirely: repeat "
-            "'openai.gpt-5.6' to keep it.\n\n"
+            "'openai.gpt-5.6,openai.gpt-6' to keep it.\n\n"
             "Cannot be combined with Amazon Bedrock Guardrails: guardrails do not "
             "apply to Mantle-served requests.\n\n"
             "Environment variable format: Comma-separated string\n"
-            "Example: 'openai.gpt-5.6,anthropic.claude-haiku-4-5'"
+            "Example: 'openai.gpt-5.6,openai.gpt-6,anthropic.claude-haiku-4-5'"
         ),
     )
 

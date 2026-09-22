@@ -80,7 +80,7 @@ curl -X POST "$BASE/v1/responses" \
 | `custom` / `namespace` / `tool_search` / `apply_patch` tools          | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and dropped; no Bedrock equivalent                                  |
 | `programmatic_tool_calling` tool / `tool_choice`                      |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | No Converse equivalent — accepted and dropped, the model calls the declared tools directly (the `tool_choice` degrades to the model's default choice); forwarded upstream on Bedrock Mantle native models |
 | **Generation Control**                                                |                                         |                                                                              |
-| `max_output_tokens`                                                   |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Maps to Bedrock `maxTokens`; forwarded verbatim on Bedrock Mantle native models, which reject a value below 16 with `400` (a request converted from Chat Completions or Anthropic Messages instead has that value raised to 16 automatically — see [Chat Completions](api_openai_chat_completions.md#bedrock-mantle) / [Messages](api_anthropic_messages.md#bedrock-mantle)). Where the classic endpoint also serves the model (the GPT-5.6 family, by default), clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) moves it there, where a budget of 1 is honored |
+| `max_output_tokens`                                                   |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Maps to Bedrock `maxTokens`; forwarded verbatim on Bedrock Mantle native models, which reject a value below 16 with `400` (a request converted from Chat Completions or Anthropic Messages instead has that value raised to 16 automatically — see [Chat Completions](api_openai_chat_completions.md#bedrock-mantle) / [Messages](api_anthropic_messages.md#bedrock-mantle)). Where the classic endpoint also serves the model (the GPT-5.6 and GPT-6 families, by default), clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) moves it there, where a budget of 1 is honored |
 | `temperature`                                                         |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | 0–2 range; mapped to Bedrock inference config. A value above `1.0` is served at `1.0` (an Amazon Bedrock limitation); Bedrock Mantle native models receive the value as sent |
 | `top_p`                                                               |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | 0–1 range; nucleus sampling                                                  |
 | `top_logprobs`                                                        |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | 0–20 range accepted and echoed; log probabilities are never returned on Converse-served models; forwarded upstream on Bedrock Mantle native models |
@@ -708,21 +708,21 @@ curl -X POST "$BASE/v1/responses" \
 
 #### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI GPT Web Search
 
-The OpenAI GPT-5.x family answers `web_search` with the search tool built into
-Amazon Bedrock. The model decides when a question needs current information,
+The OpenAI GPT-5.x and GPT-6 families answer `web_search` with the search tool
+built into Amazon Bedrock. The model decides when a question needs current information,
 runs one or more queries, and grounds its answer in what it finds.
 
 !!! warning "Amazon Bedrock Mantle only — and a price change"
     Amazon Bedrock serves this tool on the Mantle endpoint alone; it is refused
-    on the `bedrock-runtime` endpoint. The GPT-5.6 family is offered on both, and
-    is served from Mantle by default so that `web_search` and `code_interpreter`
-    work with no configuration —
+    on the `bedrock-runtime` endpoint. The GPT-5.6 and GPT-6 families are
+    offered on both, and are served from Mantle by default so that `web_search`
+    and `code_interpreter` work with no configuration —
     [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models)
-    defaults to `openai.gpt-5.6` for that reason.
+    defaults to `openai.gpt-5.6,openai.gpt-6` for that reason.
 
     That default is **a price change** for these models, because Mantle has no
     cross-region inference profiles and so no Global routing discount: GPT-5.6
-    Sol, Terra and Luna cost **exactly 10% more per token** — input, output,
+    Sol, Terra and Luna and GPT-6 Astra cost **exactly 10% more per token** — input, output,
     cached and long-context rates alike — than the classic endpoint charges
     under its default Global routing; the per-million figures are in the
     [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models)
@@ -732,8 +732,8 @@ runs one or more queries, and grounds its answer in what it finds.
     their usage is billed and reported under Bedrock Mantle. Batch inference,
     prompt caching and stored response IDs are unaffected.
 
-    Set `AWS_BEDROCK_MANTLE_PREFERRED_MODELS` to an empty value to serve the
-    family on `bedrock-runtime` instead, at the Global rate and under your
+    Set `AWS_BEDROCK_MANTLE_PREFERRED_MODELS` to an empty value to serve both
+    families on `bedrock-runtime` instead, at the Global rate and under your
     guardrail. A request then asking for `web_search` or `code_interpreter` is
     **rejected with a `400`** rather than answered without a search. The
     `x-stdapi-service: bedrock-mantle` header routes a single request back to
@@ -750,6 +750,14 @@ runs one or more queries, and grounds its answer in what it finds.
     header changes that.
 
     Available in `us-east-1`, `us-east-2` and `us-west-2`, and billed per query.
+
+!!! note "GPT-6 needs a Mantle region that lists it"
+    Mantle offers the GPT-6 models in far fewer regions than `bedrock-runtime`.
+    A model moves to Mantle only where a configured
+    [Mantle region](operations_configuration_aws.md#bedrock-mantle-regions)
+    lists it, and is then served from those regions alone; a deployment none of
+    whose Mantle regions lists it keeps serving it on `bedrock-runtime`, where
+    `web_search` and `code_interpreter` are refused with a `400`.
 
 ```bash
 curl -X POST "$BASE/v1/responses" \
@@ -1065,7 +1073,7 @@ curl -X POST "$BASE/v1/responses" \
 
 **Tools with no backend equivalent are dropped, not refused.** `computer`, `mcp`, `local_shell`, `custom`, `programmatic_tool_calling` and the others leave the tool configuration before the request reaches the model, so the request succeeds and the model simply cannot call them; the full list, and what the model does instead, is under [Function Tool Calling](#function-tool-calling). `file_search` is the exception — it is served, from the vector stores the request names.
 
-**Token counting takes fewer parameters than a generation.** `previous_response_id` is not supported on `POST /v1/responses/input_tokens`, since resolving it would change the count; `personality` (a token-counting-only schema field) and `reasoning.context` are accepted and ignored. Token counting is not available at all for models served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models), which reject the request with a `400` — the **OpenAI GPT-5.6 family included**, since it is served from Mantle by default. Clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) brings the family back to the classic endpoint, where it counts tokens. A model served by a [Marketplace](operations_configuration_models.md#bedrock-marketplace-endpoints-enabled) or [SageMaker AI](operations_configuration_models.md#aws-sagemaker-endpoints) endpoint answers the same `400`, because Bedrock's token counter takes a foundation model identifier and an endpoint you run has none; the route is not listed for those models in [`search_models`](api_search_models.md) either.
+**Token counting takes fewer parameters than a generation.** `previous_response_id` is not supported on `POST /v1/responses/input_tokens`, since resolving it would change the count; `personality` (a token-counting-only schema field) and `reasoning.context` are accepted and ignored. Token counting is not available at all for models served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models), which reject the request with a `400` — the **OpenAI GPT-5.6 and GPT-6 families included**, since they are served from Mantle by default. Clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) brings both families back to the classic endpoint, where they count tokens. A model served by a [Marketplace](operations_configuration_models.md#bedrock-marketplace-endpoints-enabled) or [SageMaker AI](operations_configuration_models.md#aws-sagemaker-endpoints) endpoint answers the same `400`, because Bedrock's token counter takes a foundation model identifier and an endpoint you run has none; the route is not listed for those models in [`search_models`](api_search_models.md) either.
 
 ## Request headers { #available-request-headers }
 

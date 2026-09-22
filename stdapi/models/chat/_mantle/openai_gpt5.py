@@ -1,4 +1,4 @@
-"""OpenAI numbered GPT models on Amazon Bedrock Mantle (Responses API only)."""
+"""OpenAI GPT-5 models on Amazon Bedrock Mantle (Responses API only)."""
 
 from re import Pattern
 from re import compile as re_compile
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 
 class ChatModel(MantleChatModel):
-    """OpenAI numbered GPT chat model (e.g. ``openai.gpt-5.6-sol``), GPT-5 and later.
+    """OpenAI GPT-5 chat model (e.g. ``openai.gpt-5.6-sol``).
 
     Includes the enrollment-gated Daybreak variants, ``openai.gpt-5.6-cyber``
     (Daybreak Red) and ``openai.gpt-daybreak-blue-5.6-sol`` (Daybreak Blue).
@@ -20,17 +20,20 @@ class ChatModel(MantleChatModel):
     below that — reasoning shape, parameter handling — is **assumed** identical
     and unprobed, since the models answer only to enrolled accounts.
 
+    GPT-6 and later answer Chat Completions too, and have their own class.
+
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html
          https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-daybreak-blue-56-sol.html
     """
 
     __slots__ = ()
 
-    #: Matches GPT-5 and future numbered versions, with or without a
-    #: ``daybreak-<edition>-`` qualifier, but never the gpt-oss family.
-    MATCHER: ClassVar[Pattern[str]] = re_compile(r"^openai\.gpt-(?:daybreak-\w+-)?\d")
+    #: Matches GPT-5 with or without a ``daybreak-<edition>-`` qualifier, never GPT-50+ or gpt-oss.
+    MATCHER: ClassVar[Pattern[str]] = re_compile(
+        r"^openai\.gpt-(?:daybreak-\w+-)?5(?!\d)"
+    )
 
-    #: Numbered GPT models are served exclusively by the Responses API.
+    #: GPT-5 models are served exclusively by the Responses API.
     NATIVE_APIS: ClassVar[frozenset[MantleApi]] = frozenset({"responses"})
 
     #: Newer Mantle-only models answer on the /openai/v1 surface.

@@ -46,7 +46,7 @@ Which AWS regions serve your models, how a request fails over between them, and 
 | [`AWS_BEDROCK_MANTLE_ENABLED`](#bedrock-mantle-enabled)                     | `true`                | Expose models served by the Amazon Bedrock Mantle endpoint alongside classic Bedrock Converse models |
 | [`AWS_BEDROCK_MANTLE_REGIONS`](#bedrock-mantle-regions)                     | Mantle-capable subset of `AWS_BEDROCK_REGIONS` | AWS regions used for Bedrock Mantle, in failover priority order                     |
 | [`AWS_BEDROCK_MANTLE_ENDPOINT_URL`](#bedrock-mantle-endpoint-url)           | None                  | Override the Bedrock Mantle endpoint URL template (`{region}` placeholder)                           |
-| [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models)   | `openai.gpt-5.6`      | Model IDs served via Mantle even when also available on the classic bedrock-runtime endpoint. Incompatible with Guardrails; the default is a **price change** for the GPT-5.6 family |
+| [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models)   | `openai.gpt-5.6,openai.gpt-6` | Model IDs served via Mantle even when also available on the classic bedrock-runtime endpoint. Incompatible with Guardrails; the default is a **price change** for the GPT-5.6 and GPT-6 families |
 | [`AWS_BEDROCK_MANTLE_SERVICE_HEADER`](#bedrock-mantle-service-header)       | `false`               | Honor the `x-stdapi-service: bedrock-mantle` request header to route dual-homed models through Mantle per request |
 | [`AWS_BEDROCK_MANTLE_PROJECT`](#bedrock-mantle-project)                     | None                  | Default Bedrock Project/Workspace ID applied to Mantle requests for cost tracking and observability  |
 | [`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](#bedrock-allow-mantle-project-override) | `false`     | Allow requests to override the configured Mantle project via the `OpenAI-Project` / `anthropic-workspace` header |
@@ -415,7 +415,7 @@ export AWS_FAILOVER_MAX_RETRIES=0
 :   `true`
 
 :octicons-workflow-24: **Behavior**
-:   Mantle-only models (e.g. OpenAI GPT, xAI Grok, Google Gemma 4) become available on the chat completions, responses, messages, and completions routes. Models available on both the classic bedrock-runtime endpoint and Mantle are served by bedrock-runtime unless listed in [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models), which defaults to the OpenAI GPT-5.6 family.
+:   Mantle-only models (e.g. OpenAI GPT, xAI Grok, Google Gemma 4) become available on the chat completions, responses, messages, and completions routes. Models available on both the classic bedrock-runtime endpoint and Mantle are served by bedrock-runtime unless listed in [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models), which defaults to the OpenAI GPT-5.6 and GPT-6 families.
 
     Authentication requires no static secrets: short-term bearer tokens are derived automatically (SigV4-presigned) from the same AWS credential chain the server already uses, and refreshed transparently.
 

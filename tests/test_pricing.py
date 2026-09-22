@@ -20,12 +20,14 @@ from typing import TYPE_CHECKING, Final
 
 import pytest
 from botocore.exceptions import BotoCoreError, ClientError
+from botocore.session import Session
 
 from stdapi import models, pricing
 from stdapi.aws import AWSConnectionManager, get_client
 from stdapi.config import SETTINGS
 from stdapi.models.deprecation import DEPRECATED_MODELS
 from stdapi.models.moderation import GUARDRAIL_CHECKS_MODERATION_MODEL
+from stdapi.models.pricing_overrides import DEFAULT_MODEL_GLOBAL_PRICES
 from stdapi.pricing import (
     KNOWLEDGE_BASE_MODEL,
     WEB_SEARCH_MODEL,
@@ -3326,6 +3328,55 @@ class TestDefaultModelPrices:
             dimension: Decimal(rate) for dimension, rate in rates.items()
         }
 
+    def test_a_global_call_from_any_commercial_region_prices_at_the_card_rate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The card's Global rate prices a global call whatever Region sent it.
+
+        The cards quote the Global rate for three US Regions while the
+        ``global.`` profile is callable from every commercial Bedrock Region.
+        AWS bills a third-party model's Global rate identically from every
+        commercial source Region: the Price List's Global rows for Claude
+        Opus 5.5, Claude Sonnet 4.5 and Kimi K3 carry one price per dimension
+        across all of them (checked 2026-09-22), so the regional fallback's
+        copy from ``us-east-1`` is exact. The Regions come from botocore's
+        own endpoint data, and GovCloud, where Kimi K3's Global rate is 20%
+        higher, is left unpriced rather than guessed.
+
+        Ref: stdapi/pricing.py:_apply_regional_fallback
+             stdapi/models/pricing_overrides.py:DEFAULT_MODEL_GLOBAL_PRICES
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
+        """
+        regions = set(Session().get_available_regions("bedrock"))
+        assert "eu-west-1" in regions
+        assert "ap-southeast-2" in regions
+        index: dict[PriceKey, Price] = {}
+        pricing._apply_default_prices(index)  # noqa: SLF001
+        pricing._apply_regional_fallback(index, regions | {"us-gov-west-1"})  # noqa: SLF001
+        monkeypatch.setattr(pricing._state, "price_index", index)  # noqa: SLF001
+        rates = DEFAULT_MODEL_GLOBAL_PRICES["openai.gpt-6-astra"]
+        for region in regions:
+            for dimension, rate in rates.items():
+                price = resolve_price(
+                    Service.BEDROCK,
+                    "openai.gpt-6-astra",
+                    region,
+                    dimension,
+                    routing="global",
+                )
+                assert price is not None, (region, dimension)
+                assert price.amount == Decimal(rate), (region, dimension)
+        assert (
+            resolve_price(
+                Service.BEDROCK,
+                "openai.gpt-6-astra",
+                "us-gov-west-1",
+                Dimension.INPUT_TOKENS,
+                routing="global",
+            )
+            is None
+        )
+
     def test_an_in_region_call_still_prices_at_the_in_region_rate(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -5425,9 +5476,10 @@ _KNOWN_PRICING_GAPS: Final[frozenset[str]] = frozenset(
         "stability.stable-diffusion-xl-v1",
         # No Price List rows and no pricing-page rate (only GLM 4.7/5 listed).
         "zai.glm-4.6",
-        # No Price List rows (2026-09-22), no model card (the user guide URL
-        # soft-404s) and the English pricing page links both to the OpenAI card
-        # index only; price them from their cards once AWS publishes them.
+        # Checked 2026-09-22: no Price List row under any of the three Bedrock
+        # service codes, no model card (model-card-openai-gpt-6-luna.html and
+        # -sol.html redirect to the user guide index) and the pricing page
+        # names both without a rate. Price them from their cards once published.
         "openai.gpt-6-luna",
         "openai.gpt-6-sol",
     }

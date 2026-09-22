@@ -60,24 +60,26 @@ Which model catalogues the gateway draws from, and which model identifiers a req
 :   Comma-separated string of model IDs or ID prefixes
 
 :octicons-gear-24: **Default**
-:   `openai.gpt-5.6` (the OpenAI GPT-5.6 family; every other dual-homed model is served by bedrock-runtime)
+:   `openai.gpt-5.6,openai.gpt-6` (the OpenAI GPT-5.6 and GPT-6 families; every other dual-homed model is served by bedrock-runtime)
 
 :octicons-workflow-24: **Behavior**
 :   Useful to leverage Mantle's independent throughput quotas, native response storage or built-in server tools for selected models. Mantle quotas (per-model, per-region tokens-per-minute) are independent from bedrock-runtime quotas.
 
-:   The GPT-5.6 family is preferred by default because Amazon Bedrock serves its [`web_search`](api_openai_responses.md#openai-gpt-web-search) and `code_interpreter` tools on Mantle alone — on the classic endpoint they can only be refused.
+:   The GPT-5.6 and GPT-6 families are preferred by default because Amazon Bedrock serves their [`web_search`](api_openai_responses.md#openai-gpt-web-search) and `code_interpreter` tools on Mantle alone — on the classic endpoint they can only be refused.
 
-:   An explicit value **replaces** the default rather than adding to it: repeat `openai.gpt-5.6` to keep the family on Mantle while preferring other models too.
+:   A preferred model moves to Mantle only where a configured [Mantle region](operations_configuration_aws.md#bedrock-mantle-regions) lists it, and is then served from those regions alone. Mantle offers the GPT-6 models in far fewer regions than the classic endpoint: where no configured Mantle region lists one, it stays on the classic endpoint, and its `web_search` and `code_interpreter` are refused with a `400`.
+
+:   An explicit value **replaces** the default rather than adding to it: repeat `openai.gpt-5.6,openai.gpt-6` to keep both families on Mantle while preferring other models too.
 
 ```bash
-export AWS_BEDROCK_MANTLE_PREFERRED_MODELS='openai.gpt-5.6,anthropic.claude-haiku-4-5'
+export AWS_BEDROCK_MANTLE_PREFERRED_MODELS='openai.gpt-5.6,openai.gpt-6,anthropic.claude-haiku-4-5'
 ```
 
 !!! info "Not the same as a wildcard model name"
     This setting matches models by ID prefix and takes no glob syntax; it selects a *set* of models for the operator's own routing, where a [wildcard model name](#model-wildcard-patterns) selects *one* model for a single request.
 
-!!! warning "The default is a price change for the GPT-5.6 family"
-    Both endpoints charge the same In-Region rate, but Mantle has no cross-region inference profiles, so a model preferred here stops riding the Global profile that bedrock-runtime uses by default ([`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL`](operations_configuration_aws.md#cross-region-global)). For GPT-5.6 that is **exactly 10% more per token** — $4.40 / $22.00 per million input / output tokens for Sol, $2.20 / $13.20 for Terra and $0.22 / $1.32 for Luna, against $4.00 / $20.00, $2.00 / $12.00 and $0.20 / $1.20 on the Global profile. Cached tokens and the long-context rates move by the same 10%; a deployment already pinned In-Region pays what it paid.
+!!! warning "The default is a price change for the GPT-5.6 and GPT-6 families"
+    Both endpoints charge the same In-Region rate, but Mantle has no cross-region inference profiles, so a model preferred here stops riding the Global profile that bedrock-runtime uses by default ([`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL`](operations_configuration_aws.md#cross-region-global)). For GPT-5.6 and GPT-6 Astra that is **exactly 10% more per token** — $4.40 / $22.00 per million input / output tokens for GPT-5.6 Sol, $2.20 / $13.20 for Terra, $0.22 / $1.32 for Luna and $11.00 / $55.00 for GPT-6 Astra, against $4.00 / $20.00, $2.00 / $12.00, $0.20 / $1.20 and $10.00 / $50.00 on the Global profile. GPT-6 Sol and Luna have no published rate yet, so their usage is recorded without a cost. Cached tokens and the long-context rates move by the same 10%; a deployment already pinned In-Region pays what it paid.
 
     Usage for these models is also recorded, and billed by AWS, under Bedrock Mantle rather than Bedrock — attributed by [project](operations_configuration_aws.md#bedrock-mantle-project) instead of by IAM principal — and [input token counting](api_openai_responses.md#input-token-counting) answers `400` for them. Batch inference, prompt caching and existing stored-response IDs are unaffected.
 
@@ -90,7 +92,7 @@ export AWS_BEDROCK_MANTLE_PREFERRED_MODELS='openai.gpt-5.6,anthropic.claude-haik
     export AWS_BEDROCK_MANTLE_PREFERRED_MODELS=
     ```
 
-    Every dual-homed model, GPT-5.6 included, then returns to bedrock-runtime — at its Global-profile price, under your guardrail, and with `web_search` and `code_interpreter` refused with a `400`. [`AWS_BEDROCK_MANTLE_SERVICE_HEADER`](operations_configuration_aws.md#bedrock-mantle-service-header) cannot bring them back for a single request: it is refused at startup alongside a guardrail for the same reason, so a guardrailed deployment serves those tools on no route. Setting [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration_aws.md#bedrock-mantle-enabled) to `false` has the same effect on routing and additionally removes the Mantle-only models from the catalogue.
+    Every dual-homed model, the GPT-5.6 and GPT-6 families included, then returns to bedrock-runtime — at its Global-profile price, under your guardrail, and with `web_search` and `code_interpreter` refused with a `400`. [`AWS_BEDROCK_MANTLE_SERVICE_HEADER`](operations_configuration_aws.md#bedrock-mantle-service-header) cannot bring them back for a single request: it is refused at startup alongside a guardrail for the same reason, so a guardrailed deployment serves those tools on no route. Setting [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration_aws.md#bedrock-mantle-enabled) to `false` has the same effect on routing and additionally removes the Mantle-only models from the catalogue.
 
 !!! danger "Incompatible with a Required End User Identity"
     A Mantle request is signed with the server's own credentials, so a model routed here never runs under the per-end-user role, and the policy conditions written on that role are never evaluated. Configuring this setting alongside [`AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY`](operations_configuration_bedrock.md#aws-bedrock-user-role-require-identity) therefore **stops the server at startup**, naming the routed models; set this to an empty value to keep both. A request identifying no end user is still answered `400` on Mantle, so the Mantle-only models stay served — under the server's own role.

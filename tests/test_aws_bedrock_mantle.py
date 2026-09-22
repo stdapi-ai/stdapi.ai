@@ -73,6 +73,7 @@ from stdapi.models.chat._mantle.anthropic_claude import ChatModel as ClaudeChatM
 from stdapi.models.chat._mantle.google_gemma4 import ChatModel as GemmaChatModel
 from stdapi.models.chat._mantle.open_weight import ChatModel as OpenWeightChatModel
 from stdapi.models.chat._mantle.openai_gpt5 import ChatModel as GptChatModel
+from stdapi.models.chat._mantle.openai_gpt6 import ChatModel as Gpt6ChatModel
 from stdapi.models.chat._mantle.openai_gpt_oss import ChatModel as GptOssChatModel
 from stdapi.models.chat._mantle.qwen_vl import ChatModel as QwenVisionChatModel
 from stdapi.models.chat._mantle.xai_grok import ChatModel as GrokChatModel
@@ -900,7 +901,12 @@ _FUTURE_MANTLE_MODEL_IDS: tuple[str, ...] = (
     "mistral.mistral-large-4-123b-instruct",
     "nvidia.nemotron-nano-4-30b",
     "openai.gpt-5.6-sol",
+    "openai.gpt-6-astra",
+    "openai.gpt-6-luna",
+    "openai.gpt-6-sol",
+    "openai.gpt-10.1-vega",
     "openai.gpt-daybreak-blue-5.6-sol",
+    "openai.gpt-daybreak-red-6-cyber",
     "qwen.qwen-vl-max",
     "qwen.qwen4-vl-32b",
     "writer.palmyra-x6-v1:0",
@@ -919,33 +925,71 @@ class TestMantleModelClassResolution:
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
          https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html
          https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-daybreak-blue-56-sol.html
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
          stdapi/models/chat/_mantle/__init__.py:get_mantle_chat_model
          stdapi/models/chat/_mantle/_default.py:ChatModel._api_paths
          stdapi/models/chat/_mantle/anthropic_claude.py:ChatModel
          stdapi/models/chat/_mantle/open_weight.py:ChatModel
+         stdapi/models/chat/_mantle/openai_gpt5.py:ChatModel
+         stdapi/models/chat/_mantle/openai_gpt6.py:ChatModel
          stdapi/models/chat/_mantle/qwen_vl.py:ChatModel
     """
 
     @pytest.mark.parametrize(
-        "model_id", ["openai.gpt-5.6-sol", "openai.gpt-6-nova", "openai.gpt-10.1-vega"]
+        "model_id", ["openai.gpt-5.4", "openai.gpt-5.6-sol", "openai.gpt-5.9-orion"]
     )
-    def test_numbered_gpt_versions_use_the_gpt_class(self, model_id: str) -> None:
-        """GPT-5 and future numbered GPT versions resolve to the GPT class."""
+    def test_gpt_5_versions_use_the_responses_only_class(self, model_id: str) -> None:
+        """GPT-5 and its future point releases resolve to the Responses-only class."""
         model = get_mantle_chat_model(model_id)
-        assert isinstance(model, GptChatModel)
+        assert type(model) is GptChatModel
+        assert set(model.NATIVE_APIS) == {"responses"}
         assert model._api_paths("responses")[0] == "/openai/v1/responses"  # noqa: SLF001
         assert model.native_store_supported() is True
 
     @pytest.mark.parametrize(
         "model_id",
         [
-            "openai.gpt-5.6-cyber",
-            "openai.gpt-daybreak-blue-5.6-sol",
-            "openai.gpt-daybreak-red-6-cyber",
+            "openai.gpt-6-astra",
+            "openai.gpt-6-luna",
+            "openai.gpt-6-sol",
+            "openai.gpt-6.5-nova",
+            "openai.gpt-7-vega",
+            "openai.gpt-10.1-vega",
+            "openai.gpt-50-pulsar",
         ],
     )
-    def test_daybreak_editions_use_the_gpt_class(self, model_id: str) -> None:
-        """Daybreak-qualified GPT IDs resolve to the GPT class, image input included.
+    def test_gpt_6_and_later_answer_both_openai_apis(self, model_id: str) -> None:
+        """GPT-6 and every later version resolve to the class serving both OpenAI APIs.
+
+        GPT-6 Luna and Sol answered Chat Completions and Responses on the
+        ``/openai/v1`` surface in ``us-east-1`` (probed 2026-09-22), and the
+        GPT-6 Astra card lists both. Bound to the GPT-5 class, a Chat
+        Completions request would be converted to Responses, dropping the
+        parameters that conversion cannot carry.
+        """
+        model = get_mantle_chat_model(model_id)
+        assert type(model) is Gpt6ChatModel
+        assert set(model.NATIVE_APIS) == {"chat_completions", "responses"}
+        assert (
+            model._api_paths("chat_completions")[0]  # noqa: SLF001
+            == "/openai/v1/chat/completions"
+        )
+        assert model._api_paths("responses")[0] == "/openai/v1/responses"  # noqa: SLF001
+        assert model.native_store_supported() is True
+        assert model.INPUT_MODALITIES == ("TEXT", "IMAGE")
+
+    @pytest.mark.parametrize(
+        ("model_id", "model_class"),
+        [
+            ("openai.gpt-5.6-cyber", GptChatModel),
+            ("openai.gpt-daybreak-blue-5.6-sol", GptChatModel),
+            ("openai.gpt-daybreak-red-6-cyber", Gpt6ChatModel),
+        ],
+    )
+    def test_daybreak_editions_use_their_version_s_gpt_class(
+        self, model_id: str, model_class: type[mantle_default.ChatModel]
+    ) -> None:
+        """Daybreak-qualified GPT IDs resolve to their version's class, image input included.
 
         AWS names Daybreak Red ``openai.gpt-5.6-cyber`` but Daybreak Blue
         ``openai.gpt-daybreak-blue-5.6-sol``, so the qualifier sits where the
@@ -953,7 +997,7 @@ class TestMantleModelClassResolution:
         generic Mantle class and is advertised as text-only.
         """
         model = get_mantle_chat_model(model_id)
-        assert isinstance(model, GptChatModel)
+        assert type(model) is model_class
         assert model._api_paths("responses")[0] == "/openai/v1/responses"  # noqa: SLF001
         assert model.native_store_supported() is True
         assert model.INPUT_MODALITIES == ("TEXT", "IMAGE")
@@ -962,7 +1006,7 @@ class TestMantleModelClassResolution:
         """gpt-oss models keep resolving to their own class."""
         model = get_mantle_chat_model("openai.gpt-oss-120b")
         assert isinstance(model, GptOssChatModel)
-        assert not isinstance(model, GptChatModel)
+        assert not isinstance(model, GptChatModel | Gpt6ChatModel)
         assert model._api_paths("responses")[0] == "/v1/responses"  # noqa: SLF001
 
     @pytest.mark.parametrize(

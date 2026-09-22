@@ -159,6 +159,8 @@ Some models — mostly older/deprecated ones — aren't published in every regio
 
 This is a substitute price, not the actual published price for that region.
 
+Borrowed prices are exact for the OpenAI GPT models priced from their model cards. Each card quotes a single rate per inference option (In-Region, Geo and Global) for all commercial Regions. A global request from `eu-west-1`, or a Geo request from `ap-south-1`, is therefore costed at the card's own rate.
+
 ### Multi-Currency Support
 
 stdapi.ai detects currency from the AWS partition:

@@ -69,6 +69,9 @@ pytestmark = pytest.mark.local
 #: GPT-5.6 model IDs verified served by both bedrock-runtime and Bedrock Mantle.
 _DUAL_HOMED = ("openai.gpt-5.6-sol", "openai.gpt-5.6-terra", "openai.gpt-5.6-luna")
 
+#: The one GPT-6 model the default routes to Mantle that has a published rate.
+_PRICED_GPT6 = "openai.gpt-6-astra"
+
 #: A region the GPT-5.6 model-card rates are published for.
 _REGION: RegionName = "us-east-1"
 
@@ -913,7 +916,7 @@ class TestPriceOfTheMove:
     Ref: stdapi/pricing.py:register_default_prices
     """
 
-    @pytest.mark.parametrize("model_id", _DUAL_HOMED)
+    @pytest.mark.parametrize("model_id", [*_DUAL_HOMED, _PRICED_GPT6])
     @pytest.mark.parametrize(
         "dimension",
         [
@@ -953,7 +956,7 @@ class TestPriceOfTheMove:
         global_routed = Decimal(global_prices[model_id][dimension])
         assert in_region == global_routed * Decimal("1.1")
 
-    @pytest.mark.parametrize("model_id", _DUAL_HOMED)
+    @pytest.mark.parametrize("model_id", [*_DUAL_HOMED, _PRICED_GPT6])
     def test_the_catalogue_prices_mantle_in_region_and_never_global(
         self, model_id: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -988,7 +991,7 @@ class TestPriceOfTheMove:
         assert mantle_global.amount == in_region
         assert runtime_global.amount * Decimal("1.1") == in_region
 
-    @pytest.mark.parametrize("model_id", _DUAL_HOMED)
+    @pytest.mark.parametrize("model_id", [*_DUAL_HOMED, _PRICED_GPT6])
     def test_the_catalogue_prices_a_long_context_mantle_call_in_region(
         self, model_id: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1045,6 +1048,6 @@ class TestPriceOfTheMove:
         assert set(findall(r"\$\d+\.\d\d", sentences[0])) == {
             f"${Decimal(table[model_id][dimension]) * 1_000_000:.2f}"
             for table in (DEFAULT_MODEL_PRICES, DEFAULT_MODEL_GLOBAL_PRICES)
-            for model_id in _DUAL_HOMED
+            for model_id in (*_DUAL_HOMED, _PRICED_GPT6)
             for dimension in (Dimension.INPUT_TOKENS, Dimension.OUTPUT_TOKENS)
         }

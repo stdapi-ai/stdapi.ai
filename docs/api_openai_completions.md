@@ -15,7 +15,7 @@ Generate text completions with Amazon Bedrock foundation models—including Clau
 - :material-file-link: **File prompts.** `https://`, `s3://`, `data:` and `file-id:` references bring images, documents, audio and video into a completion request.
 - :material-aws: **Every Chat Completions model answers here too**, with the same service tiers and multi-region model access.
 - :material-swap-horizontal: **Differs from OpenAI:** OpenAI labels `/v1/completions` legacy and steers new projects to Chat Completions or Responses; here it is a first-class route with the same quality guarantees as the others.
-- :material-swap-horizontal: **Differs by backend:** models served by [Bedrock Mantle](features.md#bedrock-mantle-models) — the OpenAI GPT-5.6 family by default — take a single text prompt only; see [Limits and behaviour to know](#limits-and-behaviour-to-know).
+- :material-swap-horizontal: **Differs by backend:** models served by [Bedrock Mantle](features.md#bedrock-mantle-models) — the OpenAI GPT-5.6 and GPT-6 families by default — take a single text prompt only; see [Limits and behaviour to know](#limits-and-behaviour-to-know).
 
 ```bash
 curl -X POST "$BASE/v1/completions" \
@@ -306,7 +306,7 @@ curl -X POST "$BASE/v1/completions" \
 
 ## Limits and behaviour to know
 
-**A Mantle-served model takes one text prompt.** The request is converted to a chat payload before it leaves the gateway, and that conversion accepts a single string: a batch of prompts, a file prompt of any scheme (`https://`, `s3://`, `data:`, `file-id:`), `logprobs` and `suffix` are each rejected with `400` naming what was refused. `echo` is honored, exactly as on the Bedrock Converse path below. The OpenAI GPT-5.6 family is served from Mantle by default; clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) moves it to the classic endpoint, where the full prompt surface applies.
+**A Mantle-served model takes one text prompt.** The request is converted to a chat payload before it leaves the gateway, and that conversion accepts a single string: a batch of prompts, a file prompt of any scheme (`https://`, `s3://`, `data:`, `file-id:`), `logprobs` and `suffix` are each rejected with `400` naming what was refused. `echo` is honored, exactly as on the Bedrock Converse path below. The OpenAI GPT-5.6 and GPT-6 families are served from Mantle by default; clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) moves them to the classic endpoint, where the full prompt surface applies.
 
 **`echo` prepends the prompt, computed locally.** Neither backend has an equivalent parameter; the gateway derives each choice's prompt from the text it already built the upstream request from and prepends it to that choice's completion (one leading chunk per choice, sent before any generated content, when streamed). On the Bedrock Converse path a file-only prompt has no text block to echo, so it echoes nothing, and a text + files collapse request echoes just its text instruction; a Mantle-served model only ever takes one text prompt, so every one of its `n` choices carries that same prompt.
 
