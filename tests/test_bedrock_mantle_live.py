@@ -434,6 +434,26 @@ class TestMantleChatCompletions:
         assert call.type == "function"
         assert call.function.name == "get_weather"
 
+    def test_claude_haiku_reasoning_effort_served(self, openai_client: OpenAI) -> None:
+        """``reasoning_effort`` on Claude Haiku 4.5 is served with a thinking budget.
+
+        Mantle refuses ``output_config.effort`` on this model with a 400, so the
+        conversion sends the budget-based ``thinking`` it accepts instead.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+             stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+        """
+        response = openai_client.chat.completions.create(
+            model=_CLAUDE_MANTLE,
+            messages=[{"role": "user", "content": "What is 17*23? Answer only."}],
+            max_completion_tokens=2048,
+            reasoning_effort="low",
+        )
+
+        assert response.choices[0].message.content
+        assert response.usage is not None
+        assert response.usage.completion_tokens > 0
+
     @pytest.mark.slow
     def test_luna_converted_to_responses(
         self,

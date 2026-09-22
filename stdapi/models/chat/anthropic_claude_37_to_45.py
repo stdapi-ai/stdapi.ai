@@ -31,6 +31,42 @@ _REASONING_BUDGET_MINIMAL = 1024
 _REASONING_BUDGET_MAXIMAL = 32768
 
 
+def reasoning_budget(
+    reasoning_effort: Effort | None, max_tokens: int | None
+) -> int | None:
+    """Return the thinking budget an effort level maps to within an output limit.
+
+    Claude 3.7 to 4.5 take a token budget rather than an effort level. The
+    budget must be at least the minimal one and smaller than ``max_tokens``, so
+    an output limit leaving no room for it yields no budget and a warning.
+
+    Args:
+        reasoning_effort: The reasoning effort level, ``high`` when unset.
+        max_tokens: Maximum number of tokens allowed for the model.
+
+    Returns:
+        The budget in tokens, or ``None`` when reasoning cannot be enabled.
+    """
+    ceiling = _REASONING_BUDGET_MAXIMAL if max_tokens is None else max_tokens
+    if ceiling <= _REASONING_BUDGET_MINIMAL:
+        log_error_details(
+            "The requested output limit leaves no room for the smallest "
+            "reasoning budget this model takes: reasoning is not enabled "
+            "for this request",
+            level="warning",
+        )
+        return None
+    if reasoning_effort == "minimal":
+        return _REASONING_BUDGET_MINIMAL
+    return max(
+        _REASONING_BUDGET_MINIMAL,
+        int(
+            (ceiling - 1)
+            * _REASONING_EFFORT_BUDGET_FACTOR.get(reasoning_effort or "high", 1.0)
+        ),
+    )
+
+
 class ChatModel(AnthropicClaudeChatModel):
     """Anthropic Claude 3.7 to 4.5 chat model implementation."""
 
@@ -85,33 +121,11 @@ class ChatModel(AnthropicClaudeChatModel):
             additional_request_fields["reasoning_config"] = {"type": "disabled"}
             return
 
+        # A requested budget of 0 is a value, not an omission.
         if budget_tokens is None:
-            # A requested budget of 0 is a value, not an omission.
-            ceiling = _REASONING_BUDGET_MAXIMAL if max_tokens is None else max_tokens
-            if ceiling <= _REASONING_BUDGET_MINIMAL:
-                # Bedrock takes no budget under the minimal one and none that is
-                # not smaller than `maxTokens`, so this output limit leaves room
-                # for neither: deriving one would build a request it refuses.
-                log_error_details(
-                    "The requested output limit leaves no room for the smallest "
-                    "reasoning budget this model takes: reasoning is not enabled "
-                    "for this request",
-                    level="warning",
-                )
+            budget_tokens = reasoning_budget(reasoning_effort, max_tokens)
+            if budget_tokens is None:
                 return
-            budget_tokens = (
-                _REASONING_BUDGET_MINIMAL
-                if reasoning_effort == "minimal"
-                else max(
-                    _REASONING_BUDGET_MINIMAL,
-                    int(
-                        (ceiling - 1)
-                        * _REASONING_EFFORT_BUDGET_FACTOR.get(
-                            reasoning_effort or "high", 1.0
-                        )
-                    ),
-                )
-            )
         additional_request_fields["reasoning_config"] = {
             "type": "enabled",
             "budget_tokens": budget_tokens,

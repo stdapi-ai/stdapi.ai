@@ -39,6 +39,7 @@ from stdapi.models.chat._adapters._openai_responses import COMPACTION_CONTENT_PR
 from stdapi.models.chat._anthropic_claude import (
     REASONING_NOT_DISABLED as _REASONING_NOT_DISABLED,
 )
+from stdapi.models.chat.anthropic_claude_37_to_45 import reasoning_budget
 from stdapi.models.chat.anthropic_claude_fable_mythos import FABLE_MYTHOS_MATCHER
 from stdapi.models.chat.anthropic_claude_opus_5 import (
     FORCED_TOOL_CHOICE_REFUSED,
@@ -176,6 +177,12 @@ _TOP_EFFORT_MATCHERS = {
         r"|(?:opus|sonnet|haiku)-(?:4-(?:[6-9]|\d{2})|[5-9]|\d{2})(?:\D|$))"
     ),
 }
+
+#: Claude 3.7 to 4.5, which take a thinking budget and refuse an effort level.
+_BUDGET_THINKING_MATCHER = re_compile(
+    r"^anthropic\.claude-(?!(?:opus|sonnet|haiku)-4-(?:[6-9]|\d{2})(?:\D|$))"
+    r"(?:3-7-sonnet|(?:opus|sonnet|haiku)-4)"
+)
 
 #: Anthropic ``tool_choice`` types forcing tool use.
 _FORCED_TOOL_CHOICES = frozenset({"any", "tool"})
@@ -1576,12 +1583,67 @@ def _response_format_from_text(
             return None
 
 
+def _anthropic_reasoning_fields(
+    payload: dict[str, Any], model: str, max_tokens: int
+) -> dict[str, Any]:
+    """Return the Anthropic fields carrying the reasoning of a Chat Completions payload.
+
+    Follows the runtime path. Reasoning is on when ``reasoning_effort`` is a
+    level other than ``none``, ``enable_thinking`` is true or ``thinking.type``
+    is ``enabled``. Claude 3.7 to 4.5 then take a thinking budget:
+    ``thinking_budget`` as sent, or one derived from the effort. Later
+    generations take ``thinking_budget`` as sent, else ``output_config.effort``,
+    else adaptive thinking. Reasoning turned off explicitly is disabled, except
+    on a model that always reasons, where a warning is logged instead.
+
+    Args:
+        payload: Chat Completions request payload.
+        model: Mantle model identifier.
+        max_tokens: Output limit of the request.
+
+    Returns:
+        ``thinking`` or ``output_config`` fields, or nothing when no reasoning
+        field was sent or none can be served.
+    """
+    effort = payload.get("reasoning_effort")
+    enable = payload.get("enable_thinking")
+    thinking = (payload.get("thinking") or {}).get("type")
+    budget = payload.get("thinking_budget")
+    if not (
+        (effort is not None and effort != "none")
+        or enable is True
+        or thinking == "enabled"
+    ):
+        off = effort == "none" or enable is False or thinking == "disabled"
+        if off and _ALWAYS_REASONING_MATCHER.match(model):
+            log_error_details(_REASONING_NOT_DISABLED, level="warning")
+            off = False
+        return {"thinking": {"type": "disabled"}} if off else {}
+    if budget is None and _BUDGET_THINKING_MATCHER.match(model):
+        budget = reasoning_budget(effort, max_tokens)
+        if budget is None:
+            return {}
+    if budget is not None:
+        return {"thinking": {"type": "enabled", "budget_tokens": budget}}
+    if (matcher := _TOP_EFFORT_MATCHERS.get(str(effort))) and matcher.match(model):
+        level = effort
+    else:
+        level = _EFFORT_TO_ANTHROPIC.get(str(effort))
+    return (
+        {"output_config": {"effort": level}}
+        if level
+        else {"thinking": {"type": "adaptive"}}
+    )
+
+
 def _chat_to_messages_request(payload: dict[str, Any]) -> dict[str, Any]:
     """Convert a Chat Completions request payload to the Anthropic shape.
 
     Penalties, ``response_format`` (rejected by Mantle Messages as
     ``output_config.format``) and other unmappable options are dropped;
-    the temperature is clamped to the Anthropic 0-1 range.
+    the temperature is clamped to the Anthropic 0-1 range. Reasoning becomes
+    a thinking budget on Claude 3.7 to 4.5, which take no effort level, and
+    ``output_config.effort`` on later generations.
 
     Args:
         payload: Chat Completions request payload.
@@ -1608,13 +1670,9 @@ def _chat_to_messages_request(payload: dict[str, Any]) -> dict[str, Any]:
     out.update(_optional_fields(payload, ("top_p", "stream")))
     if tier := _map_service_tier(payload.get("service_tier")):
         out["service_tier"] = tier
-    requested = str(payload.get("reasoning_effort"))
-    if (matcher := _TOP_EFFORT_MATCHERS.get(requested)) and matcher.match(
-        str(out["model"])
-    ):
-        out["output_config"] = {"effort": requested}
-    elif effort := _EFFORT_TO_ANTHROPIC.get(requested):
-        out["output_config"] = {"effort": effort}
+    out.update(
+        _anthropic_reasoning_fields(payload, str(out["model"]), out["max_tokens"])
+    )
     if stop := payload.get("stop"):
         out["stop_sequences"] = [stop] if isinstance(stop, str) else stop
     if user := payload.get("user"):

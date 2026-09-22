@@ -142,7 +142,7 @@ Mantle-served requests follow one of three paths, each with its own parameter fi
 |-----------------------------|---------------------------------------------------------------------------|--------------------|
 | **Passthrough**             | Chat-native models (OpenAI GPT-6, xAI Grok, OpenAI gpt-oss, Google Gemma 4, other open-weight models) | All schema-accepted parameters are forwarded; the upstream API may reject unsupported ones per model with a clean `400` (the upstream error code and parameter are propagated) |
 | **Converted to Responses**  | OpenAI GPT-5.x frontier models; unknown models                            | Dropped silently: `stop`, `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `top_logprobs`, `audio`, `modalities`, message `name`, `input_audio` content parts, legacy `functions`/`function_call`. Preserved: `metadata`, `safety_identifier`. `max_tokens`/`max_completion_tokens` below 16 is raised to 16, the Responses API's minimum (a budget of 1, sent as a cheap model probe by some clients, would otherwise be rejected with `400`); where the classic endpoint also serves the model (the GPT-5.6 family, by default), clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) moves it there, where a smaller budget is honored as sent. `n > 1` rejected with `400`. `store` is handled by stdapi.ai only, never forwarded upstream |
-| **Converted to Messages**   | Mantle-only Anthropic Claude models                                       | Same drops and `n > 1` rejection as the Responses conversion, except `stop` which is forwarded as `stop_sequences`; plus: `temperature` clamped to ≤ 1.0; `max_tokens` defaults to `4096` when unset; `reasoning_effort` mapped to Anthropic effort levels; `response_format` `json_object`/`json_schema` not available; `metadata`, `prompt_cache_key`, and `prompt_cache_retention` dropped; `service_tier` forwarded only when `auto` |
+| **Converted to Messages**   | Mantle-only Anthropic Claude models                                       | Same drops and `n > 1` rejection as the Responses conversion, except `stop` which is forwarded as `stop_sequences`; plus: `temperature` clamped to ≤ 1.0; `max_tokens` defaults to `4096` when unset; `reasoning_effort` mapped to Anthropic effort levels, or to a thinking budget on Claude 3.7 - 4.5 (`thinking_budget` and `enable_thinking` honoured; see [Reasoning Control](#reasoning-control) for small output limits); `response_format` `json_object`/`json_schema` not available; `metadata`, `prompt_cache_key`, and `prompt_cache_retention` dropped; `service_tier` forwarded only when `auto` |
 
 !!! note "Project attribution (`OpenAI-Project`)"
     Mantle requests can be attributed to a Bedrock Project for cost tracking and observability with the `OpenAI-Project: <project-id>` header (a bare project ID such as `proj_abc123`, not an ARN). It is honored per-request only when [`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](operations_configuration_aws.md#bedrock-allow-mantle-project-override) is `true`; otherwise the server default ([`AWS_BEDROCK_MANTLE_PROJECT`](operations_configuration_aws.md#bedrock-mantle-project)) applies. This applies **only** to models served by the Bedrock Mantle endpoint — classic `bedrock-runtime` models ignore the header.
@@ -549,6 +549,9 @@ This API supports several approaches to control [Amazon Bedrock reasoning](https
     Models listed as effort-only still accept a token budget: it turns reasoning
     on, and the depth comes from their own effort scale.
 
+!!! note "A small output limit turns reasoning off on Claude 3.7 - 4.5"
+    These models spend a thinking budget of at least 1,024 tokens out of the output limit. A `reasoning_effort` sent with a `max_completion_tokens` (or `max_tokens`) of 1,024 or less leaves no room for it, so the request is served without reasoning and a warning is logged. Raise the limit above 1,024 to get reasoning back.
+
 #### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI and DeepSeek API-Compatible Reasoning Parameters
 
 Use the `reasoning_effort` parameter with predefined effort levels. This format is shared by the OpenAI and [DeepSeek](https://api-docs.deepseek.com/api/create-chat-completion) Chat Completions APIs and works with all Amazon Bedrock models supporting reasoning.
@@ -561,7 +564,7 @@ Use the `reasoning_effort` parameter with predefined effort levels. This format 
 - `medium` - Balanced reasoning for most use cases
 - `high` - Deep reasoning for complex problems
 - `xhigh` - Maximum reasoning for complex problems
-- `max` - Its own (higher) effort tier on the adaptive Claude models served by the Converse API (Sonnet/Opus 4.6 and later, plus Fable), which forward it unchanged; collapsed onto the model's top reasoning tier on the fixed-scale models (Claude 3.7 - 4.5, Amazon Nova 2, DeepSeek, Kimi). Claude 4.6 also maps `xhigh` down to `high`. Amazon Bedrock Mantle applies the same rules to Claude, and maps both levels to `high` on the generations before 4.6; every other Mantle-served model receives the level as sent
+- `max` - Its own (higher) effort tier on Claude Sonnet/Opus 4.6 and later, Fable and Mythos, which receive it unchanged; collapsed onto the model's top reasoning tier on the fixed-scale models (Claude 3.7 - 4.5, Amazon Nova 2, DeepSeek, Kimi). Claude 4.6 maps `xhigh` down to `high`. Models other than Claude served through [Bedrock Mantle](#bedrock-mantle) receive the level as sent
 
 **What You Get:**
 

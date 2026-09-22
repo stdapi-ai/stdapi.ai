@@ -2874,20 +2874,183 @@ class TestServiceTierAndEffortMapping:
             "anthropic.claude-haiku-4-5",
             "anthropic.claude-sonnet-4-20250514-v1:0",
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "anthropic.claude-opus-4-1-20250805-v1:0",
+            "anthropic.claude-3-7-sonnet-20250219-v1:0",
         ],
     )
-    def test_top_efforts_capped_before_claude_4_6(self, model: str) -> None:
-        """Earlier Claude generations keep ``xhigh``/``max`` capped to ``high``.
+    @pytest.mark.parametrize(
+        ("effort", "budget"),
+        [
+            ("minimal", 1024),
+            ("low", 1024),
+            ("medium", 2047),
+            ("high", 3071),
+            ("xhigh", 4095),
+            ("max", 4095),
+        ],
+    )
+    def test_effort_becomes_a_thinking_budget_before_claude_4_6(
+        self, model: str, effort: str, budget: int
+    ) -> None:
+        """Claude 3.7 to 4.5 get a thinking budget, never ``output_config.effort``.
 
-        The dated 4.0 and 4.5 IDs pin the version boundary of the matchers.
+        Mantle answers ``This model does not support the effort parameter.`` on
+        Claude Haiku 4.5 and accepts ``thinking`` with a budget of at least 1,024
+        tokens below ``max_tokens``. The budget scales with the effort over the
+        default 4,096-token limit, as on the runtime path; the dated 4.0 and 4.5
+        IDs pin the version boundary.
 
-        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+        Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+             stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+             stdapi/models/chat/anthropic_claude_37_to_45.py:reasoning_budget
         """
-        for effort in ("xhigh", "max"):
-            out = mantle_convert._chat_to_messages_request(  # noqa: SLF001
-                {"model": model, "messages": [], "reasoning_effort": effort}
-            )
-            assert out["output_config"] == {"effort": "high"}
+        out = mantle_convert._chat_to_messages_request(  # noqa: SLF001
+            {"model": model, "messages": [], "reasoning_effort": effort}
+        )
+
+        assert "output_config" not in out
+        assert out["thinking"] == {"type": "enabled", "budget_tokens": budget}
+
+    @pytest.mark.parametrize(
+        ("effort", "expected"),
+        [("none", {"thinking": {"type": "disabled"}}), (None, {})],
+    )
+    def test_none_disables_thinking_before_claude_4_6(
+        self, effort: str | None, expected: dict[str, Any]
+    ) -> None:
+        """``none`` disables thinking, as on the runtime path; no effort sends nothing.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_anthropic_reasoning_fields
+        """
+        out = mantle_convert._chat_to_messages_request(  # noqa: SLF001
+            {
+                "model": "anthropic.claude-haiku-4-5",
+                "messages": [],
+                "reasoning_effort": effort,
+            }
+        )
+
+        assert {
+            key: out[key] for key in ("thinking", "output_config") if key in out
+        } == (expected)
+
+    def test_small_output_limit_serves_without_reasoning(
+        self, request_log: EventLog
+    ) -> None:
+        """An output limit with no room for the smallest budget drops reasoning with a warning.
+
+        Ref: stdapi/models/chat/anthropic_claude_37_to_45.py:reasoning_budget
+        """
+        out = mantle_convert._chat_to_messages_request(  # noqa: SLF001
+            {
+                "model": "anthropic.claude-haiku-4-5",
+                "messages": [],
+                "reasoning_effort": "high",
+                "max_completion_tokens": 1024,
+            }
+        )
+
+        assert "thinking" not in out
+        assert "output_config" not in out
+        assert request_log["level"] == "warning"
+
+    @pytest.mark.parametrize(
+        ("fields", "budget"),
+        [
+            ({"enable_thinking": True, "thinking_budget": 2000}, 2000),
+            ({"enable_thinking": True}, 3071),
+            ({"thinking": {"type": "enabled"}}, 3071),
+        ],
+        ids=["thinking_budget", "enable_thinking", "thinking"],
+    )
+    def test_thinking_fields_become_a_budget_before_claude_4_6(
+        self, fields: dict[str, Any], budget: int
+    ) -> None:
+        """``thinking_budget``, ``enable_thinking`` and ``thinking`` reach Claude 3.7-4.5 as a budget.
+
+        An explicit budget is sent as is; turning reasoning on without one
+        derives the ``high`` budget over the default output limit, as on the
+        runtime path. ``reasoning.max_tokens`` arrives as ``thinking_budget``.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+             stdapi/models/chat/_mantle/_convert.py:_anthropic_reasoning_fields
+        """
+        out = mantle_convert._chat_to_messages_request(  # noqa: SLF001
+            {"model": "anthropic.claude-haiku-4-5", "messages": [], **fields}
+        )
+
+        assert out["thinking"] == {"type": "enabled", "budget_tokens": budget}
+        assert "output_config" not in out
+
+    @pytest.mark.parametrize(
+        ("model", "level", "thinking"),
+        [
+            ("anthropic.claude-opus-5-5", "warning", None),
+            ("anthropic.claude-mythos-5", "warning", None),
+            ("anthropic.claude-opus-5", "info", {"type": "disabled"}),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"reasoning_effort": "none"},
+            {"enable_thinking": False},
+            {"thinking": {"type": "disabled"}},
+        ],
+        ids=["effort", "enable_thinking", "thinking"],
+    )
+    def test_disabled_reasoning_follows_the_runtime_path(
+        self,
+        model: str,
+        level: str,
+        thinking: dict[str, str] | None,
+        fields: dict[str, Any],
+        request_log: EventLog,
+    ) -> None:
+        """Reasoning turned off is disabled, or logged on a model that always reasons.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_anthropic_reasoning_fields
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_reasoning
+        """
+        out = mantle_convert._chat_to_messages_request(  # noqa: SLF001
+            {"model": model, "messages": [], **fields}
+        )
+
+        assert out.get("thinking") == thinking
+        assert "output_config" not in out
+        assert request_log["level"] == level
+
+    @pytest.mark.parametrize(
+        "model", ["anthropic.claude-opus-5", "anthropic.claude-sonnet-5"]
+    )
+    @pytest.mark.parametrize(
+        ("fields", "expected"),
+        [
+            ({"enable_thinking": True}, {"thinking": {"type": "adaptive"}}),
+            ({"thinking": {"type": "enabled"}}, {"thinking": {"type": "adaptive"}}),
+            (
+                {"enable_thinking": True, "thinking_budget": 2000},
+                {"thinking": {"type": "enabled", "budget_tokens": 2000}},
+            ),
+            ({"reasoning_effort": "high"}, {"output_config": {"effort": "high"}}),
+        ],
+        ids=["enable_thinking", "thinking", "thinking_budget", "effort"],
+    )
+    def test_reasoning_on_claude_4_6_and_later_follows_the_runtime_path(
+        self, model: str, fields: dict[str, Any], expected: dict[str, Any]
+    ) -> None:
+        """Turning reasoning on without an effort asks for adaptive thinking; a budget is sent as is.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_anthropic_reasoning_fields
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_reasoning
+        """
+        out = mantle_convert._chat_to_messages_request(  # noqa: SLF001
+            {"model": model, "messages": [], **fields}
+        )
+
+        assert {
+            key: out[key] for key in ("thinking", "output_config") if key in out
+        } == (expected)
 
     @pytest.mark.parametrize(
         "model",
