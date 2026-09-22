@@ -205,6 +205,7 @@ This is a hand-picked sample, not the full roster — the [Models](models.md) pa
 - Vocabulary customization and custom language models, per language — so a request identifying between several applies the right resources to each one
 - [Streamed results](api_openai_audio_transcriptions.md#streaming) — each phrase comes back as it is recognized instead of after the whole recording, whenever the request names the language to expect
 - [Transcripts encrypted with your own KMS key](operations_configuration_storage.md#aws-transcribe-output-encryption-key-arn), under a key policy scoped to this workload rather than to a whole bucket
+- [Medical transcription](api_openai_audio_transcriptions.md#medical-transcription) — clinical dictation and patient–clinician conversations in US English, with six medical specialties when streamed
 
 **Speech translation** — Transcribe audio and translate to English in a single request; a language pair that cannot be served is refused as a request problem instead of failing after the audio has been transcribed.
 

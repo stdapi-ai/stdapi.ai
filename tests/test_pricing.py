@@ -293,6 +293,32 @@ class TestIngestPriceListItem:
         )
         assert results[batch].amount == Decimal("0.0024")
 
+    def test_transcribe_medical_rows_key_the_medical_model(self) -> None:
+        """Medical batch and streaming rows key under ``amazon.transcribe-medical``.
+
+        AWS lists them as ``MedicalTranscribeAudio`` and ``MedicalStreamingAudio``
+        (service code ``transcribe``); the Medical Scribe row, a product the
+        gateway does not serve, must not land on the medical key.
+
+        Ref: https://aws.amazon.com/transcribe/pricing/
+             stdapi/pricing.py:_synthesize_service_model_key
+             stdapi/usage.py:record_transcribe_usage
+        """
+        results, diagnostics = _ingest_fixture(
+            "transcribe_sample.json", Service.TRANSCRIBE
+        )
+        assert diagnostics == []
+        medical = normalize_model_key("amazon.transcribe-medical")
+        keys = {
+            key.spec: price.amount
+            for key, price in results.items()
+            if key.model == medical and key.dimension is Dimension.INPUT_SECONDS
+        }
+        assert keys == {
+            "": Decimal("0.0012500000"),
+            TRANSCRIBE_STREAMING_SPEC: Decimal("0.0012600000"),
+        }
+
     def test_marketplace_global_usagetype_becomes_routing_global(self) -> None:
         """Regression: bare "_Global" usagetype must map to routing="global".
 
@@ -5705,6 +5731,7 @@ _SYNTHETIC_MODEL_PROBES: Final[tuple[tuple[Service, str, Dimension], ...]] = (
     (Service.POLLY, "amazon.polly-generative", Dimension.INPUT_CHARACTERS),
     (Service.TRANSLATE, "amazon.translate", Dimension.INPUT_CHARACTERS),
     (Service.TRANSCRIBE, "amazon.transcribe", Dimension.INPUT_SECONDS),
+    (Service.TRANSCRIBE, "amazon.transcribe-medical", Dimension.INPUT_SECONDS),
     (
         Service.COMPREHEND,
         "amazon.comprehend-language-detection",
@@ -5767,7 +5794,10 @@ async def test_live_price_catalog_ingests_cleanly() -> None:
         for key in index
         if key.service is Service.TRANSCRIBE and key.spec == TRANSCRIBE_STREAMING_SPEC
     }
-    assert normalize_model_key("amazon.transcribe") in streamed
+    assert {
+        normalize_model_key("amazon.transcribe"),
+        normalize_model_key("amazon.transcribe-medical"),
+    } <= streamed
 
 
 async def _unclaimed_bedrock_price_list_models(

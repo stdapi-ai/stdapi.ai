@@ -5,7 +5,7 @@ from asyncio import timeout as async_timeout
 from contextlib import aclosing, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired
 from zlib import compress
 
 from aws_sdk_transcribe_streaming.models import (
@@ -13,6 +13,7 @@ from aws_sdk_transcribe_streaming.models import (
     AudioStreamAudioEvent,
     Item,
     ItemType,
+    StartMedicalStreamTranscriptionInput,
     StartStreamTranscriptionInput,
 )
 from botocore.exceptions import ClientError, ParamValidationError
@@ -26,7 +27,11 @@ from stdapi.api_errors import (
     InvalidLanguageFormatError,
     UnsupportedParameterError,
 )
-from stdapi.aws import call_with_region_failover, get_client
+from stdapi.aws import (
+    call_with_region_failover,
+    get_client,
+    is_region_unavailable_error,
+)
 from stdapi.aws_bedrock import apply_guardrail_to_text
 from stdapi.aws_bidi import bidi_regions, open_bidi_stream
 from stdapi.aws_s3 import (
@@ -83,7 +88,14 @@ from stdapi.utils import (
 
 if TYPE_CHECKING:
     from asyncio import Task
-    from collections.abc import AsyncGenerator, Generator, Sequence
+    from collections.abc import (
+        AsyncGenerator,
+        Awaitable,
+        Callable,
+        Generator,
+        Mapping,
+        Sequence,
+    )
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_transcribe.client import TranscribeServiceClient
@@ -95,6 +107,9 @@ if TYPE_CHECKING:
 
 #: Transcribe model ID
 AWS_TRANSCRIBE_MODEL_ID = "amazon.transcribe"
+
+#: Transcribe Medical model ID
+AWS_TRANSCRIBE_MEDICAL_MODEL_ID = "amazon.transcribe-medical"
 
 #: Ordinal value of the "A" letter used as speaker label
 _A_ORDINAL_VALUE = ord("A")
@@ -137,7 +152,19 @@ class _TranscribeLanguageIdSetting(BaseModelResponse):
     VocabularyName: str | None = None
 
 
-class _TranscribeExtraParams(BaseModelResponse):
+class _TranscribeSettingsParams(BaseModelResponse):
+    """The job ``Settings`` sub-fields every transcription job kind accepts."""
+
+    # Max* values are forwarded unchecked: AWS rejects an out-of-range one with a 400.
+    ChannelIdentification: bool | None = None
+    MaxAlternatives: int | None = None
+    MaxSpeakerLabels: int | None = None
+    ShowAlternatives: bool | None = None
+    ShowSpeakerLabels: bool | None = None
+    VocabularyName: str | None = None
+
+
+class _TranscribeExtraParams(_TranscribeSettingsParams):
     """Supported extra parameters for AWS Transcribe's StartTranscriptionJob.
 
     ``Settings``' sub-fields are flattened to the top level (mirroring Polly's
@@ -145,23 +172,15 @@ class _TranscribeExtraParams(BaseModelResponse):
     free for AWS Translate's own extra parameters on the translation route.
     """
 
-    # MaxAlternatives/MaxSpeakerLabels/VocabularyFilterMethod are forwarded
-    # as-is (not range/enum-checked here): AWS Transcribe rejects an
-    # out-of-range or unknown value with its own 400 error.
-    ChannelIdentification: bool | None = None
+    # VocabularyFilterMethod is forwarded unchecked: AWS rejects an unknown one with a 400.
     ContentRedaction: _TranscribeContentRedaction | None = None
     IdentifyMultipleLanguages: bool | None = None
     LanguageIdSettings: dict[str, _TranscribeLanguageIdSetting] | None = None
     LanguageOptions: list[str] | None = None
-    MaxAlternatives: int | None = None
-    MaxSpeakerLabels: int | None = None
     ModelSettings: _TranscribeModelSettings | None = None
-    ShowAlternatives: bool | None = None
-    ShowSpeakerLabels: bool | None = None
     ToxicityDetection: list[_TranscribeToxicityDetectionSetting] | None = None
     VocabularyFilterMethod: str | None = None
     VocabularyFilterName: str | None = None
-    VocabularyName: str | None = None
 
 
 # AWS Transcribe-specific data structures
@@ -227,6 +246,30 @@ _POLL_INTERVAL_INITIAL: float = 0.5
 _POLL_INTERVAL_MAX: float = 2.0
 
 
+@dataclass(frozen=True, slots=True)
+class _JobOperations:
+    """The calls one kind of transcription job is started, polled and deleted with.
+
+    Attributes:
+        feature: The feature as the caller knows it, when no region offers it.
+        start_action: The IAM action starting the job, named to the operator.
+        build: Builds the start parameters from the job name, bucket, language,
+            response format, extra parameters and expected languages.
+        start: Starts the job from those parameters.
+        describe: Returns the job's description, by job name.
+        delete: Deletes the job, by job name.
+    """
+
+    feature: str
+    start_action: str
+    build: Callable[
+        [str, str, str | None, str, Any, list[str] | None], Mapping[str, Any]
+    ]
+    start: Callable[[TranscribeServiceClient, Mapping[str, Any]], Awaitable[object]]
+    describe: Callable[[TranscribeServiceClient, str], Awaitable[Mapping[str, Any]]]
+    delete: Callable[[TranscribeServiceClient, str], Awaitable[object]]
+
+
 def transcribe_job_candidates() -> list[tuple[RegionName, str]]:
     """Return the candidate (region, S3 bucket) pairs for transcription jobs.
 
@@ -270,21 +313,25 @@ async def initialize_transcribe_models() -> None:
     of its own.
     """
     await load_supported_languages()
-    EXTRA_MODELS_INPUT_MODALITY.setdefault("SPEECH", set()).add(AWS_TRANSCRIBE_MODEL_ID)
-    EXTRA_MODELS_OUTPUT_MODALITY.setdefault("TEXT", set()).add(AWS_TRANSCRIBE_MODEL_ID)
     regions = [region for region, _ in transcribe_job_candidates()]
     regions += [
         region for region in transcribe_stream_regions() if region not in regions
     ]
-    EXTRA_MODELS[AWS_TRANSCRIBE_MODEL_ID] = ModelDetails(
-        id=AWS_TRANSCRIBE_MODEL_ID,
-        name="Transcribe",
-        provider="Amazon",
-        regions=regions,
-        service="AWS Transcribe",
-        input_modalities=["SPEECH"],
-        output_modalities=["TEXT"],
-    )
+    for model_id, name in (
+        (AWS_TRANSCRIBE_MODEL_ID, "Transcribe"),
+        (AWS_TRANSCRIBE_MEDICAL_MODEL_ID, "Transcribe Medical"),
+    ):
+        EXTRA_MODELS_INPUT_MODALITY.setdefault("SPEECH", set()).add(model_id)
+        EXTRA_MODELS_OUTPUT_MODALITY.setdefault("TEXT", set()).add(model_id)
+        EXTRA_MODELS[model_id] = ModelDetails(
+            id=model_id,
+            name=name,
+            provider="Amazon",
+            regions=list(regions),
+            service="AWS Transcribe",
+            input_modalities=["SPEECH"],
+            output_modalities=["TEXT"],
+        )
 
 
 async def _start_transcription_with_failover(
@@ -292,8 +339,10 @@ async def _start_transcription_with_failover(
     job_id: str,
     language: str | None,
     response_format: str,
-    extra: _TranscribeExtraParams | None = None,
+    extra: BaseModelResponse | None = None,
     languages: list[str] | None = None,
+    *,
+    operations: _JobOperations | None = None,
 ) -> tuple[RegionName, str]:
     """Start the transcription job, failing over across candidate regions.
 
@@ -308,8 +357,10 @@ async def _start_transcription_with_failover(
         job_id: Transcription job name (also the input key's directory).
         language: Optional language code, for caller-error translation.
         response_format: Requested response format.
-        extra: Optional extra StartTranscriptionJob parameters.
+        extra: Optional extra parameters of the job kind.
         languages: Optional expected input language codes.
+        operations: The job kind's calls; a standard transcription job's when
+            None.
 
     Returns:
         The (region, bucket) pair that accepted the job.
@@ -317,9 +368,11 @@ async def _start_transcription_with_failover(
     Raises:
         ApiError: For caller errors (unsupported language, bad file, or
             incompatible extra parameters).
+        FeatureUnavailableError: When no candidate region offers the job kind.
         BotoCoreError: When every candidate region fails (last error).
         ClientError: Same as above.
     """
+    job = operations or _TRANSCRIPTION_JOB
     input_key = f"{SETTINGS.aws_s3_tmp_prefix}{job_id}/input"
     buckets = dict(candidates)
     first_bucket = candidates[0][1]
@@ -339,10 +392,9 @@ async def _start_transcription_with_failover(
         with _handle_transcription_error(
             language or ", ".join(languages or ()) or None
         ):
-            await transcribe.start_transcription_job(
-                **_build_transcription_job_params(
-                    job_id, bucket, language, response_format, extra, languages
-                )
+            await job.start(
+                transcribe,
+                job.build(job_id, bucket, language, response_format, extra, languages),
             )
         return bucket
 
@@ -350,14 +402,22 @@ async def _start_transcription_with_failover(
         transcribe: TranscribeServiceClient, _region: RegionName
     ) -> None:
         """Best-effort delete: the start may have been accepted despite the error."""
-        await transcribe.delete_transcription_job(TranscriptionJobName=job_id)
+        await job.delete(transcribe, job_id)
 
-    bucket, region = await call_with_region_failover(
-        "transcribe",
-        [region for region, _ in candidates],
-        _attempt,
-        on_failed_region=_cleanup,
-    )
+    regions = [region for region, _ in candidates]
+    try:
+        bucket, region = await call_with_region_failover(
+            "transcribe", regions, _attempt, on_failed_region=_cleanup
+        )
+    except ClientError as error:
+        if not is_region_unavailable_error(error):
+            raise
+        raise FeatureUnavailableError(
+            job.feature,
+            f"AWS Transcribe refused {job.start_action} in every candidate region "
+            f"({', '.join(regions)}): {error}. Configure a region offering it, or "
+            "grant the server role that action.",
+        ) from error
     return region, bucket
 
 
@@ -565,17 +625,17 @@ _CHANNEL_IDENTIFICATION_PARAM = "ChannelIdentification"
 _SHOW_SPEAKER_LABELS_PARAM = "ShowSpeakerLabels"
 
 
-def _apply_extra_settings(
-    job_params: StartTranscriptionJobRequestTypeDef,
-    response_format: str,
-    extra: _TranscribeExtraParams | None,
-) -> None:
-    """Merge Settings/ContentRedaction/ModelSettings/ToxicityDetection into the job.
+def _job_settings(
+    response_format: str, extra: _TranscribeSettingsParams | None
+) -> dict[str, object]:
+    """Build a transcription job's ``Settings``.
 
     Args:
-        job_params: Job parameters to update in place.
         response_format: Response format for transcription.
-        extra: Optional extra StartTranscriptionJob parameters.
+        extra: Optional extra parameters.
+
+    Returns:
+        The settings, empty when there are none to send.
 
     Raises:
         UnsupportedParameterError: If ``extra.ChannelIdentification`` is combined
@@ -595,6 +655,26 @@ def _apply_extra_settings(
         if extra.ShowSpeakerLabels is False and response_format == "diarized_json":
             raise UnsupportedParameterError(_SHOW_SPEAKER_LABELS_PARAM)
         settings.update(extra.model_dump(include=_SETTINGS_FIELDS, exclude_none=True))
+    return settings
+
+
+def _apply_extra_settings(
+    job_params: StartTranscriptionJobRequestTypeDef,
+    response_format: str,
+    extra: _TranscribeExtraParams | None,
+) -> None:
+    """Merge Settings/ContentRedaction/ModelSettings/ToxicityDetection into the job.
+
+    Args:
+        job_params: Job parameters to update in place.
+        response_format: Response format for transcription.
+        extra: Optional extra StartTranscriptionJob parameters.
+
+    Raises:
+        UnsupportedParameterError: See :func:`_job_settings`.
+    """
+    settings = _job_settings(response_format, extra)
+    if extra is not None:
         if extra.ContentRedaction is not None:
             job_params["ContentRedaction"] = extra.ContentRedaction.model_dump()  # type: ignore[typeddict-item]
         if extra.ModelSettings is not None:
@@ -702,7 +782,11 @@ def _handle_transcription_error(language: str | None) -> Generator[None]:
 
 
 async def _wait_for_transcription_completion(
-    transcribe: TranscribeServiceClient, job_id: str, s3_bucket: str
+    transcribe: TranscribeServiceClient,
+    job_id: str,
+    s3_bucket: str,
+    *,
+    operations: _JobOperations | None = None,
 ) -> tuple[str, str | None]:
     """Wait for transcription job to complete and return its output keys.
 
@@ -715,6 +799,8 @@ async def _wait_for_transcription_completion(
         transcribe: Transcribe service client
         job_id: Transcription job ID
         s3_bucket: Bucket the job writes its output to
+        operations: The job kind's calls; a standard transcription job's when
+            None.
 
     Returns:
         The transcript object key, and the subtitle object key when one was requested.
@@ -722,11 +808,10 @@ async def _wait_for_transcription_completion(
     Raises:
         ApiError: If transcription fails
     """
+    describe = (operations or _TRANSCRIPTION_JOB).describe
     poll_interval = _POLL_INTERVAL_INITIAL
     while True:  # Timeout at FastAPI level
-        job = (await transcribe.get_transcription_job(TranscriptionJobName=job_id))[
-            "TranscriptionJob"
-        ]
+        job = await describe(transcribe, job_id)
         if job["TranscriptionJobStatus"] == "COMPLETED":
             break
         if job["TranscriptionJobStatus"] == "FAILED":
@@ -785,7 +870,10 @@ _JOB_ALREADY_GONE = ("couldn't be deleted", "couldn't be found")
 
 
 async def _delete_transcription_job(
-    transcribe: TranscribeServiceClient, job_name: str
+    transcribe: TranscribeServiceClient,
+    job_name: str,
+    *,
+    operations: _JobOperations | None = None,
 ) -> None:
     """Deletes a transcription job with the specified job name.
 
@@ -796,9 +884,11 @@ async def _delete_transcription_job(
     Args:
         transcribe: Transcribe client
         job_name: The name of the transcription job to be deleted.
+        operations: The job kind's calls; a standard transcription job's when
+            None.
     """
     try:
-        await transcribe.delete_transcription_job(TranscriptionJobName=job_name)
+        await (operations or _TRANSCRIPTION_JOB).delete(transcribe, job_name)
     except ClientError as error:
         info = error.response["Error"]
         if info["Code"] == "BadRequestException" and any(
@@ -806,6 +896,36 @@ async def _delete_transcription_job(
         ):
             return
         raise
+
+
+async def _describe_transcription_job(
+    transcribe: TranscribeServiceClient, job_name: str
+) -> Mapping[str, Any]:
+    """Return a standard transcription job's description.
+
+    Args:
+        transcribe: Transcribe client.
+        job_name: The job's name.
+
+    Returns:
+        The job's status, failure reason and output locations.
+    """
+    return (await transcribe.get_transcription_job(TranscriptionJobName=job_name))[
+        "TranscriptionJob"
+    ]
+
+
+#: The calls a standard transcription job goes through.
+_TRANSCRIPTION_JOB: Final = _JobOperations(
+    feature=_TRANSCRIPTION_FEATURE,
+    start_action="transcribe:StartTranscriptionJob",
+    build=_build_transcription_job_params,
+    start=lambda transcribe, params: transcribe.start_transcription_job(**params),
+    describe=_describe_transcription_job,
+    delete=lambda transcribe, name: transcribe.delete_transcription_job(
+        TranscriptionJobName=name
+    ),
+)
 
 
 def _speaker_label(index: int) -> str:
@@ -1156,6 +1276,49 @@ async def _stream_audio_frames(audio_content: InputFile) -> AsyncGenerator[bytes
                 del frame[:_STREAM_FRAME_BYTES]
     if frame:
         yield bytes(frame)
+
+
+#: The feature a caller reads when no region can open a live transcription session.
+_LIVE_TRANSCRIPTION_FEATURE: Final = "Live transcription"
+
+
+async def _live_or_job(
+    live: AsyncGenerator[_TranscriptPart],
+    job: Callable[[], AsyncGenerator[_TranscriptPart]] | None,
+) -> AsyncGenerator[_TranscriptPart]:
+    """Yield a live session's parts, or a job's when no region opens the session.
+
+    A region refusing the session refuses it before any audio is sent, so the
+    upload is still whole for the job.
+
+    Args:
+        live: The live session's parts.
+        job: Starts the job serving the same request; None when none can.
+
+    Yields:
+        The parts of whichever path served the request.
+
+    Raises:
+        FeatureUnavailableError: No region opened the session, and no job can
+            serve the request.
+    """
+    async with aclosing(live):
+        try:
+            first = await anext(live)
+        except StopAsyncIteration:
+            return
+        except FeatureUnavailableError:
+            if job is None:
+                raise
+            fallback = job
+        else:
+            yield first
+            async for part in live:
+                yield part
+            return
+    async with aclosing(fallback()) as parts:
+        async for part in parts:
+            yield part
 
 
 async def _one_chunk(data: bytes) -> AsyncGenerator[bytes]:
@@ -1524,6 +1687,73 @@ class AudioModel(AudioModelBase[None, None]):
     SUPPORTED_TIMESTAMP_GRANULARITIES = frozenset({"word", "segment"})
     STREAMED_DIARIZATION_SUPPORTED = True
 
+    #: Model ID the transcribed seconds are recorded, and priced, under.
+    USAGE_MODEL_ID: ClassVar[str] = AWS_TRANSCRIBE_MODEL_ID
+
+    #: Extra parameters a transcription job accepts.
+    EXTRA_PARAMS: ClassVar[type[BaseModelResponse]] = _TranscribeExtraParams
+
+    #: The calls this model's transcription jobs go through.
+    JOB_OPERATIONS: ClassVar[_JobOperations] = _TRANSCRIPTION_JOB
+
+    @classmethod
+    def _live_request(
+        cls,
+        language: str | None,
+        languages: list[str] | None,
+        extra_params: JsonMapping | None,
+        *,
+        diarize: bool,
+    ) -> StartStreamTranscriptionInput | StartMedicalStreamTranscriptionInput | None:
+        """Build the request a live session serves this transcription with.
+
+        Args:
+            language: Optional language code.
+            languages: Optional expected input language codes.
+            extra_params: Optional extra parameters.
+            diarize: Whether each word must be attributed to a speaker.
+
+        Returns:
+            The session request, or None when only a transcription job can
+            serve the request as it was made.
+        """
+        extra: _TranscribeExtraParams | None = None
+        if extra_params:
+            with validation_error_handler():
+                extra = _TranscribeExtraParams(**extra_params)  # type: ignore[arg-type]
+        language_params = _stream_language_params(language, languages, extra)
+        if language_params is None or not _can_stream_live(extra):
+            return None
+        return _stream_input(language_params, extra, diarize=diarize)
+
+    @classmethod
+    def _job_serves(cls, extra_params: JsonMapping | None) -> bool:  # noqa: ARG003
+        """Whether a transcription job can serve the request as it was made.
+
+        Args:
+            extra_params: Optional extra parameters.
+
+        Returns:
+            True: a job serves every request this model accepts.
+        """
+        return True
+
+    @staticmethod
+    def _open_live_session(
+        client: Any,  # noqa: ANN401
+        request: StartStreamTranscriptionInput | StartMedicalStreamTranscriptionInput,
+    ) -> Awaitable[Any]:
+        """Open the live session a request built by :meth:`_live_request` names.
+
+        Args:
+            client: The region's bidirectional Transcribe client.
+            request: The session request.
+
+        Returns:
+            The SDK's pending duplex stream.
+        """
+        return client.start_stream_transcription(request)  # type: ignore[no-any-return]
+
     @classmethod
     def get_aliases(
         cls,
@@ -1580,15 +1810,16 @@ class AudioModel(AudioModelBase[None, None]):
         self._validate_no_temperature(temperature)
         self._validate_no_logprobs(logprobs)
 
-        extra: _TranscribeExtraParams | None = None
+        extra: BaseModelResponse | None = None
         if extra_params:
             with validation_error_handler():
-                extra = _TranscribeExtraParams(**extra_params)  # type: ignore[arg-type]
+                extra = self.EXTRA_PARAMS(**extra_params)
 
+        operations = self.JOB_OPERATIONS
         candidates = transcribe_job_candidates()
         if not candidates:
             raise FeatureUnavailableError(
-                _TRANSCRIPTION_FEATURE,
+                operations.feature,
                 "No S3 bucket configured for AWS Transcribe: set AWS_S3_BUCKET, "
                 "AWS_TRANSCRIBE_S3_BUCKET, or an AWS_S3_REGIONAL_BUCKETS entry "
                 "for a candidate region.",
@@ -1607,7 +1838,13 @@ class AudioModel(AudioModelBase[None, None]):
                 key=f"{s3_prefix}{request_id}/input",
             )
             region, s3_bucket = await _start_transcription_with_failover(
-                candidates, request_id, language, response_format, extra, languages
+                candidates,
+                request_id,
+                language,
+                response_format,
+                extra,
+                languages,
+                operations=operations,
             )
             _SERVED_REGION.set(region)
             transcribe: TranscribeServiceClient = get_client("transcribe", region)
@@ -1620,7 +1857,7 @@ class AudioModel(AudioModelBase[None, None]):
 
             # Wait for completion and get results
             s3_output_key, subtitle_key = await _wait_for_transcription_completion(
-                transcribe, request_id, s3_bucket
+                transcribe, request_id, s3_bucket, operations=operations
             )
             track_temporary_s3_objects(
                 s3_bucket, s3_output_key, *filter(None, (subtitle_key,))
@@ -1631,7 +1868,9 @@ class AudioModel(AudioModelBase[None, None]):
 
         finally:
             if to_cleanup:
-                schedule_cleanup(_delete_transcription_job(*to_cleanup))
+                schedule_cleanup(
+                    _delete_transcription_job(*to_cleanup, operations=operations)
+                )
 
     @classmethod
     async def _format_transcription_response(
@@ -1805,7 +2044,9 @@ class AudioModel(AudioModelBase[None, None]):
         return await self._format_transcription_response(
             transcript_data,
             response_format,
-            record_transcribe_usage(duration, region=_SERVED_REGION.get()),
+            record_transcribe_usage(
+                duration, region=_SERVED_REGION.get(), model=self.USAGE_MODEL_ID
+            ),
             duration,
             timestamp_granularities,
             await audio_content.get_filename(),
@@ -1853,23 +2094,13 @@ class AudioModel(AudioModelBase[None, None]):
         """
         self._validate_no_logprobs(logprobs)
         _validate_no_keywords(keywords)
-        extra: _TranscribeExtraParams | None = None
-        if extra_params:
-            with validation_error_handler():
-                extra = _TranscribeExtraParams(**extra_params)  # type: ignore[arg-type]
-
         diarize = response_format == "diarized_json"
-        language_params = _stream_language_params(language, languages, extra)
+        request = self._live_request(language, languages, extra_params, diarize=diarize)
         regions = transcribe_stream_regions()
-        if language_params is not None and regions and _can_stream_live(extra):
-            parts = self._live_transcript(
-                audio_content,
-                _stream_input(language_params, extra, diarize=diarize),
-                regions,
-                diarize=diarize,
-            )
-        else:
-            parts = self._job_transcript(
+
+        def _job() -> AsyncGenerator[_TranscriptPart]:
+            """Start the job serving this request."""
+            return self._job_transcript(
                 audio_content,
                 response_format,
                 language,
@@ -1877,6 +2108,24 @@ class AudioModel(AudioModelBase[None, None]):
                 temperature,
                 extra_params,
                 languages,
+            )
+
+        job = _job if self._job_serves(extra_params) else None
+        if request is None:
+            parts = _job()
+        elif regions:
+            parts = _live_or_job(
+                self._live_transcript(audio_content, request, regions, diarize=diarize),
+                job,
+            )
+        elif job is not None:
+            parts = job()
+        else:
+            raise FeatureUnavailableError(
+                _LIVE_TRANSCRIPTION_FEATURE,
+                "No candidate region has a live transcription endpoint, and only a "
+                "live session serves this request (a medical Specialty other than "
+                "PRIMARYCARE): add a region offering StartMedicalStreamTranscription.",
             )
         full_text_parts: list[str] = []
         speakers: dict[str, str] = {}
@@ -1918,7 +2167,7 @@ class AudioModel(AudioModelBase[None, None]):
     async def _live_transcript(
         self,
         audio_content: InputFile,
-        request: StartStreamTranscriptionInput,
+        request: StartStreamTranscriptionInput | StartMedicalStreamTranscriptionInput,
         regions: list[RegionName],
         *,
         diarize: bool = False,
@@ -1947,7 +2196,7 @@ class AudioModel(AudioModelBase[None, None]):
             async with open_bidi_stream(
                 "transcribe",
                 regions,
-                lambda client, _region: client.start_stream_transcription(request),
+                lambda client, _region: self._open_live_session(client, request),
             ) as session:
                 _SERVED_REGION.set(session.region)
                 sender = create_task(
@@ -1989,7 +2238,10 @@ class AudioModel(AudioModelBase[None, None]):
             # A session that never took audio has nothing to bill.
             if transcript.seconds:
                 record_transcribe_usage(
-                    transcript.seconds, region=_SERVED_REGION.get(), streaming=True
+                    transcript.seconds,
+                    region=_SERVED_REGION.get(),
+                    streaming=True,
+                    model=self.USAGE_MODEL_ID,
                 )
 
     async def _job_transcript(
@@ -2034,7 +2286,9 @@ class AudioModel(AudioModelBase[None, None]):
             languages,
         )
         record_transcribe_usage(
-            _get_audio_duration(transcript_data), region=_SERVED_REGION.get()
+            _get_audio_duration(transcript_data),
+            region=_SERVED_REGION.get(),
+            model=self.USAGE_MODEL_ID,
         )
         segmented = False
         if response_format == "diarized_json":

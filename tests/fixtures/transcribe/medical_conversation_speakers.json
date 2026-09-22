@@ -1,0 +1,366 @@
+{
+ "jobName": "stdapi-116-conv-aa8ba34f",
+ "accountId": "123456789012",
+ "status": "COMPLETED",
+ "results": {
+  "transcripts": [
+   {
+    "transcript": "What brings you in today? I have had chest pain and shortness of breath since Monday."
+   }
+  ],
+  "speaker_labels": {
+   "segments": [
+    {
+     "start_time": "0.0",
+     "end_time": "4.84",
+     "speaker_label": "spk_0",
+     "items": [
+      {
+       "speaker_label": "spk_0",
+       "start_time": "0.009",
+       "end_time": "0.25"
+      },
+      {
+       "speaker_label": "spk_0",
+       "start_time": "0.25",
+       "end_time": "0.49"
+      },
+      {
+       "speaker_label": "spk_0",
+       "start_time": "0.49",
+       "end_time": "0.61"
+      },
+      {
+       "speaker_label": "spk_0",
+       "start_time": "0.61",
+       "end_time": "0.889"
+      },
+      {
+       "speaker_label": "spk_0",
+       "start_time": "0.889",
+       "end_time": "1.299"
+      },
+      {
+       "speaker_label": "spk_0",
+       "start_time": "1.69",
+       "end_time": "1.85"
+      },
+      {
+       "speaker_label": "spk_0",
+       "start_time": "1.85",
+       "end_time": "2.0"
+      },
+      {
+       "speaker_label": "spk_0",
+       "start_time": "2.0",
+       "end_time": "2.13"
+      },
+      {
+       "speaker_label": "spk_0",
+       "start_time": "2.13",
+       "end_time": "2.529"
+      },
+      {
+       "speaker_label": "spk_0",
+       "start_time": "2.529",
+       "end_time": "2.73"
+      },
+      {
+       "speaker_label": "spk_0",
+       "start_time": "2.73",
+       "end_time": "3.009"
+      },
+      {
+       "speaker_label": "spk_0",
+       "start_time": "3.009",
+       "end_time": "3.49"
+      },
+      {
+       "speaker_label": "spk_0",
+       "start_time": "3.49",
+       "end_time": "3.69"
+      },
+      {
+       "speaker_label": "spk_0",
+       "start_time": "3.69",
+       "end_time": "3.97"
+      },
+      {
+       "speaker_label": "spk_0",
+       "start_time": "3.97",
+       "end_time": "4.25"
+      },
+      {
+       "speaker_label": "spk_0",
+       "start_time": "4.25",
+       "end_time": "4.739"
+      }
+     ]
+    }
+   ],
+   "channel_label": "ch_0",
+   "speakers": 1
+  },
+  "items": [
+   {
+    "id": 0,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.999",
+      "content": "What"
+     }
+    ],
+    "start_time": "0.009",
+    "end_time": "0.25",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 1,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.999",
+      "content": "brings"
+     }
+    ],
+    "start_time": "0.25",
+    "end_time": "0.49",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 2,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.999",
+      "content": "you"
+     }
+    ],
+    "start_time": "0.49",
+    "end_time": "0.61",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 3,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "1.0",
+      "content": "in"
+     }
+    ],
+    "start_time": "0.61",
+    "end_time": "0.889",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 4,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.999",
+      "content": "today"
+     }
+    ],
+    "start_time": "0.889",
+    "end_time": "1.299",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 5,
+    "type": "punctuation",
+    "alternatives": [
+     {
+      "confidence": "0.0",
+      "content": "?"
+     }
+    ],
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 6,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "1.0",
+      "content": "I"
+     }
+    ],
+    "start_time": "1.69",
+    "end_time": "1.85",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 7,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.999",
+      "content": "have"
+     }
+    ],
+    "start_time": "1.85",
+    "end_time": "2.0",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 8,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.999",
+      "content": "had"
+     }
+    ],
+    "start_time": "2.0",
+    "end_time": "2.13",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 9,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "1.0",
+      "content": "chest"
+     }
+    ],
+    "start_time": "2.13",
+    "end_time": "2.529",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 10,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "1.0",
+      "content": "pain"
+     }
+    ],
+    "start_time": "2.529",
+    "end_time": "2.73",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 11,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "1.0",
+      "content": "and"
+     }
+    ],
+    "start_time": "2.73",
+    "end_time": "3.009",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 12,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "1.0",
+      "content": "shortness"
+     }
+    ],
+    "start_time": "3.009",
+    "end_time": "3.49",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 13,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "1.0",
+      "content": "of"
+     }
+    ],
+    "start_time": "3.49",
+    "end_time": "3.69",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 14,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "1.0",
+      "content": "breath"
+     }
+    ],
+    "start_time": "3.69",
+    "end_time": "3.97",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 15,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "1.0",
+      "content": "since"
+     }
+    ],
+    "start_time": "3.97",
+    "end_time": "4.25",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 16,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "1.0",
+      "content": "Monday"
+     }
+    ],
+    "start_time": "4.25",
+    "end_time": "4.739",
+    "speaker_label": "spk_0"
+   },
+   {
+    "id": 17,
+    "type": "punctuation",
+    "alternatives": [
+     {
+      "confidence": "0.0",
+      "content": "."
+     }
+    ],
+    "speaker_label": "spk_0"
+   }
+  ],
+  "audio_segments": [
+   {
+    "id": 0,
+    "transcript": "What brings you in today? I have had chest pain and shortness of breath since Monday.",
+    "start_time": "0.0",
+    "end_time": "4.84",
+    "speaker_label": "spk_0",
+    "items": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17
+    ]
+   }
+  ]
+ }
+}

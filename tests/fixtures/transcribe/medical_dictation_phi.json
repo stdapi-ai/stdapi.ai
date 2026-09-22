@@ -1,0 +1,331 @@
+{
+ "jobName": "stdapi-116-dict-1b22ff11",
+ "accountId": "123456789012",
+ "status": "COMPLETED",
+ "results": {
+  "transcripts": [
+   {
+    "transcript": "Patient John Smith, date of birth March 3, 1970. Prescribed metformin 500 mg twice daily for type 2 diabetes."
+   }
+  ],
+  "items": [
+   {
+    "id": 0,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.999",
+      "content": "Patient"
+     }
+    ],
+    "start_time": "0.04",
+    "end_time": "0.43"
+   },
+   {
+    "id": 1,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.991",
+      "content": "John"
+     }
+    ],
+    "start_time": "0.43",
+    "end_time": "0.71"
+   },
+   {
+    "id": 2,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.946",
+      "content": "Smith"
+     }
+    ],
+    "start_time": "0.71",
+    "end_time": "1.15"
+   },
+   {
+    "id": 3,
+    "type": "punctuation",
+    "alternatives": [
+     {
+      "confidence": "0.0",
+      "content": ","
+     }
+    ]
+   },
+   {
+    "id": 4,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.964",
+      "content": "date"
+     }
+    ],
+    "start_time": "1.32",
+    "end_time": "1.47"
+   },
+   {
+    "id": 5,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.998",
+      "content": "of"
+     }
+    ],
+    "start_time": "1.47",
+    "end_time": "1.63"
+   },
+   {
+    "id": 6,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.987",
+      "content": "birth"
+     }
+    ],
+    "start_time": "1.63",
+    "end_time": "1.95"
+   },
+   {
+    "id": 7,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.998",
+      "content": "March"
+     }
+    ],
+    "start_time": "1.95",
+    "end_time": "2.19"
+   },
+   {
+    "id": 8,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.828",
+      "content": "3"
+     }
+    ],
+    "start_time": "2.19",
+    "end_time": "2.39"
+   },
+   {
+    "id": 9,
+    "type": "punctuation",
+    "alternatives": [
+     {
+      "confidence": "0.0",
+      "content": ","
+     }
+    ]
+   },
+   {
+    "id": 10,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.998",
+      "content": "1970"
+     }
+    ],
+    "start_time": "2.52",
+    "end_time": "3.63"
+   },
+   {
+    "id": 11,
+    "type": "punctuation",
+    "alternatives": [
+     {
+      "confidence": "0.0",
+      "content": "."
+     }
+    ]
+   },
+   {
+    "id": 12,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.986",
+      "content": "Prescribed"
+     }
+    ],
+    "start_time": "3.92",
+    "end_time": "4.43"
+   },
+   {
+    "id": 13,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.961",
+      "content": "metformin"
+     }
+    ],
+    "start_time": "4.43",
+    "end_time": "5.03"
+   },
+   {
+    "id": 14,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.998",
+      "content": "500"
+     }
+    ],
+    "start_time": "5.03",
+    "end_time": "5.63"
+   },
+   {
+    "id": 15,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.98",
+      "content": "mg"
+     }
+    ],
+    "start_time": "5.63",
+    "end_time": "6.28"
+   },
+   {
+    "id": 16,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.998",
+      "content": "twice"
+     }
+    ],
+    "start_time": "6.28",
+    "end_time": "6.59"
+   },
+   {
+    "id": 17,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.98",
+      "content": "daily"
+     }
+    ],
+    "start_time": "6.59",
+    "end_time": "6.95"
+   },
+   {
+    "id": 18,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.999",
+      "content": "for"
+     }
+    ],
+    "start_time": "6.95",
+    "end_time": "7.12"
+   },
+   {
+    "id": 19,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.996",
+      "content": "type"
+     }
+    ],
+    "start_time": "7.12",
+    "end_time": "7.42"
+   },
+   {
+    "id": 20,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.997",
+      "content": "2"
+     }
+    ],
+    "start_time": "7.42",
+    "end_time": "7.55"
+   },
+   {
+    "id": 21,
+    "type": "pronunciation",
+    "alternatives": [
+     {
+      "confidence": "0.998",
+      "content": "diabetes"
+     }
+    ],
+    "start_time": "7.55",
+    "end_time": "8.46"
+   },
+   {
+    "id": 22,
+    "type": "punctuation",
+    "alternatives": [
+     {
+      "confidence": "0.0",
+      "content": "."
+     }
+    ]
+   }
+  ],
+  "entities": [
+   {
+    "start_time": 0.43,
+    "end_time": 1.15,
+    "category": "PHI-Personal",
+    "content": "John Smith",
+    "confidence": 1.0
+   },
+   {
+    "start_time": 1.95,
+    "end_time": 3.63,
+    "category": "PHI-Personal",
+    "content": "March 3 1970",
+    "confidence": 1.0
+   }
+  ],
+  "audio_segments": [
+   {
+    "id": 0,
+    "transcript": "Patient John Smith, date of birth March 3, 1970. Prescribed metformin 500 mg twice daily for type 2 diabetes.",
+    "start_time": "0.0",
+    "end_time": "8.63",
+    "items": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22
+    ]
+   }
+  ]
+ }
+}

@@ -1006,6 +1006,8 @@ TRANSCRIBE_STREAMING_SPEC: Final = "streaming"
 _TRANSCRIBE_OPERATIONS: Final[dict[str, tuple[str, str]]] = {
     "TranscribeAudio": ("amazon.transcribe", ""),
     "StreamingAudio": ("amazon.transcribe", TRANSCRIBE_STREAMING_SPEC),
+    "MedicalTranscribeAudio": ("amazon.transcribe-medical", ""),
+    "MedicalStreamingAudio": ("amazon.transcribe-medical", TRANSCRIBE_STREAMING_SPEC),
 }
 
 

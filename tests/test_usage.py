@@ -1292,6 +1292,34 @@ class TestNonBedrockRecordUsageHelpers:
         compute_costs()
         assert record.cost == expected_cost
 
+    def test_record_transcribe_usage_prices_medical_audio_at_the_medical_rate(
+        self,
+    ) -> None:
+        """Medical transcription is its own billed product, at $0.00125/s.
+
+        AWS lists it as ``MedicalTranscribeAudio`` (service code ``transcribe``),
+        twelve times the standard batch rate in us-east-1.
+
+        Ref: https://aws.amazon.com/transcribe/pricing/
+             stdapi/usage.py:record_transcribe_usage
+        """
+        set_test_price(
+            normalize_model_key("amazon.transcribe-medical"),
+            "us-east-1",
+            Dimension.INPUT_SECONDS,
+            "0.00125",
+            "USD",
+            service=Service.TRANSCRIBE,
+        )
+        billed = record_transcribe_usage(
+            8.6, region="us-east-1", model="amazon.transcribe-medical"
+        )
+        record = next(iter(usage.USAGE.get().values()))
+        assert billed == 9
+        assert record.model == "amazon.transcribe-medical"
+        compute_costs()
+        assert record.cost == Decimal("0.01125")
+
     @pytest.mark.parametrize(("text_length", "expected"), [(50, 3), (300, 3), (500, 5)])
     def test_record_comprehend_usage_applies_3_unit_minimum(
         self, text_length: int, expected: int

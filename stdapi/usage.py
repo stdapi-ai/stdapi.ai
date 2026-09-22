@@ -789,7 +789,11 @@ def record_translate_usage(characters: int, *, region: str = "") -> int:
 
 
 def record_transcribe_usage(
-    audio_duration: float, *, region: str = "", streaming: bool = False
+    audio_duration: float,
+    *,
+    region: str = "",
+    streaming: bool = False,
+    model: str = "amazon.transcribe",
 ) -> int:
     """Record AWS Transcribe usage.
 
@@ -798,6 +802,8 @@ def record_transcribe_usage(
         region: Region that served the job; configured default when empty.
         streaming: Whether the audio was streamed, which AWS prices apart from
             a batch job.
+        model: The billed product: ``amazon.transcribe`` or
+            ``amazon.transcribe-medical``.
 
     Returns:
         Billed seconds: AWS bills one-second increments with no minimum.
@@ -805,7 +811,7 @@ def record_transcribe_usage(
     billed_seconds = ceil(audio_duration)
     _record_usage(
         Service.TRANSCRIBE,
-        "amazon.transcribe",
+        model,
         region or _default_region(Service.TRANSCRIBE),
         quantities={Dimension.INPUT_SECONDS: billed_seconds},
         input_seconds_by_spec={TRANSCRIBE_STREAMING_SPEC: billed_seconds}

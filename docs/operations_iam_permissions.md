@@ -45,7 +45,7 @@ Each row below is one section of this page. Find the features your deployment en
 | **[Video Generation](#video-generation-optional)** | Core Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:TagResource`)<br>`bedrock:ListAsyncInvokes` and `bedrock:ListTagsForResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for job listing<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS` |
 | **[Batch Inference](#batch-inference)** | `bedrock:CreateModelInvocationJob`<br>`bedrock:GetModelInvocationJob`<br>`bedrock:StopModelInvocationJob` (on `arn:aws:bedrock:*:*:model-invocation-job/*`)<br>`iam:PassRole` on the batch service role, scoped with `iam:PassedToService: bedrock.amazonaws.com`<br>File Storage S3 permissions on each bucket a batch uses, plus the service role's own policy | `AWS_BEDROCK_BATCH_ROLE_ARN` |
 | **[Text-to-Speech](#text-to-speech-optional)** | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`<br>`polly:StartSpeechSynthesisStream` for generative voices above 3,000 characters<br>`polly:StartSpeechSynthesisTask`, `polly:GetSpeechSynthesisTask` and S3 `PutObject`/`GetObject`/`DeleteObject` on each bucket serving a Polly region, for the other voices above 3,000 characters | `AWS_POLLY_REGION`<br>`AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS` |
-| **[Speech-to-Text](#speech-to-text-optional)** | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:StartStreamTranscription`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>File Storage S3 permissions on every bucket serving a candidate region<br>`kms:GenerateDataKey`, `kms:Decrypt` on the output encryption key, when one is configured | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`<br>`AWS_TRANSCRIBE_STREAM_LANGUAGES`<br>`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN` |
+| **[Speech-to-Text](#speech-to-text-optional)** | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:StartStreamTranscription`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*` and `medical-transcription-job/*`)<br>For medical transcription: `transcribe:StartMedicalTranscriptionJob`, `transcribe:StartMedicalStreamTranscription`, and `transcribe:GetMedicalTranscriptionJob`, `transcribe:DeleteMedicalTranscriptionJob` (on `arn:aws:transcribe:*:*:medical-transcription-job/*`)<br>File Storage S3 permissions on every bucket serving a candidate region<br>`kms:GenerateDataKey`, `kms:Decrypt` on the output encryption key, when one is configured | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`<br>`AWS_TRANSCRIBE_STREAM_LANGUAGES`<br>`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN` |
 | **[Language Detection](#language-detection-optional)** | `comprehend:DetectDominantLanguage` | `AWS_COMPREHEND_REGION` |
 | **[Comprehend Moderation](#comprehend-moderation)** | `comprehend:DetectToxicContent` | Moderations API without a configured guardrail |
 | **[Text Translation](#text-translation-optional)** | `translate:TranslateText`<br>`translate:ListLanguages` (optional; validates the language pair before transcribing) | `AWS_TRANSLATE_REGION` |
@@ -1035,12 +1035,33 @@ Required for transcribing audio files using Amazon Transcribe. Each transcriptio
       "Resource": "*"
     },
     {
+      "Sid": "TranscribeMedical",
+      "Effect": "Allow",
+      "Action": [
+        "transcribe:StartMedicalTranscriptionJob",
+        "transcribe:StartMedicalStreamTranscription"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TranscribeMedicalJobs",
+      "Effect": "Allow",
+      "Action": [
+        "transcribe:GetMedicalTranscriptionJob",
+        "transcribe:DeleteMedicalTranscriptionJob"
+      ],
+      "Resource": "arn:aws:transcribe:*:*:medical-transcription-job/*"
+    },
+    {
       "Sid": "TranscribeTagging",
       "Effect": "Allow",
       "Action": [
         "transcribe:TagResource"
       ],
-      "Resource": "arn:aws:transcribe:*:*:transcription-job/*"
+      "Resource": [
+        "arn:aws:transcribe:*:*:transcription-job/*",
+        "arn:aws:transcribe:*:*:medical-transcription-job/*"
+      ]
     },
     {
       "Sid": "TranscribeS3Storage",
@@ -1067,6 +1088,9 @@ Required for transcribing audio files using Amazon Transcribe. Each transcriptio
 
     !!! info "`StartStreamTranscription` needs no bucket"
         `transcribe:StartStreamTranscription` serves [`stream=true`](api_openai_audio_transcriptions.md#streaming) requests, which send their audio to Transcribe directly instead of staging it. A deployment with no bucket at all still serves those, and only those — the `TranscribeS3Storage` statement above is what the other requests need.
+
+    !!! info "Medical transcription"
+        The `TranscribeMedical` and `TranscribeMedicalJobs` statements serve [`amazon.transcribe-medical`](api_openai_audio_transcriptions.md#medical-transcription) only; omit them from a hand-written policy to leave that model unavailable (the Terraform module grants them wherever it grants transcription). Its jobs use the same buckets and `TranscribeS3Storage` statement. The two `Start` actions accept no resource type, hence `"*"`; `transcribe:TagResource` covers the job tags sent at start.
 
     **If your transcribe S3 buckets use KMS encryption**, also add the KMS permissions for each bucket's key, with that region's `kms:ViaService` value.
 

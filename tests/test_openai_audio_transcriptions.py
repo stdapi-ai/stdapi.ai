@@ -37,6 +37,9 @@ from stdapi.models.audio.amazon_transcribe import (
     _TranscribeExtraParams,
     _TranscribeLanguageIdSetting,
 )
+from stdapi.models.audio.amazon_transcribe_medical import (
+    AudioModel as MedicalAudioModel,
+)
 from stdapi.routes import openai_audio_transcriptions
 from stdapi.types.openai_audio import (
     AudioResponseFormat,
@@ -470,6 +473,40 @@ class TestAudioTranscriptions:
             word in error_message
             for word in ["format", "response", "json", "text", "vtt", "srt"]
         )
+
+    def test_format_the_model_cannot_produce_is_unsupported_value(
+        self, openai_client: OpenAI, sample_audio_file: bytes, use_official_api: bool
+    ) -> None:
+        """A model without subtitle output refuses ``srt`` naming ``response_format``.
+
+        OpenAI answers ``gpt-4o-mini-transcribe`` with ``{"type":
+        "invalid_request_error", "param": "response_format", "code":
+        "unsupported_value"}``; ``amazon.transcribe-medical`` writes no
+        subtitles and answers with the same envelope, before reading the audio.
+
+        Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
+             stdapi/models/audio/__init__.py:unsupported_response_format
+             stdapi/models/audio/amazon_transcribe_medical.py:AudioModel._validate_response_formats
+        """
+        with pytest.raises(BadRequestError) as exc_info:
+            openai_client.audio.transcriptions.create(
+                file=("test.wav", io.BytesIO(sample_audio_file)),
+                model=(
+                    "gpt-4o-mini-transcribe"
+                    if use_official_api
+                    else "amazon.transcribe-medical"
+                ),
+                response_format="srt",
+            )
+
+        error = exc_info.value
+        assert error.status_code == 400
+        body = error.body
+        assert isinstance(body, dict)
+        assert body["type"] == "invalid_request_error"
+        assert body["param"] == "response_format"
+        assert body["code"] == "unsupported_value"
+        assert "srt" in body["message"]
 
     @pytest.mark.slow
     def test_duration_usage_counts_whole_seconds(
@@ -2250,6 +2287,8 @@ class TestStreamedDiarizationIsRefusedWithoutSpeakers:
             await anext(stream)
 
         assert exc_info.value.status == 400
+        assert exc_info.value.code == "unsupported_value"
+        assert exc_info.value.param == "response_format"
         assert "diarized_json" in str(exc_info.value)
         assert "amazon.transcribe" in str(exc_info.value)
 
@@ -2263,7 +2302,65 @@ class TestStreamedDiarizationIsRefusedWithoutSpeakers:
             await anext(stream)
 
         assert exc_info.value.status == 400
+        assert exc_info.value.code == "unsupported_value"
+        assert exc_info.value.param == "response_format"
         assert "diarized_json" in str(exc_info.value)
+
+
+@pytest.mark.local
+class TestUnsupportedFormatEnvelope:
+    """Every model refusing a format names ``response_format`` as ``unsupported_value``.
+
+    OpenAI answers ``{"param": "response_format", "code": "unsupported_value"}``
+    when a model lacks a format; each refusal site keeps its own message but
+    returns that envelope, so a client can fall back on ``code`` alone.
+
+    Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
+         stdapi/models/audio/__init__.py:unsupported_response_format
+    """
+
+    @staticmethod
+    def _assert_unsupported_format(error: ApiError) -> None:
+        """Assert the OpenAI envelope for a format the model cannot produce."""
+        assert error.status == 400
+        assert error.code == "unsupported_value"
+        assert error.param == "response_format"
+        assert "srt" in str(error)
+
+    async def test_base_class_refusal(self) -> None:
+        """The shared validator refuses ``srt`` before any backend call.
+
+        Ref: stdapi/models/audio/__init__.py:AudioModelBase._validate_response_formats
+        """
+        with pytest.raises(ApiError) as exc_info:
+            await DefaultAudioModel("mistral.voxtral-mini-3b-2507").stt(
+                InputFile("data:audio/wav;base64,AAAA"), "srt", logprobs=False
+            )
+
+        self._assert_unsupported_format(exc_info.value)
+
+    async def test_amazon_nova_sonic_refusal(self) -> None:
+        """Nova Sonic's own validator keeps its message and the shared envelope.
+
+        Ref: stdapi/models/audio/amazon_nova_sonic.py:AudioModel._validate_response_formats
+        """
+        with pytest.raises(ApiError) as exc_info:
+            await NovaSonicAudioModel("amazon.nova-2-sonic-v1:0").stt(
+                InputFile("data:audio/wav;base64,AAAA"), "srt", logprobs=False
+            )
+
+        self._assert_unsupported_format(exc_info.value)
+        assert "timestamps" in str(exc_info.value)
+
+    def test_amazon_transcribe_medical_refusal(self) -> None:
+        """The medical model refuses subtitles with the same envelope.
+
+        Ref: stdapi/models/audio/amazon_transcribe_medical.py:AudioModel._validate_response_formats
+        """
+        with pytest.raises(ApiError) as exc_info:
+            MedicalAudioModel._validate_response_formats("srt")  # noqa: SLF001
+
+        self._assert_unsupported_format(exc_info.value)
 
 
 @pytest.mark.local

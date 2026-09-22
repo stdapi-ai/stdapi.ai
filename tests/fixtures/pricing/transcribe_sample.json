@@ -85,5 +85,98 @@
         }
       }
     }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "servicecode": "transcribe",
+        "usagetype": "USE1-MedicalTranscribeAudio",
+        "locationType": "AWS Region",
+        "location": "US East (N. Virginia)",
+        "servicename": "Amazon Transcribe",
+        "supportedModes": "Medical Audio to Text",
+        "operation": "MedicalTranscribeAudio"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU304": {
+          "priceDimensions": {
+            "SKU304.6YSXRJFJ4J8ZQZ9U": {
+              "unit": "seconds",
+              "description": "$0.00125 per seconds for MedicalTranscribeAudio:MedicalTranscribeAudio in US East (N. Virginia)",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0012500000"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "servicecode": "transcribe",
+        "usagetype": "USE1-MedicalStreamingAudio",
+        "locationType": "AWS Region",
+        "location": "US East (N. Virginia)",
+        "servicename": "Amazon Transcribe",
+        "supportedModes": "Stream to Text",
+        "operation": "MedicalStreamingAudio"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU305": {
+          "priceDimensions": {
+            "SKU305.6YSXRJFJ4J8ZQZ9V": {
+              "unit": "seconds",
+              "description": "Processed Medical streaming transcription request in us-east-1",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0012600000"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "servicecode": "transcribe",
+        "usagetype": "USE1-HealthScribeBatch",
+        "locationType": "AWS Region",
+        "location": "US East (N. Virginia)",
+        "servicename": "Amazon Transcribe",
+        "supportedModes": "Health Scribe",
+        "operation": "HealthScribeBatch"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU306": {
+          "priceDimensions": {
+            "SKU306.6YSXRJFJ4J8ZQZ9W": {
+              "unit": "seconds",
+              "description": "$0.001667 per seconds for HealthScribe:HealthScribeBatch in US East (N. Virginia)",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0016670000"
+              }
+            }
+          }
+        }
+      }
+    }
   }
 ]

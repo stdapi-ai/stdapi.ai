@@ -47,6 +47,24 @@ _FILENAME_MAX_LEN = 200
 _DEFAULT_FILENAME = "audio"
 
 
+def unsupported_response_format(message: str) -> ApiError:
+    """Return the 400 refusing a response format the model cannot produce.
+
+    OpenAI names ``response_format`` and answers ``unsupported_value`` when a
+    model lacks a format, so a client reads the same envelope here.
+
+    Args:
+        message: Human-readable reason.
+
+    Returns:
+        The error to raise.
+    """
+    error = ApiError(message)
+    error.code = "unsupported_value"
+    error.param = "response_format"
+    return error
+
+
 def _subtitle_content_disposition(
     filename: str | None, response_format: AudioResponseFormat
 ) -> str:
@@ -346,7 +364,7 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
                 "response_format='json' or 'text', or request 'diarized_json' "
                 "from `amazon.transcribe`, which labels speakers."
             )
-            raise ApiError(msg)
+            raise unsupported_response_format(msg)
 
     @classmethod
     def _validate_response_formats(
@@ -365,7 +383,7 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         """
         if value not in cls.SUPPORTED_RESPONSES_FORMATS:
             msg = f"Response format '{value}' is not supported by this model."
-            raise ApiError(msg)
+            raise unsupported_response_format(msg)
 
         if value == "verbose_json" and timestamp_granularities:
             for granularity in timestamp_granularities:

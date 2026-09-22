@@ -218,7 +218,9 @@ async def create_transcription(
         Form(
             description=(
                 "The transcription model to use.\n"
-                "`amazon.transcribe`, `amazon.nova-2-sonic-v1:0` (lowest cost, `json`/`text` "
+                "`amazon.transcribe`, `amazon.transcribe-medical` (clinical dictation "
+                "and conversations, US English only, no `srt`/`vtt`), "
+                "`amazon.nova-2-sonic-v1:0` (lowest cost, `json`/`text` "
                 "output only, no timestamps, 10 minutes of audio maximum), or another "
                 "speech-to-text model (e.g. Mistral Voxtral). "
                 "Wildcard patterns are accepted and select the most recent matching model."
@@ -369,8 +371,8 @@ async def create_transcription(
         http_request: FastAPI request object used to detect content-type.
         file: The audio file to transcribe (multipart only).
         model: The transcription model to use: ``amazon.transcribe``,
-            ``amazon.nova-2-sonic-v1:0``, or another speech-to-text model
-            (e.g. Mistral Voxtral).
+            ``amazon.transcribe-medical``, ``amazon.nova-2-sonic-v1:0``, or
+            another speech-to-text model (e.g. Mistral Voxtral).
         language: The language of the input audio (ISO-639-1 code, e.g. `en`). Improves accuracy and latency when provided.
         languages: Expected input languages when the audio may contain more than one language. Cannot be combined with `language`.
         keywords: Literal terms that may appear in the audio. Supported by Bedrock

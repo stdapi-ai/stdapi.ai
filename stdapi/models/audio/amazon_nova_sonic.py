@@ -30,7 +30,7 @@ from stdapi.aws_bedrock import apply_guardrail_to_text
 from stdapi.aws_bidi import open_bidi_stream
 from stdapi.media import encode_audio_stream
 from stdapi.models import compute_candidate_regions, set_effective_region
-from stdapi.models.audio import AudioModelBase
+from stdapi.models.audio import AudioModelBase, unsupported_response_format
 from stdapi.types.openai_audio import (
     Transcription,
     TranscriptionTextDeltaEvent,
@@ -322,7 +322,7 @@ class AudioModel(AudioModelBase[Any, Any]):
                 f"Request '{served}', or use `{_TIMESTAMPED_MODEL}` for timestamps "
                 "and subtitles."
             )
-            raise ApiError(msg)
+            raise unsupported_response_format(msg)
         if timestamp_granularities:
             msg = (
                 "Timestamps are not available with this model. Request the "

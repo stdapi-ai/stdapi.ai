@@ -39,6 +39,7 @@ from stdapi.models.audio import amazon_transcribe
 from stdapi.models.audio.amazon_transcribe import (
     _STREAM_FRAME_BYTES,
     _STREAM_SAMPLE_RATE,
+    AWS_TRANSCRIBE_MEDICAL_MODEL_ID,
     AWS_TRANSCRIBE_MODEL_ID,
     AudioModel,
     _build_transcription_job_params,
@@ -887,7 +888,7 @@ class TestServedRegionStickiness:
 
         usage_regions: list[str] = []
 
-        def _fake_usage(_duration: float, region: str = "") -> int:
+        def _fake_usage(_duration: float, region: str = "", **_: object) -> int:
             usage_regions.append(region)
             return 15
 
@@ -1236,12 +1237,14 @@ class TestInitializeTranscribeModels:
         """
         monkeypatch.setattr(amazon_transcribe, "transcribe_stream_regions", list)
         monkeypatch.setattr(amazon_transcribe, "load_supported_languages", _noop)
-        saved = EXTRA_MODELS.get(AWS_TRANSCRIBE_MODEL_ID)
+        model_ids = (AWS_TRANSCRIBE_MODEL_ID, AWS_TRANSCRIBE_MEDICAL_MODEL_ID)
+        saved = {model_id: EXTRA_MODELS.get(model_id) for model_id in model_ids}
         yield
-        if saved is None:
-            EXTRA_MODELS.pop(AWS_TRANSCRIBE_MODEL_ID, None)
-        else:
-            EXTRA_MODELS[AWS_TRANSCRIBE_MODEL_ID] = saved
+        for model_id, details in saved.items():
+            if details is None:
+                EXTRA_MODELS.pop(model_id, None)
+            else:
+                EXTRA_MODELS[model_id] = details
 
     async def test_registers_the_candidate_regions(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1256,6 +1259,29 @@ class TestInitializeTranscribeModels:
         await initialize_transcribe_models()
         model = EXTRA_MODELS[AWS_TRANSCRIBE_MODEL_ID]
         assert model.regions == ["us-east-1", "eu-west-1"]
+
+    async def test_registers_the_medical_model_on_the_same_regions(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Medical transcription is published beside the standard model.
+
+        It runs on the same buckets and live-session pool, so it is advertised
+        where the standard model is, best effort: a region without it fails
+        over at request time rather than being left out of the catalog.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:initialize_transcribe_models
+        """
+        monkeypatch.setattr(SETTINGS, "aws_transcribe_region", None)
+        monkeypatch.setattr(SETTINGS, "aws_transcribe_s3_bucket", "primary-bucket")
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1", "eu-west-1"])
+        monkeypatch.setattr(
+            SETTINGS, "aws_s3_regional_buckets", {"eu-west-1": "eu-bucket"}
+        )
+        await initialize_transcribe_models()
+        model = EXTRA_MODELS[AWS_TRANSCRIBE_MEDICAL_MODEL_ID]
+        assert model.regions == ["us-east-1", "eu-west-1"]
+        assert model.input_modalities == ["SPEECH"]
+        assert model.output_modalities == ["TEXT"]
 
     async def test_registers_empty_regions_without_any_bucket(
         self, monkeypatch: pytest.MonkeyPatch

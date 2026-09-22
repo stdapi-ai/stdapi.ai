@@ -1,7 +1,7 @@
 ---
 title: Speech to Text API - Amazon Transcribe & Bedrock Audio Models
 description: Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable models. OpenAI-compatible STT API supporting 100+ languages, speaker diarization, and multiple output formats.
-keywords: speech to text API, audio transcription API, AWS Transcribe API, STT API, OpenAI Whisper alternative, audio to text, transcription service, speaker diarization
+keywords: speech to text API, audio transcription API, AWS Transcribe API, STT API, OpenAI Whisper alternative, audio to text, transcription service, speaker diarization, medical transcription API, Amazon Transcribe Medical, clinical dictation
 ---
 
 # Speech to Text API
@@ -23,6 +23,9 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
   default and 30 at most** — `diarized_json`, in one response or streamed as
   `transcript.text.segment` events, see
   [Working with Amazon Transcribe](#advanced-features).
+- :material-medical-bag: **Medical dictation and clinical conversations** —
+  `amazon.transcribe-medical`, in US English, with six specialties when
+  streamed, see [Medical transcription](#medical-transcription).
 - :material-plus-circle: **Audio as base64, data URI, HTTPS URL, S3 URI or a
   `file-id:` reference** — a JSON body alternative to the multipart upload, for
   MCP clients and AI agents, see [Try it](#try-it-now).
@@ -58,8 +61,8 @@ curl -X POST "$BASE/v1/audio/transcriptions" \
 | `text`                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Plain text output                                                |
 | `verbose_json`             |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | With timestamps and details (Amazon Transcribe; not Bedrock models); each segment's `seek`, `temperature` and `tokens` are placeholders — see [Limits and behaviour to know](#limits-and-behaviour-to-know) |
 | `diarized_json`            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | With speaker identification (Amazon Transcribe; not Bedrock models); streams as `transcript.text.segment` events with `stream=true` |
-| `srt`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Subtitle format with timing (Amazon Transcribe; not Bedrock models); rejected with `stream=true` |
-| `vtt`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | WebVTT subtitle format (Amazon Transcribe; not Bedrock models); rejected with `stream=true` |
+| `srt`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Subtitle format with timing (`amazon.transcribe`; not `amazon.transcribe-medical` nor Bedrock models); rejected with `stream=true` |
+| `vtt`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | WebVTT subtitle format (`amazon.transcribe`; not `amazon.transcribe-medical` nor Bedrock models); rejected with `stream=true` |
 | **Language**               |                                          |                                                                  |
 | Language specification     |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | ISO-639-1 language codes                                         |
 | `languages` (expected languages) | :material-check-circle:{ .success role="img" aria-label="Supported" } | Expected-language list (ISO-639-1) for multi-language audio; cannot be combined with `language`. Drives Amazon Transcribe multi-language identification; folded into the transcription context on Bedrock models |
@@ -104,9 +107,10 @@ curl -X POST "$BASE/v1/audio/transcriptions" \
 | Model             | Supported Languages | Notes                                                                                                      |
 |-------------------|---------------------|------------------------------------------------------------------------------------------------------------|
 | amazon.transcribe | 100+                | Full-featured transcription with speaker diarization and subtitle generation at the cost of higher latency |
+| amazon.transcribe-medical | US English  | Clinical dictation and patient–clinician conversations, with medical terminology — see [Medical transcription](#medical-transcription) |
 
 !!! warning "Configuration Required"
-    You must configure a bucket to use this model, through `AWS_S3_BUCKET`, `AWS_TRANSCRIBE_S3_BUCKET`, or an `AWS_S3_REGIONAL_BUCKETS` entry for a region where Amazon Transcribe is a candidate. This bucket is used for temporary storage during transcription processing.
+    You must configure a bucket to use these models, through `AWS_S3_BUCKET`, `AWS_TRANSCRIBE_S3_BUCKET`, or an `AWS_S3_REGIONAL_BUCKETS` entry for a region where Amazon Transcribe is a candidate. This bucket is used for temporary storage during transcription processing.
 
 ### ![Mistral](styles/logo_mistralai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Mistral Models
 
@@ -310,11 +314,51 @@ The following parameters from Amazon Transcribe's [StartTranscriptionJob API](ht
 
 `VocabularyName`, `VocabularyFilterName`, and custom language models must already exist in your AWS account (created via the AWS Transcribe console, CLI, or SDK) before being referenced here.
 
+### Medical transcription { #medical-transcription }
+
+`amazon.transcribe-medical` transcribes clinical audio — a physician's dictated notes, a patient–clinician conversation — with [Amazon Transcribe Medical](https://docs.aws.amazon.com/transcribe/latest/dg/transcribe-medical.html), which recognizes medical terms, drug names and dosages. It is priced separately from `amazon.transcribe` (see [Amazon Transcribe pricing](https://aws.amazon.com/transcribe/pricing/)) and needs its own [IAM permissions](operations_iam_permissions.md#speech-to-text-optional).
+
+```json
+{
+  "model": "amazon.transcribe-medical",
+  "file": "data:audio/wav;base64,<base64-encoded-audio>",
+  "Type": "DICTATION"
+}
+```
+
+| Parameter | Values | Notes |
+|---|---|---|
+| `Type` | `CONVERSATION` (default), `DICTATION` | One speaker dictating, or a conversation between several |
+| `Specialty` | `PRIMARYCARE` (default), `CARDIOLOGY`, `NEUROLOGY`, `ONCOLOGY`, `RADIOLOGY`, `UROLOGY` | Any value other than `PRIMARYCARE` requires `stream=true` (without it, HTTP 400) and a deployment serving live medical transcription (without it, HTTP 503) |
+| `VocabularyName` | string | A [medical custom vocabulary](https://docs.aws.amazon.com/transcribe/latest/dg/vocabulary-med.html) you created |
+| `ShowSpeakerLabels`, `MaxSpeakerLabels`, `ChannelIdentification`, `ShowAlternatives`, `MaxAlternatives` | as for `amazon.transcribe` | Not carried by a phrase-by-phrase stream, so combining them with `Specialty` returns HTTP 400 |
+
+- **Language**: US English only. `language` and `languages` may be omitted or set to `en`; any other language returns HTTP 400, as does any `amazon.transcribe` parameter this model does not list above (redaction, toxicity detection, language identification, vocabulary filters, custom language models, `ContentIdentificationType`).
+- **Formats**: `json`, `text`, `verbose_json` and `diarized_json`. `srt` and `vtt` return HTTP 400: request `verbose_json` for timed segments.
+- **Streaming**: `stream=true` streams phrase by phrase, since the language is always known. A request setting a parameter a stream cannot carry, or reaching a deployment where no configured region offers live medical transcription, is still served, all at once when the transcript is complete — except with a `Specialty` other than `PRIMARYCARE`, which needs the live path (HTTP 503 without it).
+- **Translation**: not available — the transcript is already in English.
+- **Regions**: medical transcription is offered in fewer regions than `amazon.transcribe`, and fewer still when streamed ([supported regions](https://docs.aws.amazon.com/general/latest/gr/transcribe.html)). A request moves on to the next configured region that offers it; when none does, it returns HTTP 503.
+- **Fixed variants**: a client that can only send a model name (Home Assistant, Open WebUI) reaches a specific audio `Type` through an [alias that carries configuration](operations_configuration_models.md#model-aliases-configuration). A `Specialty` other than `PRIMARYCARE` in an alias only works for clients that send `stream=true`; the others get HTTP 400.
+
+    ```bash
+    export MODEL_ALIASES='{
+      "medical-dictation": {
+        "model": "amazon.transcribe-medical",
+        "extra_params": {"Type": "DICTATION"}
+      }
+    }'
+    ```
+
+!!! warning "Protected health information"
+    Amazon Transcribe Medical is a HIPAA-eligible service; processing protected health information requires a [Business Associate Addendum](https://aws.amazon.com/compliance/hipaa-compliance/) with AWS and a deployment configured for it. A request served as a transcription job — every non-streamed request, and a streamed one that [falls back to a job](#streaming) — writes the audio and the transcript under the [`AWS_S3_TMP_PREFIX`](operations_configuration_storage.md#aws-s3-tmp-prefix) of your transcription bucket and deletes them after responding, best effort; a lifecycle rule expiring that prefix removes whatever an interrupted server leaves behind. In a versioned bucket a deletion keeps a noncurrent version: the buckets the Terraform module creates expire both current and noncurrent versions under that prefix after one day, so the data can remain for a day or two; a bucket you bring needs the same noncurrent-version expiration on that prefix, or deleted audio and transcripts stay recoverable indefinitely. Transcripts also reach the server log when [`LOG_REQUEST_PARAMS`](operations_configuration_observability.md#log-request-params) is enabled — keep it off for this model.
+
 ## Streaming { #streaming }
 
 `stream=true` returns the transcript as server-sent events — `transcript.text.delta` events followed by a final `transcript.text.done` — instead of one response body. A [ready-to-run example](#try-it-now) is below.
 
 Each phrase is sent as it is recognized, rather than after the whole recording, whenever the request names the language to expect: send `language`, or two or more expected `languages`. That path needs no S3 bucket, so a deployment with no storage configured serves streamed transcriptions.
+
+When no configured region can open a live session — the deployment lacks the [`transcribe:StartStreamTranscription` permission](operations_iam_permissions.md#speech-to-text-optional) (`transcribe:StartMedicalStreamTranscription` for the medical model), or no region offers streaming for the model — the request is served as a transcription job instead: it is still streamed, but its events arrive together at the end, and it needs a transcription bucket.
 
 A request naming neither is still streamed, but its events arrive together once the recording has been read and its language detected. Operators can set [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](operations_configuration_storage.md#aws-transcribe-stream-languages) to the languages their callers actually send, which gives those requests the faster path too. The same applies to a request using any provider-specific parameter above other than `VocabularyName`, `VocabularyFilterName` and `VocabularyFilterMethod`, which are the only ones a phrase-by-phrase transcript can carry.
 
@@ -352,6 +396,10 @@ Streamed events carry no subtitle cues, which is why `srt` and `vtt` are rejecte
   rest.
 - `chunking_strategy` accepts `auto` only; any other value is rejected rather
   than silently applied.
+- `amazon.transcribe-medical` accepts US English only, refuses `srt` and
+  `vtt`, and takes a specialty other than primary care only with `stream=true`
+  on a deployment serving live medical transcription — see
+  [Medical transcription](#medical-transcription).
 - The extra Amazon Transcribe parameters are reachable through the
   `application/json` body only, not through the multipart upload — see
   [Provider-Specific Parameters](#provider-specific-parameters).
