@@ -20,7 +20,9 @@ one way, then classifies the outcome:
 ``rejected``
     The backend refused it. The recorded message is what a caller would see.
 ``error``
-    Anything else — recorded verbatim rather than guessed at.
+    Anything else — recorded verbatim rather than guessed at. This includes an
+    answer cut at the output budget before the effect it was looked for in
+    could appear, which says nothing about the parameter.
 
 Usage::
 
@@ -59,8 +61,8 @@ if TYPE_CHECKING:
 #: Where a probe run writes its record, one file per model.
 RESULTS_DIR = Path(__file__).parent / "results"
 
-#: Bumped when the probe set changes in a way that invalidates older records.
-SCHEMA_VERSION = 5
+#: Bumped when the probe set changes; a record names the version it was probed under.
+SCHEMA_VERSION = 6
 
 #: Outcome of a single probe.
 Outcome = Literal["supported", "accepted", "rejected", "error", "skipped"]
@@ -77,6 +79,15 @@ _BASELINE_PROMPT = "Reply with the single word OK."
 
 #: Filler long enough to clear the smallest documented prompt-cache minimum.
 _CACHE_FILLER = ("The gateway translates requests between API dialects. " * 220).strip()
+
+#: Output budget for probes whose effect is in the answer, above what a reasoning model spends first.
+_OUTPUT_BUDGET = 1024
+
+#: Output tokens under which an answer to the reasoning prompt carries no reasoning.
+_UNREASONED_OUTPUT_TOKENS = 32
+
+#: Seconds between the calls of a repeated probe, so an asynchronous cache write can land.
+_REPEAT_DELAY = 3
 
 
 def _probe_png() -> bytes:
@@ -179,14 +190,27 @@ class Probe:
         overrides: Extra/replacement keys merged into the baseline Converse request.
         observe: Predicate on the response returning the observed effect, or an
             empty string when the parameter was accepted without visible effect.
+            ``None`` when the probe only asks whether the request is accepted.
         applies_to: Optional filter on the model id.
+        calls: Times the request is sent; the effect is observed on the last
+            response, for an effect only a repeat can show (implicit caching).
+        effect_in_output: Whether the effect is part of the generated answer, so
+            that an answer cut at the output budget cannot show it.
+        added_in: ``SCHEMA_VERSION`` that introduced the probe; an older record
+            was never asked it.
+        changed_in: ``SCHEMA_VERSION`` that last changed the probe's request; an
+            older record's result for it was measured with another request.
     """
 
     name: str
     feature: str
     overrides: dict[str, Any]
-    observe: Callable[[dict[str, Any]], str] = lambda _response: ""
+    observe: Callable[[dict[str, Any]], str] | None = None
     applies_to: re.Pattern[str] | None = None
+    calls: int = 1
+    effect_in_output: bool = True
+    added_in: int = 1
+    changed_in: int = 1
 
 
 def _blocks(response: dict[str, Any]) -> list[dict[str, Any]]:
@@ -274,6 +298,44 @@ def _wrote_cache(response: dict[str, Any]) -> str:
     return f"cacheWrite={written} cacheRead={read}" if written or read else ""
 
 
+def _read_cache(response: dict[str, Any]) -> str:
+    """Report a prompt-cache read, the effect only a repeated prefix can show.
+
+    Args:
+        response: Parsed Converse response of the repeated call.
+
+    Returns:
+        A description of the cache read, or an empty string.
+    """
+    usage = response.get("usage") or {}
+    if read := usage.get("cacheReadInputTokens") or 0:
+        return f"cacheRead={read} on the repeated call"
+    return ""
+
+
+def _reasoning_off(response: dict[str, Any]) -> str:
+    """Report an answer to the reasoning prompt that carries no reasoning.
+
+    Only meaningful on a model that reasons by default: one that never reasons
+    shows the same answer whatever the probe asks.
+
+    Args:
+        response: Parsed Converse response.
+
+    Returns:
+        A description of the unreasoned answer, or an empty string.
+    """
+    reasoning = sum(
+        len((block["reasoningContent"].get("reasoningText") or {}).get("text") or "")
+        for block in _blocks(response)
+        if "reasoningContent" in block
+    )
+    output = (response.get("usage") or {}).get("outputTokens") or 0
+    if reasoning or output >= _UNREASONED_OUTPUT_TOKENS:
+        return ""
+    return f"no reasoning text, {output} output tokens"
+
+
 def _stopped_on_sequence(response: dict[str, Any]) -> str:
     """Report whether generation halted at the requested stop sequence.
 
@@ -346,9 +408,13 @@ PROBES: tuple[Probe, ...] = (
                     "content": [{"text": "Write exactly: BEGIN STOPHERE END"}],
                 }
             ],
-            "inferenceConfig": {"maxTokens": 64, "stopSequences": ["STOPHERE"]},
+            "inferenceConfig": {
+                "maxTokens": _OUTPUT_BUDGET,
+                "stopSequences": ["STOPHERE"],
+            },
         },
         observe=_stopped_on_sequence,
+        changed_in=6,
     ),
     Probe(
         name="top_k",
@@ -366,8 +432,10 @@ PROBES: tuple[Probe, ...] = (
                 }
             ],
             "toolConfig": {"tools": [_WEATHER_TOOL]},
+            "inferenceConfig": {"maxTokens": _OUTPUT_BUDGET},
         },
         observe=_has_tool_use,
+        changed_in=6,
     ),
     Probe(
         name="tool_choice_any",
@@ -375,8 +443,10 @@ PROBES: tuple[Probe, ...] = (
         overrides={
             "messages": [{"role": "user", "content": [{"text": "Say hello."}]}],
             "toolConfig": {"tools": [_WEATHER_TOOL], "toolChoice": {"any": {}}},
+            "inferenceConfig": {"maxTokens": _OUTPUT_BUDGET},
         },
         observe=_has_tool_use,
+        changed_in=6,
     ),
     Probe(
         name="tool_choice_tool",
@@ -387,8 +457,10 @@ PROBES: tuple[Probe, ...] = (
                 "tools": [_WEATHER_TOOL],
                 "toolChoice": {"tool": {"name": "get_weather"}},
             },
+            "inferenceConfig": {"maxTokens": _OUTPUT_BUDGET},
         },
         observe=_has_tool_use,
+        changed_in=6,
     ),
     Probe(
         name="thinking_enabled",
@@ -443,6 +515,30 @@ PROBES: tuple[Probe, ...] = (
         observe=_has_reasoning,
     ),
     Probe(
+        name="reasoning_object_effort_none",
+        feature='additionalModelRequestFields.reasoning = {"effort": "none"} '
+        "(meaningful where the model reasons by default)",
+        overrides={
+            "messages": [{"role": "user", "content": [{"text": _REASONING_PROMPT}]}],
+            "inferenceConfig": {"maxTokens": 4096},
+            "additionalModelRequestFields": {"reasoning": {"effort": "none"}},
+        },
+        observe=_reasoning_off,
+        added_in=6,
+    ),
+    Probe(
+        name="reasoning_disabled",
+        feature='additionalModelRequestFields.thinking = {"type": "disabled"} '
+        "(meaningful where the model reasons by default)",
+        overrides={
+            "messages": [{"role": "user", "content": [{"text": _REASONING_PROMPT}]}],
+            "inferenceConfig": {"maxTokens": 4096},
+            "additionalModelRequestFields": {"thinking": {"type": "disabled"}},
+        },
+        observe=_reasoning_off,
+        added_in=6,
+    ),
+    Probe(
         name="prompt_cache",
         feature="cachePoint in the message content",
         overrides={
@@ -458,6 +554,23 @@ PROBES: tuple[Probe, ...] = (
             ]
         },
         observe=_wrote_cache,
+        effect_in_output=False,
+    ),
+    Probe(
+        name="implicit_prompt_cache",
+        feature="A long prefix sent twice with no cachePoint",
+        overrides={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"text": _CACHE_FILLER}, {"text": _BASELINE_PROMPT}],
+                }
+            ]
+        },
+        observe=_read_cache,
+        calls=2,
+        effect_in_output=False,
+        added_in=6,
     ),
     Probe(
         name="json_mode",
@@ -473,9 +586,11 @@ PROBES: tuple[Probe, ...] = (
                         }
                     ],
                 }
-            ]
+            ],
+            "inferenceConfig": {"maxTokens": _OUTPUT_BUDGET},
         },
         observe=_is_json_object,
+        changed_in=6,
     ),
     Probe(
         name="latency_optimized",
@@ -570,8 +685,10 @@ PROBES: tuple[Probe, ...] = (
                     },
                 }
             },
+            "inferenceConfig": {"maxTokens": _OUTPUT_BUDGET},
         },
         observe=_is_json_object,
+        changed_in=6,
     ),
     Probe(
         name="image_input",
@@ -687,6 +804,19 @@ def _chat_is_json_object(response: dict[str, Any]) -> str:
     return f"JSON object with keys {sorted(parsed)}" if isinstance(parsed, dict) else ""
 
 
+def _chat_truncated(response: dict[str, Any]) -> bool:
+    """Report whether a Chat Completions answer stopped at the output budget.
+
+    Args:
+        response: Parsed Chat Completions response.
+
+    Returns:
+        True when the first choice finished for ``length``.
+    """
+    choice = (response.get("choices") or [{}])[0]
+    return isinstance(choice, dict) and choice.get("finish_reason") == "length"
+
+
 def _chat_cached_tokens(response: dict[str, Any]) -> str:
     """Report prompt-cache accounting on a Chat Completions response.
 
@@ -728,12 +858,14 @@ MANTLE_PROBES: tuple[Probe, ...] = (
                 {"role": "user", "content": "Write exactly: BEGIN STOPHERE END"}
             ],
             "stop": ["STOPHERE"],
+            "max_tokens": _OUTPUT_BUDGET,
         },
         observe=lambda response: (
             "halted at the sequence"
             if "STOPHERE" not in str(_chat_message(response).get("content") or "")
             else ""
         ),
+        changed_in=6,
     ),
     Probe(
         name="frequency_penalty",
@@ -749,8 +881,10 @@ MANTLE_PROBES: tuple[Probe, ...] = (
         overrides={
             "messages": [{"role": "user", "content": "What is the weather in Lisbon?"}],
             "tools": [_OPENAI_WEATHER_TOOL],
+            "max_tokens": _OUTPUT_BUDGET,
         },
         observe=_chat_tool_call,
+        changed_in=6,
     ),
     Probe(
         name="tool_choice_any",
@@ -759,8 +893,10 @@ MANTLE_PROBES: tuple[Probe, ...] = (
             "messages": [{"role": "user", "content": "Say hello."}],
             "tools": [_OPENAI_WEATHER_TOOL],
             "tool_choice": "required",
+            "max_tokens": _OUTPUT_BUDGET,
         },
         observe=_chat_tool_call,
+        changed_in=6,
     ),
     Probe(
         name="tool_choice_tool",
@@ -769,8 +905,10 @@ MANTLE_PROBES: tuple[Probe, ...] = (
             "messages": [{"role": "user", "content": "Say hello."}],
             "tools": [_OPENAI_WEATHER_TOOL],
             "tool_choice": {"type": "function", "function": {"name": "get_weather"}},
+            "max_tokens": _OUTPUT_BUDGET,
         },
         observe=_chat_tool_call,
+        changed_in=6,
     ),
     Probe(
         name="parallel_tool_calls_false",
@@ -779,8 +917,10 @@ MANTLE_PROBES: tuple[Probe, ...] = (
             "messages": [{"role": "user", "content": "Weather in Lisbon and Porto?"}],
             "tools": [_OPENAI_WEATHER_TOOL],
             "parallel_tool_calls": False,
+            "max_tokens": _OUTPUT_BUDGET,
         },
         observe=_chat_tool_call,
+        changed_in=6,
     ),
     Probe(
         name="reasoning_effort_high",
@@ -832,6 +972,7 @@ MANTLE_PROBES: tuple[Probe, ...] = (
             ]
         },
         observe=_chat_cached_tokens,
+        effect_in_output=False,
     ),
     Probe(
         name="json_mode",
@@ -845,8 +986,10 @@ MANTLE_PROBES: tuple[Probe, ...] = (
                 }
             ],
             "response_format": {"type": "json_object"},
+            "max_tokens": _OUTPUT_BUDGET,
         },
         observe=_chat_is_json_object,
+        changed_in=6,
     ),
     Probe(
         name="json_schema",
@@ -870,8 +1013,10 @@ MANTLE_PROBES: tuple[Probe, ...] = (
                     },
                 },
             },
+            "max_tokens": _OUTPUT_BUDGET,
         },
         observe=_chat_is_json_object,
+        changed_in=6,
     ),
     Probe(
         name="image_input",
@@ -1004,8 +1149,11 @@ async def _run_probe(
         return ProbeResult(probe.name, probe.feature, "skipped", "not applicable")
     request = {**baseline, **probe.overrides, "modelId": model_id}
     try:
-        async with asyncio.timeout(_PROBE_TIMEOUT):
-            response = await client.converse(**request)
+        async with asyncio.timeout(_PROBE_TIMEOUT * probe.calls):
+            for call in range(probe.calls):
+                if call:
+                    await asyncio.sleep(_REPEAT_DELAY)
+                response = await client.converse(**request)
     except TimeoutError:
         return ProbeResult(
             probe.name,
@@ -1018,13 +1166,42 @@ async def _run_probe(
         return ProbeResult(
             probe.name, probe.feature, _classify(exc), str(exc), probe.overrides
         )
-    observed = probe.observe(response)
+    return _observed_result(
+        probe, response, truncated=response.get("stopReason") == "max_tokens"
+    )
+
+
+def _observed_result(
+    probe: Probe, response: dict[str, Any], *, truncated: bool
+) -> ProbeResult:
+    """Classify a successful response by the effect the probe looks for.
+
+    An answer cut at the output budget cannot show an effect that lives in the
+    answer, so that case is an ``error`` of the probe, not an inert knob.
+
+    Args:
+        probe: The probe that was sent.
+        response: The parsed response.
+        truncated: Whether the answer stopped at the output budget.
+
+    Returns:
+        The classified result.
+    """
+    observed = probe.observe(response) if probe.observe is not None else ""
+    if observed:
+        return ProbeResult(
+            probe.name, probe.feature, "supported", observed, probe.overrides
+        )
+    if truncated and probe.observe is not None and probe.effect_in_output:
+        return ProbeResult(
+            probe.name,
+            probe.feature,
+            "error",
+            "the answer stopped at the output budget before the effect could appear",
+            probe.overrides,
+        )
     return ProbeResult(
-        probe.name,
-        probe.feature,
-        "supported" if observed else "accepted",
-        observed or "no observable effect",
-        probe.overrides,
+        probe.name, probe.feature, "accepted", "no observable effect", probe.overrides
     )
 
 
@@ -1064,14 +1241,7 @@ async def _run_stream_probe(
         return ProbeResult(
             probe.name, probe.feature, _classify(exc), str(exc), probe.overrides
         )
-    observed = probe.observe({"_events": events})
-    return ProbeResult(
-        probe.name,
-        probe.feature,
-        "supported" if observed else "accepted",
-        observed or "no observable effect",
-        probe.overrides,
-    )
+    return _observed_result(probe, {"_events": events}, truncated=False)
 
 
 async def probe_model(model_id: str, region: str) -> dict[str, Any]:
@@ -1177,14 +1347,9 @@ async def probe_mantle_model(model_id: str, region: str) -> dict[str, Any]:
                     )
                 )
             else:
-                observed = probe.observe(response)
                 results.append(
-                    ProbeResult(
-                        probe.name,
-                        probe.feature,
-                        "supported" if observed else "accepted",
-                        observed or "no observable effect",
-                        probe.overrides,
+                    _observed_result(
+                        probe, response, truncated=_chat_truncated(response)
                     )
                 )
             print(f"  {results[-1].outcome:<10} {probe.name}", file=sys.stderr)  # noqa: T201
