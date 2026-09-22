@@ -48,6 +48,7 @@ from stdapi.pricing import (
     normalize_usagetype_model,
     parse_unit_scale,
     refresh_price_catalog_for_new_models,
+    resolve_model_key,
     resolve_price,
 )
 from tests.conftest import set_test_price
@@ -2860,6 +2861,145 @@ class TestMantleOnlyRuntimeModel:
         assert self._per_million(
             Dimension.INPUT_TOKENS, service=Service.BEDROCK_MANTLE
         ) == Decimal("3.3")
+
+
+class TestBatchPricedModels:
+    """Batch support is read only from models AWS prices on the runtime endpoint.
+
+    Every row below is copied verbatim from the us-east-1 Price List
+    (2026-09-22). Probed the same day with CreateModelInvocationJob: batch
+    inference refuses every Kimi K3 id ("Batch inference is not supported for
+    the requested model") and accepts ``qwen.qwen3-next-80b-a3b``, though both
+    carry a batch rate under a Mantle usagetype only.
+
+    Ref: stdapi/pricing.py:batch_priced_models
+         https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference-supported.html
+    """
+
+    @staticmethod
+    def _row(attrs: dict[str, object], price: str) -> dict[str, object]:
+        """Build one us-east-1 row from its verbatim attributes (per 1K tokens)."""
+        return _price_item(
+            {
+                "regionCode": "us-east-1",
+                "servicecode": "AmazonBedrock",
+                "locationType": "AWS Region",
+                "location": "US East (N. Virginia)",
+                "servicename": "Amazon Bedrock",
+                "operation": "",
+                **attrs,
+            },
+            unit="1K tokens",
+            price=price,
+        )
+
+    @classmethod
+    def _kimi_k3_rows(cls) -> list[dict[str, object]]:
+        """Return Kimi K3's standard and batch rows, all under Mantle usagetypes."""
+        common = {"provider": "Moonshot AI", "model": "Kimi K3"}
+        return [
+            cls._row(
+                {
+                    **common,
+                    "inferenceType": "Input tokens",
+                    "usagetype": "USE1-moonshotai.kimi-k3-mantle-input-tokens-standard",
+                    "service_tier": "standard",
+                },
+                "0.0033",
+            ),
+            cls._row(
+                {
+                    **common,
+                    "inferenceType": "input tokens batch",
+                    "usagetype": "USE1-moonshotai.kimi-k3-mantle-input-tokens-batch",
+                    "service_tier": "batch",
+                },
+                "0.0016500000",
+            ),
+            cls._row(
+                {
+                    **common,
+                    "inferenceType": "output tokens batch",
+                    "usagetype": "USE1-moonshotai.kimi-k3-mantle-output-tokens-batch",
+                    "service_tier": "batch",
+                },
+                "0.0082500000",
+            ),
+        ]
+
+    @classmethod
+    def _qwen3_next_rows(cls) -> list[dict[str, object]]:
+        """Return Qwen3 Next's runtime rate and its Mantle-only batch rate."""
+        common = {"provider": "Qwen", "model": "Qwen3 Next 80B A3B"}
+        return [
+            cls._row(
+                {
+                    **common,
+                    "inferenceType": "Input tokens flex",
+                    "feature": "On-demand Inference",
+                    "usagetype": "USE1-Qwen3Next-80B-A3B-input-tokens-flex",
+                },
+                "0.0000700000",
+            ),
+            cls._row(
+                {
+                    **common,
+                    "inferenceType": "input tokens batch",
+                    "usagetype": (
+                        "USE1-qwen.qwen3-next-80b-a3b-instruct-mantle-input-tokens-batch"
+                    ),
+                    "service_tier": "batch",
+                },
+                "0.0000700000",
+            ),
+        ]
+
+    @staticmethod
+    async def _load(
+        monkeypatch: pytest.MonkeyPatch, rows: list[dict[str, object]]
+    ) -> frozenset[str]:
+        """Load *rows* through the full load path and return the batch-priced keys."""
+        _use_fake_catalog(monkeypatch, _FakePricingClient({"AmazonBedrock": rows}))
+        diagnostics: list[str] = []
+        await pricing._load_price_catalog(diagnostics)  # noqa: SLF001
+        assert diagnostics == []
+        batch_priced = pricing.batch_priced_models()
+        assert batch_priced is not None
+        return batch_priced
+
+    async def test_a_model_priced_under_mantle_alone_is_not_batch_priced(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Kimi K3's Mantle batch rate does not advertise a batch AWS refuses.
+
+        Its rates are still copied onto bedrock-runtime so a call is priced,
+        batch tier included, which is exactly why the copy must not count.
+        """
+        batch_priced = await self._load(monkeypatch, self._kimi_k3_rows())
+
+        assert resolve_model_key("moonshotai.kimi-k3") not in batch_priced
+        assert resolve_price(
+            Service.BEDROCK, "moonshotai.kimi-k3", "us-east-1", Dimension.INPUT_TOKENS
+        )
+
+    async def test_a_runtime_priced_model_counts_its_mantle_batch_rate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Qwen3 Next is batch-priced from a Mantle batch row: batch accepts it."""
+        batch_priced = await self._load(monkeypatch, self._qwen3_next_rows())
+
+        assert resolve_model_key("qwen.qwen3-next-80b-a3b") in batch_priced
+
+    async def test_both_together_move_only_the_mantle_only_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One catalog holding both keeps each model's own answer."""
+        batch_priced = await self._load(
+            monkeypatch, [*self._kimi_k3_rows(), *self._qwen3_next_rows()]
+        )
+
+        assert resolve_model_key("moonshotai.kimi-k3") not in batch_priced
+        assert resolve_model_key("qwen.qwen3-next-80b-a3b") in batch_priced
 
 
 class TestNovaSonicModality:

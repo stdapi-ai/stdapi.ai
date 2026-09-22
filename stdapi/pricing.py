@@ -1963,21 +1963,35 @@ def batch_priced_models() -> frozenset[str] | None:
 
     AWS publishes a batch price dimension only for models that can run batch
     inference, so this is the catalogue's best-effort signal of batch support.
-    Cached until the price index is swapped; the result's identity is stable
-    while the catalog is, which lets callers skip a re-derivation.
+    Batch jobs run on bedrock-runtime: a model priced under Mantle usagetypes
+    alone is not counted, while a model with runtime rates counts any batch row,
+    Mantle's included. Cached until the price index is swapped; the result's
+    identity is stable while the catalog is, which lets callers skip a
+    re-derivation.
 
     Returns:
         Model keys (as resolved by :func:`resolve_model_key`) holding at least
-        one ``batch``-tier price row, or None while the catalog is unloaded --
-        which is "unknown", not "no model supports batch".
+        one ``batch``-tier price row and a runtime rate AWS published, or None
+        while the catalog is unloaded -- which is "unknown", not "no model
+        supports batch".
     """
     index = _state.price_index
     if not index:
         return None
     if _state.batch_priced is None or _state.batch_priced[0] is not index:
+        # The raw fetch of the load that published *index*, before the copy.
+        fetched = _state.pending_index
+        runtime_models = {k.model for k in fetched if k.service == Service.BEDROCK}
+        mantle_only = {
+            k.model for k in fetched if k.service == Service.BEDROCK_MANTLE
+        } - runtime_models
         _state.batch_priced = (
             index,
-            frozenset(key.model for key in index if key.tier == "batch"),
+            frozenset(
+                key.model
+                for key in index
+                if key.tier == "batch" and key.model not in mantle_only
+            ),
         )
     return _state.batch_priced[1]
 
