@@ -173,7 +173,7 @@ Usage is reported as a nested `usage` list on `request` / `request_stream` event
 | `output_seconds`            | int | Billed output media duration in seconds (video generation, recorded at job submission)                |
 | `output_seconds_by_spec`    | dict| Output seconds keyed by rate bucket (e.g., `{"hd": 5}`), for models priced per resolution              |
 | `input_seconds`             | int | Real input media duration in seconds (Transcribe with a 15s minimum; audio/video embedding inputs)     |
-| `input_seconds_by_spec`     | dict| Input seconds keyed by modality (e.g., `{"audio": 42}`), for models priced per media type              |
+| `input_seconds_by_spec`     | dict| Input seconds keyed by modality (e.g., `{"audio": 42}`), for models priced per media type; `{"streaming": 12}` for streamed transcription, priced at its own rate |
 | `input_images`              | int | Input image count (multimodal embeddings, billed per image)                                            |
 | `input_images_by_spec`      | dict| Input image count keyed by rate bucket (e.g., `{"document": 1}`)                                       |
 | `input_characters`          | int | Real input character count (Polly `RequestCharacters`, Translate source text)                         |

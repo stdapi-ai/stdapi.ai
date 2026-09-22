@@ -54,5 +54,36 @@
         }
       }
     }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "servicecode": "transcribe",
+        "usagetype": "USE1-StreamingAudio",
+        "locationType": "AWS Region",
+        "location": "US East (N. Virginia)",
+        "servicename": "Amazon Transcribe",
+        "supportedModes": "Stream to Text",
+        "operation": "StreamingAudio"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU303": {
+          "priceDimensions": {
+            "SKU303.6YSXRJFJ4J8ZQZ9T": {
+              "unit": "second",
+              "description": "$0.0001667 per second for StreamingAudio in US East (N. Virginia)",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0001667000"
+              }
+            }
+          }
+        }
+      }
+    }
   }
 ]

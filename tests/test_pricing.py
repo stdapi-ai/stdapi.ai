@@ -30,6 +30,7 @@ from stdapi.models.moderation import GUARDRAIL_CHECKS_MODERATION_MODEL
 from stdapi.models.pricing_overrides import DEFAULT_MODEL_GLOBAL_PRICES
 from stdapi.pricing import (
     KNOWLEDGE_BASE_MODEL,
+    TRANSCRIBE_STREAMING_SPEC,
     WEB_SEARCH_MODEL,
     Dimension,
     Price,
@@ -258,6 +259,39 @@ class TestIngestPriceListItem:
         )
         assert key in results
         assert results[key].amount == Decimal("0.0024")
+
+    def test_transcribe_streaming_row_keys_the_streaming_bucket(self) -> None:
+        """The streaming rate keys under the transcription model's streaming bucket.
+
+        AWS lists streamed audio as its own operation, ``StreamingAudio``, at a
+        higher rate than a batch job's ``TranscribeAudio``; keying it anywhere
+        else leaves streamed seconds priced at the batch rate.
+
+        Ref: https://aws.amazon.com/transcribe/pricing/
+             stdapi/pricing.py:_resolve_native_model
+             stdapi/usage.py:record_transcribe_usage
+        """
+        results, diagnostics = _ingest_fixture(
+            "transcribe_sample.json", Service.TRANSCRIBE
+        )
+        assert diagnostics == []
+        streaming = PriceKey(
+            Service.TRANSCRIBE,
+            normalize_model_key("amazon.transcribe"),
+            "us-east-1",
+            Dimension.INPUT_SECONDS,
+            "standard",
+            spec=TRANSCRIBE_STREAMING_SPEC,
+        )
+        assert results[streaming].amount == Decimal("0.0001667000")
+        batch = PriceKey(
+            Service.TRANSCRIBE,
+            normalize_model_key("amazon.transcribe"),
+            "us-east-1",
+            Dimension.INPUT_SECONDS,
+            "standard",
+        )
+        assert results[batch].amount == Decimal("0.0024")
 
     def test_marketplace_global_usagetype_becomes_routing_global(self) -> None:
         """Regression: bare "_Global" usagetype must map to routing="global".
@@ -5726,6 +5760,14 @@ async def test_live_price_catalog_ingests_cleanly() -> None:
         )
     ]
     assert not unpriced, f"synthetic keys with no live price: {unpriced}"
+    # A spec bucket falls back to the undifferentiated rate, so the probes above
+    # cannot tell a streaming rate that never lands from one that does.
+    streamed = {
+        key.model
+        for key in index
+        if key.service is Service.TRANSCRIBE and key.spec == TRANSCRIBE_STREAMING_SPEC
+    }
+    assert normalize_model_key("amazon.transcribe") in streamed
 
 
 async def _unclaimed_bedrock_price_list_models(

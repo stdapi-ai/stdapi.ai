@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypedDict
 from stdapi.config import SETTINGS
 from stdapi.pricing import (
     KNOWLEDGE_BASE_MODEL,
+    TRANSCRIBE_STREAMING_SPEC,
     WEB_SEARCH_MODEL,
     CacheTtlBucket,
     ContextLength,
@@ -787,12 +788,16 @@ def record_translate_usage(characters: int, *, region: str = "") -> int:
     return characters
 
 
-def record_transcribe_usage(audio_duration: float, *, region: str = "") -> int:
+def record_transcribe_usage(
+    audio_duration: float, *, region: str = "", streaming: bool = False
+) -> int:
     """Record AWS Transcribe usage.
 
     Args:
         audio_duration: Actual audio duration in seconds.
         region: Region that served the job; configured default when empty.
+        streaming: Whether the audio was streamed, which AWS prices apart from
+            a batch job.
 
     Returns:
         Billed seconds (minimum 15).
@@ -803,6 +808,9 @@ def record_transcribe_usage(audio_duration: float, *, region: str = "") -> int:
         "amazon.transcribe",
         region or _default_region(Service.TRANSCRIBE),
         quantities={Dimension.INPUT_SECONDS: billed_seconds},
+        input_seconds_by_spec={TRANSCRIBE_STREAMING_SPEC: billed_seconds}
+        if streaming
+        else None,
     )
     return billed_seconds
 

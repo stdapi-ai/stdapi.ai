@@ -25,6 +25,7 @@ from stdapi import usage
 from stdapi.config import SETTINGS, _Settings
 from stdapi.models.pricing_overrides import MODEL_LONG_CONTEXT_THRESHOLDS
 from stdapi.pricing import (
+    TRANSCRIBE_STREAMING_SPEC,
     WEB_SEARCH_MODEL,
     Dimension,
     Service,
@@ -1248,6 +1249,40 @@ class TestNonBedrockRecordUsageHelpers:
         assert record.quantities[Dimension.INPUT_SECONDS] == expected
         assert record.service == Service.TRANSCRIBE
         assert record.model == "amazon.transcribe"
+
+    @pytest.mark.parametrize(
+        ("streaming", "expected_cost"),
+        [(True, Decimal("0.003334")), (False, Decimal("0.002"))],
+    )
+    def test_record_transcribe_usage_prices_streamed_audio_at_the_streaming_rate(
+        self, *, streaming: bool, expected_cost: Decimal
+    ) -> None:
+        """Streamed audio is costed at AWS's streaming rate, a job's at the batch rate.
+
+        AWS prices the two separately: operation ``StreamingAudio`` at
+        $0.0001667/s and ``TranscribeAudio`` at $0.0001/s in us-east-1 (Price
+        List, service code ``transcribe``). Both stay under the one model the
+        client called, told apart by the price bucket.
+
+        Ref: https://aws.amazon.com/transcribe/pricing/
+             stdapi/usage.py:record_transcribe_usage
+        """
+        model = normalize_model_key("amazon.transcribe")
+        for spec, rate in (("", "0.0001"), (TRANSCRIBE_STREAMING_SPEC, "0.0001667")):
+            set_test_price(
+                model,
+                "us-east-1",
+                Dimension.INPUT_SECONDS,
+                rate,
+                "USD",
+                spec=spec,
+                service=Service.TRANSCRIBE,
+            )
+        record_transcribe_usage(20, region="us-east-1", streaming=streaming)
+        record = next(iter(usage.USAGE.get().values()))
+        assert record.model == "amazon.transcribe"
+        compute_costs()
+        assert record.cost == expected_cost
 
     @pytest.mark.parametrize(("text_length", "expected"), [(50, 3), (300, 3), (500, 5)])
     def test_record_comprehend_usage_applies_3_unit_minimum(

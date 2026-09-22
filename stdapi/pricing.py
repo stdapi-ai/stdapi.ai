@@ -422,7 +422,7 @@ class PriceKey:
     cache_ttl: CacheTtlBucket = ""
     routing: Routing = ""
     # "<resolution>:<quality>" (generated images) or a modality qualifier
-    # ("speech"/"document"/"audio"/"video"/"hd"); "" is the default bucket.
+    # ("speech"/"document"/"audio"/"video"/"hd"/"streaming"); "" is the default bucket.
     spec: str = ""
     context: ContextLength = ""
 
@@ -999,6 +999,16 @@ def _bedrock_synthetic_model(usagetype: str) -> str:
     return _guardrail_model(usagetype)
 
 
+#: Spec bucket of streamed transcription audio, which AWS prices apart from a batch job's.
+TRANSCRIBE_STREAMING_SPEC: Final = "streaming"
+
+#: Transcribe Price List operation to the (synthetic model, spec bucket) it prices.
+_TRANSCRIBE_OPERATIONS: Final[dict[str, tuple[str, str]]] = {
+    "TranscribeAudio": ("amazon.transcribe", ""),
+    "StreamingAudio": ("amazon.transcribe", TRANSCRIBE_STREAMING_SPEC),
+}
+
+
 def _synthesize_service_model_key(
     our_service: Service, attrs: Mapping[str, Any]
 ) -> str:
@@ -1030,11 +1040,7 @@ def _synthesize_service_model_key(
                 "amazon.translate" if attrs.get("operation") == "TranslateText" else ""
             )
         case Service.TRANSCRIBE:
-            return (
-                "amazon.transcribe"
-                if attrs.get("operation") == "TranscribeAudio"
-                else ""
-            )
+            return _TRANSCRIBE_OPERATIONS.get(attrs.get("operation", ""), ("", ""))[0]
         case Service.COMPREHEND:
             return {
                 "DetectDominantLanguage": "amazon.comprehend-language-detection",
@@ -1475,7 +1481,12 @@ def _resolve_native_model(
         return normalize_model_key(titan_model), spec
 
     if synthetic_model := _synthesize_service_model_key(our_service, attrs):
-        return normalize_model_key(synthetic_model), ""
+        spec = (
+            _TRANSCRIBE_OPERATIONS[attrs["operation"]][1]
+            if our_service is Service.TRANSCRIBE
+            else ""
+        )
+        return normalize_model_key(synthetic_model), spec
     if our_service == Service.BEDROCK:
         return normalize_usagetype_model(usagetype), _native_price_spec(
             inference_type, usagetype

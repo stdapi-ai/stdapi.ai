@@ -1989,7 +1989,9 @@ class AudioModel(AudioModelBase[None, None]):
             # A session that never took audio has nothing to bill, and the
             # recorder would otherwise book the 15-second minimum for it.
             if transcript.seconds:
-                record_transcribe_usage(transcript.seconds, region=_SERVED_REGION.get())
+                record_transcribe_usage(
+                    transcript.seconds, region=_SERVED_REGION.get(), streaming=True
+                )
 
     async def _job_transcript(
         self,

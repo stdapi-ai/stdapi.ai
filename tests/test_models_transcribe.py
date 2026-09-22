@@ -2222,14 +2222,24 @@ class TestLiveTranscriptionStream:
     async def test_usage_is_recorded_for_the_audio_that_was_streamed(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The seconds of audio sent to the session are what gets billed."""
-        recorded: list[tuple[float, str]] = []
+        """The seconds of audio sent to the session are billed, at the streaming rate.
+
+        AWS prices streamed audio apart from a batch job's (``StreamingAudio``
+        vs ``TranscribeAudio``), so a live session records its seconds as
+        streamed.
+
+        Ref: https://aws.amazon.com/transcribe/pricing/
+             stdapi/models/audio/amazon_transcribe.py:AudioModel._live_transcript
+        """
+        recorded: list[tuple[float, str, bool]] = []
         _fake_live_session(
             monkeypatch, _transcript_events([("r1", False, "hi")]), region="us-east-1"
         )
 
-        def _record(duration: float, *, region: str = "") -> int:
-            recorded.append((duration, region))
+        def _record(
+            duration: float, *, region: str = "", streaming: bool = False, **_: object
+        ) -> int:
+            recorded.append((duration, region, streaming))
             return 15
 
         monkeypatch.setattr(amazon_transcribe, "record_transcribe_usage", _record)
@@ -2243,9 +2253,10 @@ class TestLiveTranscriptionStream:
             pass
 
         assert len(recorded) == 1
-        duration, region = recorded[0]
+        duration, region, streaming = recorded[0]
         assert duration == pytest.approx(_FAKE_AUDIO_SECONDS, abs=0.01)
         assert region == "us-east-1"
+        assert streaming, "a live session must be billed at the streaming rate"
 
     async def test_a_caller_leaving_mid_stream_is_still_billed_once(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2266,7 +2277,7 @@ class TestLiveTranscriptionStream:
             region="us-east-1",
         )
 
-        def _record(duration: float, *, region: str = "") -> int:
+        def _record(duration: float, *, region: str = "", **_: object) -> int:
             recorded.append((duration, region))
             return 15
 
@@ -2354,7 +2365,10 @@ class TestLiveTranscriptionStream:
         """With no resolvable language the transcript still streams, from the job.
 
         A live session cannot be opened at all, so the caller keeps the behaviour
-        the route had before rather than getting an error.
+        the route had before rather than getting an error, billed as the batch
+        job AWS actually ran.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:AudioModel._job_transcript
         """
         monkeypatch.setattr(SETTINGS, "aws_transcribe_stream_languages", [])
 
@@ -2369,9 +2383,13 @@ class TestLiveTranscriptionStream:
             }
 
         monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
-        monkeypatch.setattr(
-            amazon_transcribe, "record_transcribe_usage", lambda *_a, **_k: 15
-        )
+        streamed: list[bool] = []
+
+        def _record(_duration: float, *, streaming: bool = False, **_: object) -> int:
+            streamed.append(streaming)
+            return 1
+
+        monkeypatch.setattr(amazon_transcribe, "record_transcribe_usage", _record)
 
         collected = [
             event
@@ -2384,6 +2402,8 @@ class TestLiveTranscriptionStream:
 
         _, done = _split_stream(collected)
         assert done.text == "from the job"
+        # AWS bills the job as batch audio, whatever the client asked for.
+        assert streamed == [False]
 
 
 #: A finished job's language, words and per-speaker attribution.
