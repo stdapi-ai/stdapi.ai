@@ -12,6 +12,7 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 
 import io
 from base64 import b64encode
+from math import ceil
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -316,11 +317,11 @@ class TestAudioTranslations:
         """A translation request bills both Amazon Transcribe and Amazon Translate.
 
         French audio is required: ``translate()`` short-circuits on an English source
-        and would never produce a Translate usage record. Transcribe is billed per
-        second with a 15-second per-request minimum, so the logged seconds are at
-        least 15 even for a short clip.
+        and would never produce a Translate usage record. Transcribe is billed in
+        one-second increments with no minimum, so the logged seconds are the
+        clip's own duration, as ``verbose_json`` reports it, rounded up.
 
-        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/what-is.html
+        Ref: https://aws.amazon.com/transcribe/pricing/
              stdapi/usage.py:record_translate_usage
         """
         capfd.readouterr()
@@ -330,7 +331,7 @@ class TestAudioTranslations:
             files={
                 "file": ("test.mp3", io.BytesIO(sample_audio_fr_file), "audio/mpeg")
             },
-            data={"model": "amazon.transcribe"},
+            data={"model": "amazon.transcribe", "response_format": "verbose_json"},
             headers={"Authorization": f"Bearer {api_key}"},
         )
         assert response.status_code == 200
@@ -356,9 +357,9 @@ class TestAudioTranslations:
         assert transcribe_entries, "Expected transcribe service in usage"
         transcribe_entry = transcribe_entries[0]
         assert transcribe_entry["model"] == "amazon.transcribe"
-        assert transcribe_entry["input_seconds"] >= 15, (
-            "Transcribe bills a 15-second minimum per request"
-        )
+        # The clip is well under 15 s, so a returning per-request minimum fails here.
+        assert transcribe_entry["input_seconds"] == ceil(response_data["duration"])
+        assert transcribe_entry["input_seconds"] < 15
 
 
 @pytest.mark.gateway("JSON body input not supported by the official OpenAI API")

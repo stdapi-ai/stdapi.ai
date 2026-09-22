@@ -89,8 +89,8 @@ class TestGetAudioDuration:
     """_get_audio_duration: the last segment's end time is the billed duration.
 
     Amazon Transcribe reports no media duration on the job, so it is recovered from
-    the transcript's audio segments; a missing duration still bills the 15-second
-    per-request minimum, which is why it warns instead of failing.
+    the transcript's audio segments; a missing duration leaves the job's seconds
+    unrecorded, which is why it warns instead of failing.
 
     Ref: https://docs.aws.amazon.com/transcribe/latest/dg/what-is.html
          stdapi/models/audio/amazon_transcribe.py:_get_audio_duration
@@ -106,10 +106,10 @@ class TestGetAudioDuration:
     def test_missing_segments_warns_and_returns_zero(
         self, request_log: dict[str, Any]
     ) -> None:
-        """No segments: return 0.0 (15s minimum billed) and warn in the request log."""
+        """No segments: return 0.0 (nothing recorded) and warn in the request log."""
         assert _get_audio_duration({}) == 0.0
         assert request_log["level"] == "warning"
-        assert any("15-second minimum" in str(d) for d in request_log["error_detail"])
+        assert any("not recorded" in str(d) for d in request_log["error_detail"])
 
     def test_empty_segments_list_warns_and_returns_zero(
         self, request_log: dict[str, Any]
@@ -118,7 +118,7 @@ class TestGetAudioDuration:
         data: dict[str, Any] = {"audio_segments": []}
         assert _get_audio_duration(data) == 0.0  # type: ignore[arg-type]
         assert request_log["level"] == "warning"
-        assert any("15-second minimum" in str(d) for d in request_log["error_detail"])
+        assert any("not recorded" in str(d) for d in request_log["error_detail"])
 
 
 class TestDominantLanguageCode:
@@ -778,9 +778,7 @@ class TestSttDurationComputedOnce:
             logprobs=False,
         )
 
-        warnings = [
-            d for d in request_log["error_detail"] if "15-second minimum" in str(d)
-        ]
+        warnings = [d for d in request_log["error_detail"] if "not recorded" in str(d)]
         assert len(warnings) == 1
 
         assert isinstance(response, TranscriptionVerbose)
@@ -2304,9 +2302,8 @@ class TestLiveTranscriptionStream:
     ) -> None:
         """A request failing before any audio is sent records no usage.
 
-        The recorder floors what it is given at the 15-second billing minimum,
-        so recording zero seconds would bill a quarter minute of audio AWS
-        never received.
+        AWS received no audio, so there is nothing for the recorder to be
+        called with.
 
         Ref: stdapi/usage.py:record_transcribe_usage
         """

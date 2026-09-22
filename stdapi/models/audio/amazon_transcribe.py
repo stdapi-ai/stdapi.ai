@@ -382,15 +382,15 @@ def _get_audio_duration(transcript_data: TranscribeJobData) -> float:
         transcript_data: Parsed transcription results from AWS Transcribe
 
     Returns:
-        Duration in seconds, 0.0 when the response reports no segments
-        (usage then falls back to the AWS 15-second billing minimum).
+        Duration in seconds, 0.0 when the response reports no segments (no
+        usage is then recorded for the job).
     """
     try:
         return float(transcript_data["audio_segments"][-1]["end_time"])
     except KeyError, IndexError:
         log_error_details(
             "Transcribe response reports no audio segments;"
-            " billing the 15-second minimum.",
+            " the job's billed seconds are unknown and not recorded.",
             level="warning",
         )
         return 0.0
@@ -1986,8 +1986,7 @@ class AudioModel(AudioModelBase[None, None]):
             for part in transcript.remainder():
                 yield part
         finally:
-            # A session that never took audio has nothing to bill, and the
-            # recorder would otherwise book the 15-second minimum for it.
+            # A session that never took audio has nothing to bill.
             if transcript.seconds:
                 record_transcribe_usage(
                     transcript.seconds, region=_SERVED_REGION.get(), streaming=True

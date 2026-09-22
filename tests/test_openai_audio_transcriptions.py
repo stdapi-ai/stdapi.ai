@@ -44,6 +44,7 @@ from stdapi.types.openai_audio import (
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
     TranscriptionTextSegmentEvent,
+    UsageDuration,
 )
 from tests.conftest import logged_usage_entries
 
@@ -470,6 +471,34 @@ class TestAudioTranscriptions:
             for word in ["format", "response", "json", "text", "vtt", "srt"]
         )
 
+    @pytest.mark.slow
+    def test_duration_usage_counts_whole_seconds(
+        self, openai_client: OpenAI, sample_audio_file: bytes, transcription_model: str
+    ) -> None:
+        """``usage`` reports the audio length rounded up to a whole second.
+
+        A clip under a second long reports ``{"type": "duration", "seconds":
+        1}`` upstream (0.86 s of audio, probed on ``whisper-1``): an integer
+        count of seconds, rounded up, with no minimum. ``amazon.transcribe``
+        reports the seconds it bills, rounded the same way.
+
+        Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
+             https://aws.amazon.com/transcribe/pricing/
+             stdapi/usage.py:record_transcribe_usage
+        """
+        raw = openai_client.audio.transcriptions.with_raw_response.create(
+            file=("test.wav", io.BytesIO(sample_audio_file)),
+            model=transcription_model,
+            response_format="verbose_json",
+        )
+        response = raw.parse()
+
+        assert isinstance(json.loads(raw.text)["usage"]["seconds"], int)
+        usage = response.usage
+        assert usage is not None
+        assert usage.type == "duration"
+        assert response.duration <= usage.seconds < response.duration + 1
+
     @pytest.mark.expensive
     @pytest.mark.parametrize("temperature", [0.5, 1.0])
     def test_temperature_parameter_validation(
@@ -879,12 +908,13 @@ class TestAudioTranscriptions:
         sample_audio_file: bytes,
         capfd: pytest.CaptureFixture[str],
     ) -> None:
-        """A transcription logs one ``transcribe`` usage entry billing 15 seconds.
+        """A transcription logs one ``transcribe`` usage entry billing the clip's seconds.
 
-        Amazon Transcribe bills per second with a 15-second minimum per request, so
-        the sample clip — well under 15 seconds — is always billed as 15.
+        Amazon Transcribe bills in one-second increments with no minimum, so the
+        sample clip — well under 15 seconds — is billed its own rounded-up length,
+        the same figure the response reports as its usage.
 
-        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/what-is.html
+        Ref: https://aws.amazon.com/transcribe/pricing/
              stdapi/usage.py:record_transcribe_usage
         """
         capfd.readouterr()
@@ -909,9 +939,8 @@ class TestAudioTranscriptions:
         assert transcribe_entries, "Expected transcribe service in usage"
         transcribe_entry = transcribe_entries[0]
         assert transcribe_entry["model"] == "amazon.transcribe"
-        assert "input_seconds" in transcribe_entry
-        # Transcribe uses 15-second minimum billing
-        assert transcribe_entry["input_seconds"] == 15
+        assert 0 < transcribe_entry["input_seconds"] < 15
+        assert transcribe_entry["input_seconds"] == response_data["usage"]["seconds"]
 
 
 @pytest.mark.gateway("JSON body input not supported by the official OpenAI API")
@@ -987,7 +1016,7 @@ class TestAudioTranscriptionsJsonBody:
         """A ``data:audio/wav;base64`` file in the JSON body is transcribed.
 
         The response is the same ``json`` payload as the multipart path, including the
-        duration-based usage block (15 seconds minimum billing).
+        duration-based usage block.
 
         Ref: https://stdapi.ai/api_openai_audio_transcriptions/
              stdapi/input_file.py:InputFile
@@ -1006,7 +1035,7 @@ class TestAudioTranscriptionsJsonBody:
             f"Transcript does not match the sample audio: {body['text']!r}"
         )
         assert body["usage"]["type"] == "duration"
-        assert body["usage"]["seconds"] >= 15
+        assert body["usage"]["seconds"] > 0
 
     @pytest.mark.slow
     def test_json_body_transcription_with_transcribe_extra_params(
@@ -1108,7 +1137,8 @@ class TestAudioTranscriptionsResponseFormatBugs:
         assert body["language"] == "english"
         assert body["duration"] == 2.0
         assert body["usage"]["type"] == "duration"
-        assert body["usage"]["seconds"] == 15
+        # Billed in whole seconds, with no minimum.
+        assert body["usage"]["seconds"] == 2
         assert [segment["text"] for segment in body["segments"]] == ["hello", "world"]
         assert [segment["start"] for segment in body["segments"]] == [0.0, 1.0]
         assert [segment["end"] for segment in body["segments"]] == [1.0, 2.0]
@@ -1540,6 +1570,36 @@ class TestTranscriptionAdvertisedRequestSchema:
 
 
 @pytest.mark.local
+class TestDurationUsageSchema:
+    """``usage.seconds`` is a non-negative count, integer or not, in the schema.
+
+    Ref: openai.types.audio.transcription.UsageDuration
+         stdapi/types/openai_audio.py:UsageDuration
+    """
+
+    def test_every_branch_keeps_the_non_negative_bound(self) -> None:
+        """Each ``anyOf`` branch carries ``minimum: 0``, a keyword validators know."""
+        schema = UsageDuration.model_json_schema()["properties"]["seconds"]
+
+        assert "ge" not in schema
+        assert schema["anyOf"] == [
+            {"minimum": 0, "type": "integer"},
+            {"minimum": 0, "type": "number"},
+        ]
+
+    def test_whole_seconds_serialize_as_an_integer(self) -> None:
+        """A whole-second count stays an integer on the wire, as OpenAI sends it."""
+        usage = UsageDuration(type="duration", seconds=1)
+
+        assert usage.model_dump_json() == '{"seconds":1,"type":"duration"}'
+
+    def test_a_negative_duration_is_rejected(self) -> None:
+        """Neither branch accepts a negative duration."""
+        with pytest.raises(ValidationError):
+            UsageDuration(type="duration", seconds=-0.5)
+
+
+@pytest.mark.local
 class TestTranscribeUnsupportedParameters:
     """Amazon Transcribe rejects the OpenAI parameters it has no equivalent for.
 
@@ -1947,8 +2007,7 @@ class TestJobFallbackDiarization:
 
         The conversation goes back to its first speaker, which is the only way
         to tell a label that is reused from one handed out again, and it runs
-        past the 15-second billing minimum so the recorded seconds are the
-        job's own rather than the floor.
+        20 seconds, a figure no stray default could produce.
 
         Returns:
             The events the stream produced, and the usage it recorded.
@@ -2060,9 +2119,8 @@ class TestJobFallbackDiarization:
 
         The segments are read out of the same job payload the duration comes
         from, so emitting them must not skip -- nor repeat -- the recording.
-        The 20 seconds are above the 15-second billing minimum, so a lost
-        duration reads as a different number rather than as the floor, and a
-        second recording doubles it (repeated recordings sum into one entry).
+        A lost duration reads as no entry at all, and a second recording doubles
+        the 20 seconds (repeated recordings sum into one entry).
 
         Ref: stdapi/usage.py:record_transcribe_usage
         """

@@ -800,9 +800,9 @@ def record_transcribe_usage(
             a batch job.
 
     Returns:
-        Billed seconds (minimum 15).
+        Billed seconds: AWS bills one-second increments with no minimum.
     """
-    billed_seconds = max(ceil(audio_duration), 15)
+    billed_seconds = ceil(audio_duration)
     _record_usage(
         Service.TRANSCRIBE,
         "amazon.transcribe",

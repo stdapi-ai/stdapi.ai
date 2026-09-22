@@ -1237,12 +1237,20 @@ class TestNonBedrockRecordUsageHelpers:
         assert record.model == "amazon.translate"
 
     @pytest.mark.parametrize(
-        ("duration", "expected"), [(5.0, 15), (15.0, 15), (15.4, 16), (30.0, 30)]
+        ("duration", "expected"), [(0.2, 1), (5.0, 5), (15.4, 16), (30.0, 30)]
     )
-    def test_record_transcribe_usage_applies_15_second_minimum(
+    def test_record_transcribe_usage_bills_whole_seconds_with_no_minimum(
         self, duration: float, expected: int
     ) -> None:
-        """Transcribe bills per second, rounded up, with a 15-second per-request minimum."""
+        """Transcribe bills in one-second increments, rounded up, with no minimum.
+
+        The pricing page states "billed in one-second increments, with no
+        minimum applied" for standard batch and streaming; only Call Analytics
+        states a 15-second per-request minimum.
+
+        Ref: https://aws.amazon.com/transcribe/pricing/
+             stdapi/usage.py:record_transcribe_usage
+        """
         billed = record_transcribe_usage(duration)
         assert billed == expected
         record = next(iter(usage.USAGE.get().values()))
@@ -1309,12 +1317,15 @@ class TestNonBedrockRecordUsageHelpers:
         assert billed == 0
         assert usage.USAGE.get() == {}
 
-    def test_record_transcribe_usage_with_zero_duration_bills_the_minimum(self) -> None:
-        """Zero duration still bills the 15-second minimum rather than recording nothing."""
+    def test_record_transcribe_usage_with_zero_duration_records_nothing(self) -> None:
+        """Zero seconds bill nothing and create no usage record.
+
+        Ref: https://aws.amazon.com/transcribe/pricing/
+             stdapi/usage.py:record_transcribe_usage
+        """
         billed = record_transcribe_usage(0)
-        assert billed == 15
-        record = next(iter(usage.USAGE.get().values()))
-        assert record.quantities[Dimension.INPUT_SECONDS] == 15
+        assert billed == 0
+        assert usage.USAGE.get() == {}
 
     def test_record_comprehend_usage_with_zero_length_bills_the_minimum(self) -> None:
         """Zero text length still bills the 3-unit minimum rather than recording nothing."""

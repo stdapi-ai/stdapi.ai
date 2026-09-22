@@ -2,7 +2,14 @@
 
 from typing import Annotated, Literal, Self
 
-from pydantic import AliasChoices, BaseModel, Field, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    Field,
+    NonNegativeFloat,
+    NonNegativeInt,
+    model_validator,
+)
 
 from stdapi.api_errors import UnsupportedParameterError
 from stdapi.config import SETTINGS
@@ -166,8 +173,10 @@ TranscriptionStreamEvent = (
 class UsageDuration(BaseModelResponse):
     """Duration usage for models billed by audio duration."""
 
-    seconds: float = Field(
-        default=0, ge=0, description="Duration of the input audio in seconds."
+    seconds: NonNegativeInt | NonNegativeFloat = Field(
+        default=0,
+        description="Duration of the input audio in seconds, whole seconds "
+        "when billed per second.",
     )
     type: Literal["duration"] = Field(
         description="Usage object type. Always `duration` for this variant."
