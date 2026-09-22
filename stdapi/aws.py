@@ -489,13 +489,17 @@ FAILOVER_ERROR_CODES: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: ClientError codes answered by a service absent from the called region
-_REGION_UNAVAILABLE_ERROR_CODES: Final[frozenset[str]] = frozenset(
+#: Error codes answered by a service absent from the called region
+REGION_UNAVAILABLE_ERROR_CODES: Final[frozenset[str]] = frozenset(
     {"NotAuthorizedException"}
 )
 
-#: Error message prefix of an operation unavailable in the called region
-_UNSUPPORTED_OPERATION_PREFIX: Final = "UNSUPPORTED_OPERATION"
+#: Error message prefixes of an operation unavailable in the called region
+_REGION_UNAVAILABLE_MESSAGE_PREFIXES: Final = (
+    "UNSUPPORTED_OPERATION",
+    # Transcribe's BadRequestException where only that operation is missing.
+    "Your account isn't authorized to call this operation",
+)
 
 
 def service_regions(region: RegionName | None) -> list[RegionName]:
@@ -523,17 +527,33 @@ def is_failover_error(exception: BotoCoreError | ClientError) -> bool:
     """
     if isinstance(exception, BotoCoreError):
         return True
-    error = exception.response.get("Error", {})
-    code: str = error.get("Code", "")
+    code: str = exception.response.get("Error", {}).get("Code", "")
     status = exception.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
     if code in FAILOVER_ERROR_CODES or status >= 500:
         return True
-    # A service the region does not host answers a 4xx the next region serves:
-    # Comprehend reports NotAuthorizedException outside its regions, and
-    # UNSUPPORTED_OPERATION where only that operation is unavailable.
+    return is_region_unavailable_error(exception)
+
+
+def is_region_unavailable_error(exception: ClientError) -> bool:
+    """Whether an AWS error says the called region does not offer the operation.
+
+    Such a region answers a 4xx the next region serves: Comprehend reports
+    NotAuthorizedException outside its regions, other services an
+    UNSUPPORTED_OPERATION message, and Transcribe a BadRequestException saying
+    the account "isn't authorized" (medical transcription outside its regions).
+
+    Args:
+        exception: The AWS error.
+
+    Returns:
+        True when another region may still offer the operation.
+    """
+    error = exception.response.get("Error", {})
     message: str = error.get("Message", "")
-    return code in _REGION_UNAVAILABLE_ERROR_CODES or message.startswith(
-        _UNSUPPORTED_OPERATION_PREFIX
+    return error.get(
+        "Code", ""
+    ) in REGION_UNAVAILABLE_ERROR_CODES or message.startswith(
+        _REGION_UNAVAILABLE_MESSAGE_PREFIXES
     )
 
 

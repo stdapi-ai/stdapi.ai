@@ -15,6 +15,7 @@ from asyncio import CancelledError, Task, create_task, ensure_future, shield
 from asyncio import timeout as async_timeout
 from contextlib import asynccontextmanager, suppress
 from copy import deepcopy
+from re import compile as re_compile
 from typing import TYPE_CHECKING, Any, Final
 
 from aws_sdk_bedrock_runtime.client import AsyncBedrockRuntimeClient
@@ -25,6 +26,7 @@ from aws_sdk_transcribe_streaming.client import AsyncTranscribeStreamingClient
 from aws_sdk_transcribe_streaming.config import Config as TranscribeStreamingConfig
 from smithy_aws_core.identity import AWSCredentialsIdentity
 from smithy_core.deserializers import DeserializeableShape
+from smithy_core.exceptions import CallError
 from smithy_core.serializers import SerializeableShape
 from smithy_http.aio.crt import AWSCRTHTTPClient
 
@@ -32,6 +34,7 @@ from stdapi import server
 from stdapi.api_errors import ApiError, FeatureUnavailableError
 from stdapi.aws import (
     FAILOVER_ERROR_CODES,
+    REGION_UNAVAILABLE_ERROR_CODES,
     pooled_clients,
     verify_bidi_user_role_policy,
 )
@@ -102,6 +105,9 @@ _SERVER_ERROR_MESSAGE: Final = "The request could not be completed. Retry the re
 #: Statuses meaning the gateway's own credential, not the caller's, was refused.
 _DENIED_STATUSES: Final = frozenset({401, 403})
 
+#: Error id an unmodelled failure's message ends with, e.g. "- id: <namespace>#NotAuthorizedException".
+_UNMODELED_ERROR_ID: Final = re_compile(r" - id: [\w.]+#(\w+)")
+
 #: Feature name and stream permission per service, for a refused credential.
 _BIDI_UNAVAILABLE: Final[dict[str, tuple[str, str]]] = {
     "bedrock-runtime": (
@@ -109,7 +115,13 @@ _BIDI_UNAVAILABLE: Final[dict[str, tuple[str, str]]] = {
         "bedrock:InvokeModelWithBidirectionalStream",
     ),
     "polly": ("Streaming speech synthesis", "polly:StartSpeechSynthesisStream"),
-    "transcribe": ("Live transcription", "transcribe:StartStreamTranscription"),
+    "transcribe": (
+        "Live transcription",
+        (
+            "transcribe:StartStreamTranscription (transcribe:StartMedicalStreamTranscription"
+            " for medical transcription), in a region offering it"
+        ),
+    ),
 }
 
 
@@ -332,11 +344,31 @@ def _create_client(service: str, region: RegionName, endpoint: str) -> Any:  # n
     return client_class(config=config)
 
 
+def _error_name(exception: BaseException) -> str:
+    """Return the AWS error name a stream failure carries.
+
+    An error the SDK does not model arrives as a bare ``CallError`` whose
+    message ends with the service's own error id, which is the name the
+    translation tables use.
+
+    Args:
+        exception: The failure raised by the SDK.
+
+    Returns:
+        The error's name, e.g. ``NotAuthorizedException``.
+    """
+    if type(exception) is CallError and (
+        match := _UNMODELED_ERROR_ID.search(str(exception))
+    ):
+        return match.group(1)
+    return type(exception).__name__
+
+
 def _stream_error_status(exception: BaseException) -> int:
     """Resolve the status a stream failure answers with.
 
-    Modeled errors are mapped by class name, as botocore errors are by code;
-    anything else is a transport failure.
+    Errors are mapped by name (:func:`_error_name`), as botocore errors are by
+    code; anything else is a transport failure.
 
     Args:
         exception: The failure raised by the SDK.
@@ -346,7 +378,10 @@ def _stream_error_status(exception: BaseException) -> int:
     """
     if isinstance(exception, ApiError):
         return exception.status
-    name = type(exception).__name__
+    name = _error_name(exception)
+    if name in REGION_UNAVAILABLE_ERROR_CODES:
+        # The region does not offer the operation: the deployment's gap, like a denial.
+        return 403
     if (mapped := AWS_ERROR_MAP.get(name)) is not None:
         return mapped[0]
     if (modeled := _STREAM_ERROR_STATUS.get(name)) is not None:
@@ -402,7 +437,8 @@ def _is_stream_failover_error(exception: BaseException) -> bool:
         caller error, which would be refused identically everywhere.
     """
     # These codes are regional even where their status is not, e.g. a job quota.
-    if type(exception).__name__ in FAILOVER_ERROR_CODES:
+    name = _error_name(exception)
+    if name in FAILOVER_ERROR_CODES or name in REGION_UNAVAILABLE_ERROR_CODES:
         return True
     status = _stream_error_status(exception)
     return status >= 500 or status == 429

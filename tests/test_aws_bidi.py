@@ -82,6 +82,14 @@ _TEST_TIMEOUT = 5.0
 #: A bound the test expects nothing to reach.
 _UNREACHED_TIMEOUT = 30
 
+#: A region offering no medical streaming refusing a session, verbatim.
+_MEDICAL_STREAM_REFUSAL = CallError(
+    "Unknown error for operation com.amazonaws.transcribestreaming#"
+    "StartMedicalStreamTranscription - status: 401 - id: "
+    "com.amazonaws.transcribestreaming#NotAuthorizedException",
+    fault="client",
+)
+
 
 class LimitExceededException(CallError):  # noqa: N818
     """Stand-in for a per-region quota error that no status table names.
@@ -942,6 +950,99 @@ class TestFailoverEligibility:
 
         assert stdapi.aws_bidi._stream_error_status(error) == 400  # noqa: SLF001
         assert stdapi.aws_bidi._is_stream_failover_error(error) is True  # noqa: SLF001
+
+    def test_a_region_without_the_operation_falls_over(self) -> None:
+        """An unmodelled ``NotAuthorizedException`` is a region gap, not a bad request.
+
+        The SDK does not model it, so it arrives as a bare ``CallError`` with
+        ``fault="client"`` whose message carries the error id -- verbatim as
+        eu-west-3, which offers no medical streaming, answered on 2026-09-22.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_streaming_StartMedicalStreamTranscription.html
+             stdapi/aws_bidi.py:_error_name
+        """
+        assert stdapi.aws_bidi._is_stream_failover_error(_MEDICAL_STREAM_REFUSAL)  # noqa: SLF001
+
+    def test_an_unmodelled_caller_error_stays_final(self) -> None:
+        """An unmodelled error is classified by its id, so a bad request still stops.
+
+        Ref: stdapi/aws_bidi.py:_error_name
+        """
+        error = CallError(
+            "Unknown error for operation com.amazonaws.transcribestreaming#"
+            "StartMedicalStreamTranscription - status: 400 - id: "
+            "com.amazonaws.transcribestreaming#BadRequestException",
+            fault="client",
+        )
+
+        assert stdapi.aws_bidi._stream_error_status(error) == 400  # noqa: SLF001
+        assert stdapi.aws_bidi._is_stream_failover_error(error) is False  # noqa: SLF001
+
+    def test_an_unmodelled_throttle_falls_over_on_any_service(self) -> None:
+        """The id rule applies to every stream, not only Transcribe's.
+
+        A throttle a service does not model arrived as a client-fault
+        ``CallError`` and was answered as a bad request from the first region.
+
+        Ref: stdapi/aws_bidi.py:_error_name
+        """
+        error = CallError(
+            "Unknown error for operation com.amazonaws.polly#"
+            "StartSpeechSynthesisStream - status: 400 - id: "
+            "com.amazonaws.polly#ThrottlingException",
+            fault="client",
+        )
+
+        assert stdapi.aws_bidi._stream_api_error(error, "polly").status == 429  # noqa: SLF001
+        assert stdapi.aws_bidi._is_stream_failover_error(error) is True  # noqa: SLF001
+
+    async def test_the_next_region_serves_a_region_gap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A region refusing the operation hands the session to the next one.
+
+        Ref: stdapi/aws_bidi.py:open_bidi_stream
+        """
+        monkeypatch.setattr(
+            stdapi.aws_bidi, "get_bidi_client", lambda _service, _region=None: object()
+        )
+        stream = FakeDuplexStream(events=["transcript"])
+        opener = _failing_opener({"eu-west-3": _MEDICAL_STREAM_REFUSAL}, stream)
+
+        async with open_bidi_stream(
+            "transcribe", ["eu-west-3", "us-east-1"], opener
+        ) as session:
+            assert session.region == "us-east-1"
+
+    async def test_no_region_offering_the_operation_is_the_deployment(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """Refused everywhere, the stream is a feature this deployment lacks.
+
+        The caller reads the generic 503; the operator reads which operation no
+        candidate region offered.
+
+        Ref: stdapi/aws_bidi.py:_stream_api_error
+             stdapi/api_errors.py:FeatureUnavailableError
+        """
+        monkeypatch.setattr(
+            stdapi.aws_bidi, "get_bidi_client", lambda _service, _region=None: object()
+        )
+        opener = _failing_opener(
+            {"eu-west-3": _MEDICAL_STREAM_REFUSAL}, FakeDuplexStream(events=[])
+        )
+
+        with pytest.raises(ApiError) as raised:
+            async with open_bidi_stream("transcribe", ["eu-west-3"], opener):
+                pass
+
+        assert raised.value.status == 503
+        assert raised.value.code == "feature_unavailable"
+        assert "StartMedicalStreamTranscription" not in str(raised.value)
+        assert any(
+            "StartMedicalStreamTranscription" in str(detail)
+            for detail in request_log["error_detail"]
+        )
 
 
 class TestOpenAndFailover:

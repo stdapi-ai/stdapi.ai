@@ -23,6 +23,7 @@ from stdapi.aws import (
     AWSConnectionManager,
     call_with_region_failover,
     is_failover_error,
+    is_region_unavailable_error,
     raise_first_exception,
     service_regions,
 )
@@ -39,6 +40,12 @@ if TYPE_CHECKING:
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
+
+#: Transcribe's refusal of an operation the region does not offer, verbatim.
+_TRANSCRIBE_REGION_REFUSAL = (
+    "Your account isn't authorized to call this operation. Check your account "
+    "permissions and try your request again."
+)
 
 
 def _patch_get_client(monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -161,6 +168,48 @@ class TestIsFailoverError:
             message="UNSUPPORTED_OPERATION: This operation is not supported in this region",
         )
         assert is_failover_error(error) is True
+
+    def test_transcribe_operation_missing_from_the_region_fails_over(self) -> None:
+        """Transcribe's "isn't authorized" ``BadRequestException`` fails over.
+
+        A region that does not offer medical transcription refuses
+        ``StartMedicalTranscriptionJob`` with this HTTP 400, verbatim as
+        eu-central-2 answered it on 2026-09-22, while the standard job runs
+        there; the next region serves the request.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartMedicalTranscriptionJob.html
+             stdapi/aws.py:is_region_unavailable_error
+        """
+        error = make_client_error(
+            "BadRequestException",
+            "StartMedicalTranscriptionJob",
+            message=_TRANSCRIBE_REGION_REFUSAL,
+            status=400,
+        )
+        assert is_failover_error(error) is True
+        assert is_region_unavailable_error(error) is True
+
+    def test_plain_bad_request_does_not_fail_over(self) -> None:
+        """A ``BadRequestException`` about the request itself stays fatal.
+
+        The code is shared with the region refusal above, so only its message
+        tells a region gap from a request every region would refuse alike.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartMedicalTranscriptionJob.html
+             stdapi/aws.py:is_failover_error
+        """
+        error = make_client_error(
+            "BadRequestException",
+            "StartMedicalTranscriptionJob",
+            message=(
+                "1 validation error detected: Value at 'type' failed to satisfy "
+                "constraint: Member must satisfy enum value set: "
+                "[CONVERSATION, DICTATION]"
+            ),
+            status=400,
+        )
+        assert is_failover_error(error) is False
+        assert is_region_unavailable_error(error) is False
 
     @pytest.mark.parametrize(
         "code",
