@@ -13,7 +13,8 @@ It is also the second independent reader of a search this gateway ran itself --
 pydantic-ai is the first -- which is what makes a client-specific accident
 distinguishable from a gateway one.
 
-Requires --agentic, podman, and Bedrock credentials.
+Requires --agentic, podman, Bedrock credentials, and its own client overlay
+(``uv run --with llama-index-llms-openai``, see tests/agentic/requirements.txt).
 
 Ref: https://developers.llamaindex.ai/python/examples/llm/openai_responses/
      https://developers.openai.com/api/reference/resources/vector_stores

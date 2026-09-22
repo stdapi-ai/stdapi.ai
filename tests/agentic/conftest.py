@@ -73,6 +73,14 @@ _MISSING_CLIENTS: tuple[str, ...] = tuple(
 
 collect_ignore = list(_MISSING_CLIENTS)
 
+#: Command running each module whose client cannot share the overlay's resolution.
+_OWN_OVERLAY: Mapping[str, str] = {
+    "test_llama_index.py": (
+        "uv run --with llama-index-llms-openai "
+        "pytest tests/agentic/test_llama_index.py --agentic"
+    )
+}
+
 #: Workers the lane is validated at.
 #:
 #: Every test here waits on Bedrock rather than on a core, so the useful figure is
@@ -259,7 +267,8 @@ def pytest_report_header(config: pytest.Config) -> list[str] | None:
         config: Configuration of the session.
 
     Returns:
-        One line for the clients present, one for those missing, one for any
+        One line for the clients present, one for those missing from the
+        overlay, one per skipped module that runs under its own, one for any
         gateway reaped from an aborted session, or None when the lane is not
         selected.
     """
@@ -282,11 +291,17 @@ def pytest_report_header(config: pytest.Config) -> list[str] | None:
             "agentic clients: "
             + ", ".join(f"{d}=={v}" for d, v in sorted(installed.items()))
         )
-    if _MISSING_CLIENTS:
+    if missing := [m for m in _MISSING_CLIENTS if m not in _OWN_OVERLAY]:
         lines.append(
-            f"agentic clients missing, skipping {', '.join(_MISSING_CLIENTS)} -- rerun "
+            f"agentic clients missing, skipping {', '.join(missing)} -- rerun "
             "with: uv run --refresh --with-requirements tests/agentic/requirements.txt"
         )
+    lines.extend(
+        f"agentic client outside the overlay, skipping {module} -- run it alone "
+        f"with: {command}"
+        for module, command in _OWN_OVERLAY.items()
+        if module in _MISSING_CLIENTS
+    )
     return lines or None
 
 

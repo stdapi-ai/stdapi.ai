@@ -221,12 +221,14 @@ uv run pytest tests/agentic/test_openai_agents.py --agentic   # the realtime voi
 uv run pytest tests/agentic/test_livekit.py --agentic         # the documented LiveKit recipe
 uv run pytest tests/agentic/test_pipecat.py --agentic         # the documented Pipecat recipe
 uv run pytest tests/agentic/test_agno.py --agentic            # the vector-store write path
-uv run pytest tests/agentic/test_llama_index.py --agentic     # the second file_search reader
+uv run --with llama-index-llms-openai \
+  pytest tests/agentic/test_llama_index.py --agentic          # the second file_search reader
 ```
 
-The last nine need the client overlay described under
+The nine before the last need the client overlay described under
 [In-process clients](#in-process-clients); without it they are dropped from
-collection and the run says so.
+collection and the run says so. The last one runs under an overlay of its own,
+for the reason given there.
 
 `-s` surfaces one benchmark line per run:
 
@@ -293,7 +295,8 @@ process: `test_langchain.py`, `test_pydantic_ai.py`, `test_wyoming_audio.py`,
 `test_litellm.py`, `test_openai_agents.py`, `test_livekit.py`, `test_pipecat.py`,
 `test_agno.py`, `test_llama_index.py` and `test_ollama_sdk.py`. Their packages are
 listed in `requirements.txt` and layered over the project environment at run time
-— except `ollama`, which is a `test` group dependency in `pyproject.toml` because
+— except `llama-index-llms-openai` (see below) and `ollama`, which is a `test`
+group dependency in `pyproject.toml` because
 `tests/test_ollama_*.py` drive the same client against the in-process app, and a
 second resolution of it here would let the two lanes prove different versions:
 
@@ -326,6 +329,21 @@ modules run on either.
 Without the overlay, those modules are dropped from collection and the header
 names them rather than letting the run look complete. `mypy` needs the overlay too,
 which is why CI's type-checking step uses it.
+
+**LlamaIndex cannot share that resolution yet.** Every `llama-index-llms-openai`
+release caps `openai<3`, while `openai-agents` and `pydantic-ai-slim[openai]`
+require `openai>=3`. Listed together, uv walks LlamaIndex back to `0.1.x`, whose
+`llama-index-core` 0.10 is built on `pydantic.v1` and fails to import on Python
+3.14; a version floor walks those two clients back instead. `test_llama_index.py`
+therefore runs alone, under its own overlay, and the full lane's header says so
+with the command. Its line returns to `requirements.txt` once the cap lifts.
+
+**Installing the overlay into `.venv`** — to run `.venv/bin/pytest` directly —
+takes `uv pip install --no-config -r tests/agentic/requirements.txt`. Without
+`--no-config`, uv applies `pyproject.toml`'s `override-dependencies`, which keep
+`rich` and `typer` out of the image — and so away from `agno` and
+`livekit-agents`, which import them. `uv run --with-requirements` does not apply
+them.
 
 ## Isolation
 

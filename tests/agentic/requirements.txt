@@ -4,6 +4,10 @@
 # Kept out of pyproject.toml: uv.lock's single universal resolution would pin these
 # to whatever also satisfies the gateway. Only tests/agentic/ may import them; other
 # modules are skipped when their client is missing (see tests/agentic/conftest.py).
+#
+# Installing them into .venv instead takes `uv pip install --no-config -r`: without
+# it uv applies pyproject.toml's override-dependencies, which drop the `rich` and
+# `typer` that agno and livekit-agents import.
 
 # tests/agentic/test_langchain.py
 langchain-openai
@@ -36,9 +40,13 @@ pipecat-ai[openai]
 # for itself, through the same client and base URL it chats with.
 agno
 
-# tests/agentic/test_llama_index.py -- its Responses model, which reads hosted
-# tool calls back as its own blocks. The package pulls llama-index-core with it.
-llama-index-llms-openai
+# llama-index-llms-openai is deliberately NOT here while every release of it
+# caps `openai<3`: openai-agents and pydantic-ai-slim[openai] require `openai>=3`,
+# so uv walks it back to 0.1.x, whose llama-index-core 0.10 is built on
+# pydantic.v1, which cannot import on Python 3.14 -- and a floor instead walks
+# those two clients back. tests/agentic/test_llama_index.py runs under its own
+# overlay until the cap lifts, then its line returns here:
+#   uv run --with llama-index-llms-openai pytest tests/agentic/test_llama_index.py --agentic
 
 # `ollama` is deliberately NOT here either, and tests/agentic/test_ollama_sdk.py
 # imports it all the same: it is already a `test` group dependency in
