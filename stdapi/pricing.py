@@ -75,7 +75,8 @@ class Service(StrEnum):
     """AWS services/APIs that have pricing support.
 
     Bedrock is split per invocation API: bedrock-runtime (Converse) and
-    bedrock-mantle usage are recorded and priced independently.
+    bedrock-mantle usage are recorded and priced independently, except that a
+    model AWS prices under Mantle only is billed at those rates on both.
 
     ``BEDROCK_MARKETPLACE`` covers models served from a Marketplace model
     endpoint, and ``SAGEMAKER`` models served from a SageMaker AI endpoint.
@@ -147,6 +148,8 @@ def parse_unit_scale(unit: str) -> int:
 _INFERENCE_TYPE_PREFIXES: Final[tuple[tuple[str, Dimension], ...]] = (
     ("prompt cache read", Dimension.CACHE_READ_TOKENS),
     ("prompt cache write", Dimension.CACHE_WRITE_TOKENS),
+    ("cache read tokens", Dimension.CACHE_READ_TOKENS),
+    ("cache write tokens", Dimension.CACHE_WRITE_TOKENS),
     ("input tokens", Dimension.INPUT_TOKENS),
     ("output tokens", Dimension.OUTPUT_TOKENS),
     ("text input token", Dimension.INPUT_TOKENS),
@@ -531,10 +534,9 @@ def register_default_prices(
             model's :func:`long_context_threshold`.
     """
     # Only bedrock-runtime offers cross-Region inference, so a Mantle-keyed
-    # routed row could never be resolved. Plain rates key under both: the
-    # pricing page doesn't distinguish invocation APIs, and AWS states the
-    # per-token rate is identical on them, so a Mantle-only model resolves at
-    # runtime too.
+    # routed row could never be resolved. Plain rates key under both: these
+    # sources publish one rate set per model with no split by invocation API,
+    # so a Mantle-only model resolves at runtime too.
     services = (
         (Service.BEDROCK,) if routing else (Service.BEDROCK, Service.BEDROCK_MANTLE)
     )
@@ -1269,6 +1271,9 @@ def _ingest_price_list_item(
 #: inferenceType suffixes signaling a non-standard tier when service_tier is absent.
 _INFERENCE_TYPE_TIER_SUFFIXES: Final[tuple[str, ...]] = ("flex", "priority", "batch")
 
+#: ``service_tier`` prefix naming the Global cross-Region rate, e.g. "global-flex".
+_GLOBAL_SERVICE_TIER_PREFIX: Final[str] = "global-"
+
 
 def _resolve_tier(attrs: Mapping[str, Any]) -> str:
     """Resolve the service tier (standard/flex/priority/batch) for one price-list item.
@@ -1277,7 +1282,9 @@ def _resolve_tier(attrs: Mapping[str, Any]) -> str:
     a `service_tier` attribute, a trailing `inferenceType` word ("Output
     tokens flex"), `feature` == "Batch Inference", or a usagetype segment
     ("...batch...", "...-<tier>" suffix). Missing any of them folds that
-    tier's rows onto the standard-tier PriceKey.
+    tier's rows onto the standard-tier PriceKey. A `service_tier` may also
+    carry the Global routing ("global-flex"), which :func:`_native_routing`
+    reads and this strips.
 
     Args:
         attrs: The price-list item's ``product.attributes``.
@@ -1286,7 +1293,7 @@ def _resolve_tier(attrs: Mapping[str, Any]) -> str:
         One of "standard", "flex", "priority", "batch".
     """
     if service_tier := attrs.get("service_tier"):
-        return str(service_tier).lower()
+        return str(service_tier).lower().removeprefix(_GLOBAL_SERVICE_TIER_PREFIX)
     inference_type = attrs.get("inferenceType", "").strip().lower()
     for suffix in _INFERENCE_TYPE_TIER_SUFFIXES:
         if inference_type.endswith(f" {suffix}"):
@@ -1307,9 +1314,10 @@ def _resolve_tier(attrs: Mapping[str, Any]) -> str:
 def _bedrock_api_service(our_service: Service, usagetype: str) -> Service:
     """Key Bedrock rows under their invocation API (bedrock-runtime vs bedrock-mantle).
 
-    The two APIs have distinct published rates for the same model (confirmed
-    live: qwen3-next-80b-a3b in ap-south-1); "mantle" rows are signaled by a
-    usagetype segment.
+    AWS can publish distinct rates per API for one model (confirmed live:
+    qwen3-next-80b-a3b in ap-south-1); "mantle" rows are signaled by a
+    usagetype segment. A model with Mantle rows only is billed at them on
+    bedrock-runtime too -- see :func:`_apply_mantle_fallback`.
 
     Args:
         our_service: The Service this price-list entry belongs to.
@@ -1343,9 +1351,10 @@ def _native_routing(
 ) -> Routing:
     """Resolve the serving profile ("latency", "global" or "") for a native row.
 
-    Global routing is a "-cross-region-global" usagetype suffix;
-    latency-optimized rates are a " Latency Optimized" `model` attribute
-    suffix (e.g. "Nova Pro Latency Optimized"). Only meaningful for Bedrock.
+    Global routing is a "-cross-region-global" usagetype suffix or a
+    "global-<tier>" `service_tier`; latency-optimized rates are a " Latency
+    Optimized" `model` attribute suffix (e.g. "Nova Pro Latency Optimized").
+    Only meaningful for Bedrock.
 
     Args:
         our_service: The Service this price-list entry belongs to.
@@ -1360,7 +1369,12 @@ def _native_routing(
     blob = _normalize_usagetype(usagetype + (attrs.get("model") or ""))
     if "latencyoptimized" in blob:
         return "latency"
-    return "global" if "crossregionglobal" in blob else ""
+    service_tier = str(attrs.get("service_tier") or "").lower()
+    if "crossregionglobal" in blob or service_tier.startswith(
+        _GLOBAL_SERVICE_TIER_PREFIX
+    ):
+        return "global"
+    return ""
 
 
 #: 1-hour cache-write TTL marker in a usagetype: "-1h-", "-1-hour" or "-1hour-".
@@ -1534,6 +1548,7 @@ def _ingest_native_item(
     if not (terms := item.get("terms", {}).get("OnDemand", {})):
         return
 
+    # A TTL with no bucket of its own (Kimi K3's 30m write) keys undifferentiated.
     cache_ttl: CacheTtlBucket = (
         "1h"
         if dimension == Dimension.CACHE_WRITE_TOKENS
@@ -1582,6 +1597,27 @@ def _catalog_regions() -> set[str]:
         | {r for r in service_regions if r}
         | ({AWS_REGION} if AWS_REGION else set())
     ) or {"us-east-1"}
+
+
+def _apply_mantle_fallback(index: dict[PriceKey, Price]) -> None:
+    """Copy a model's Mantle rows onto bedrock-runtime when it has no runtime row.
+
+    AWS publishes some runtime-served models (Kimi K3) under "mantle"
+    usagetypes only, while their card and pricing page quote one rate set
+    with no split by invocation API. Without the copy a runtime call to one
+    resolves no price at all. A model with any runtime row keeps its own.
+
+    Args:
+        index: Price index to update, in place.
+    """
+    runtime_models = {key.model for key in index if key.service == Service.BEDROCK}
+    index.update(
+        {
+            replace(key, service=Service.BEDROCK): price
+            for key, price in list(index.items())
+            if key.service == Service.BEDROCK_MANTLE and key.model not in runtime_models
+        }
+    )
 
 
 def _apply_default_prices(index: dict[PriceKey, Price]) -> None:
@@ -1859,6 +1895,7 @@ async def _load_price_catalog(diagnostics: list[str]) -> None:
     # fetch results only, so a later retry's _store_price collision check
     # isn't confused by keys these steps added without a claim.
     published_index = dict(new_index)
+    _apply_mantle_fallback(published_index)
     _apply_default_prices(published_index)
     _apply_regional_fallback(published_index, regions)
     _apply_price_overrides(published_index, regions, diagnostics)

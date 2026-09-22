@@ -89,7 +89,7 @@ from stdapi.models.pricing_overrides import (
     DEFAULT_MODEL_PRICES,
     MODEL_LONG_CONTEXT_THRESHOLDS,
 )
-from stdapi.pricing import ContextLength, Dimension
+from stdapi.pricing import ContextLength, Dimension, PriceKey, Routing, Service
 from tests.conftest import REPO_ROOT
 
 if TYPE_CHECKING:
@@ -115,6 +115,14 @@ _MODEL_CARD_URLS: Final[dict[str, str]] = {
     "openai.gpt-daybreak-blue-5.6-sol": "model-card-openai-gpt-daybreak-blue-56-sol",
     "openai.gpt-6-astra": "model-card-openai-gpt-6-astra",
 }
+
+#: Model card per Price List-priced model, cross-checked against the rows ingested.
+_PRICE_LIST_CARD_URLS: Final[dict[str, str]] = {
+    "moonshotai.kimi-k3": "model-card-moonshot-ai-kimi-k3"
+}
+
+#: Region whose Price List rows that cross-check reads.
+_CARD_CHECK_REGION: Final[str] = "us-east-1"
 
 #: Where a model card lives, given its slug.
 _USER_GUIDE: Final[str] = "https://docs.aws.amazon.com/bedrock/latest/userguide/"
@@ -155,6 +163,9 @@ _PER_MILLION_NOTE: Final[str] = "per 1 million tokens"
 
 #: The card row naming the rate that applies in the model's own region.
 _IN_REGION_ROW: Final[str] = "in-region"
+
+#: The row a card with no In-Region row prices its regional (Geo) rate in.
+_US_CRIS_ROW: Final[str] = "us cris"
 
 #: The card row naming the rate the ``global.`` inference profile is billed at.
 _GLOBAL_ROW: Final[str] = "global cris"
@@ -499,7 +510,10 @@ def _row_rates(rows: list[list[str]], label: str) -> dict[Dimension, Decimal] | 
 def parse_model_card(
     page: str, context: ContextLength = ""
 ) -> dict[Dimension, Decimal] | None:
-    """Return the per-token In-Region rates a Bedrock model card publishes.
+    """Return the per-token regional rates a Bedrock model card publishes.
+
+    That is the In-Region row, or the US CRIS row of a card with none (Kimi
+    K3 is served only through cross-Region profiles).
 
     Args:
         page: The model card's HTML.
@@ -513,17 +527,19 @@ def parse_model_card(
 
     Raises:
         UnreadableSourceError: If the pricing section, its unit note, the
-            wanted table or its In-Region row cannot be identified.
+            wanted table or its regional row cannot be identified.
     """
     rows = _pricing_rows(page, context)
     if rows is None:
         return None
     rates = _row_rates(rows, _IN_REGION_ROW)
     if rates is None:
-        msg = "the pricing table has no In-Region row"
+        rates = _row_rates(rows, _US_CRIS_ROW)
+    if rates is None:
+        msg = "the pricing table has no In-Region or US CRIS row"
         raise UnreadableSourceError(msg)
     if not rates:
-        msg = "the In-Region row states no rate"
+        msg = "the regional row states no rate"
         raise UnreadableSourceError(msg)
     return rates
 
@@ -1200,6 +1216,92 @@ _LONG_CAPTION: Final[str] = (
 )
 
 
+async def _ingested_rates(model_id: str) -> dict[Routing, dict[Dimension, str]]:
+    """Return the standard-tier rates a bedrock-runtime call to *model_id* resolves.
+
+    Runs the gateway's own ingestion over the region's Bedrock rows, Mantle
+    fallback included, so a row it misreads or drops shows here as it does in
+    a real call's cost.
+
+    Returns:
+        Per-token rate per dimension, keyed by routing ("" regional, "global").
+
+    Raises:
+        BotoCoreError: When the Price List API is unreachable.
+        ClientError: When the Price List API refuses the request.
+    """
+    endpoint = pricing.pricing_endpoint_region()
+    index: dict[PriceKey, pricing.Price] = {}
+    # type-ignore: the RegionName stub Literal lags EUSC/China (works live).
+    async with AWSConnectionManager(("pricing", endpoint)):  # type: ignore[arg-type]
+        client = get_client("pricing", endpoint)  # type: ignore[arg-type]
+        for service_code in _BEDROCK_SERVICE_CODES:
+            rows, _claims = await pricing._fetch_service_pricing(  # noqa: SLF001
+                client, service_code, _CARD_CHECK_REGION, []
+            )
+            index.update(rows)
+    pricing._apply_mantle_fallback(index)  # noqa: SLF001
+    model = pricing.resolve_model_key(model_id)
+    rates: dict[Routing, dict[Dimension, str]] = {"": {}, "global": {}}
+    for key, price in index.items():
+        if (
+            key.service == Service.BEDROCK
+            and key.model == model
+            and key.tier == "standard"
+            and key.routing in rates
+            and not (key.cache_ttl or key.spec or key.context)
+        ):
+            rates[key.routing][key.dimension] = f"{price.amount:f}"
+    return rates
+
+
+@pytest.mark.drift
+async def test_the_price_list_rates_match_the_model_card() -> None:
+    """A Price List-priced model must resolve every rate its card publishes.
+
+    The Price List is authoritative, but the gateway reads it through its own
+    ingestion, and a row it misreads is invisible: Kimi K3 resolved no price on
+    bedrock-runtime, its Global rate was unreachable and its cache rows were
+    dropped. The card is compared against what a runtime call resolves, so a
+    rate the card has and the gateway lacks fails here as much as a
+    different one.
+
+    Ref: stdapi/pricing.py:_ingest_native_item
+         stdapi/pricing.py:_apply_mantle_fallback
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3.html
+    """
+    if pricing.pricing_endpoint_region() is None:
+        pytest.skip("this partition has no AWS Price List API endpoint")
+    findings: list[Finding] = []
+    with httpx.Client(
+        timeout=_FETCH_TIMEOUT,
+        follow_redirects=True,
+        headers={"User-Agent": _USER_AGENT},
+    ) as client:
+        for model_id, slug in _PRICE_LIST_CARD_URLS.items():
+            card = _read_model_card(client, slug)
+            try:
+                ingested = await _ingested_rates(model_id)
+            except (BotoCoreError, ClientError) as exc:
+                pytest.skip(f"the AWS Price List API is not reachable: {exc}")
+            findings.extend(classify(model_id, ingested[""], card.in_region))
+            findings.extend(
+                classify(_global_key(model_id), ingested["global"], card.cross_region)
+            )
+
+    report = format_report(findings)
+    print(report)  # noqa: T201 -- shown by pytest on failure, and with -s
+    if not any(finding.outcome is Outcome.MATCH for finding in findings):
+        pytest.skip(f"No card published a rate to compare against.\n{report}")
+    unpriced = {Outcome.DRIFT, Outcome.NEW}
+    if any(finding.outcome in unpriced for finding in findings):
+        pytest.fail(
+            f"{report}\nFIX: the gateway resolves a different rate than the card, "
+            "or none at all: the Price List ingestion in stdapi/pricing.py "
+            "misreads these rows."
+        )
+
+
 @pytest.fixture(scope="module")
 def gpt_56_cyber_card() -> str:
     """The recorded Pricing section of the GPT-5.6 Cyber model card."""
@@ -1235,6 +1337,12 @@ def daybreak_blue_card() -> str:
 def gpt_6_astra_card() -> str:
     """The recorded Pricing section of the GPT-6 Astra model card."""
     return (FIXTURES_DIR / "model_card_openai_gpt_6_astra_pricing.html").read_text()
+
+
+@pytest.fixture(scope="module")
+def kimi_k3_card() -> str:
+    """The recorded Pricing section of the Kimi K3 model card."""
+    return (FIXTURES_DIR / "model_card_moonshot_ai_kimi_k3_pricing.html").read_text()
 
 
 @pytest.fixture(scope="module")
@@ -1432,6 +1540,40 @@ class TestModelCardParsing:
         assert rates is not None
         assert rates[Dimension.INPUT_TOKENS] == Decimal("0.0000088")
         assert parse_context_window(card) == 272_000
+
+    def test_a_card_without_an_in_region_row_is_read_from_us_cris(
+        self, kimi_k3_card: str
+    ) -> None:
+        """Kimi K3 prices only its cross-Region profiles: US CRIS is its regional rate.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3.html
+        """
+        assert parse_model_card(kimi_k3_card) == {
+            Dimension.INPUT_TOKENS: Decimal("0.0000033"),
+            Dimension.OUTPUT_TOKENS: Decimal("0.0000165"),
+            Dimension.CACHE_READ_TOKENS: Decimal("0.00000033"),
+            Dimension.CACHE_WRITE_TOKENS: Decimal("0.000004125"),
+        }
+        assert parse_model_card_global(kimi_k3_card) == {
+            Dimension.INPUT_TOKENS: Decimal("0.000003"),
+            Dimension.OUTPUT_TOKENS: Decimal("0.000015"),
+            Dimension.CACHE_READ_TOKENS: Decimal("0.0000003"),
+            Dimension.CACHE_WRITE_TOKENS: Decimal("0.00000375"),
+        }
+        assert parse_context_window(kimi_k3_card) is None
+
+    def test_the_in_region_row_wins_over_us_cris(self, kimi_k3_card: str) -> None:
+        """A card quoting both prices the model's own region at In-Region."""
+        card = kimi_k3_card.replace(
+            '<tr><td tabindex="-1">Global CRIS</td>',
+            '<tr><td tabindex="-1">In-Region</td><td tabindex="-1">$9.00</td>'
+            '<td tabindex="-1">$9.00</td><td tabindex="-1">$9.00</td>'
+            '<td tabindex="-1">$9.00</td></tr>'
+            '<tr><td tabindex="-1">Global CRIS</td>',
+        )
+        rates = parse_model_card(card)
+        assert rates is not None
+        assert rates[Dimension.INPUT_TOKENS] == Decimal("0.000009")
 
     def test_the_user_guide_soft_404_reads_as_a_withdrawn_card(self) -> None:
         """The 200-with-a-stub answer for an unknown page means the card is gone.

@@ -2689,6 +2689,177 @@ class TestUsagetypeTokenFallbackTierSuffixes:
         assert results[key].amount == Decimal("0.002") / 1000
 
 
+class TestMantleOnlyRuntimeModel:
+    """Kimi K3's Price List schema: "-mantle-" rows only, Global in ``service_tier``.
+
+    AWS prices Kimi K3 with rows shaped like the ones below and nothing else,
+    though the gateway serves it on bedrock-runtime. Its card and the pricing
+    page quote one rate set per routing with no split by invocation API.
+
+    Ref: stdapi/pricing.py:_resolve_tier
+         stdapi/pricing.py:_native_routing
+         stdapi/pricing.py:_apply_mantle_fallback
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3.html
+    """
+
+    #: The model every row below prices.
+    MODEL_ID: Final[str] = "moonshotai.kimi-k3"
+
+    @staticmethod
+    def _row(
+        dimension: str, inference_type: str, service_tier: str, price: str
+    ) -> dict[str, object]:
+        """Build one row as the live us-east-1 Price List publishes it (per 1K)."""
+        return _price_item(
+            {
+                "regionCode": "us-east-1",
+                "usagetype": f"USE1-moonshotai.kimi-k3-mantle-{dimension}-{service_tier}",
+                "inferenceType": inference_type,
+                "service_tier": service_tier,
+                "model": "Kimi K3",
+                "provider": "Moonshot AI",
+                "servicename": "Amazon Bedrock",
+            },
+            unit="1K tokens",
+            price=price,
+        )
+
+    @classmethod
+    def _rows(cls) -> list[dict[str, object]]:
+        """Return the standard-tier regional and Global rows, plus one flex pair."""
+        return [
+            cls._row("input-tokens", "Input tokens", "standard", "0.0033"),
+            cls._row("input-tokens", "Input tokens global", "global-standard", "0.003"),
+            cls._row("input-tokens", "Input tokens flex", "flex", "0.00165"),
+            cls._row(
+                "input-tokens", "Input tokens global flex", "global-flex", "0.0015"
+            ),
+            cls._row("output-tokens", "Output tokens", "standard", "0.0165"),
+            cls._row(
+                "output-tokens", "Output tokens global", "global-standard", "0.015"
+            ),
+            cls._row("cache-read-tokens", "Cache read tokens", "standard", "0.00033"),
+            cls._row(
+                "cache-read-tokens",
+                "Cache read tokens global",
+                "global-standard",
+                "0.0003",
+            ),
+            cls._row(
+                "cache-write-tokens-30m",
+                "Cache write tokens 30m",
+                "standard",
+                "0.004125",
+            ),
+            cls._row(
+                "cache-write-tokens-30m",
+                "Cache write tokens 30m global",
+                "global-standard",
+                "0.00375",
+            ),
+        ]
+
+    async def _load(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        extra: list[dict[str, object]] | None = None,
+    ) -> None:
+        """Load a catalog holding the rows above, through the full load path."""
+        client = _FakePricingClient({"AmazonBedrock": [*self._rows(), *(extra or [])]})
+        _use_fake_catalog(monkeypatch, client)
+        diagnostics: list[str] = []
+        await pricing._load_price_catalog(diagnostics)  # noqa: SLF001
+        assert diagnostics == []
+
+    def _per_million(
+        self,
+        dimension: Dimension,
+        *,
+        service: Service = Service.BEDROCK,
+        tier: str = "standard",
+        routing: Routing = "",
+        cache_ttl: pricing.CacheTtlBucket = "",
+    ) -> Decimal | None:
+        """Return the resolved rate per 1M tokens, or None when nothing resolves."""
+        price = resolve_price(
+            service, self.MODEL_ID, "us-east-1", dimension, tier, cache_ttl, routing
+        )
+        return None if price is None else price.amount * 1_000_000
+
+    def test_a_global_service_tier_is_a_routing_not_a_tier(self) -> None:
+        """ "global-flex" is the flex tier on the Global routing."""  # noqa: D210
+        assert _resolve_tier({"service_tier": "global-flex"}) == "flex"
+        assert _resolve_tier({"service_tier": "global-standard"}) == "standard"
+
+    async def test_a_runtime_call_resolves_the_mantle_rates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model AWS prices under Mantle only is priced on bedrock-runtime too.
+
+        Before, every Kimi K3 call resolved no price on any dimension, so the
+        gateway reported it as free.
+        """
+        await self._load(monkeypatch)
+        assert self._per_million(Dimension.INPUT_TOKENS) == Decimal("3.3")
+        assert self._per_million(Dimension.OUTPUT_TOKENS) == Decimal("16.5")
+
+    async def test_a_global_call_resolves_the_global_rate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The Global rows price the "global." profile, per tier.
+
+        Keyed as a "global-standard" tier they were unreachable, and a Global
+        call relaxed onto the dearer regional rate.
+        """
+        await self._load(monkeypatch)
+        assert self._per_million(Dimension.INPUT_TOKENS, routing="global") == Decimal(3)
+        assert self._per_million(Dimension.OUTPUT_TOKENS, routing="global") == Decimal(
+            15
+        )
+        assert self._per_million(
+            Dimension.INPUT_TOKENS, tier="flex", routing="global"
+        ) == Decimal("1.5")
+
+    async def test_the_cache_rows_are_priced(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ "Cache read tokens" and "Cache write tokens 30m" rows are read, not dropped.
+
+        The 30-minute write has no TTL bucket of its own, so it keys
+        undifferentiated and prices a write of any recorded TTL.
+        """  # noqa: D210
+        await self._load(monkeypatch)
+        assert self._per_million(Dimension.CACHE_READ_TOKENS) == Decimal("0.33")
+        assert self._per_million(
+            Dimension.CACHE_READ_TOKENS, routing="global"
+        ) == Decimal("0.3")
+        assert self._per_million(Dimension.CACHE_WRITE_TOKENS) == Decimal("4.125")
+        assert self._per_million(
+            Dimension.CACHE_WRITE_TOKENS, routing="global", cache_ttl="5m"
+        ) == Decimal("3.75")
+
+    async def test_a_model_with_a_runtime_row_keeps_its_own_rate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The Mantle rows are a fallback: a published runtime rate is never replaced."""
+        runtime_row = _price_item(
+            {
+                "regionCode": "us-east-1",
+                "usagetype": "USE1-moonshotai.kimi-k3-input-tokens",
+                "inferenceType": "Input tokens",
+                "model": "Kimi K3",
+            },
+            unit="1K tokens",
+            price="0.004",
+        )
+        await self._load(monkeypatch, [runtime_row])
+        assert self._per_million(Dimension.INPUT_TOKENS) == Decimal(4)
+        assert self._per_million(Dimension.OUTPUT_TOKENS) is None
+        assert self._per_million(
+            Dimension.INPUT_TOKENS, service=Service.BEDROCK_MANTLE
+        ) == Decimal("3.3")
+
+
 class TestNovaSonicModality:
     """Nova Sonic (speech-to-speech) rows: text-modality tokens billed, speech-modality rows unmapped.
 
