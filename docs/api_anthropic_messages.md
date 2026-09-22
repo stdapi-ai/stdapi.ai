@@ -174,6 +174,7 @@ Reduce costs and improve response times by caching frequently-used prompt compon
 
 - **Anthropic Claude**: Full support for system, messages, and tools caching
 - **Amazon Nova**: Support for system and messages caching
+- **Moonshot Kimi K3 and OpenAI GPT-6**: Automatic — a repeated prompt prefix is cached without `cache_control` and reported in `usage.cache_read_input_tokens`; `cache_control` markers are accepted and ignored
 
 !!! info "Documentation"
     See [Amazon Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models) for the complete list of models supporting prompt caching.

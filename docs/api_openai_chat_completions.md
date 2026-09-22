@@ -165,6 +165,7 @@ Reduce costs and improve response times by caching frequently-used prompt compon
 
 - **Anthropic Claude**: Full support for system, messages, and tools caching
 - **Amazon Nova**: Support for system and messages caching
+- **Moonshot Kimi K3 and OpenAI GPT-6**: Automatic — a repeated prompt prefix is cached with no parameter at all, and the cached tokens are reported in `usage.prompt_tokens_details.cached_tokens`. Cache breakpoints are accepted and ignored. `prompt_cache_key` is ignored too, except on GPT-6 served by [Bedrock Mantle](#bedrock-mantle) (its default where a configured Region offers it), where it is forwarded to the model as a cache routing key
 
 !!! info "Documentation"
     See [Amazon Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models) for the complete list of models supporting prompt caching.
@@ -547,6 +548,7 @@ This API supports several approaches to control [Amazon Bedrock reasoning](https
     - **DeepSeek V3 models**: `reasoning_effort` parameter only
     - **OpenAI GPT-5.x and GPT-6**: `reasoning_effort` parameter only
     - **OpenAI gpt-oss**: `reasoning_effort` parameter only, on a `low` / `medium` / `high` scale
+    - **Moonshot Kimi K3**: `reasoning_effort` parameter only (the Moonshot `thinking` toggle below also turns reasoning off)
 
     Models listed as effort-only still accept a token budget: it turns reasoning
     on, and the depth comes from their own effort scale.
@@ -560,13 +562,13 @@ Use the `reasoning_effort` parameter with predefined effort levels. This format 
 
 **Available Levels:**
 
-- `none` - Disable reasoning (accepted but not honored on Claude Opus 5.5 and later, Fable and Mythos, which always reason: the model's default adaptive mode is used, the response still carries reasoning content and its output tokens are still billed; the same applies to OpenAI GPT-6 Astra and gpt-oss, which reason at their default level)
-- `minimal` - Quick responses with minimal reasoning (sent as `low` to the models without a minimal level, OpenAI GPT-5.x, GPT-6 and gpt-oss among them)
+- `none` - Disable reasoning (accepted but not honored on Claude Opus 5.5 and later, Fable and Mythos, which always reason: the model's default adaptive mode is used, the response still carries reasoning content and its output tokens are still billed; the same applies to OpenAI GPT-6 Astra, which reasons at its default level, and to gpt-oss, except on [Bedrock Mantle](#bedrock-mantle), where gpt-oss receives `none` as sent)
+- `minimal` - Quick responses with minimal reasoning (sent as `low` to the models without a minimal level: OpenAI GPT-5.x and GPT-6 wherever they are served, and gpt-oss and Moonshot Kimi outside Bedrock Mantle)
 - `low` - Light reasoning for straightforward tasks
 - `medium` - Balanced reasoning for most use cases
 - `high` - Deep reasoning for complex problems
 - `xhigh` - Maximum reasoning for complex problems
-- `max` - Its own (higher) effort tier on Claude Sonnet/Opus 4.6 and later, Fable and Mythos, and on OpenAI GPT-5.x and GPT-6, which receive it unchanged; collapsed onto the model's top reasoning tier on the fixed-scale models (Claude 3.7 - 4.5, Amazon Nova 2, DeepSeek, Kimi, gpt-oss). Claude 4.6 maps `xhigh` down to `high`. Models other than Claude served through [Bedrock Mantle](#bedrock-mantle) receive the level as sent
+- `max` - Its own (higher) effort tier on Claude Sonnet/Opus 4.6 and later, Fable and Mythos, and on OpenAI GPT-5.x, GPT-6 and Moonshot Kimi K3, which receive it unchanged; collapsed onto the model's top reasoning tier on the fixed-scale models (Claude 3.7 - 4.5, Amazon Nova 2, DeepSeek, Kimi K2, gpt-oss). Claude 4.6 maps `xhigh` down to `high`. OpenAI GPT-5.x and GPT-6 get the `minimal` and `none` handling above wherever they are served; other models served through [Bedrock Mantle](#bedrock-mantle) receive the level as sent
 
 **What You Get:**
 

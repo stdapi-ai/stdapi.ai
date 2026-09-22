@@ -23,16 +23,17 @@ _REASONING_OVERRIDE: dict[Effort | None, KimiReasoning] = {
 
 
 class ChatModel(_BaseChatModel):
-    """Moonshot Kimi K2-specific chat model implementation.
+    """Moonshot Kimi K2 generation chat model implementation (K2 Thinking, K2.5).
 
-    Supports Kimi-specific thinking/reasoning configuration via
-    ``additionalModelRequestFields.thinking`` and ``.reasoning_effort``.
+    Configures reasoning through the K2 generation's
+    ``additionalModelRequestFields.thinking`` and ``.reasoning_effort``; Kimi K3
+    ignores both and has a class of its own.
     """
 
     __slots__ = ()
 
-    #: Matches both Bedrock provider prefixes for any Kimi K2.x model, open-ended on version.
-    MATCHER = re_compile(r"^moonshot(?:ai)?\.kimi-k2")
+    #: Kimi K2.x under either Bedrock provider prefix; never K20 and later, which K3's class takes.
+    MATCHER = re_compile(r"^moonshot(?:ai)?\.kimi-k2(?!\d)")
 
     def _req_configure_reasoning(
         self,

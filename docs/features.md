@@ -294,7 +294,7 @@ A deployment spanning several AWS regions draws on more than one Bedrock quota a
 
 | Feature                            | Description                                                                                                            |
 |------------------------------------|------------------------------------------------------------------------------------------------------------------------|
-| **Prompt Caching**                 | Cache system prompts, messages and tools section by section, at the TTL you choose — a long system prompt is billed at the cache-read rate on later turns instead of in full, with cache metrics in the response |
+| **Prompt Caching**                 | Cache system prompts, messages and tools section by section, at the TTL you choose — a long system prompt is billed at the cache-read rate on later turns instead of in full, with cache metrics in the response; automatic, with no parameter, on Moonshot Kimi K3 and OpenAI GPT-6 |
 | **Reasoning Modes**                | Extended thinking on Claude, Nova, OpenAI GPT, Kimi and DeepSeek, driven by effort level or by a token budget          |
 | **Context Editing**                | Claude clears the oldest tool results and thinking blocks of a long agent conversation before it reaches the model — Anthropic's [`context_management`](api_anthropic_messages.md#context-editing), with the applied edits reported back and honored by token counting |
 | **Bedrock Guardrails**             | Content filtering and safety policies applied to traffic from every client, with the trace detail you choose           |

@@ -382,7 +382,7 @@ Add `"include": ["reasoning.encrypted_content"]` to attach an `encrypted_content
 !!! warning "Cache Creation Costs"
     Cache creation incurs a higher cost than regular token processing. Only use prompt caching when you expect a high cache hit ratio across multiple requests with similar prompts.
 
-Prompt caching reduces latency and costs by caching repetitive prompt components. Set the `prompt_cache_key` parameter to enable:
+Prompt caching reduces latency and costs by caching repetitive prompt components. Moonshot Kimi K3 and OpenAI GPT-6 cache a repeated prompt prefix automatically, with no parameter — see [Chat Completions prompt caching](api_openai_chat_completions.md#prompt-caching) for how they treat the settings below. On the other models, set the `prompt_cache_key` parameter to enable:
 
 ```bash
 curl -X POST "$BASE/v1/responses" \
