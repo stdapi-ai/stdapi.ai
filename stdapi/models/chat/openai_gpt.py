@@ -3,11 +3,20 @@
 from re import compile as re_compile
 
 from stdapi.models.chat._adapters._common import NoServerTools
-from stdapi.models.chat._default import ChatModel as _BaseChatModel
+from stdapi.models.chat._reasoning_effort import ReasoningEffortChatModel
+
+#: GPT Astra models, with or without a ``daybreak-<edition>-`` qualifier, which reject effort ``none``.
+ALWAYS_REASONING_MATCHER = re_compile(r"^openai\.gpt-(?:daybreak-\w+-)?[\d.]+-astra")
 
 
-class ChatModel(_BaseChatModel):
+class ChatModel(ReasoningEffortChatModel):
     """OpenAI GPT-specific chat model implementation.
+
+    Reasoning is set by ``additionalModelRequestFields.reasoning.effort``: probed
+    on GPT-5.6 and GPT-6, it takes ``none`` through ``max`` (``low`` through
+    ``max`` on GPT-6 Astra) and rejects ``minimal``, and the flat
+    ``reasoning_effort`` and ``thinking`` fields are rejected as unknown
+    parameters.
 
     Amazon Bedrock serves the OpenAI server tools (web search, code interpreter)
     on the Bedrock Mantle endpoint only: on ``bedrock-runtime`` the Responses API
@@ -39,3 +48,8 @@ class ChatModel(_BaseChatModel):
         "Amazon Bedrock Guardrails are configured, nor to an API key carrying "
         "an AWS credential of its own: both are always served by bedrock-runtime."
     )
+
+    @property
+    def REASONING_DISABLE_SUPPORTED(self) -> bool:  # type: ignore[override]  # noqa: N802
+        """Whether the model accepts ``reasoning.effort: "none"``."""
+        return ALWAYS_REASONING_MATCHER.match(self._model_id) is None

@@ -4,13 +4,13 @@ from re import Pattern
 from re import compile as re_compile
 from typing import TYPE_CHECKING, ClassVar
 
-from stdapi.models.chat._mantle._default import ChatModel as MantleChatModel
+from stdapi.models.chat._mantle._openai_gpt import OpenAIGptChatModel
 
 if TYPE_CHECKING:
     from stdapi.aws_bedrock_mantle import MantleApi, Surface
 
 
-class ChatModel(MantleChatModel):
+class ChatModel(OpenAIGptChatModel):
     """OpenAI GPT-5 chat model (e.g. ``openai.gpt-5.6-sol``).
 
     Includes the enrollment-gated Daybreak variants, ``openai.gpt-5.6-cyber``

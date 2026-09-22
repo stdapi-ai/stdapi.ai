@@ -733,8 +733,8 @@ On models whose reasoning depth is an effort level rather than a token budget (A
 !!! note "`display` Not Honored"
     The `display` field (`summarized`/`omitted`) is accepted but has no effect: Bedrock's reasoning configuration has no equivalent, so full thinking text is always returned.
 
-!!! note "Disabled Thinking Not Honored on Claude Opus 5.5+, Fable and Mythos"
-    These models always reason. The request is accepted and a warning is recorded in the request log, but the disabled configuration is dropped and the model's default adaptive mode is used: the response still carries thinking blocks and their output tokens are still billed. Use `output_config.effort` to lower the depth instead.
+!!! note "Disabled Thinking Not Honored on Claude Opus 5.5+, Fable, Mythos, OpenAI GPT-6 Astra and gpt-oss"
+    These models always reason. The request is accepted and a warning is recorded in the request log, but the disabled configuration is dropped and the model's default reasoning is used (adaptive mode on Claude): the response may still carry thinking blocks, and their output tokens are still billed. Use `output_config.effort` to lower the depth instead.
 
 **Response with Thinking:**
 
