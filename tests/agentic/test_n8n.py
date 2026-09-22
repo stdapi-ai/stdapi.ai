@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
+from stdapi.config import SETTINGS
 from tests.conftest import SAMPLES_DIR, smallest_image_size
 
 from ._runner import ModelConfig, assert_result, log_metrics, run_agent
@@ -121,6 +122,9 @@ _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 #: An empty or truncated body would still decode to *something*; this floor is
 #: what separates a real MP3 frame or PNG raster from a stub.
 _MIN_MEDIA_BYTES = 1024
+
+#: Root of the Ollama routes as the gateway serves and logs them, prefix included.
+_OLLAMA_API = f"{SETTINGS.ollama_routes_prefix}/api"
 
 
 def _logs_observable(server: AgenticServer) -> bool:
@@ -767,7 +771,9 @@ class TestOllamaChat:
         assert "tokyo" in str(entry["text"]).lower()
 
         _assert_called(
-            _gateway_calls(agentic_server, log_start), "/api/chat", model_config.model
+            _gateway_calls(agentic_server, log_start),
+            f"{_OLLAMA_API}/chat",
+            model_config.model,
         )
 
 
@@ -828,7 +834,7 @@ class TestOllamaModel:
 
         _assert_called(
             _gateway_calls(agentic_server, log_start),
-            "/api/generate",
+            f"{_OLLAMA_API}/generate",
             model_config.model,
         )
 
@@ -903,7 +909,9 @@ class TestOllamaEmbeddings:
         assert scores[0] > scores[-1], "every document scored identically"
 
         _assert_called(
-            _gateway_calls(agentic_server, log_start), "/api/embed", model_config.model
+            _gateway_calls(agentic_server, log_start),
+            f"{_OLLAMA_API}/embed",
+            model_config.model,
         )
 
 

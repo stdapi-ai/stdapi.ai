@@ -177,6 +177,9 @@ _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 #: Openings an MP3 body may have: an ID3 tag, or a bare frame sync.
 _MP3_MAGIC = (b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")
 
+#: Root of the Ollama routes as the gateway serves and logs them, prefix included.
+_OLLAMA_API = f"{SETTINGS.ollama_routes_prefix}/api"
+
 
 def _gateway_url(server: AgenticServer) -> str:
     """Return the gateway's base URL as seen from inside the container.
@@ -475,12 +478,15 @@ class TestOpenWebUIOllamaConnection:
         log_start = len(agentic_server.logs)
         verified = open_webui.post(
             "/ollama/verify",
-            json={"url": _gateway_url(agentic_server), "key": agentic_server.api_key},
+            json={
+                "url": f"{_gateway_url(agentic_server)}{SETTINGS.ollama_routes_prefix}",
+                "key": agentic_server.api_key,
+            },
         )
         assert verified.status_code == 200, verified.text[:500]
         reported = verified.json()["version"]
         assert _VERSION.match(reported), reported
-        _assert_paths(agentic_server, log_start, {"/api/version"})
+        _assert_paths(agentic_server, log_start, {f"{_OLLAMA_API}/version"})
 
     def test_the_model_picker_is_built_from_the_tags_route(
         self, open_webui: httpx.Client, agentic_server: AgenticServer
@@ -500,7 +506,7 @@ class TestOpenWebUIOllamaConnection:
         assert tagged.status_code == 200, tagged.text[:500]
         names = {model["model"] for model in tagged.json()["models"]}
         assert _OLLAMA_CHAT_MODEL in names, sorted(names)[:20]
-        _assert_paths(agentic_server, log_start, {"/api/tags"})
+        _assert_paths(agentic_server, log_start, {f"{_OLLAMA_API}/tags"})
 
         listed = open_webui.get("/api/models")
         assert listed.status_code == 200, listed.text[:500]
@@ -539,7 +545,7 @@ class TestOpenWebUIOllamaConnection:
         assert response.status_code == 200, response.text[:500]
         content = response.json()["message"]["content"]
         assert _CHAT_KEYWORD.lower() in content.lower(), content[:500]
-        _assert_routes(agentic_server, log_start, {"/api/chat": _CHAT_MODEL})
+        _assert_routes(agentic_server, log_start, {f"{_OLLAMA_API}/chat": _CHAT_MODEL})
 
     def test_the_loaded_models_panel_renders_an_empty_backend(
         self, open_webui: httpx.Client, agentic_server: AgenticServer
@@ -562,7 +568,7 @@ class TestOpenWebUIOllamaConnection:
         running = open_webui.get("/ollama/api/ps")
         assert running.status_code == 200, running.text[:500]
         assert running.json()["models"] == []
-        _assert_paths(agentic_server, log_start, {"/api/ps"})
+        _assert_paths(agentic_server, log_start, {f"{_OLLAMA_API}/ps"})
 
     def test_pull_is_accepted_and_delete_is_refused(
         self, open_webui: httpx.Client, agentic_server: AgenticServer
@@ -594,7 +600,9 @@ class TestOpenWebUIOllamaConnection:
         )
         assert deleted.status_code == 400, deleted.text[:500]
         assert "does not store models" in deleted.text, deleted.text[:500]
-        _assert_paths(agentic_server, log_start, {"/api/pull", "/api/delete"})
+        _assert_paths(
+            agentic_server, log_start, {f"{_OLLAMA_API}/pull", f"{_OLLAMA_API}/delete"}
+        )
 
 
 class TestOpenWebUIAudio:
