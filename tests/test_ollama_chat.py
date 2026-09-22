@@ -504,6 +504,10 @@ def test_chat_reads_an_image(
     assert "red" in answer.message.content.lower()
 
 
+@pytest.mark.retry(
+    "whether a vision model reads an image a tool returned or declines it is a "
+    "model decision, which the pinned temperature makes rarer but does not remove"
+)
 @pytest.mark.parametrize("colour", sorted(SQUARE_BY_COLOUR))
 def test_chat_reads_an_image_a_tool_returned(
     ollama_client: ollama.Client, ollama_vision_model: str, colour: str
