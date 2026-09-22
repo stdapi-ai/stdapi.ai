@@ -207,9 +207,9 @@ uv run pytest tests/agentic/test_pi.py --agentic -k chat-completions   # one rou
 uv run pytest tests/agentic/test_openclaw.py --agentic -k anthropic   # one wire format
 uv run pytest tests/agentic/test_hermes.py --agentic -k "1h or 5m"   # the cache TTL tiers
 uv run pytest tests/agentic/test_qwen_code.py --agentic   # the reasoning round trip
-uv run pytest tests/agentic/test_n8n.py --agentic --expensive   # + the image tests
+uv run pytest tests/agentic/test_n8n.py --agentic --image-generation   # + the image tests
 uv run pytest tests/agentic/test_rag_haystack.py --agentic   # the rerank route
-uv run pytest tests/agentic/test_open_webui.py --agentic   # the documented env block
+uv run pytest tests/agentic/test_open_webui.py --agentic   # the documented env block (images: + --image-generation)
 uv run pytest tests/agentic/test_docling.py --agentic         # the VLM vision call
 uv run pytest tests/agentic/test_wyoming_audio.py --agentic   # streamed TTS
 uv run pytest tests/agentic/test_home_assistant.py --agentic   # the conversation agent

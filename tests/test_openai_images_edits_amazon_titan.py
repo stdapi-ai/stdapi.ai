@@ -50,7 +50,7 @@ class TestAmazonTitanEditing:
          stdapi/routes/_images_common.py:build_images_response
     """
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_edit_with_extra_parameters(
         self,
@@ -95,7 +95,7 @@ class TestAmazonTitanEditing:
         assert response.background == "opaque"
         assert response.quality == "medium"
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", TITAN_ALL)
     def test_edit_b64_single(
         self,
@@ -152,7 +152,7 @@ class TestAmazonTitanEditing:
             == response.usage.input_tokens + response.usage.output_tokens
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_edit_with_outpainting_task_type(
         self,
@@ -188,7 +188,7 @@ class TestAmazonTitanEditing:
         assert response.size == TITAN_SIZE
         assert response.output_format == "png"
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_edit_with_outpainting_task_type_and_alpha_mask(
         self,
@@ -232,7 +232,7 @@ class TestAmazonTitanEditing:
             "only the source image and the mask are input images"
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_edit_with_background_removal_task_type(
         self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
@@ -264,7 +264,7 @@ class TestAmazonTitanEditing:
         assert response.size == TITAN_SIZE
         assert response.output_format == "png"
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_edit_inpainting_without_mask(
         self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
@@ -297,7 +297,7 @@ class TestAmazonTitanEditing:
         assert response.size == TITAN_SIZE
         assert response.output_format == "png"
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_edit_outpainting_without_mask(
         self, openai_client: OpenAI, sample_image_file: bytes, model_id: str

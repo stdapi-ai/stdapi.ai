@@ -7,7 +7,7 @@ the ``initialize`` handshake and ``tools/call`` requests against ``/mcp``, and
 53 exposed tools get at least one call (stored/derived resources are created
 through MCP too), so a schema or transport regression on any tool is caught by
 the suite. The costly lanes keep their usual gates: image tools require
-``--expensive`` and the video lifecycle requires ``--video``.
+``--image-generation`` and the video lifecycle requires ``--video``.
 
 Every MCP interaction runs inside the TestClient's portal event loop: the MCP
 session manager's task group binds to the loop of the first ``/mcp`` request
@@ -565,7 +565,7 @@ class TestAudioTools:
 class TestImageTools:
     """Image route families called through their MCP tools (JSON request format)."""
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_openai_image_generation(
         self, mcp_call: McpCall, image_generation_model: str, image_generation_size: str
     ) -> None:
@@ -586,7 +586,7 @@ class TestImageTools:
         )
         assert payload["data"][0]["b64_json"]
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_openai_image_edit(
         self, mcp_call: McpCall, sample_image_file_base64: str
     ) -> None:
@@ -607,7 +607,7 @@ class TestImageTools:
         )
         assert payload["data"][0]["b64_json"]
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_openai_image_variation(
         self, mcp_call: McpCall, sample_image_file_base64: str
     ) -> None:

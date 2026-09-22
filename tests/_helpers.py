@@ -224,3 +224,32 @@ def assert_embedding_list(
             "batch returned vectors of different widths"
         )
     return vectors
+
+
+class FakeCollectedItem:
+    """A collected item exposing just the marker API ``pytest_collection_modifyitems`` uses."""
+
+    def __init__(self, *markers: pytest.MarkDecorator) -> None:
+        self.nodeid = "tests/test_x.py::test_y"
+        self._marks = [marker.mark for marker in markers]
+        self.fixturenames: tuple[str, ...] = ()
+        self.added: list[Any] = []
+
+    def get_closest_marker(self, name: str) -> Any | None:  # noqa: ANN401
+        """Return the first of the item's own markers that *name* matches.
+
+        Args:
+            name: Marker name to look up.
+
+        Returns:
+            The matching mark, or None when the item carries none.
+        """
+        return next((mark for mark in self._marks if mark.name == name), None)
+
+    def add_marker(self, marker: Any) -> None:  # noqa: ANN401
+        """Record a marker the hook applied.
+
+        Args:
+            marker: Marker the hook added.
+        """
+        self.added.append(marker)

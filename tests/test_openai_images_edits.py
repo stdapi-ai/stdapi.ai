@@ -59,7 +59,7 @@ class TestImagesEditsBasic:
          stdapi/routes/openai_images_edits.py:edit_images
     """
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.gateway(
         "OpenAI retired dall-e-2, leaving gpt-image-1 as the only model its "
         "edits endpoint serves; Stability inpaint is Bedrock-only, and its "
@@ -112,7 +112,7 @@ class TestImagesEditsBasic:
         assert response.usage.output_tokens > 0
         validate_image_usage(response.usage)
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.gateway(
         "gpt-image-1, the only model left on OpenAI's edits endpoint after "
         "dall-e-2 was retired, rejects response_format outright and always "
@@ -420,7 +420,7 @@ class TestImagesEditsBasic:
             exc_info.value
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.gateway(
         "the single-event stream asserted here is a property of the "
         "Bedrock-only Stability inpaint model, which emits no preview frames; "
@@ -465,7 +465,7 @@ class TestImagesEditsBasic:
         assert [str(event.type) for event in events] == ["image_edit.completed"]
         assert validate_base64_image(events[-1].b64_json) == "png"
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.gateway(
         "the Bedrock-only Stability inpaint model this pins does not exist "
         "upstream, and gpt-image-1 -- all OpenAI serves on this endpoint since "

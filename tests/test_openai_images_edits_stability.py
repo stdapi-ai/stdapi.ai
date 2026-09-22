@@ -510,7 +510,7 @@ class TestStabilityEditing:
          stdapi/models/image/stability_stable_diffusion.py:TextToImageJob
     """
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", STABILITY_ALL)
     def test_edit_b64_single(
         self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
@@ -553,7 +553,7 @@ class TestStabilityUpscaleModels:
          stdapi/models/image/stability_stable_image_edit.py:_SimpleEditJob
     """
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_fast_upscale(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
@@ -605,7 +605,7 @@ class TestStabilityUpscaleModels:
             f"{aspect_drift:.2%}"
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     # Both upscale models are served by stability_stable_image_edit.py, the same
     # job the control-sketch, control-structure, style-guide and outpaint tests
     # already exercise, so one of the pair proves the path; it is the cheaper one.
@@ -684,7 +684,7 @@ class TestStabilityEditModels:
          https://stdapi.ai/api_openai_images_edits/
     """
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_search_recolor(self, openai_client: OpenAI) -> None:
         """Search-and-recolor recolors the region named by the ``select_prompt`` extra.
 
@@ -758,7 +758,7 @@ class TestStabilityEditModels:
             exc_info.value
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_search_replace(
         self, openai_client: OpenAI, chat_vision_judge_model: str
     ) -> None:
@@ -860,7 +860,7 @@ class TestStabilityEditModels:
             exc_info.value
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_inpaint(self, openai_client: OpenAI) -> None:
         """Inpainting regenerates the masked area and leaves the rest alone.
 
@@ -923,7 +923,7 @@ class TestStabilityEditModels:
             f"{_MIN_INPAINT_DELTA_RATIO:.0f}x ratio the polarity requires"
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_inpaint_without_mask(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
@@ -950,7 +950,7 @@ class TestStabilityEditModels:
         assert len(data) == 1
         decoded_png(data[0].b64_json)
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_erase(self, openai_client: OpenAI) -> None:
         """Object erasure consumes the mask and ignores the prompt.
 
@@ -986,7 +986,7 @@ class TestStabilityEditModels:
         # Save output for manual inspection
         (output_dir / "stability_erase_result.jpg").write_bytes(output_data)
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_remove_background(self, openai_client: OpenAI) -> None:
         """Background removal isolates the subject from a prompt-free request.
 
@@ -1054,7 +1054,7 @@ class TestStabilityControlModels:
          stdapi/models/image/stability_stable_image_edit.py:_SimpleEditJob
     """
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_control_sketch(self, openai_client: OpenAI) -> None:
         """Control-sketch turns a sketch into a rendered scene described by the prompt.
 
@@ -1107,7 +1107,7 @@ class TestStabilityControlModels:
             f"over the {_MAX_RENDERED_GREY_SHARE:.0%} ceiling"
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_control_structure(self, openai_client: OpenAI) -> None:
         """Control-structure answers with a restyled frame at the source resolution.
 
@@ -1172,7 +1172,7 @@ class TestStabilityStyleModels:
          stdapi/models/image/stability_stable_style_transfer.py:_StyleTransferJob
     """
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_style_guide(self, openai_client: OpenAI, sample_image_file: bytes) -> None:
         """Style-guide takes a single image as the style reference for the prompt.
 
@@ -1193,7 +1193,7 @@ class TestStabilityStyleModels:
         assert len(data) == 1
         decoded_png(data[0].b64_json)
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_style_transfer_with_mask_as_style_image(
         self, openai_client: OpenAI
     ) -> None:
@@ -1237,7 +1237,7 @@ class TestStabilityStyleModels:
 
         _assert_style_applied(response.size, input_image, output_data)
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_style_transfer_with_style_image_parameter(
         self, openai_client: OpenAI
     ) -> None:

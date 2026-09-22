@@ -41,7 +41,7 @@ class TestAmazonNovaCanvasVariations:
     as a conditioning/reference image instead.
     """
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_ALL)
     def test_variation_b64_single(
         self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
@@ -79,7 +79,7 @@ class TestAmazonNovaCanvasVariations:
             == response.usage.input_tokens + response.usage.output_tokens
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_variation_with_text_image_task_type(
         self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
@@ -103,7 +103,7 @@ class TestAmazonNovaCanvasVariations:
         assert response.data[0].b64_json is not None
         assert response.size == NOVA_CANVAS_SIZE
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_variation_with_color_guided_task_type(
         self, openai_client: OpenAI, sample_image_file: bytes, model_id: str

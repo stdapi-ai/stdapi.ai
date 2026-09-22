@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from tests._helpers import FakeCollectedItem
 from tests.conftest import (
     _DEFAULT_RERUN_DELAY,
     _DEFAULT_RERUNS,
@@ -33,26 +34,7 @@ class _FakeConfig:
         return False
 
 
-class _FakeItem:
-    """A collected item exposing just the marker API the hook uses."""
-
-    def __init__(self, marker: pytest.MarkDecorator | None) -> None:
-        self.nodeid = "tests/test_x.py::test_y"
-        self._marker = None if marker is None else marker.mark
-        self.added: list[Any] = []
-
-    def get_closest_marker(self, name: str) -> Any | None:  # noqa: ANN401
-        """Return the item's own marker when *name* matches it."""
-        if self._marker is not None and self._marker.name == name:
-            return self._marker
-        return None
-
-    def add_marker(self, marker: Any) -> None:  # noqa: ANN401
-        """Record a marker the hook applied."""
-        self.added.append(marker)
-
-
-def _run(marker: pytest.MarkDecorator | None) -> _FakeItem:
+def _run(marker: pytest.MarkDecorator | None) -> FakeCollectedItem:
     """Collect a single item carrying *marker* and return it afterwards.
 
     Args:
@@ -61,7 +43,7 @@ def _run(marker: pytest.MarkDecorator | None) -> _FakeItem:
     Returns:
         The item, with whatever markers the hook added recorded on it.
     """
-    item = _FakeItem(marker)
+    item = FakeCollectedItem() if marker is None else FakeCollectedItem(marker)
     pytest_collection_modifyitems(
         _FakeConfig(),  # type: ignore[arg-type]
         [item],  # type: ignore[list-item]
@@ -69,7 +51,7 @@ def _run(marker: pytest.MarkDecorator | None) -> _FakeItem:
     return item
 
 
-def _flaky_marks(item: _FakeItem) -> Iterator[Any]:
+def _flaky_marks(item: FakeCollectedItem) -> Iterator[Any]:
     """Yield every ``flaky`` mark the hook put on *item*."""
     return (mark.mark for mark in item.added if mark.mark.name == "flaky")
 

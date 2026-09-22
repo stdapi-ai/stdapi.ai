@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from tests._helpers import FakeCollectedItem
 from tests.conftest import _SELF_TIMED_MARKERS, pytest_collection_modifyitems
 
 if TYPE_CHECKING:
@@ -30,27 +31,9 @@ class _FakeConfig:
         return False
 
 
-class _FakeItem:
-    """A collected item exposing just the marker API the hook uses."""
-
-    def __init__(self, *markers: pytest.MarkDecorator) -> None:
-        self.nodeid = "tests/test_x.py::test_y"
-        self._marks = [marker.mark for marker in markers]
-        self.fixturenames: tuple[str, ...] = ()
-        self.added: list[Any] = []
-
-    def get_closest_marker(self, name: str) -> Any | None:  # noqa: ANN401
-        """Return the first of the item's own markers that *name* matches."""
-        return next((mark for mark in self._marks if mark.name == name), None)
-
-    def add_marker(self, marker: Any) -> None:  # noqa: ANN401
-        """Record a marker the hook applied."""
-        self.added.append(marker)
-
-
 def _timeouts(*markers: pytest.MarkDecorator) -> Iterator[Any]:
     """Yield every ``timeout`` mark the hook puts on an item carrying *markers*."""
-    item = _FakeItem(*markers)
+    item = FakeCollectedItem(*markers)
     pytest_collection_modifyitems(
         _FakeConfig(),  # type: ignore[arg-type]
         [item],  # type: ignore[list-item]

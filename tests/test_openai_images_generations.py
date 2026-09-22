@@ -474,7 +474,7 @@ class TestImageGeneration:
          stdapi/types/openai_images.py:ImageGenerateParams
     """
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_image_generation_default_response_format_is_url(
         self,
         openai_client: OpenAI,
@@ -520,7 +520,7 @@ class TestImageGeneration:
             validate_url_format(image.url)
             assert image.b64_json is None, "the url default must not inline base64 data"
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_multiple_images_generation(
         self,
         openai_client: OpenAI,
@@ -567,7 +567,7 @@ class TestImageGeneration:
             "each generated image must be returned under its own URL"
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_response_format_b64_json(
         self,
         openai_client: OpenAI,
@@ -616,7 +616,7 @@ class TestImageGeneration:
                 "Reported output_format must match the returned bytes"
             )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     # One size only: every other live test here already runs at the fixture's
     # default, so a second value would re-prove the same acceptance branch.
     @pytest.mark.parametrize("size", ["512x512"])
@@ -653,7 +653,7 @@ class TestImageGeneration:
                 f"Reported size must be WIDTHxHEIGHT, got {response.size}"
             )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_quality_parameter(
         self,
         openai_client: OpenAI,
@@ -699,7 +699,7 @@ class TestImageGeneration:
                 "the Bedrock premium tier must be reported as OpenAI quality 'high'"
             )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.gateway
     def test_style_parameter(
         self,
@@ -740,7 +740,7 @@ class TestImageGeneration:
         assert response.data[0].url is not None
         validate_url_format(response.data[0].url)
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_stream_parameter(
         self,
         openai_client: OpenAI,
@@ -937,7 +937,7 @@ class TestImageGeneration:
             expected_param="response_format",
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_invalid_quality_error(
         self,
         openai_client: OpenAI,
@@ -1005,7 +1005,7 @@ class TestImageGeneration:
             "refused, invalid value"
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_invalid_style_error(
         self,
         openai_client: OpenAI,
@@ -1166,7 +1166,7 @@ class TestImageGenerationUsage:
     Ref: stdapi/models/image/__init__.py:ImageModelBase._record_invoke_usage
     """
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_image_generation_usage_logged(
         self,
         local_test_client: TestClientType,

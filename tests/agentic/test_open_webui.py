@@ -651,6 +651,7 @@ class TestOpenWebUIAudio:
         )
 
 
+@pytest.mark.image_generation
 class TestOpenWebUIImages:
     """The Image Generation section of the integration document.
 

@@ -581,8 +581,16 @@ SAMPLES_DIR = Path(__file__).parent / "samples"
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 _OPENAI_ORGANIZATION = "tests_stdapi.ai"
-#: Markers whose tests are collected only when the matching ``--<marker>`` flag is passed.
-_OPT_IN_MARKERS = ("expensive", "agentic", "slow", "video", "container", "drift")
+#: Markers whose tests run only when the matching ``--<marker>`` flag (``_`` as ``-``) is passed.
+_OPT_IN_MARKERS = (
+    "expensive",
+    "agentic",
+    "slow",
+    "video",
+    "image_generation",
+    "container",
+    "drift",
+)
 #: Markers of the lanes whose own subprocess budgets already exceed the global timeout.
 _SELF_TIMED_MARKERS = ("agentic", "container")
 #: Fallback skip reason for a ``gateway`` marker that names none of its own.
@@ -664,6 +672,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--video", action="store_true", default=False, help="Run video generation tests"
     )
     parser.addoption(
+        "--image-generation",
+        action="store_true",
+        default=False,
+        help="Run image generation, edit and variation tests",
+    )
+    parser.addoption(
         "--container",
         action="store_true",
         default=False,
@@ -700,7 +714,8 @@ def pytest_collection_modifyitems(
     ``--use-official-api`` selects a remote target; ``gateway``-marked tests are
     skipped only for ``--use-official-api``, since a deployed gateway can serve
     them but the upstream vendors cannot; the ``_OPT_IN_MARKERS`` tests are
-    skipped unless their matching flag is passed.
+    skipped unless their matching flag is passed, the marker's underscores
+    written as hyphens (``image_generation`` needs ``--image-generation``).
 
     ``gateway`` takes an optional reason -- ``@pytest.mark.gateway("Amazon Polly
     is not available on the official OpenAI API")`` -- so a whole module or class
@@ -778,8 +793,9 @@ def pytest_collection_modifyitems(
     if config.getoption("--offline"):
         skip("Needs a live service (--offline selected)", needs_live_service)
     for opt_in in _OPT_IN_MARKERS:
-        if not config.getoption(f"--{opt_in}"):
-            skip(f"Need --{opt_in} option to run this test", marked(opt_in))
+        flag = f"--{opt_in.replace('_', '-')}"
+        if not config.getoption(flag):
+            skip(f"Need {flag} option to run this test", marked(opt_in))
     apply_retries()
     lift_timeout_on_self_timed_lanes()
 

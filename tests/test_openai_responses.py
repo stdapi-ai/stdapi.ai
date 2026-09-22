@@ -2117,7 +2117,7 @@ class TestImageGenerationTool:
          stdapi/models/chat/_adapters/_openai_responses.py:get_image_generation_tool
     """
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("chat_model", _IMAGE_GEN_TEXT_MODELS)
     def test_image_generation_returns_image_call(
         self,
@@ -2176,7 +2176,7 @@ class TestImageGenerationTool:
         )
         assert resp.status == "completed"
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("chat_model", _IMAGE_GEN_TEXT_MODELS)
     def test_image_generation_streaming_emits_image_call_item(
         self,

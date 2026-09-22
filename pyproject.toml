@@ -242,6 +242,7 @@ markers = [
     "agentic: agentic tests, skipped unless --agentic is passed",
     "slow: cheap but slow tests, skipped unless --slow is passed",
     "video: video generation tests, by far the costliest, skipped unless --video is passed",
+    "image_generation: image generation, edit and variation tests, billed per output image, skipped unless --image-generation is passed",
     "container: builds the container images and tests them, skipped unless --container is passed",
     "drift: compares a hardcoded vendor fact against its published source, skipped unless --drift is passed",
     "image: strategic test re-run against the built container image by the container suite",

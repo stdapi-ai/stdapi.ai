@@ -29,7 +29,7 @@ pytestmark = pytest.mark.gateway(
 class TestStabilityVariations:
     """Variations served by Stability image-to-image generation."""
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", STABILITY_ALL)
     def test_variation_b64_single(
         self, openai_client: OpenAI, sample_image_file: bytes, model_id: str

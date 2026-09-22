@@ -25,7 +25,7 @@ pytestmark = pytest.mark.skip(reason="Amazon Titan Image Generator is deprecated
 class TestAmazonTitanImageGenerator:
     """Text-to-image generation with the Amazon Titan Image Generator family."""
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", TITAN_ALL)
     def test_generate_b64_single(self, openai_client: OpenAI, model_id: str) -> None:
         """A prompt returns one base64 PNG at the requested size with default quality.
@@ -54,7 +54,7 @@ class TestAmazonTitanImageGenerator:
         assert img.b64_json is not None
         assert img.url is None
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_extra_params_cfg_scale(self, openai_client: OpenAI, model_id: str) -> None:
         """``imageGenerationConfig.cfgScale`` is accepted as a provider extra.
@@ -79,7 +79,7 @@ class TestAmazonTitanImageGenerator:
         assert response.data[0].b64_json is not None
         assert response.data[0].url is None
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_multiple_images(self, openai_client: OpenAI, model_id: str) -> None:
         """``n=2`` returns two base64 images from a single Titan invocation.
@@ -104,7 +104,7 @@ class TestAmazonTitanImageGenerator:
             assert item.b64_json is not None
             assert item.url is None
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_style_unsupported_is_ignored(
         self, openai_client: OpenAI, model_id: str
@@ -127,7 +127,7 @@ class TestAmazonTitanImageGenerator:
         assert response.data is not None
         assert response.data[0].b64_json
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_generate_with_color_guided_task_type(
         self, openai_client: OpenAI, model_id: str

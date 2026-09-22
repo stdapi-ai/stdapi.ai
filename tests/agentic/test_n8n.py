@@ -1213,7 +1213,7 @@ class TestFiles:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.expensive
+@pytest.mark.image_generation
 class TestImages:
     """n8n's Generate an Image and Edit an Image operations.
 

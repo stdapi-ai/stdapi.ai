@@ -32,7 +32,7 @@ pytestmark = pytest.mark.gateway(
 class TestStabilityImages:
     """Text-to-image generation with the Stability AI models on Bedrock."""
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", STABILITY_ALL)
     def test_generate_b64_single(self, openai_client: OpenAI, model_id: str) -> None:
         """A prompt returns exactly one base64 JPEG when ``output_format="jpeg"``.
@@ -61,7 +61,7 @@ class TestStabilityImages:
             "output_format=jpeg must yield JPEG bytes"
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)
     def test_extra_params_negative_prompt(
         self, openai_client: OpenAI, model_id: str
@@ -87,7 +87,7 @@ class TestStabilityImages:
         assert response.data[0].b64_json is not None
         assert response.data[0].url is None
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)
     def test_generate_and_convert_to_webp(
         self, openai_client: OpenAI, model_id: str
@@ -114,7 +114,7 @@ class TestStabilityImages:
         assert image_bytes.startswith(b"RIFF")
         assert b"WEBP" in image_bytes[:12]
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)
     def test_quality_unsupported_is_ignored(
         self, openai_client: OpenAI, model_id: str
@@ -142,7 +142,7 @@ class TestStabilityImages:
             "an unsupported quality must not be echoed back as if it applied"
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)
     def test_style_unsupported_is_ignored(
         self, openai_client: OpenAI, model_id: str

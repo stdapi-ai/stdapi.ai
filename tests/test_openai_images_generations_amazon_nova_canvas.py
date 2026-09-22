@@ -29,7 +29,7 @@ pytestmark = pytest.mark.skip(reason="Amazon Nova Canvas is deprecated")
 class TestAmazonNovaCanvas:
     """Text-to-image generation with Amazon Nova Canvas."""
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_extra_params_negative_text(
         self, openai_client: OpenAI, model_id: str
@@ -60,7 +60,7 @@ class TestAmazonNovaCanvas:
         assert response.data[0].url is None
         assert response.size == NOVA_CANVAS_SIZE
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_ALL)
     def test_generate_b64_single(self, openai_client: OpenAI, model_id: str) -> None:
         """A prompt returns one base64 PNG at the requested size with default quality.
@@ -89,7 +89,7 @@ class TestAmazonNovaCanvas:
         assert img.b64_json is not None
         assert img.url is None
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_generate_url_multiple_images(
         self, openai_client: OpenAI, model_id: str
@@ -119,7 +119,7 @@ class TestAmazonNovaCanvas:
             "each generated image must get its own presigned URL"
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_quality_is_accepted(self, openai_client: OpenAI, model_id: str) -> None:
         """OpenAI ``quality="high"`` maps to Nova Canvas ``premium`` and echoes back ``high``.
@@ -172,7 +172,7 @@ class TestAmazonNovaCanvas:
         assert body["code"] == "ValidationException"
         assert body["message"]
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_generate_with_color_guided_task_type(
         self, openai_client: OpenAI, model_id: str

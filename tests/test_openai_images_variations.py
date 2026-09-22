@@ -47,7 +47,7 @@ class TestImagesVariationsBasic:
         "502 HTML page instead of reaching the API at all"
     )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_create_variation_basic(
         self,
         openai_client: OpenAI,
@@ -97,7 +97,7 @@ class TestImagesVariationsBasic:
             == response.usage.input_tokens + response.usage.output_tokens
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_create_variations_multiple(
         self,
         openai_client: OpenAI,
@@ -131,7 +131,7 @@ class TestImagesVariationsBasic:
         assert response.usage is not None
         assert response.usage.output_tokens == 2
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_create_variation_b64_json(
         self,
         openai_client: OpenAI,
@@ -263,7 +263,7 @@ class TestImagesVariationsProviderParams:
 
     pytestmark = pytest.mark.gateway("Unittest only for local tests.")
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_variation_with_strength(
         self,
         openai_client: OpenAI,
@@ -302,7 +302,7 @@ class TestImagesVariationsProviderParams:
         assert body["data"][0]["url"]
         assert body["usage"]["output_tokens"] == 1
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_variation_with_negative_prompt(
         self,
         openai_client: OpenAI,
@@ -346,7 +346,7 @@ class TestImagesVariationsJsonBody:
         "Bedrock model this route's variations run on has no counterpart there"
     )
 
-    @pytest.mark.expensive
+    @pytest.mark.image_generation
     def test_variation_with_file_id(
         self,
         openai_client: OpenAI,
@@ -573,7 +573,7 @@ class TestImageVariationSizeValidation:
     Repointing ``MODEL_MAPPINGS["local"]["image_variation"]`` at a model whose
     cheapest size (:data:`conftest.IMAGE_MODEL_SIZES`) is not one of the three
     sizes ``images.create_variation`` accepts must fail loudly here, not as a
-    live 400 from an ``--expensive`` run.
+    live 400 from an ``--image-generation`` run.
 
     Ref: tests/conftest.py:variation_size
     """
