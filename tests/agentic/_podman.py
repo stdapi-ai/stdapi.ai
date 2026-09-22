@@ -23,6 +23,7 @@ Ref: https://docs.podman.io/en/latest/markdown/podman-run.1.html
 from __future__ import annotations
 
 import atexit
+import json
 import shutil
 import socket
 import subprocess
@@ -71,13 +72,7 @@ _SERVICE_STOP_TIMEOUT = "10"
 #: Seconds allowed for pulling an image that is not in the local store.
 _PULL_TIMEOUT = 1800
 
-#: Marker of a run whose container never started, so the CLI never executed.
-#:
-#: Under a parallel session the runtime intermittently fails to set up the new
-#: network namespace ("write to /proc/sys/net/ipv4/ping_group_range ... OCI
-#: runtime error"), and podman reports it as an exit code from the container.
-#: Nothing was tested, so it is retried rather than reported as a client failure --
-#: which is what it looked like, two per pass, spread across unrelated clients.
+#: Marker of a one-shot run whose container never started, so it is retried.
 _OCI_START_ERROR = "OCI runtime error"
 
 #: Attempts allowed for a container that fails to start.
@@ -121,6 +116,77 @@ def uses_remote_engine() -> bool:
     """True when the container engine runs outside this process's mount namespace."""
     argv = podman_argv()
     return argv is not None and "--remote" in argv
+
+
+@cache
+def _engine_user() -> tuple[tuple[str, ...], str]:
+    """Return the ID map flags equivalent to ``--userns=keep-id``, and its user.
+
+    The podman service resolves ``keep-id`` through libsubid, which is not
+    thread-safe: concurrent creates get a truncated or oversized mapping (crun
+    then fails writing ``ping_group_range`` or ``uid_map``) or crash the service.
+    Explicit maps skip that lookup; they are read once from ``podman info`` and
+    laid out as podman's own ``GetKeepIDMapping`` does, including clipping the
+    IDs below the user to the subordinate range when that range is smaller.
+
+    Returns:
+        The ``--uidmap``/``--gidmap`` flags mapping the engine's user to itself
+        and every other ID onto its subordinate range, and that user's
+        ``UID:GID``.
+
+    Raises:
+        RuntimeError: If podman is unavailable, or is not a rootless engine with
+            a subordinate range to map the rest of the container's IDs onto.
+    """
+    podman = podman_argv()
+    if podman is None:
+        msg = "podman is required to run agentic tests"
+        raise RuntimeError(msg)
+    info = subprocess.run(  # noqa: S603
+        [*podman, "info", "--format", "{{json .Host.IDMappings}}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if info.returncode != 0:
+        msg = f"podman info failed ({info.returncode})\n{info.stderr[-2000:]}"
+        raise RuntimeError(msg)
+    mappings = json.loads(info.stdout) or {}
+    flags: list[str] = []
+    ids: list[int] = []
+    for flag, key in (("--uidmap", "uidmap"), ("--gidmap", "gidmap")):
+        entries = mappings.get(key) or []
+        own = next((e["host_id"] for e in entries if e["container_id"] == 0), None)
+        size = sum(e["size"] for e in entries if e["container_id"] != 0)
+        if own is None or not size:
+            msg = (
+                f"podman {key} {entries} is not a rootless mapping with a "
+                "subordinate range; the agentic lane needs rootless podman with "
+                "/etc/subuid and /etc/subgid entries for the current user"
+            )
+            raise RuntimeError(msg)
+        if own:
+            flags.append(f"{flag}=0:1:{min(own, size)}")
+        flags.append(f"{flag}={own}:0:1")
+        if size > own:
+            flags.append(f"{flag}={own + 1}:{own + 1}:{size - own}")
+        ids.append(own)
+    return tuple(flags), f"{ids[0]}:{ids[1]}"
+
+
+def _user_flags(user: str | None = None) -> list[str]:
+    """Return the flags running a container as *user* under keep-id's mapping.
+
+    Args:
+        user: ``UID:GID`` to run as; None runs as the engine's user whatever
+            ``USER`` the image declares.
+
+    Returns:
+        The ID map flags followed by ``--user``.
+    """
+    maps, own = _engine_user()
+    return [*maps, "--user", user or own]
 
 
 def host_path(path: Path) -> str:
@@ -397,8 +463,9 @@ def run_in_container(
     visible, which is what keeps ``tests/.env`` and the host's credentials away
     from the CLI.
 
-    ``--userns=keep-id`` maps the host user to the same UID inside, so files the
-    CLI writes into *workdir* stay owned by the test runner.
+    The container runs as the host user under keep-id's mapping (see
+    :func:`_engine_user`), so files the CLI writes into *workdir* stay owned by
+    the test runner.
 
     A run that exceeds *timeout* is removed by name: the timeout kills this
     podman client and leaves the container up, and an orphaned agent keeps
@@ -443,7 +510,7 @@ def run_in_container(
         f"--tmpfs=/tmp:rw,size={_TMPFS_SIZE},mode=1777",
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
-        "--userns=keep-id",
+        *_user_flags(),
         f"--memory={_MEMORY_LIMIT}",
         f"--pids-limit={_PIDS_LIMIT}",
         # ",Z" relabels this mount for SELinux; without it every write is denied
@@ -492,8 +559,8 @@ def run_in_container(
                 raise
             if process.returncode == 0 or _OCI_START_ERROR not in process.stderr:
                 return process
+            _remove_container(name)
             if attempt < _START_ATTEMPTS - 1:
-                _remove_container(name)
                 time.sleep(_START_RETRY_DELAY)
         return process
 
@@ -685,11 +752,11 @@ def start_service_container(
         read_only: Keep the container's root filesystem read-only. Turn it off
             only for an image that writes outside ``/work`` and ``/tmp``, and say
             in the caller why.
-        user: ``UID:GID`` to run as, overriding the image's own ``USER``. An
-            image running as root needs it: under ``--userns=keep-id`` container
-            root maps to a subordinate host UID, which -- with no capabilities --
-            cannot write into *workdir* and would leave the test runner unable to
-            delete whatever it did write. Pass the owner of *workdir*.
+        user: ``UID:GID`` to run as; None runs as the host user whatever
+            ``USER`` the image declares, so files written into *workdir* stay
+            deletable by the test runner. Any other ID, root included, is a
+            subordinate host UID that -- with no capabilities -- cannot write
+            into *workdir*.
         refresh: Re-pull the image before starting, for a moving tag.
 
     Returns:
@@ -727,7 +794,7 @@ def start_service_container(
         f"--tmpfs=/tmp:rw,size={_TMPFS_SIZE},mode=1777",
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
-        "--userns=keep-id",
+        *_user_flags(user),
         f"--memory={_MEMORY_LIMIT}",
         f"--pids-limit={_PIDS_LIMIT}",
         # ",Z" relabels the per-test directory for SELinux, as in the one-shot
@@ -739,8 +806,6 @@ def start_service_container(
     ]
     if read_only:
         cmd.append("--read-only")
-    if user is not None:
-        cmd += ["--user", user]
     if entrypoint is not None:
         cmd += ["--entrypoint", entrypoint]
 
@@ -749,10 +814,15 @@ def start_service_container(
         cmd.append(image)
         cmd.extend(argv)
 
-        started = subprocess.run(  # noqa: S603
-            cmd, capture_output=True, text=True, timeout=300, check=False
-        )
+        try:
+            started = subprocess.run(  # noqa: S603
+                cmd, capture_output=True, text=True, timeout=300, check=False
+            )
+        except subprocess.TimeoutExpired:
+            _remove_container(container.name)
+            raise
     if started.returncode != 0:
+        _remove_container(container.name)  # A failed start leaves it "Created".
         msg = (
             f"podman run failed ({started.returncode}) for {image}\n"
             f"{_redacted(started.stderr, env)[-2000:]}"

@@ -336,7 +336,7 @@ Each run is a throwaway container:
 | `--network=pasta:-T,<port>` | Own network namespace; only the test server's port is forwarded, from the container's loopback to the host's. The server itself never binds beyond `127.0.0.1`. |
 | `--read-only` + `--tmpfs /tmp` | No writes to the image. |
 | `--cap-drop=ALL`, `--security-opt=no-new-privileges` | No capabilities, no privilege escalation. |
-| `--userns=keep-id` | Runs as the host user; files the agent writes stay owned by the test runner. |
+| `--uidmap`/`--gidmap` + `--user` | `--userns=keep-id`'s mapping, spelled out once from `podman info`: runs as the host user, so files the agent writes stay owned by the test runner. The explicit form avoids the service's keep-id lookup, which is not thread-safe under parallel starts. |
 | `--memory`, `--pids-limit` | A runaway agent cannot exhaust the machine. |
 | mounts | `stdapi/` read-only at `/src/stdapi`; one writable per-test directory at `/work`. |
 
@@ -460,9 +460,11 @@ read-only root, `/work` the only writable mount. Six things bite:
 - state the service writes must live under `/work` (`data_dirs`), because the root
   filesystem is read-only. `read_only=False` exists for an image that writes
   elsewhere — use it only with evidence, and say why at the call site;
-- an image whose `USER` is root needs `user=`. Under `--userns=keep-id` container
-  root is a subordinate host UID, so with no capabilities it cannot write into
-  `/work` at all, and anything it did write would be undeletable by the test
+- the container runs as the host user by default, **whatever `USER` the image
+  declares**; `user=` overrides it with an explicit `UID:GID` (the fixtures pass
+  the workdir's owner). Under the ID maps any other ID — root, or the image's own
+  `USER` — is a subordinate host UID, which with no capabilities cannot write
+  into `/work`, and anything it did write would be undeletable by the test
   runner. Open WebUI boots fine read-only once it runs as the workdir's owner.
 - `health_path=None` proves only that the **port was published**, not that the
   service bound it: pasta accepts a connection on the host side as soon as the

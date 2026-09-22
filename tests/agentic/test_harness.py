@@ -17,14 +17,19 @@ Ref: https://docs.podman.io/en/latest/markdown/podman-run.1.html
 
 from __future__ import annotations
 
+import json
 import socket
+import subprocess
 from pathlib import Path
+from secrets import token_hex
 from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
 
+from . import _podman
 from ._podman import (
+    _engine_user,
     _env_flags,
     _redacted,
     image_tag,
@@ -305,3 +310,183 @@ class TestServiceContainer:
         assert not _port_answers(port), (
             "the published port still answers after the service was stopped"
         )
+
+    def test_a_failed_start_leaves_no_container_behind(
+        self, agentic_image: str, agentic_workdir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A container whose start fails is removed, not left in "Created".
+
+        ``podman run --detach`` creates the container before the runtime starts
+        it, so an entry point that cannot run leaves one behind for every failed
+        attempt unless the harness removes it.
+
+        Ref: https://docs.podman.io/en/latest/markdown/podman-run.1.html
+             tests/agentic/_podman.py:start_service_container
+        """
+        token = token_hex(6)
+        monkeypatch.setattr(_podman, "token_hex", lambda _: token)
+        with pytest.raises(RuntimeError, match="podman run failed"):
+            start_service_container(
+                image=agentic_image,
+                port=find_free_port(),
+                workdir=agentic_workdir,
+                env={},
+                forward_port=None,
+                entrypoint="/nonexistent-stdapi-probe",
+                startup_timeout=_PROBE_STARTUP_TIMEOUT,
+            )
+        podman = _podman.podman_argv()
+        assert podman is not None
+        exists = subprocess.run(  # noqa: S603
+            [*podman, "container", "exists", f"stdapi-agentic-svc-{token}"],
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        assert exists.returncode == 1, "the failed container was left behind"
+
+    def test_a_start_that_times_out_is_removed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ``podman run`` killed by its timeout still has its container removed.
+
+        The timeout kills the podman client, not the container it was creating,
+        so without the removal a hung start leaves one behind. Podman is stubbed:
+        a real hang cannot be produced on demand.
+
+        Ref: https://docs.python.org/3/library/subprocess.html#subprocess.run
+             tests/agentic/_podman.py:start_service_container
+        """
+        removed: list[str] = []
+
+        def hang(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:  # noqa: ANN401
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+        monkeypatch.setattr(_podman, "token_hex", lambda _: "hung")
+        monkeypatch.setattr(_podman, "podman_argv", lambda: ("podman",))
+        monkeypatch.setattr(_podman, "pull_image", lambda *_, **__: None)
+        monkeypatch.setattr(_podman, "_user_flags", lambda *_: [])
+        monkeypatch.setattr(_podman, "_remove_container", removed.append)
+        monkeypatch.setattr(subprocess, "run", hang)
+        with pytest.raises(subprocess.TimeoutExpired):
+            start_service_container(
+                image="stdapi-agentic:unused",
+                port=find_free_port(),
+                workdir=tmp_path,
+                env={},
+                forward_port=None,
+                startup_timeout=_PROBE_STARTUP_TIMEOUT,
+            )
+        assert removed == ["stdapi-agentic-svc-hung"]
+
+
+class TestKeepIdMapping:
+    """The explicit ID maps standing in for ``--userns=keep-id``.
+
+    Ref: https://docs.podman.io/en/latest/markdown/podman-run.1.html#userns-mode
+         tests/agentic/_podman.py:_engine_user
+    """
+
+    @staticmethod
+    def _engine_user_for(
+        monkeypatch: pytest.MonkeyPatch,
+        uidmap: list[dict[str, int]],
+        gidmap: list[dict[str, int]],
+    ) -> tuple[tuple[str, ...], str]:
+        """Run the uncached ``_engine_user`` against a stubbed ``podman info``.
+
+        Args:
+            monkeypatch: Fixture used to stub podman.
+            uidmap: ``Host.IDMappings.uidmap`` the stub reports.
+            gidmap: ``Host.IDMappings.gidmap`` the stub reports.
+
+        Returns:
+            What ``_engine_user`` returns for that mapping.
+        """
+        info = json.dumps({"uidmap": uidmap, "gidmap": gidmap})
+        monkeypatch.setattr(_podman, "podman_argv", lambda: ("podman",))
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *_, **__: subprocess.CompletedProcess((), 0, info, ""),
+        )
+        return _engine_user.__wrapped__()
+
+    def test_no_subordinate_range_is_an_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An engine with no subordinate IDs cannot reproduce keep-id, and says so.
+
+        Without the range there is nothing to map the container's other IDs
+        onto; building flags anyway would hand podman a zero-sized range and
+        fail later with an error naming nothing the reader can act on.
+
+        Ref: https://docs.podman.io/en/latest/markdown/podman-info.1.html
+             tests/agentic/_podman.py:_engine_user
+        """
+        own_only = [{"container_id": 0, "host_id": 1000, "size": 1}]
+        with pytest.raises(RuntimeError, match="not a rootless mapping"):
+            self._engine_user_for(monkeypatch, own_only, own_only)
+
+    def test_maps_the_engine_user_onto_itself(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A typical rootless mapping yields keep-id's three ranges per ID kind.
+
+        Distinct UID and GID catch a swapped loop or ``UID:GID`` order that a
+        host with ``1000:1000`` would hide.
+
+        Ref: https://docs.podman.io/en/latest/markdown/podman-run.1.html#userns-mode
+             tests/agentic/_podman.py:_engine_user
+        """
+        flags, user = self._engine_user_for(
+            monkeypatch,
+            [
+                {"container_id": 0, "host_id": 1000, "size": 1},
+                {"container_id": 1, "host_id": 524288, "size": 65536},
+            ],
+            [
+                {"container_id": 0, "host_id": 1001, "size": 1},
+                {"container_id": 1, "host_id": 524288, "size": 65536},
+            ],
+        )
+        assert flags == (
+            "--uidmap=0:1:1000",
+            "--uidmap=1000:0:1",
+            "--uidmap=1001:1001:64536",
+            "--gidmap=0:1:1001",
+            "--gidmap=1001:0:1",
+            "--gidmap=1002:1002:64535",
+        )
+        assert user == "1000:1001"
+
+    def test_an_id_above_the_range_is_clipped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An ID at or above the subordinate range size clips instead of failing.
+
+        keep-id maps only ``min(id, size)`` IDs below the user and drops the
+        range above it; a directory-service UID such as 1234567 with the
+        default 65536 subordinate IDs must still run the lane.
+
+        Ref: https://docs.podman.io/en/latest/markdown/podman-run.1.html#userns-mode
+             tests/agentic/_podman.py:_engine_user
+        """
+        flags, user = self._engine_user_for(
+            monkeypatch,
+            [
+                {"container_id": 0, "host_id": 1234567, "size": 1},
+                {"container_id": 1, "host_id": 524288, "size": 65536},
+            ],
+            [
+                {"container_id": 0, "host_id": 65536, "size": 1},
+                {"container_id": 1, "host_id": 524288, "size": 65536},
+            ],
+        )
+        assert flags == (
+            "--uidmap=0:1:65536",
+            "--uidmap=1234567:0:1",
+            "--gidmap=0:1:65536",
+            "--gidmap=65536:0:1",
+        )
+        assert user == "1234567:65536"

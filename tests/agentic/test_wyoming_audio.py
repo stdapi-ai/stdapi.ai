@@ -329,9 +329,9 @@ async def wyoming_service(
     changes lives on its own Wyoming connection, and the container's own
     configuration is fixed at launch.
 
-    The container is run as the owner of the working directory. Its image
-    declares no ``USER``, and container root under ``--userns=keep-id`` is a
-    subordinate host UID that cannot write into that directory.
+    The container is run as the owner of the working directory rather than as
+    the image's default root: any other ID is a subordinate host UID that cannot
+    write into that directory.
 
     Yields:
         The running service, already answering the protocol.

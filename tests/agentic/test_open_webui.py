@@ -314,9 +314,9 @@ def open_webui(
     boot for nothing, and a shared data directory would stop testing the
     environment block at all.
 
-    The container is run as the owner of the working directory. Its image runs as
-    root, and container root under ``--userns=keep-id`` is a subordinate host UID
-    that cannot write into that directory.
+    The container is run as the owner of the working directory, overriding the
+    image's root ``USER``: any other ID is a subordinate host UID that cannot
+    write into that directory.
 
     Yields:
         A client bound to the service, carrying the admin token.
@@ -579,16 +579,21 @@ class TestOpenWebUIOllamaConnection:
         a server that refused everything would fail the first, and one that
         reported success for everything would fail the second by telling the admin
         a model went away when it did not. The refusal has to reach the admin as
-        the gateway wrote it -- Open WebUI forwards the ``error`` field verbatim as
-        its own ``detail`` -- or the message names nothing they can act on.
+        the gateway wrote it -- Open WebUI forwards the upstream status and the
+        ``error`` field verbatim as its own ``detail`` -- or the message names
+        nothing they can act on. Ollama's contract documents only the success of a
+        delete, so the ``403`` is the gateway's own documented refusal.
 
         Both verbs address the backend directly, by its own model name and (for the
         delete) by connection index, which is what the admin panel does: they are
         the operations an operator performs on one named backend rather than on a
         model they picked out of the merged list.
 
-        Ref: stdapi/routes/ollama_model_management.py:pull
+        Ref: https://docs.ollama.com/openapi.yaml (paths./api/delete)
+             https://github.com/open-webui/open-webui/blob/main/backend/open_webui/routers/ollama.py
+             stdapi/routes/ollama_model_management.py:pull
              stdapi/routes/ollama_model_management.py:delete
+             docs/api_ollama_models.md
         """
         log_start = len(agentic_server.logs)
         pulled = open_webui.post("/ollama/api/pull", json={"model": _CHAT_MODEL})
@@ -598,7 +603,7 @@ class TestOpenWebUIOllamaConnection:
         deleted = open_webui.request(
             "DELETE", "/ollama/api/delete/0", json={"model": _CHAT_MODEL}
         )
-        assert deleted.status_code == 400, deleted.text[:500]
+        assert deleted.status_code == 403, deleted.text[:500]
         assert "does not store models" in deleted.text, deleted.text[:500]
         _assert_paths(
             agentic_server, log_start, {f"{_OLLAMA_API}/pull", f"{_OLLAMA_API}/delete"}

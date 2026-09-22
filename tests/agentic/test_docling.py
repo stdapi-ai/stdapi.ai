@@ -186,9 +186,9 @@ def docling(
     boot: both pipelines under test are selected per request, so one boot serves
     them all.
 
-    The container is run as the owner of the working directory. Its image runs as
-    UID 1001, which under ``--userns=keep-id`` is a subordinate host UID that
-    cannot write into that directory.
+    The container is run as the owner of the working directory, overriding the
+    image's ``USER`` 1001: any other ID is a subordinate host UID that cannot
+    write into that directory.
 
     Yields:
         A client bound to the service.
