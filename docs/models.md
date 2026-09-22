@@ -80,6 +80,7 @@ available from any running instance through
 <tr><td>Claude Opus 4.7</td><td><code>anthropic.claude-opus-4-7</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Opus 4.8</td><td><code>anthropic.claude-opus-4-8</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Opus 5</td><td><code>anthropic.claude-opus-5</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>Claude Opus 5.5</td><td><code>anthropic.claude-opus-5-5</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Sonnet 4 (legacy)</td><td><code>anthropic.claude-sonnet-4-20250514-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
 <tr><td>Claude Sonnet 4.5</td><td><code>anthropic.claude-sonnet-4-5-20250929-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Sonnet 4.6</td><td><code>anthropic.claude-sonnet-4-6</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
@@ -139,6 +140,8 @@ available from any running instance through
 <tr><td>GPT-5.6 Sol</td><td><code>openai.gpt-5.6-sol</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
 <tr><td>GPT-5.6 Terra</td><td><code>openai.gpt-5.6-terra</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
 <tr><td>GPT-6 Astra</td><td><code>openai.gpt-6-astra</code></td><td>OpenAI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>GPT-6 Luna</td><td><code>openai.gpt-6-luna</code></td><td>OpenAI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>GPT-6 Sol</td><td><code>openai.gpt-6-sol</code></td><td>OpenAI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>GPT OSS 120B</td><td><code>openai.gpt-oss-120b</code></td><td>OpenAI</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
 <tr><td>GPT OSS 20B</td><td><code>openai.gpt-oss-20b</code></td><td>OpenAI</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
 <tr><td>GPT OSS Safeguard 120B</td><td><code>openai.gpt-oss-safeguard-120b</code></td><td>OpenAI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
@@ -218,7 +221,7 @@ reflects the AWS account this snapshot came from — your own
 ## :material-database-outline: Sources, licences and caveats
 
 <!-- catalog:generated -->
-Snapshot taken on **2026-09-18** from a stdapi.ai instance, covering 143 models across 33 AWS regions. 4 model(s) AWS no longer lists are kept, tagged `delisted`. Prices and availability move — before you commit to a number, confirm it against the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) and your own [`search_models`](api_search_models.md).
+Snapshot taken on **2026-09-22** from a stdapi.ai instance, covering 146 models across 33 AWS regions. 4 model(s) AWS no longer lists are kept, tagged `delisted`. Prices and availability move — before you commit to a number, confirm it against the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) and your own [`search_models`](api_search_models.md).
 <!-- /catalog:generated -->
 
 <!-- catalog:sources -->
@@ -226,14 +229,14 @@ Every number on this page comes from one of the sources below, reproduced unmodi
 
 | Source | Licence | Read on | Used here |
 | --- | --- | --- | --- |
-| The gateway's own [`search_models`](api_search_models.md) and [`model_pricing`](api_model_pricing.md) | — | 2026-09-18 | 143 |
-| [Amazon Bedrock `ListFoundationModels`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html), read raw so its undocumented fields survive | — | 2026-09-18 | capabilities, APIs, media types, limits |
+| The gateway's own [`search_models`](api_search_models.md) and [`model_pricing`](api_model_pricing.md) | — | 2026-09-22 | 146 |
+| [Amazon Bedrock `ListFoundationModels`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html), read raw so its undocumented fields survive | — | 2026-09-22 | capabilities, APIs, media types, limits |
 | [LMArena Leaderboard](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-09-14 | 82 of 817 entries |
-| [MTEB — Massive Text Embedding Benchmark](https://github.com/embeddings-benchmark/results) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 2026-09-18 | 5 of 12 entries |
+| [MTEB — Massive Text Embedding Benchmark](https://github.com/embeddings-benchmark/results) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 2026-09-22 | 5 of 12 entries |
 | [Epoch AI — AI Benchmarking Hub](https://epoch.ai/benchmarks/use-this-data) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-09-02 | 66 of 706 entries |
-| [Amazon Bedrock model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html) | [AWS documentation](https://aws.amazon.com/terms/) | 2026-09-18 | 113 of 128 model cards |
-| [models.dev](https://models.dev/) | [MIT](https://github.com/anomalyco/models.dev/blob/dev/LICENSE) | 2026-09-18 | 72 of 165 models |
-| [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) | 2026-09-18 | 2 of 64 entries |
+| [Amazon Bedrock model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html) | [AWS documentation](https://aws.amazon.com/terms/) | 2026-09-22 | 114 of 128 model cards |
+| [models.dev](https://models.dev/) | [MIT](https://github.com/anomalyco/models.dev/blob/dev/LICENSE) | 2026-09-22 | 73 of 171 models |
+| [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) | 2026-09-22 | 2 of 64 entries |
 
 - **LMArena Leaderboard** — Arena Elo ratings by LMArena (Arena Intelligence Inc.), reproduced unmodified under CC BY 4.0. The mapping to Amazon Bedrock model IDs is ours.
 - **MTEB — Massive Text Embedding Benchmark** — Benchmark results from the MTEB results repository, dedicated to the public domain under CC0 1.0. The mapping to Amazon Bedrock model IDs is ours.
