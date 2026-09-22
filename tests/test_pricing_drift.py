@@ -113,12 +113,13 @@ _MODEL_CARD_URLS: Final[dict[str, str]] = {
     "openai.gpt-5.6-sol": "model-card-openai-gpt-56-sol",
     "openai.gpt-5.6-terra": "model-card-openai-gpt-56-terra",
     "openai.gpt-daybreak-blue-5.6-sol": "model-card-openai-gpt-daybreak-blue-56-sol",
+    "openai.gpt-6-astra": "model-card-openai-gpt-6-astra",
 }
 
 #: Where a model card lives, given its slug.
 _USER_GUIDE: Final[str] = "https://docs.aws.amazon.com/bedrock/latest/userguide/"
 
-#: The OpenAI card index, scanned for GPT-5.x cards no table entry prices.
+#: The OpenAI card index, scanned for frontier GPT cards no table entry prices.
 _OPENAI_CARD_INDEX: Final[str] = f"{_USER_GUIDE}model-cards-openai.html"
 
 #: The page carrying the Stability AI Image Services per-generation table.
@@ -167,9 +168,9 @@ _LONG_CONTEXT_CAPTION: Final[str] = "long context"
 #: Heading opening the AWS GovCloud rates, which DEFAULT_MODEL_PRICES excludes.
 _GOVCLOUD_HEADING: Final[str] = "aws govcloud"
 
-#: How a card states the boundary between its two context tables, e.g. "(272K)".
+#: How a card states its context tables' boundary, e.g. "(272K input tokens or fewer)".
 _CONTEXT_WINDOW_SIZE: Final[re.Pattern[str]] = re.compile(
-    r"\((\d+)\s*K\)", re.IGNORECASE
+    r"\((\d+)\s*K\b", re.IGNORECASE
 )
 
 #: Multiplier turning a card's "K" context-window size into prompt tokens.
@@ -196,13 +197,16 @@ _ROW: Final[re.Pattern[str]] = re.compile(r"<tr.*?</tr>", re.DOTALL)
 _CELL: Final[re.Pattern[str]] = re.compile(r"<t[hd][^>]*>(.*?)</t[hd]>", re.DOTALL)
 _MONEY: Final[re.Pattern[str]] = re.compile(r"^\$([0-9]+(?:\.[0-9]+)?)$")
 _H1: Final[re.Pattern[str]] = re.compile(r"<h1[\s>]")
-_PARAGRAPH: Final[re.Pattern[str]] = re.compile(r"<p[^>]*>.*?</p>", re.DOTALL)
+_PARAGRAPH_OR_HEADING: Final[re.Pattern[str]] = re.compile(
+    r"<(p|h[3-6])[\s>].*?</\1>", re.DOTALL
+)
 _PRICING_SECTION: Final[re.Pattern[str]] = re.compile(
     r'<h2[^>]*id="[^"]*-pricing"[^>]*>.*?</h2>(.*?)(?=<h2|\Z)', re.DOTALL
 )
-#: A bold caption labelling the table that follows it, or a table itself.
+#: A bold caption or sub-heading labelling the table that follows it, or a table.
 _CAPTION_OR_TABLE: Final[re.Pattern[str]] = re.compile(
-    r"<p[^>]*>\s*<b>(.*?)</b>\s*</p>|<table.*?</table>", re.DOTALL
+    r"<p[^>]*>\s*<b>(.*?)</b>\s*</p>|<h[3-6][^>]*>(.*?)</h[3-6]>|<table.*?</table>",
+    re.DOTALL,
 )
 
 
@@ -319,10 +323,10 @@ def _card_dimension(header: str) -> Dimension | None:
 def _captioned_tables(section: str) -> list[tuple[str | None, str]]:
     """Return the section's pricing tables, each with the caption labelling it.
 
-    A card carries one unlabelled table, or several captioned ones: a short and
-    a long context window, or a separate AWS GovCloud block. Pairing each table
-    with its own caption is what keeps one tier's rate from being read as
-    another's.
+    A card carries one unlabelled table, or several captioned ones -- by a bold
+    paragraph or a sub-heading: a short and a long context window, or a
+    separate AWS GovCloud block. Pairing each table with its own caption is
+    what keeps one tier's rate from being read as another's.
     """
     tables: list[tuple[str | None, str]] = []
     caption: str | None = None
@@ -331,7 +335,8 @@ def _captioned_tables(section: str) -> list[tuple[str | None, str]]:
             tables.append((caption, match.group(0)))
             caption = None
         else:
-            caption = _text(match.group(1))
+            bold, heading = match.group(1, 2)
+            caption = _text(bold if bold is not None else heading)
     return tables
 
 
@@ -403,13 +408,13 @@ def _commercial_block(section: str) -> str:
     """Return *section* truncated before the AWS GovCloud rates it may carry.
 
     A card pricing GovCloud repeats the same context-window captions below a
-    GovCloud heading, so those tables are not distinguishable from the
-    commercial ones by caption alone. ``DEFAULT_MODEL_PRICES`` registers only
-    commercial rates, which are the ones above that heading.
+    GovCloud paragraph or heading, so those tables are not distinguishable from
+    the commercial ones by caption alone. ``DEFAULT_MODEL_PRICES`` registers
+    only commercial rates, which are the ones above that heading.
     """
-    for paragraph in _PARAGRAPH.finditer(section):
-        if _GOVCLOUD_HEADING in _text(paragraph.group(0)).casefold():
-            return section[: paragraph.start()]
+    for block in _PARAGRAPH_OR_HEADING.finditer(section):
+        if _GOVCLOUD_HEADING in _text(block.group(0)).casefold():
+            return section[: block.start()]
     return section
 
 
@@ -777,6 +782,37 @@ def classify_threshold(model_id: str, reading: ThresholdReading) -> list[Finding
     return [Finding(Outcome.MATCH, key, f"{expected} prompt tokens")]
 
 
+def classify_card(model_id: str, card: CardReadings) -> list[Finding]:
+    """Compare every table carrying *model_id* against what its card publishes.
+
+    Args:
+        model_id: The model the entries price.
+        card: Everything the model's card had to say.
+
+    Returns:
+        The findings for all four rate tables and the context-window boundary.
+    """
+    return [
+        *classify(model_id, DEFAULT_MODEL_PRICES[model_id], card.in_region),
+        *classify_global(model_id, card.cross_region),
+        *classify_qualified(
+            model_id,
+            DEFAULT_MODEL_LONG_CONTEXT_PRICES,
+            "long context",
+            "DEFAULT_MODEL_LONG_CONTEXT_PRICES",
+            card.long_in_region,
+        ),
+        *classify_qualified(
+            model_id,
+            DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES,
+            "long context, Global",
+            "DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES",
+            card.long_cross_region,
+        ),
+        *classify_threshold(model_id, card.threshold),
+    ]
+
+
 def _card_url(slug: str) -> str:
     """Return the user guide URL of the model card named *slug*."""
     return f"{_USER_GUIDE}{slug}.html"
@@ -805,6 +841,28 @@ def _withdrawn_readings(url: str) -> CardReadings:
     )
 
 
+def parse_card_readings(url: str, page: str) -> CardReadings:
+    """Return everything a served model card publishes.
+
+    Args:
+        url: Where the card was read from, quoted by every finding.
+        page: The model card's HTML.
+
+    Returns:
+        The card's four rate readings and its context-window boundary.
+
+    Raises:
+        UnreadableSourceError: If any of them cannot be read with confidence.
+    """
+    return CardReadings(
+        SourceReading(url, rates=parse_model_card(page)),
+        SourceReading(url, rates=parse_model_card_global(page)),
+        SourceReading(url, rates=parse_model_card(page, "long")),
+        SourceReading(url, rates=parse_model_card_global(page, "long")),
+        ThresholdReading(url, tokens=parse_context_window(page)),
+    )
+
+
 def _read_model_card(client: httpx.Client, slug: str) -> CardReadings:
     """Fetch a model card once, never raising on a source-side problem.
 
@@ -822,13 +880,7 @@ def _read_model_card(client: httpx.Client, slug: str) -> CardReadings:
         page = response.text
         if card_is_withdrawn(slug, page):
             return _withdrawn_readings(url)
-        return CardReadings(
-            SourceReading(url, rates=parse_model_card(page)),
-            SourceReading(url, rates=parse_model_card_global(page)),
-            SourceReading(url, rates=parse_model_card(page, "long")),
-            SourceReading(url, rates=parse_model_card_global(page, "long")),
-            ThresholdReading(url, tokens=parse_context_window(page)),
-        )
+        return parse_card_readings(url, page)
     except (httpx.HTTPError, UnreadableSourceError) as exc:
         problem = f"{type(exc).__name__}: {exc}"
         reading = SourceReading(url, problem=problem)
@@ -897,13 +949,13 @@ def unpriced_stability_rows(page: str) -> list[Finding]:
 
 
 def unpriced_openai_cards(index: str) -> list[Finding]:
-    """Return a finding per GPT-5.x model card no table entry prices."""
+    """Return a finding per frontier GPT model card no table entry prices."""
     known = set(_MODEL_CARD_URLS.values())
     return [
         Finding(
             Outcome.NEW,
             slug,
-            f"{_card_url(slug)} is a GPT-5.x model card, DEFAULT_MODEL_PRICES "
+            f"{_card_url(slug)} is a frontier GPT model card, DEFAULT_MODEL_PRICES "
             f"has no entry",
         )
         for slug in sorted(set(_OPENAI_CARD_LINK.findall(index)) - known)
@@ -943,30 +995,7 @@ def _collect(client: httpx.Client) -> list[Finding]:
     """Read every source once and classify the whole table against it."""
     findings: list[Finding] = []
     for model_id, slug in _MODEL_CARD_URLS.items():
-        card = _read_model_card(client, slug)
-        findings.extend(
-            classify(model_id, DEFAULT_MODEL_PRICES[model_id], card.in_region)
-        )
-        findings.extend(classify_global(model_id, card.cross_region))
-        findings.extend(
-            classify_qualified(
-                model_id,
-                DEFAULT_MODEL_LONG_CONTEXT_PRICES,
-                "long context",
-                "DEFAULT_MODEL_LONG_CONTEXT_PRICES",
-                card.long_in_region,
-            )
-        )
-        findings.extend(
-            classify_qualified(
-                model_id,
-                DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES,
-                "long context, Global",
-                "DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES",
-                card.long_cross_region,
-            )
-        )
-        findings.extend(classify_threshold(model_id, card.threshold))
+        findings.extend(classify_card(model_id, _read_model_card(client, slug)))
 
     page: str | None = None
     problem: str | None = None
@@ -1160,6 +1189,17 @@ async def test_the_price_list_publishes_no_rate_the_tables_hand_copy() -> None:
         )
 
 
+#: The recorded cards' short-context table heading.
+_SHORT_CAPTION: Final[str] = (
+    "Commercial Regions — short context (272K input tokens or fewer)"
+)
+
+#: The recorded cards' long-context table heading.
+_LONG_CAPTION: Final[str] = (
+    "Commercial Regions — long context (more than 272K input tokens)"
+)
+
+
 @pytest.fixture(scope="module")
 def gpt_56_cyber_card() -> str:
     """The recorded Pricing section of the GPT-5.6 Cyber model card."""
@@ -1189,6 +1229,12 @@ def daybreak_blue_card() -> str:
     """The recorded Pricing section of the Daybreak Blue GPT-5.6 Sol model card."""
     path = FIXTURES_DIR / "model_card_openai_gpt_daybreak_blue_56_sol_pricing.html"
     return path.read_text()
+
+
+@pytest.fixture(scope="module")
+def gpt_6_astra_card() -> str:
+    """The recorded Pricing section of the GPT-6 Astra model card."""
+    return (FIXTURES_DIR / "model_card_openai_gpt_6_astra_pricing.html").read_text()
 
 
 @pytest.fixture(scope="module")
@@ -1226,8 +1272,8 @@ class TestModelCardParsing:
         """
         rates = parse_model_card(daybreak_blue_card)
         assert rates is not None
-        assert rates[Dimension.INPUT_TOKENS] == Decimal("0.0000055")
-        assert rates[Dimension.OUTPUT_TOKENS] == Decimal("0.000033")
+        assert rates[Dimension.INPUT_TOKENS] == Decimal("0.0000044")
+        assert rates[Dimension.OUTPUT_TOKENS] == Decimal("0.000022")
 
     def test_the_global_row_is_read_from_the_short_context_table(
         self, gpt_56_sol_card: str
@@ -1257,11 +1303,12 @@ class TestModelCardParsing:
     def test_the_govcloud_block_is_neither_the_commercial_nor_a_global_rate(
         self, gpt_54_card: str
     ) -> None:
-        """A card's third table shape must not leak into either rate.
+        """A card's GovCloud table must not leak into either rate.
 
-        GPT-5.4 prices an uncaptioned commercial table and a captioned AWS
-        GovCloud one; the GovCloud block is a different partition's rate, and
-        its In-Region row is not a Global rate either.
+        GPT-5.4 heads its GovCloud table "AWS GovCloud (US-West) — short
+        context", so it names the short context window as the commercial one
+        does; the GovCloud block is a different partition's rate, and its
+        In-Region row is not a Global rate either.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.html
         """
@@ -1276,11 +1323,11 @@ class TestModelCardParsing:
     ) -> None:
         """A GovCloud block captioned exactly like the commercial one is still skipped.
 
-        GPT-5.6 Luna captions its GovCloud tables "Short Context Window (272K)"
-        and "Long Context Window (1M)" too, so only the GovCloud heading above
-        them separates the two blocks. Reading by caption alone found two
-        short-context tables and reported the card unreadable, which left the
-        Luna and Terra rates unverified against their source.
+        GPT-5.6 Luna heads its GovCloud tables "Short context" and "Long
+        context" too, so only the GovCloud heading above them separates the two
+        blocks. Reading by caption alone found two short-context tables and
+        reported the card unreadable, which left the Luna and Terra rates
+        unverified against their source.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-luna.html
         """
@@ -1330,7 +1377,7 @@ class TestModelCardParsing:
         self, gpt_56_sol_card: str
     ) -> None:
         """The Global parser inherits the In-Region parser's table strictness."""
-        card = gpt_56_sol_card.replace("Long Context Window (1M)", "Short Context")
+        card = gpt_56_sol_card.replace(_LONG_CAPTION, _SHORT_CAPTION)
         with pytest.raises(UnreadableSourceError, match="exactly one"):
             parse_model_card_global(card)
 
@@ -1347,7 +1394,7 @@ class TestModelCardParsing:
         self, daybreak_blue_card: str
     ) -> None:
         """Two candidate tables must raise rather than pick one."""
-        card = daybreak_blue_card.replace("Long Context Window (1M)", "Short Context")
+        card = daybreak_blue_card.replace(_LONG_CAPTION, _SHORT_CAPTION)
         with pytest.raises(UnreadableSourceError, match="exactly one"):
             parse_model_card(card)
 
@@ -1361,6 +1408,30 @@ class TestModelCardParsing:
         """A redesigned card reports as unreadable, never as a vanished rate."""
         with pytest.raises(UnreadableSourceError, match="no Pricing section"):
             parse_model_card("<html><body><h1>GPT-5.6 Cyber</h1></body></html>")
+
+    def test_a_bold_paragraph_caption_still_labels_its_table(
+        self, gpt_56_sol_card: str
+    ) -> None:
+        """A card captioning its tables in bold paragraphs reads like a headed one.
+
+        The cards captioned their tables "<p><b>Short Context Window (272K)</b></p>"
+        before moving to sub-headings, and a card still in that form must not
+        read as one ambiguous uncaptioned section.
+        """
+        card = re.sub(
+            r"<h3[^>]*>Commercial Regions — (short|long) context[^<]*</h3>",
+            lambda match: (
+                "<p><b>Short Context Window (272K)</b></p>"
+                if match.group(1) == "short"
+                else "<p><b>Long Context Window (1M)</b></p>"
+            ),
+            gpt_56_sol_card,
+        )
+        assert "<h3" not in card
+        rates = parse_model_card(card, "long")
+        assert rates is not None
+        assert rates[Dimension.INPUT_TOKENS] == Decimal("0.0000088")
+        assert parse_context_window(card) == 272_000
 
     def test_the_user_guide_soft_404_reads_as_a_withdrawn_card(self) -> None:
         """The 200-with-a-stub answer for an unknown page means the card is gone.
@@ -1416,8 +1487,11 @@ class TestLongContextParsing:
     def test_the_govcloud_block_is_not_mistaken_for_a_long_context_table(
         self, gpt_54_card: str
     ) -> None:
-        """A captioned table that is not the long-context one yields no long rate."""
-        assert parse_model_card(gpt_54_card, "long") is None
+        """The long rate is the commercial one, never the GovCloud block below it."""
+        rates = parse_model_card(gpt_54_card, "long")
+        assert rates is not None
+        assert rates[Dimension.INPUT_TOKENS] == Decimal("0.0000055")
+        assert rates[Dimension.OUTPUT_TOKENS] == Decimal("0.00002475")
 
     def test_the_boundary_is_read_from_the_short_context_caption(
         self, gpt_56_sol_card: str
@@ -1437,23 +1511,24 @@ class TestLongContextParsing:
         assert parse_context_window(gpt_56_cyber_card) == 272_000
         assert parse_model_card(gpt_56_cyber_card, "long") is None
 
-    def test_an_uncaptioned_card_states_no_boundary(self, gpt_54_card: str) -> None:
+    def test_an_uncaptioned_card_states_no_boundary(
+        self, gpt_56_cyber_card: str
+    ) -> None:
         """A card pricing one unlabelled table leaves the model on the default."""
-        assert parse_context_window(gpt_54_card) is None
+        card = re.sub(r"<h3[^>]*>.*?</h3>", "", gpt_56_cyber_card, flags=re.DOTALL)
+        assert parse_context_window(card) is None
 
     def test_a_caption_without_a_size_is_unreadable(self, gpt_56_sol_card: str) -> None:
         """A reworded caption must raise rather than yield a guessed boundary."""
         card = gpt_56_sol_card.replace(
-            "Short Context Window (272K)", "Short Context Window"
+            _SHORT_CAPTION, "Commercial Regions — short context"
         )
         with pytest.raises(UnreadableSourceError, match="no window size"):
             parse_context_window(card)
 
     def test_two_long_context_tables_are_unreadable(self, gpt_56_sol_card: str) -> None:
         """A caption that stops naming one table must not have one picked for it."""
-        card = gpt_56_sol_card.replace(
-            "Short Context Window (272K)", "Long Context Window (1M)"
-        )
+        card = gpt_56_sol_card.replace(_SHORT_CAPTION, _LONG_CAPTION)
         with pytest.raises(UnreadableSourceError, match="at most one"):
             parse_model_card(card, "long")
 
@@ -1482,14 +1557,14 @@ class TestLongContextParsing:
 
     def test_a_model_with_no_boundary_on_either_side_reports_nothing(self) -> None:
         """A single-tier model with no entry is silent, like an In-Region-only one."""
-        reading = ThresholdReading(_card_url("model-card-openai-gpt-54"))
-        assert classify_threshold("openai.gpt-5.4", reading) == []
+        reading = ThresholdReading(_card_url("model-card-openai-gpt-oss-120b"))
+        assert classify_threshold("openai.gpt-oss-120b-1:0", reading) == []
 
     def test_a_newly_split_card_is_reported_not_failed(self) -> None:
         """A card that gains a context window is actionable, not our regression."""
-        url = _card_url("model-card-openai-gpt-54")
+        url = _card_url("model-card-openai-gpt-oss-120b")
         findings = classify_threshold(
-            "openai.gpt-5.4", ThresholdReading(url, tokens=200_000)
+            "openai.gpt-oss-120b-1:0", ThresholdReading(url, tokens=200_000)
         )
         assert [finding.outcome for finding in findings] == [Outcome.NEW]
         assert "MODEL_LONG_CONTEXT_THRESHOLDS has no entry" in findings[0].detail
@@ -1563,6 +1638,7 @@ class TestGpt56Detection:
         [
             ("openai.gpt-5.6-cyber", "gpt_56_cyber_card"),
             ("openai.gpt-daybreak-blue-5.6-sol", "daybreak_blue_card"),
+            ("openai.gpt-6-astra", "gpt_6_astra_card"),
         ],
     )
     def test_the_shipped_table_matches_its_card(
@@ -1574,6 +1650,35 @@ class TestGpt56Detection:
         findings = classify(model_id, DEFAULT_MODEL_PRICES[model_id], reading)
         assert findings, "nothing was compared"
         assert self._outcomes(findings) == {Outcome.MATCH}
+
+    @pytest.mark.parametrize(
+        ("model_id", "fixture_name"),
+        [
+            ("openai.gpt-5.4", "gpt_54_card"),
+            ("openai.gpt-5.6-luna", "gpt_56_luna_card"),
+            ("openai.gpt-5.6-sol", "gpt_56_sol_card"),
+            ("openai.gpt-daybreak-blue-5.6-sol", "daybreak_blue_card"),
+            ("openai.gpt-6-astra", "gpt_6_astra_card"),
+        ],
+    )
+    def test_every_table_matches_a_split_card(
+        self, request: pytest.FixtureRequest, model_id: str, fixture_name: str
+    ) -> None:
+        """Each table a split card prices, and its boundary, matches the card.
+
+        A split card feeds up to four rate tables and the boundary between
+        them, so a model entered in only some of them is billed from the wrong
+        tier or routing on the rest.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.html
+        """
+        card: str = request.getfixturevalue(fixture_name)
+        findings = classify_card(model_id, parse_card_readings(_card_url("x"), card))
+        assert findings, "nothing was compared"
+        assert self._outcomes(findings) == {Outcome.MATCH}
+        assert any("context window" in finding.model_id for finding in findings)
+        assert any("long context" in finding.model_id for finding in findings)
 
     def test_a_wrong_expected_value_is_reported_as_drift(
         self, gpt_56_cyber_card: str
@@ -1772,7 +1877,7 @@ class TestNewAtTheSource:
     """
 
     def test_a_new_gpt_card_is_reported(self) -> None:
-        """A GPT-5.x card the table does not price shows up as new."""
+        """A frontier GPT card the table does not price shows up as new."""
         index = (
             '<a href="./model-card-openai-gpt-56-cyber.html">Cyber</a>'
             '<a href="./model-card-openai-gpt-57-nova.html">Nova</a>'

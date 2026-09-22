@@ -3035,10 +3035,19 @@ class TestDefaultModelPrices:
             (
                 "openai.gpt-daybreak-blue-5.6-sol",
                 {
-                    Dimension.INPUT_TOKENS: "0.0000055",
-                    Dimension.CACHE_WRITE_TOKENS: "0.000006875",
-                    Dimension.CACHE_READ_TOKENS: "0.00000055",
-                    Dimension.OUTPUT_TOKENS: "0.000033",
+                    Dimension.INPUT_TOKENS: "0.0000044",
+                    Dimension.CACHE_WRITE_TOKENS: "0.0000055",
+                    Dimension.CACHE_READ_TOKENS: "0.00000044",
+                    Dimension.OUTPUT_TOKENS: "0.000022",
+                },
+            ),
+            (
+                "openai.gpt-6-astra",
+                {
+                    Dimension.INPUT_TOKENS: "0.000011",
+                    Dimension.CACHE_WRITE_TOKENS: "0.00001375",
+                    Dimension.CACHE_READ_TOKENS: "0.0000011",
+                    Dimension.OUTPUT_TOKENS: "0.000055",
                 },
             ),
         ],
@@ -3051,12 +3060,12 @@ class TestDefaultModelPrices:
     ) -> None:
         """Every OpenAI frontier model prices at its card's In-Region rate, to the cent.
 
-        All of them serve Bedrock Mantle in us-east-2, which offers no
-        cross-Region inference, and their rows are absent from the Price List
-        API, so the model-card rate is the only source a deployment has: a
-        stale or rounded figure here is reported to the operator as fact, with
-        nothing live to correct it. GPT-5.6 takes the 272K short-context tier,
-        this table having no context axis.
+        All of them serve Bedrock Mantle, which offers no cross-Region
+        inference, and their rows are absent from the Price List API, so the
+        model-card rate is the only source a deployment has: a stale or rounded
+        figure here is reported to the operator as fact, with nothing live to
+        correct it. Each takes its 272K short-context tier, this table having
+        no context axis.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.html
              https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
@@ -3065,6 +3074,7 @@ class TestDefaultModelPrices:
              https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
              https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-terra.html
              https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-daybreak-blue-56-sol.html
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
         """
         index: dict[PriceKey, Price] = {}
         pricing._apply_default_prices(index)  # noqa: SLF001
@@ -5244,12 +5254,11 @@ _KNOWN_PRICING_GAPS: Final[frozenset[str]] = frozenset(
         "stability.stable-diffusion-xl-v1",
         # No Price List rows and no pricing-page rate (only GLM 4.7/5 listed).
         "zai.glm-4.6",
-        # Newly catalogued and not yet priced: every Bedrock Price List row in
-        # us-east-1 was read (2026-09-18) and none names it under any spelling.
-        # AWS is the only source this reads, and OpenAI states its Bedrock rates
-        # match its direct ones, so the rows are expected to arrive at the list
-        # price of $10.00/$1.00/$12.50/$50.00 per 1M tokens rather than differ.
-        "openai.gpt-6-astra",
+        # No Price List rows (2026-09-22), no model card (the user guide URL
+        # soft-404s) and the English pricing page links both to the OpenAI card
+        # index only; price them from their cards once AWS publishes them.
+        "openai.gpt-6-luna",
+        "openai.gpt-6-sol",
     }
 )
 

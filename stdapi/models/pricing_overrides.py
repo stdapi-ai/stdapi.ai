@@ -147,8 +147,8 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
     "stability.stable-fast-upscale-v1:0": {Dimension.OUTPUT_IMAGES: "0.03"},
     "stability.stable-outpaint-v1:0": {Dimension.OUTPUT_IMAGES: "0.06"},
     # OpenAI frontier models: model-card In-Region per-1M rates / 1e6 (verified
-    # 2026-08-26), absent from the Price List API outside GovCloud. GPT-5.6
-    # takes the 272K short-context tier; the 1M one is priced below.
+    # 2026-09-22), absent from the Price List API outside GovCloud. These are
+    # the 272K short-context tier; the long one is priced below.
     # The cards price Geo cross-Region identically to In-Region, so these also
     # serve a "us."/"eu." profile; the Global profile has its own table below.
     # Dated aliases share these via MODEL_KEY_OVERRIDES.
@@ -187,18 +187,24 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_READ_TOKENS: "0.00000022",
         Dimension.OUTPUT_TOKENS: "0.0000132",
     },
-    # Daybreak Blue, whose card kept the rates GPT-5.6 Sol has since come down from.
+    # Daybreak Blue: same rates as GPT-5.6 Sol above.
     "openai.gpt-daybreak-blue-5.6-sol": {
-        Dimension.INPUT_TOKENS: "0.0000055",
-        Dimension.CACHE_WRITE_TOKENS: "0.000006875",
-        Dimension.CACHE_READ_TOKENS: "0.00000055",
-        Dimension.OUTPUT_TOKENS: "0.000033",
+        Dimension.INPUT_TOKENS: "0.0000044",
+        Dimension.CACHE_WRITE_TOKENS: "0.0000055",
+        Dimension.CACHE_READ_TOKENS: "0.00000044",
+        Dimension.OUTPUT_TOKENS: "0.000022",
+    },
+    "openai.gpt-6-astra": {
+        Dimension.INPUT_TOKENS: "0.000011",
+        Dimension.CACHE_WRITE_TOKENS: "0.00001375",
+        Dimension.CACHE_READ_TOKENS: "0.0000011",
+        Dimension.OUTPUT_TOKENS: "0.000055",
     },
 }
 
 #: Global cross-Region rates for the models above whose card publishes one.
 DEFAULT_MODEL_GLOBAL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
-    # Model-card "Global CRIS" per-1M rates / 1e6 (verified 2026-08-26), ~9%
+    # Model-card "Global CRIS" per-1M rates / 1e6 (verified 2026-09-22), ~9%
     # under In-Region. Reached only through the "global." inference profile on
     # bedrock-runtime; Bedrock Mantle serves no cross-Region inference at all,
     # so its calls stay on the In-Region rates above. A model absent here
@@ -222,30 +228,49 @@ DEFAULT_MODEL_GLOBAL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_READ_TOKENS: "0.0000002",
         Dimension.OUTPUT_TOKENS: "0.000012",
     },
+    "openai.gpt-6-astra": {
+        Dimension.INPUT_TOKENS: "0.00001",
+        Dimension.CACHE_WRITE_TOKENS: "0.0000125",
+        Dimension.CACHE_READ_TOKENS: "0.000001",
+        Dimension.OUTPUT_TOKENS: "0.00005",
+    },
 }
 
 #: Prompt size at which a model leaves its short-context rate, where its own source says.
 MODEL_LONG_CONTEXT_THRESHOLDS: Final[dict[str, int]] = {
-    # The GPT-5.6 cards split their rates at a 272K short context window, not
-    # at the 200K DEFAULT_LONG_CONTEXT_THRESHOLD most models switch at. Cyber
-    # is here for the same reason though it publishes no long rate: its window
-    # is 272K, so a 250K prompt to it is not a long-context call and must not
-    # be recorded as one.
+    # The OpenAI frontier cards split their rates at a 272K short context
+    # window, not at the 200K DEFAULT_LONG_CONTEXT_THRESHOLD most models switch
+    # at. Cyber is here for the same reason though it publishes no long rate:
+    # its window is 272K, so a 250K prompt to it is not a long-context call and
+    # must not be recorded as one.
+    "openai.gpt-5.4": 272_000,
+    "openai.gpt-5.5": 272_000,
     "openai.gpt-5.6-cyber": 272_000,
     "openai.gpt-5.6-luna": 272_000,
     "openai.gpt-5.6-sol": 272_000,
     "openai.gpt-5.6-terra": 272_000,
     "openai.gpt-daybreak-blue-5.6-sol": 272_000,
+    "openai.gpt-6-astra": 272_000,
 }
 
 #: In-Region rates past MODEL_LONG_CONTEXT_THRESHOLDS, for the cards publishing one.
 DEFAULT_MODEL_LONG_CONTEXT_PRICES: Final[dict[str, dict[Dimension, str]]] = {
-    # Model-card "Long Context Window (1M)" In-Region per-1M rates / 1e6
-    # (verified 2026-08-26): 2x the short-context rate on input and both cache
+    # Model-card long-context In-Region per-1M rates / 1e6 (verified
+    # 2026-09-22): 2x the short-context rate on input and both cache
     # dimensions, 1.5x on output. AWS bills the whole call at these once the
     # prompt crosses the boundary. A model absent here publishes no long rate
     # and keeps its short one, resolve_price relaxing the context axis rather
     # than leaving the call unpriced.
+    "openai.gpt-5.4": {
+        Dimension.INPUT_TOKENS: "0.0000055",
+        Dimension.CACHE_READ_TOKENS: "0.00000055",
+        Dimension.OUTPUT_TOKENS: "0.00002475",
+    },
+    "openai.gpt-5.5": {
+        Dimension.INPUT_TOKENS: "0.000011",
+        Dimension.CACHE_READ_TOKENS: "0.0000011",
+        Dimension.OUTPUT_TOKENS: "0.0000495",
+    },
     "openai.gpt-5.6-luna": {
         Dimension.INPUT_TOKENS: "0.00000044",
         Dimension.CACHE_WRITE_TOKENS: "0.00000055",
@@ -266,17 +291,23 @@ DEFAULT_MODEL_LONG_CONTEXT_PRICES: Final[dict[str, dict[Dimension, str]]] = {
     },
     # Daybreak Blue: same rates as GPT-5.6 Sol above.
     "openai.gpt-daybreak-blue-5.6-sol": {
-        Dimension.INPUT_TOKENS: "0.000011",
-        Dimension.CACHE_WRITE_TOKENS: "0.00001375",
-        Dimension.CACHE_READ_TOKENS: "0.0000011",
-        Dimension.OUTPUT_TOKENS: "0.0000495",
+        Dimension.INPUT_TOKENS: "0.0000088",
+        Dimension.CACHE_WRITE_TOKENS: "0.000011",
+        Dimension.CACHE_READ_TOKENS: "0.00000088",
+        Dimension.OUTPUT_TOKENS: "0.000033",
+    },
+    "openai.gpt-6-astra": {
+        Dimension.INPUT_TOKENS: "0.000022",
+        Dimension.CACHE_WRITE_TOKENS: "0.0000275",
+        Dimension.CACHE_READ_TOKENS: "0.0000022",
+        Dimension.OUTPUT_TOKENS: "0.0000825",
     },
 }
 
 #: Global cross-Region rates for the long-context models above whose card publishes one.
 DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES: Final[dict[str, dict[Dimension, str]]] = {
-    # Model-card "Long Context Window (1M)" / "Global CRIS" per-1M rates / 1e6
-    # (verified 2026-08-26). Same routing scope as DEFAULT_MODEL_GLOBAL_PRICES:
+    # Model-card long-context "Global CRIS" per-1M rates / 1e6 (verified
+    # 2026-09-22). Same routing scope as DEFAULT_MODEL_GLOBAL_PRICES:
     # bedrock-runtime's "global." profile only.
     "openai.gpt-5.6-luna": {
         Dimension.INPUT_TOKENS: "0.0000004",
@@ -295,5 +326,11 @@ DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES: Final[dict[str, dict[Dimension, str]]]
         Dimension.CACHE_WRITE_TOKENS: "0.000005",
         Dimension.CACHE_READ_TOKENS: "0.0000004",
         Dimension.OUTPUT_TOKENS: "0.000018",
+    },
+    "openai.gpt-6-astra": {
+        Dimension.INPUT_TOKENS: "0.00002",
+        Dimension.CACHE_WRITE_TOKENS: "0.000025",
+        Dimension.CACHE_READ_TOKENS: "0.000002",
+        Dimension.OUTPUT_TOKENS: "0.000075",
     },
 }

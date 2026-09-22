@@ -295,7 +295,7 @@ Everything else about an idle scale-to-zero endpoint is unbilled: no instances m
 
 ### Long-Context Pricing
 
-Some 1M-context-capable models are billed by AWS at a higher rate — roughly double for input-side tokens — once a call's prompt (input + cache read/write tokens) passes the boundary that model publishes. **That boundary differs per model**: Claude Sonnet 4 (via the `context-1m` `anthropic-beta` flag) switches at 200K tokens, while the OpenAI GPT-5.6 models bill their short-context rate all the way to 272K. stdapi.ai applies each model's own boundary, prices the whole call at the published long-context rate, and reports it with `"context": "long"` in the usage entry. When AWS publishes no long-context rate for a model, the standard rate is used as the best available estimate.
+Some 1M-context-capable models are billed by AWS at a higher rate — roughly double for input-side tokens — once a call's prompt (input + cache read/write tokens) passes the boundary that model publishes. **That boundary differs per model**: Claude Sonnet 4 (via the `context-1m` `anthropic-beta` flag) switches at 200K tokens, while the OpenAI frontier models (GPT-5.4 and later) bill their short-context rate all the way to 272K. stdapi.ai applies each model's own boundary, prices the whole call at the published long-context rate, and reports it with `"context": "long"` in the usage entry. When AWS publishes no long-context rate for a model, the standard rate is used as the best available estimate.
 
 ### Built-in Tool Pricing
 
