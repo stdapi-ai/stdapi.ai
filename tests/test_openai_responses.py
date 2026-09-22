@@ -43,7 +43,7 @@ from openai.types.responses.response_output_text import (
 from pydantic import ValidationError
 
 from stdapi import usage
-from stdapi.api_errors import ApiError, UnsupportedParameterError
+from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
 from stdapi.models.chat._adapters import _openai_responses as responses_adapter
 from stdapi.models.chat._adapters._openai_common import JSON_OBJECT_SYSTEM_INSTRUCTION
@@ -2006,42 +2006,31 @@ class TestUnsupportedFeatures:
             if item.type in ("program", "program_output")
         ]
 
-    @pytest.mark.parametrize(
-        ("param", "value"),
-        [
-            ("truncation", "auto"),
-            ("context_management", [{"type": "compaction"}]),
-            ("max_tool_calls", 3),
-        ],
-    )
     @pytest.mark.gateway(
-        "official API supports these params; restriction is gateway-specific"
+        "official API supports max_tool_calls; restriction is gateway-specific"
     )
     def test_unsupported_param_returns_400(
-        self, openai_client: OpenAI, responses_model: str, param: str, value: object
+        self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Parameters marked unsupported are rejected with ``unsupported_parameter``.
+        """``max_tool_calls`` is rejected with ``unsupported_parameter``.
 
-        Each of them is rejected by the request model instead of being silently
-        ignored, and the envelope names the offending parameter. Accepting
-        ``context_management`` would be the worst failure: it is the reason the
-        standalone /v1/responses/compact route exists, so a client asking for
-        server-side compaction would get an uncompacted answer.
+        It is rejected by the request model instead of being silently ignored,
+        and the envelope names the offending parameter.
 
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
              stdapi/api_errors.py:UnsupportedParameterError
         """
         with pytest.raises(BadRequestError) as excinfo:
-            openai_client.responses.create(  # type: ignore[call-overload]
-                model=responses_model, input="Hello.", **{param: value}
+            openai_client.responses.create(
+                model=responses_model, input="Hello.", max_tool_calls=3
             )
 
         assert excinfo.value.status_code == 400
         envelope = _error_envelope(excinfo.value)
         assert envelope["type"] == "invalid_request_error"
         assert envelope["code"] == "unsupported_parameter"
-        assert envelope["param"] == param
-        assert f"'{param}' is not supported" in envelope["message"]
+        assert envelope["param"] == "max_tool_calls"
+        assert "'max_tool_calls' is not supported" in envelope["message"]
 
 
 class TestDefaultTruncation:
@@ -2050,8 +2039,8 @@ class TestDefaultTruncation:
     A client that spells the default out must reach the API: the OpenAI
     Responses integration of LlamaIndex puts `truncation="disabled"` in every
     request body it builds, so rejecting it costs the whole client while
-    gaining nothing. `"auto"` asks for something genuinely different and stays
-    rejected.
+    gaining nothing. `"auto"` is honoured as well
+    (tests/test_openai_responses_context.py).
 
     Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
          stdapi/types/openai_responses.py:ResponseCreateParams
@@ -2075,26 +2064,19 @@ class TestDefaultTruncation:
     @pytest.mark.parametrize(
         "params_type", [ResponseCreateParams, InputTokenCountParams]
     )
-    def test_both_request_bodies_take_the_default_and_refuse_auto(
+    def test_both_request_bodies_take_both_strategies(
         self, params_type: type[ResponseCreateParams | InputTokenCountParams]
     ) -> None:
-        """Every body carrying `truncation` accepts the default and refuses `auto`.
+        """Every body carrying `truncation` accepts both upstream strategies.
 
-        The token-counting body lists the parameter as unsupported too, so it
-        would refuse the same compliant request the generation body does.
-
-        Ref: https://developers.openai.com/api/reference/resources/responses/methods/count-input-tokens
+        Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count
              stdapi/types/openai_responses.py:InputTokenCountParams
         """
-        params = params_type.model_validate(
-            {"model": "m", "input": "x", "truncation": "disabled"}
-        )
-        assert params.truncation == "disabled"
-
-        with pytest.raises(UnsupportedParameterError, match="truncation"):
-            params_type.model_validate(
-                {"model": "m", "input": "x", "truncation": "auto"}
+        for strategy in ("disabled", "auto"):
+            params = params_type.model_validate(
+                {"model": "m", "input": "x", "truncation": strategy}
             )
+            assert params.truncation == strategy
 
 
 # image_generation integrated tool — model-agnostic (works for all text models)

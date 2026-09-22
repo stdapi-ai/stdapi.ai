@@ -56,7 +56,7 @@ curl -X POST "$BASE/v1/responses" \
 | Echoed output items (message, reasoning, refusal)                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Replayed to the model; refusal parts preserved; unknown upstream fields tolerated |
 | Echoed `custom_tool_call` / `image_generation_call`                   |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Replayed as tool calls (freeform input wrapped as `{"input": ...}`; image results attached) |
 | Echoed `file_search_call`                                             |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Replayed as a search the model already ran, with the passages it returned; an item carrying no `results` is dropped with its call |
-| Hosted-tool call items (`web_search_call`, `code_interpreter_call`, `computer_call`, `tool_search_call`, shell/apply-patch/MCP items, `compaction_trigger`) | :material-check-circle:{ .success role="img" aria-label="Supported" } | Input-history tolerance only: echoed items are accepted and dropped on replay (no Bedrock equivalent). Whether each *tool* can actually be used is listed under Tool Calling below |
+| Hosted-tool call items (`web_search_call`, `code_interpreter_call`, `computer_call`, `tool_search_call`, shell/apply-patch/MCP items) | :material-check-circle:{ .success role="img" aria-label="Supported" } | Input-history tolerance only: echoed items are accepted and dropped on replay (no Bedrock equivalent). Whether each *tool* can actually be used is listed under Tool Calling below |
 | Echoed `program` / `program_output` items                             |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Input-history tolerance only: accepted and dropped on replay (no Bedrock equivalent) |
 | `item_reference`                                                      |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Accepted and dropped on replay                                               |
 | `configuration_update` items                                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Input-history tolerance only: accepted and dropped on replay on Converse-served models, whose recorded `reasoning.effort` is *not* applied — the request is configured by its own `reasoning` parameter alone; forwarded verbatim on Bedrock Mantle native models, where the upstream API decides whether the recorded effort takes effect. Stored in a `conversation` and listed back like any other item |
@@ -97,9 +97,9 @@ curl -X POST "$BASE/v1/responses" \
 | `prompt_cache_retention`                                              |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Cache TTL: `in_memory`, `24h`, `1h`, or `5m`                                 |
 | `service_tier`                                                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Maps to a Bedrock service tier. `fast` is accepted as the alias of `priority`. The response reports the tier that served the request, which Amazon Bedrock names, so it can differ from the one asked for and reflects a tier the deployment configured in the request's place — see [service tier configuration](operations_configuration_bedrock.md#service-tier-per-request); a call served on the Bedrock-only `reserved` tier is reported as `default`, the value this API publishes. When nothing names a tier, the requested one is reported after alias mapping, and `ultrafast` or any other tier without a Bedrock equivalent as `default`. When streaming, the tier Amazon Bedrock reports only arrives with its last event: the lifecycle events carry the tier the call was sent on, and the terminal event the served one |
 | Extra model-specific params                                           | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra model-specific parameters not supported by the OpenAI API              |
-| `truncation`                                                          |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }   | `disabled` (the OpenAI default) is the behavior served, and is accepted; `auto` returns `400` |
+| `truncation`                                                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | `disabled` (the default) refuses an input over the context window with `400 context_length_exceeded`; `auto` drops its oldest turns instead. Forwarded as sent on Bedrock Mantle native models — see [Context Window Management](#context-window-management) |
 | `max_tool_calls`                                                      | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Returns `400`; not supported                                                 |
-| `context_management`                                                  | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Returns `400`; not supported                                                 |
+| `context_management`                                                  |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }   | Compacts the conversation once its input crosses `compact_threshold` (at least `1000`); the threshold is approximate on some models. Forwarded as sent on Bedrock Mantle native models — see [Context Window Management](#context-window-management) |
 | `background`                                                          |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted but ignored on Converse-served models — execution is synchronous; forwarded upstream on Bedrock Mantle native models, where background responses can be cancelled — see [Stored Responses](#stored-responses) |
 | `store`                                                               |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Persists the response — Amazon Bedrock session storage (non-streaming) or Mantle native storage for Mantle models (streaming supported) |
 | `stream_options`                                                      |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted but ignored on Converse-served models; forwarded upstream on Bedrock Mantle native models |
@@ -115,6 +115,7 @@ curl -X POST "$BASE/v1/responses" \
 | **Multi-Turn**                                                        |                                         |                                                                              |
 | `previous_response_id`                                                |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Continues a response stored with `store=true`                                |
 | Compaction (`POST /v1/responses/compact`)                             |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Stateless summary item; send it back in `input` to continue                  |
+| `compaction_trigger` input item                                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Must be the last input item: the response holds the compaction of everything before it, and no answer; `max_output_tokens` below `20000` is refused with `400` |
 | **Streaming**                                                         |                                         |                                                                              |
 | `stream: true`                                                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | SSE stream with full lifecycle events                                        |
 | `response.created`                                                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Emitted at stream start                                                      |
@@ -126,6 +127,7 @@ curl -X POST "$BASE/v1/responses" \
 | `response.reasoning_text.delta` / `.done`                             |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Reasoning text deltas on reasoning models                                    |
 | `response.output_text.annotation.added`                               |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | `url_citation` annotations as web-search citations arrive                    |
 | `response.web_search_call.in_progress` / `.searching` / `.completed`  |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bracket each `web_search_call` item, in that order                           |
+| `response.compaction.compacting`                                      |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Emitted while a `compaction_trigger` request's compaction is produced        |
 | `response.completed`                                                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Final event when generation finishes normally                                |
 | `response.incomplete`                                                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Final event when output is truncated or filtered (no `response.completed`)   |
 | `response.failed`                                                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Final event when generation fails; the response carries `error`              |
@@ -1008,7 +1010,7 @@ curl -X POST "$BASE/v1/responses/compact" \
   "object": "response.compaction",
   "created_at": 1752000000,
   "output": [
-    {"id": "ci-...", "type": "compaction", "encrypted_content": "..."}
+    {"id": "cmp_...", "type": "compaction", "encrypted_content": "..."}
   ],
   "usage": {"input_tokens": 1500, "output_tokens": 220, "total_tokens": 1720}
 }
@@ -1020,14 +1022,42 @@ Continue the conversation by sending the compaction item back, followed by new m
 {
   "model": "amazon.nova-pro-v1:0",
   "input": [
-    {"id": "ci-...", "type": "compaction", "encrypted_content": "..."},
+    {"id": "cmp_...", "type": "compaction", "encrypted_content": "..."},
     {"role": "user", "content": "Next question..."}
   ]
 }
 ```
 
 !!! note "Stateless compaction"
-    The compaction content is fully self-contained (marker-prefixed and encoded, not encrypted): no conversation state is needed, and any server instance can expand it. Only compaction items produced by this server can be expanded — items encrypted by the upstream OpenAI API are rejected with `400`, and locally-produced items cannot be continued on a [Mantle](features.md#bedrock-mantle-models)-served model. `previous_response_id` may reference a [stored response](#stored-responses) to include its conversation in the compaction.
+    The compaction content is fully self-contained: no conversation state is needed, and any server instance can expand it. It is not encrypted — see [Context Window Management](#context-window-management). Compaction items another service produced are rejected with `400` `invalid_encrypted_content`, except on a [Mantle](features.md#bedrock-mantle-models) model serving the Responses API natively, which reads its own items and refuses this server's. `previous_response_id` may reference a [stored response](#stored-responses) to include its conversation in the compaction. An item from this endpoint adds its summary to whatever history you send with it; an item from a response replaces that history — see below.
+
+### Context Window Management
+
+A long session eventually outgrows the model's context window. The OpenAI API's mechanisms are all served:
+
+| Mechanism | What happens |
+|---|---|
+| `truncation: "disabled"` (default) | An input the context window cannot hold is refused: `400` with `code: context_length_exceeded` and `param: input`, or, when streaming, an `error` event carrying that code followed by `response.failed`. |
+| `truncation: "auto"` | An input that does not fit has its oldest turns (a user message and everything up to the next one) dropped, and when the latest turn alone is too large its longest text is cut at its end. System and developer messages are always kept. The response reports only the input that was kept in `usage`, nothing else marks the truncation, and a stored response keeps the truncated history. The input is still refused with `context_length_exceeded` when what can never be trimmed — system and developer messages, `instructions`, tools, the latest turn's images and files — exceeds the window on its own, or when dropping its oldest turns still leaves it too large. |
+| `context_management` | Before generating, once the input crosses `compact_threshold` tokens, everything but the latest step is summarized into a `compaction` item. The item comes first in `output`, and `usage` adds the compaction to the answer. |
+| `compaction_trigger` input item | Compacts everything before it on demand: the response holds the `compaction` item alone. |
+
+```json
+{
+  "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
+  "input": [...],
+  "context_management": [{"type": "compaction", "compact_threshold": 150000}]
+}
+```
+
+Continue from a compacted response as with the OpenAI API: with `previous_response_id`, or by sending the output back followed by the next message. A `compaction` item a response produced **stands for everything before it**, so items sent ahead of it are not read again and the next turn starts from the compaction. Streamed, the item is announced with `response.output_item.added` at `output_index` 0 while the summary is produced, then completed with `response.output_item.done`, and the answer's items follow from index 1.
+
+!!! info "How this implementation measures and compacts"
+    - The threshold is exact on models that support [input token counting](#input-token-counting), and approximate on the others, where a compaction can come somewhat before or after it. An entry without `compact_threshold` never compacts.
+    - Compaction happens before generation only, never while a response is being produced, and the summary is written by the requested model itself: it keeps the facts, decisions and tool results needed to continue, not the model's hidden reasoning state. The latest user message and the latest tool step are kept verbatim.
+    - `context_management` is no way around the context window: a conversation too large to summarize is refused with `context_length_exceeded`, unless `truncation: "auto"` trims it first.
+    - Compaction items, from a response or from the compact endpoint, are not encrypted: they carry the conversation's text, summarized or verbatim — a response's item includes its system and developer messages. Anyone holding one can read it, and alter it before sending it back: hand it only to parties that may see and change that conversation, or continue with `previous_response_id` to keep it on the server.
+    - Bedrock Mantle models that serve the Responses API natively honour `truncation`, `context_management` and `compaction_trigger` themselves; one that does not compact answers `400` saying so. Other Mantle models get the behavior described here.
 
 ### Model-Specific Features
 
@@ -1067,13 +1097,15 @@ curl -X POST "$BASE/v1/responses" \
 
 ## Limits and behaviour to know
 
-**What is rejected with a `400`.** `max_tool_calls`, `context_management`, `truncation: "auto"` (`disabled`, the OpenAI default, is the behavior served), `conversation` together with `previous_response_id`, `stream=true` on `GET /v1/responses/{response_id}`, the `moderation` parameter on a [Mantle](features.md#bedrock-mantle-models)-served model, and a `phase` on an input message whose `role` is not `assistant` (`unknown_parameter`) — on an assistant message it is accepted and dropped rather than stored.
+**What is rejected with a `400`.** `max_tool_calls`, an input larger than the model's context window unless `truncation: "auto"` can trim it to fit (`context_length_exceeded`), a `context_management` entry whose type is not `compaction` or whose `compact_threshold` is not an integer of at least `1000`, a `compaction_trigger` that is not the last input item, is sent twice or comes with `max_output_tokens` below `20000`, `conversation` together with `previous_response_id`, `stream=true` on `GET /v1/responses/{response_id}`, the `moderation` parameter on a [Mantle](features.md#bedrock-mantle-models)-served model, and a `phase` on an input message whose `role` is not `assistant` (`unknown_parameter`) — on an assistant message it is accepted and dropped rather than stored.
+
+**A `compaction_trigger` with nothing before it is refused.** The OpenAI API answers it with compaction items; here it is a `400` reading `There is no conversation to compact.` Send the trigger after at least one user, assistant or tool item, or with a `previous_response_id`.
 
 **What is accepted and ignored on Converse-served models.** `background` (execution is synchronous), `stream_options`, `reasoning.summary`, `reasoning.context`, `reasoning.mode`, `text.verbosity`, `client_metadata`, `top_logprobs`, `include` values other than the two honored ones, and `include` / `starting_after` on a stored-response retrieval. On Mantle-native models these are forwarded upstream instead — see [Bedrock Mantle passthrough](#feature-compatibility) above.
 
 **Tools with no backend equivalent are dropped, not refused.** `computer`, `mcp`, `local_shell`, `custom`, `programmatic_tool_calling` and the others leave the tool configuration before the request reaches the model, so the request succeeds and the model simply cannot call them; the full list, and what the model does instead, is under [Function Tool Calling](#function-tool-calling). `file_search` is the exception — it is served, from the vector stores the request names.
 
-**Token counting takes fewer parameters than a generation.** `previous_response_id` is not supported on `POST /v1/responses/input_tokens`, since resolving it would change the count; `personality` (a token-counting-only schema field) and `reasoning.context` are accepted and ignored. Token counting is not available at all for models served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models), which reject the request with a `400` — the **OpenAI GPT-5.6 and GPT-6 families included**, since they are served from Mantle by default. Clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) brings both families back to the classic endpoint, where they count tokens. A model served by a [Marketplace](operations_configuration_models.md#bedrock-marketplace-endpoints-enabled) or [SageMaker AI](operations_configuration_models.md#aws-sagemaker-endpoints) endpoint answers the same `400`, because Bedrock's token counter takes a foundation model identifier and an endpoint you run has none; the route is not listed for those models in [`search_models`](api_search_models.md) either.
+**Token counting takes fewer parameters than a generation.** `previous_response_id` is not supported on `POST /v1/responses/input_tokens`, since resolving it would change the count; `truncation: "auto"` is, and counts the input a response would keep once its oldest turns are dropped — without it, an input larger than the context window is refused with `context_length_exceeded` rather than counted; `personality` (a token-counting-only schema field) and `reasoning.context` are accepted and ignored. Token counting is not available at all for models served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models), which reject the request with a `400` — the **OpenAI GPT-5.6 and GPT-6 families included**, since they are served from Mantle by default. Clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) brings both families back to the classic endpoint, where they count tokens. A model served by a [Marketplace](operations_configuration_models.md#bedrock-marketplace-endpoints-enabled) or [SageMaker AI](operations_configuration_models.md#aws-sagemaker-endpoints) endpoint answers the same `400`, because Bedrock's token counter takes a foundation model identifier and an endpoint you run has none; the route is not listed for those models in [`search_models`](api_search_models.md) either.
 
 ## Request headers { #available-request-headers }
 

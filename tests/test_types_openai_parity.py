@@ -498,9 +498,9 @@ class TestUnsupportedNullIsAccepted:
 
     def test_a_real_value_is_still_rejected(self) -> None:
         """Setting an unsupported parameter to a value still 400s."""
-        with pytest.raises(UnsupportedParameterError, match="truncation"):
+        with pytest.raises(UnsupportedParameterError, match="max_tool_calls"):
             ResponseCreateParams.model_validate(
-                {"model": "m", "input": "x", "truncation": "auto"}
+                {"model": "m", "input": "x", "max_tool_calls": 3}
             )
 
 

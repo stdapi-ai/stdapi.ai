@@ -4,12 +4,12 @@ from typing import Literal, Self
 
 from pydantic import Field, JsonValue, model_validator
 
-from stdapi.api_errors import ApiError
 from stdapi.types import BaseModelRequest, BaseModelResponse
 from stdapi.types.openai import Metadata, PaginatedListEnvelope
 from stdapi.types.openai_responses import (
     ResponseInputItem,
     ResponseItem,
+    invalid_request,
     reject_input_message_phase,
 )
 
@@ -26,23 +26,6 @@ METADATA_MAX_VALUE_LENGTH: int = 512
 ITEMS_MAX_PER_REQUEST: int = 20
 
 
-def _invalid_request(message: str, code: str, param: str) -> ApiError:
-    """Build the 400 error carrying an upstream error code and parameter name.
-
-    Args:
-        message: Human-readable error message.
-        code: Upstream error code (e.g. ``string_above_max_length``).
-        param: Name of the offending request parameter.
-
-    Returns:
-        The error to raise.
-    """
-    error = ApiError(message, status=400)
-    error.code = code
-    error.param = param
-    return error
-
-
 def validate_metadata(metadata: dict[str, JsonValue]) -> None:
     """Check a metadata mapping against the conversation metadata limits.
 
@@ -56,25 +39,27 @@ def validate_metadata(metadata: dict[str, JsonValue]) -> None:
     """
     if len(metadata) > METADATA_MAX_KEYS:
         msg = f"'metadata' supports at most {METADATA_MAX_KEYS} key-value pairs."
-        raise _invalid_request(msg, "object_above_max_properties", "metadata")
+        raise invalid_request(msg, code="object_above_max_properties", param="metadata")
     for key, value in metadata.items():
         if len(key) > METADATA_MAX_KEY_LENGTH:
             msg = (
                 f"'metadata' keys must be at most {METADATA_MAX_KEY_LENGTH} "
                 f"characters long, got {len(key)}."
             )
-            raise _invalid_request(msg, "property_name_above_max_length", "metadata")
+            raise invalid_request(
+                msg, code="property_name_above_max_length", param="metadata"
+            )
         if value is None:
             continue
         if not isinstance(value, str):
             msg = f"'metadata[{key}]' must be a string."
-            raise _invalid_request(msg, "invalid_type", "metadata")
+            raise invalid_request(msg, code="invalid_type", param="metadata")
         if len(value) > METADATA_MAX_VALUE_LENGTH:
             msg = (
                 f"'metadata[{key}]' must be at most "
                 f"{METADATA_MAX_VALUE_LENGTH} characters long, got {len(value)}."
             )
-            raise _invalid_request(msg, "string_above_max_length", "metadata")
+            raise invalid_request(msg, code="string_above_max_length", param="metadata")
 
 
 def _validate_items(items: list[ResponseInputItem] | None, *, required: bool) -> None:
@@ -91,14 +76,14 @@ def _validate_items(items: list[ResponseInputItem] | None, *, required: bool) ->
     if items is None:
         if required:
             msg = "Missing required parameter: 'items'."
-            raise _invalid_request(msg, "missing_required_parameter", "items")
+            raise invalid_request(msg, code="missing_required_parameter", param="items")
         return
     if required and not items:
         msg = "'items' must contain at least one item."
-        raise _invalid_request(msg, "empty_array", "items")
+        raise invalid_request(msg, code="empty_array", param="items")
     if len(items) > ITEMS_MAX_PER_REQUEST:
         msg = f"'items' accepts at most {ITEMS_MAX_PER_REQUEST} items per request."
-        raise _invalid_request(msg, "array_above_max_length", "items")
+        raise invalid_request(msg, code="array_above_max_length", param="items")
     reject_input_message_phase(items, "items")
 
 
@@ -199,10 +184,12 @@ class ConversationUpdateParams(BaseModelRequest):
         """
         if "metadata" not in self.model_fields_set:
             msg = "Missing required parameter: 'metadata'."
-            raise _invalid_request(msg, "missing_required_parameter", "metadata")
+            raise invalid_request(
+                msg, code="missing_required_parameter", param="metadata"
+            )
         if self.metadata is None:
             msg = "'metadata' must be an object."
-            raise _invalid_request(msg, "invalid_type", "metadata")
+            raise invalid_request(msg, code="invalid_type", param="metadata")
         validate_metadata(self.metadata)
         return self
 

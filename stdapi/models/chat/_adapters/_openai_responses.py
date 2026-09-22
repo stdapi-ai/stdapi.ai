@@ -7,8 +7,10 @@ response formatting (both streaming and non-streaming), and streaming events.
 
 from asyncio import Semaphore, Task, create_task, gather
 from base64 import b64decode, b64encode, urlsafe_b64encode
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import partial
 from time import time
 from traceback import format_exception
 from types import MappingProxyType
@@ -16,7 +18,9 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 from botocore.exceptions import ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
+from pydantic import TypeAdapter
 from pydantic_core import from_json, to_json
+from sse_starlette import ServerSentEvent
 
 from stdapi.api_errors import ApiError, denied_feature_unavailable
 from stdapi.aws import get_client
@@ -34,6 +38,13 @@ from stdapi.models import validate_model
 from stdapi.models.chat._adapters import _common, _openai_common
 from stdapi.models.chat._adapters._anthropic_message import (
     _synthesize_tool_config_from_history,
+)
+from stdapi.models.chat._adapters._responses_context import (
+    SUMMARY_HEADING,
+    ContextLengthExceededError,
+    context_overflow,
+    is_summary,
+    record_stream_open_error,
 )
 from stdapi.models.image import get_image_model
 from stdapi.monitoring import (
@@ -76,6 +87,8 @@ from stdapi.types.openai_responses import (
     ResponseCodeInterpreterCallInProgressEvent,
     ResponseCodeInterpreterCallInterpretingEvent,
     ResponseCodeInterpreterToolCall,
+    ResponseCompactionCompactingEvent,
+    ResponseCompactionItem,
     ResponseCompletedEvent,
     ResponseContentPartAddedEvent,
     ResponseContentPartDoneEvent,
@@ -100,6 +113,7 @@ from stdapi.types.openai_responses import (
     ResponseInProgressEvent,
     ResponseInputFile,
     ResponseInputImage,
+    ResponseInputItem,
     ResponseInputText,
     ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
@@ -132,20 +146,23 @@ from stdapi.types.openai_vector_stores import (
     CompoundFilter as VectorStoreCompoundFilter,
 )
 from stdapi.utils import b64decode as b64decode_async
-from stdapi.utils import hide_security_details, json_sse, try_parse_json
+from stdapi.utils import b64encode as b64encode_async
+from stdapi.utils import hide_security_details, json_sse, to_json_str, try_parse_json
 from stdapi.vector_stores import parse_store_id, read_store, search, touch_store
 
 if TYPE_CHECKING:
     from collections.abc import (
-        AsyncGenerator,
+        AsyncIterable,
         AsyncIterator,
+        Awaitable,
         Callable,
         Generator,
         Iterable,
         Mapping,
+        Sequence,
     )
 
-    from sse_starlette import JSONServerSentEvent
+    from sse_starlette import EventSourceResponse, JSONServerSentEvent
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_bedrock_runtime.literals import (
         CacheTTLType,
@@ -192,8 +209,8 @@ if TYPE_CHECKING:
     from stdapi.types.openai_responses import (
         Annotation,
         FileSearchFilters,
+        ResponseErrorCode,
         ResponseInputContent,
-        ResponseInputItem,
         ResponseOutputItem,
         ResponseTextConfig,
         ServiceTiers,
@@ -1142,7 +1159,7 @@ async def _continue_after_file_search(
     return response
 
 
-def _merge_usage(
+def merge_usage(
     first: ResponseUsage | None, second: ResponseUsage | None
 ) -> ResponseUsage | None:
     """Add the token usage of two model invocations of the same response.
@@ -1171,7 +1188,12 @@ def _merge_usage(
             ),
         ),
         output_tokens=first.output_tokens + second.output_tokens,
-        output_tokens_details=OutputTokensDetails(),
+        output_tokens_details=OutputTokensDetails(
+            reasoning_tokens=(
+                first.output_tokens_details.reasoning_tokens
+                + second.output_tokens_details.reasoning_tokens
+            )
+        ),
         total_tokens=first.total_tokens + second.total_tokens,
     )
 
@@ -1273,7 +1295,7 @@ async def execute_file_search_calls(
             request, items, model_id, response_id, created_at
         )
         _cite_retrieved_files(current.output, grounding)
-        usage = _merge_usage(usage, current.usage)
+        usage = merge_usage(usage, current.usage)
     output.extend(
         _unanswered_file_search_call(
             f"{response_id}-fs-{_MAX_FILE_SEARCH_ROUNDS}-{index}",
@@ -1912,6 +1934,8 @@ async def map_input(
     cache_point = (
         _openai_common.build_cache_point(cache_ttl) if allow_explicit_caching else None
     )
+    if any(isinstance(item, CompactionItemParam) for item in input_param):
+        input_param = await expand_compaction_items(input_param)
     for item in input_param:
         await _map_input_item(
             item,
@@ -1956,8 +1980,6 @@ async def _map_input_item(
             _map_reasoning_item(
                 item, bedrock_messages, signature_required=reasoning_signature_required
             )
-        case CompactionItemParam():
-            await _map_compaction_item(item, bedrock_messages)
         case _:
             await _map_tool_call_item(item, bedrock_messages)
 
@@ -1988,8 +2010,19 @@ async def _map_tool_call_item(
             _map_file_search_call(item, bedrock_messages)
 
 
-#: Marker identifying locally-encoded compaction content; ":" is outside the base64url alphabet, so upstream ciphertext can never collide with it.
-COMPACTION_CONTENT_PREFIX = "v1:"
+#: Marker of a compaction item from the compact endpoint: a summary added to the history.
+_SUMMARY_CONTENT_PREFIX: Final = "v1:"
+
+#: Marker of a compaction item from a response: it replaces every earlier item.
+_STATE_CONTENT_PREFIX: Final = "v2:"
+
+#: Markers of locally-encoded compaction content; ":" is outside the base64url alphabet, so upstream ciphertext never collides.
+COMPACTION_CONTENT_PREFIX: Final = (_SUMMARY_CONTENT_PREFIX, _STATE_CONTENT_PREFIX)
+
+#: Validates the items a compaction keeps verbatim.
+_COMPACTED_ITEMS_ADAPTER: TypeAdapter[list[ResponseInputItem]] = TypeAdapter(
+    list[ResponseInputItem]
+)
 
 
 def encode_compaction_content(summary: str) -> str:
@@ -2004,39 +2037,229 @@ def encode_compaction_content(summary: str) -> str:
     Returns:
         Opaque content for a ``compaction`` item.
     """
-    return f"{COMPACTION_CONTENT_PREFIX}{urlsafe_b64encode(summary.encode()).decode()}"
+    return f"{_SUMMARY_CONTENT_PREFIX}{urlsafe_b64encode(summary.encode()).decode()}"
 
 
-async def _map_compaction_item(
-    item: CompactionItemParam, bedrock_messages: list[MessageTypeDef]
-) -> None:
-    """Map a ``compaction`` input item back to a user message with its summary.
+async def encode_compaction_state(
+    summary: str,
+    before: Sequence[ResponseInputItem],
+    after: Sequence[ResponseInputItem],
+) -> str:
+    """Encode a compacted context as opaque compaction item content.
+
+    The item carries the summary and the items kept verbatim around it, so it
+    can stand in for the whole history before it.
 
     Args:
-        item: The compaction item produced by POST /v1/responses/compact.
-        bedrock_messages: Mutable Bedrock messages list to append to.
+        summary: Summary of the compacted items.
+        before: Items kept verbatim ahead of the summary.
+        after: Items kept verbatim after it.
+
+    Returns:
+        Opaque content for a ``compaction`` item.
+    """
+    state = {
+        "summary": summary,
+        "before": _COMPACTED_ITEMS_ADAPTER.dump_python(
+            list(before), mode="json", by_alias=True, exclude_none=True
+        ),
+        "after": _COMPACTED_ITEMS_ADAPTER.dump_python(
+            list(after), mode="json", by_alias=True, exclude_none=True
+        ),
+    }
+    # The kept items may carry inline media: encoded off the event loop.
+    encoded = await b64encode_async(to_json(state), altchars=b"-_")
+    return f"{_STATE_CONTENT_PREFIX}{encoded}"
+
+
+def _summary_message(summary: str) -> EasyInputMessage:
+    """Return the user message a compaction summary is replayed as.
+
+    Args:
+        summary: The summary text.
+
+    Returns:
+        The message.
+    """
+    return EasyInputMessage(role="user", content=f"{SUMMARY_HEADING}{summary}")
+
+
+async def _expand_compaction_item(item: CompactionItemParam) -> list[ResponseInputItem]:
+    """Expand a locally-produced ``compaction`` item into the items it stands for.
+
+    Args:
+        item: The compaction item.
+
+    Returns:
+        The summary as a user message, between the items kept verbatim.
 
     Raises:
-        ApiError: When the content lacks the local marker (e.g. an item
+        ApiError: 400 ``invalid_encrypted_content``, worded as the OpenAI API
+            words it, when the content lacks a local marker (e.g. an item
             produced by the upstream OpenAI API) or cannot be decoded.
     """
+    content = item.encrypted_content
+    subject = f"for item {item.id}" if item.id else f"{content[:4]}...{content[-4:]}"
     msg = (
-        "Invalid compaction item content: only compaction items produced "
-        "by this server can be expanded."
+        f"The encrypted content {subject} could not be verified. Reason: "
+        "Encrypted content could not be decrypted or parsed."
     )
-    encoded = item.encrypted_content.removeprefix(COMPACTION_CONTENT_PREFIX)
-    if encoded == item.encrypted_content:
-        raise ApiError(msg)
+    invalid = ApiError(msg, status=400)
+    invalid.code = "invalid_encrypted_content"
+    prefix = next((p for p in COMPACTION_CONTENT_PREFIX if content.startswith(p)), "")
+    if not prefix:
+        raise invalid
     try:
-        summary = (
-            await b64decode_async(encoded, altchars=b"-_", validate=True)
-        ).decode()
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise ApiError(msg) from exc
-    _common.append_or_merge(
-        bedrock_messages,
-        "user",
-        [{"text": f"Summary of the earlier conversation:\n{summary}"}],
+        decoded = await b64decode_async(
+            content.removeprefix(prefix), altchars=b"-_", validate=True
+        )
+        if prefix == _SUMMARY_CONTENT_PREFIX:
+            return [_summary_message(decoded.decode())]
+        state = from_json(decoded)
+        before = _COMPACTED_ITEMS_ADAPTER.validate_python(state["before"])
+        after = _COMPACTED_ITEMS_ADAPTER.validate_python(state["after"])
+        summary = state["summary"]
+    except (ValueError, UnicodeDecodeError, KeyError, TypeError) as exc:
+        raise invalid from exc
+    if not isinstance(summary, str):
+        raise invalid
+    return [*before, _summary_message(summary), *after]
+
+
+def _supersedes_history(item: object) -> bool:
+    """Whether an item is a response-produced compaction, replacing everything before it.
+
+    Args:
+        item: An input item.
+
+    Returns:
+        True for a compaction item carrying a compacted context.
+    """
+    return isinstance(item, CompactionItemParam) and item.encrypted_content.startswith(
+        _STATE_CONTENT_PREFIX
+    )
+
+
+async def expand_compaction_items(
+    items: Sequence[ResponseInputItem],
+) -> list[ResponseInputItem]:
+    """Replace locally-produced ``compaction`` items by the items they stand for.
+
+    A compaction item a response produced supersedes every item before it, as
+    upstream's does; one from the compact endpoint only adds its summary.
+
+    Args:
+        items: Input items.
+
+    Returns:
+        The items, compaction items expanded.
+
+    Raises:
+        ApiError: When a compaction item was not produced by this server.
+    """
+    start = max(
+        (index for index, item in enumerate(items) if _supersedes_history(item)),
+        default=0,
+    )
+    expanded: list[ResponseInputItem] = []
+    for item in items[start:]:
+        if isinstance(item, CompactionItemParam):
+            expanded.extend(await _expand_compaction_item(item))
+        else:
+            expanded.append(item)
+    return expanded
+
+
+def _is_user_message(item: object) -> bool:
+    """Whether an item is a user message.
+
+    Args:
+        item: An input item.
+
+    Returns:
+        True for a user-role input message.
+    """
+    return isinstance(item, EasyInputMessage | InputMessage) and item.role == "user"
+
+
+def join_summaries(items: Sequence[ResponseInputItem]) -> list[ResponseInputItem]:
+    """Fold each compaction summary into the user message next to it.
+
+    For a backend refusing two user messages in a row, applied to what is
+    sent only: the expansion compactions read keeps each summary apart.
+
+    Args:
+        items: Expanded input items.
+
+    Returns:
+        The items, each summary joined to the following user message, or else
+        to the preceding one.
+    """
+    joined = list(items)
+    index = 0
+    while index < len(joined):
+        summary = joined[index]
+        if not is_summary(summary):
+            index += 1
+            continue
+        neighbour = next(
+            (
+                other
+                for other in (index + 1, index - 1)
+                if 0 <= other < len(joined) and _is_user_message(joined[other])
+            ),
+            None,
+        )
+        if neighbour is None:
+            index += 1
+            continue
+        joined[neighbour] = _with_text(
+            joined[neighbour],  # type: ignore[arg-type]
+            str(summary.content),  # type: ignore[union-attr]
+            first=neighbour > index,
+        )
+        del joined[index]
+    return joined
+
+
+def with_user_text(
+    items: Sequence[ResponseInputItem], text: str
+) -> list[ResponseInputItem]:
+    """End an input with a user text, joined to a final user message if any.
+
+    Args:
+        items: Input items.
+        text: The text to add.
+
+    Returns:
+        The items, the text added as their last user content.
+    """
+    if items and _is_user_message(last := items[-1]):
+        return [*items[:-1], _with_text(last, text, first=False)]  # type: ignore[arg-type]
+    return [*items, EasyInputMessage(role="user", content=text)]
+
+
+def _with_text(
+    message: EasyInputMessage | InputMessage, text: str, *, first: bool
+) -> EasyInputMessage | InputMessage:
+    """Add a text part to a user message.
+
+    Args:
+        message: The message.
+        text: The text to add.
+        first: Whether the text goes ahead of the message's own content.
+
+    Returns:
+        The message, rebuilt.
+    """
+    part = ResponseInputText(type="input_text", text=text)
+    parts = (
+        [ResponseInputText(type="input_text", text=message.content)]
+        if isinstance(message.content, str)
+        else list(message.content)
+    )
+    return message.model_copy(
+        update={"content": [part, *parts] if first else [*parts, part]}
     )
 
 
@@ -2796,8 +3019,7 @@ def _build_response_object(
         or _openai_common.map_service_tier(request.service_tier)[1],  # type: ignore[arg-type]
         text=request.text,
         top_logprobs=request.top_logprobs,
-        # Reported, not echoed: "disabled" is the only strategy served, and
-        # upstream reports the field even when the request omits it.
+        # Upstream reports the field even when the request omits it.
         truncation=request.truncation or "disabled",
         usage=usage,
         user=request.user,
@@ -3803,6 +4025,14 @@ def _classify_stream_error(
         and (denied := denied_feature_unavailable(exc)) is not None
     ):
         exc = denied
+    if not isinstance(exc, ContextLengthExceededError) and context_overflow(exc):
+        overflow = ContextLengthExceededError()
+        detail = (
+            exc.response["Error"]["Message"]
+            if isinstance(exc, ClientError)
+            else str(exc.args[0] if exc.args else exc)
+        )
+        return (400, overflow.args[0], overflow.param, overflow.code, detail, None)
     if isinstance(exc, ApiError):
         return (
             exc.status,
@@ -4398,37 +4628,25 @@ async def format_stream(
             _FILE_SEARCH_TOOL_NAME
         }
     try:
-        initial_response = _build_response_object(
-            response_id,
-            created_at,
-            model_id,
-            [],
-            "in_progress",
-            None,
-            None,
-            None,
-            request,
-            service_tier,
-        )
-
-        yield json_sse(
-            "response.created",
-            ResponseCreatedEvent(
-                response=initial_response,
-                sequence_number=state.next_seq(),
-                type="response.created",
+        events = await _primed(stream)
+        for sse in _lifecycle_events(
+            state,
+            _build_response_object(
+                response_id,
+                created_at,
+                model_id,
+                [],
+                "in_progress",
+                None,
+                None,
+                None,
+                request,
+                service_tier,
             ),
-        )
-        yield json_sse(
-            "response.in_progress",
-            ResponseInProgressEvent(
-                response=initial_response,
-                sequence_number=state.next_seq(),
-                type="response.in_progress",
-            ),
-        )
+        ):
+            yield sse
 
-        async for event in stream:
+        async for event in events:
             for sse in _process_stream_event(
                 state,
                 event,
@@ -4438,11 +4656,7 @@ async def format_stream(
             ):
                 yield sse  # `yield from` is not permitted inside async generators.
 
-        # Defensive: close any block left open by a stream without contentBlockStop.
-        for sse in _handle_block_stop(state):
-            yield sse
-        # A code-execution run whose result block never arrived stays open here.
-        for sse in _emit_code_call_done(state, None, "completed"):
+        for sse in _close_open_blocks(state):
             yield sse
 
         async for sse in _post_stream_events(
@@ -4489,10 +4703,169 @@ async def format_stream(
         log_response_params(final_response)
         yield _terminal_event(status, final_response, state)
     except Exception as exc:
-        status_code, message, param, code, log_message, log_level = (
-            _classify_stream_error(exc)
+        failure_events, failure = _failure_events(
+            state,
+            exc,
+            partial(
+                _build_response_object,
+                response_id,
+                created_at,
+                model_id,
+                request=request,
+                service_tier=_openai_common.map_responses_service_tier(
+                    state.served_service_tier, service_tier
+                ),
+            ),
         )
-        yield json_sse(
+        for sse in failure_events:
+            yield sse
+        raise failure from exc
+
+
+def _close_open_blocks(state: _StreamState) -> Generator[JSONServerSentEvent]:
+    """Close what the model stream left open when it ended.
+
+    Args:
+        state: Mutable stream state.
+
+    Yields:
+        The events closing a block without ``contentBlockStop``, then a
+        code-execution run whose result block never arrived.
+    """
+    yield from _handle_block_stop(state)
+    yield from _emit_code_call_done(state, None, "completed")
+
+
+async def _primed[T](stream: AsyncIterator[T]) -> AsyncGenerator[T]:
+    """Read a stream's first event now, and replay the stream from it.
+
+    A backend refusing the request on its first event (an oversized input, on
+    some models) is then reported to the caller that opened the stream, which
+    can still retry before the response is announced; the client receives the
+    usual failure events when the replay reaches it.
+
+    Args:
+        stream: The backend event stream.
+
+    Returns:
+        The stream, first event included, raising any error the first read did.
+    """
+    events = aiter(stream)
+    try:
+        first = await anext(events)
+    except StopAsyncIteration:
+        return replay_stream((), events)
+    except Exception as exc:  # noqa: BLE001 - raised again by the replay
+        record_stream_open_error(exc)
+        return replay_stream((), events, exc)
+    return replay_stream((first,), events)
+
+
+async def replay_stream[T](
+    first: Sequence[T], rest: AsyncIterator[T], error: Exception | None = None
+) -> AsyncGenerator[T]:
+    """Yield events read ahead, then the rest of their stream, closing it after.
+
+    Args:
+        first: Events already read.
+        rest: The stream they were read from.
+        error: The error reading ahead raised, raised here instead.
+
+    Yields:
+        Every event, in order.
+
+    Raises:
+        Exception: The error reading ahead raised.
+    """
+    try:
+        if error is not None:
+            raise error
+        for item in first:
+            yield item
+        async for item in rest:
+            yield item
+    finally:
+        await close_stream(rest)
+
+
+async def close_stream(stream: AsyncIterator[Any]) -> None:
+    """Close a stream, when it can be closed.
+
+    Args:
+        stream: The stream.
+    """
+    if (aclose := getattr(stream, "aclose", None)) is not None:
+        await aclose()
+
+
+def _lifecycle_events(
+    state: _StreamState, initial_response: Response
+) -> tuple[JSONServerSentEvent, JSONServerSentEvent]:
+    """Build the ``response.created`` and ``response.in_progress`` events.
+
+    Args:
+        state: Mutable stream state (provides the sequence numbers).
+        initial_response: The in-progress response snapshot.
+
+    Returns:
+        Both events, in order.
+    """
+    return (
+        json_sse(
+            "response.created",
+            ResponseCreatedEvent(
+                response=initial_response,
+                sequence_number=state.next_seq(),
+                type="response.created",
+            ),
+        ),
+        json_sse(
+            "response.in_progress",
+            ResponseInProgressEvent(
+                response=initial_response,
+                sequence_number=state.next_seq(),
+                type="response.in_progress",
+            ),
+        ),
+    )
+
+
+def _response_error_code(status: int, code: str | None) -> ResponseErrorCode:
+    """Return the ``response.error.code`` a failed stream reports.
+
+    Args:
+        status: HTTP status the failure would have had.
+        code: The failure's API error code, if any.
+
+    Returns:
+        The response error code.
+    """
+    if code == "context_length_exceeded":
+        return "context_length_exceeded"
+    return "rate_limit_exceeded" if status == 429 else "server_error"
+
+
+def _failure_events(
+    state: _StreamState, exc: Exception, snapshot: Callable[..., Response]
+) -> tuple[list[JSONServerSentEvent], SseHandledStreamError]:
+    """Build the events reporting a stream failure, and the error closing it.
+
+    Args:
+        state: Mutable stream state (provides sequence numbers and the output
+            produced so far).
+        exc: The failure.
+        snapshot: Builds the failed response snapshot from the output items,
+            status, incomplete details, error and usage.
+
+    Returns:
+        The ``error`` and ``response.failed`` events, and the
+        :class:`SseHandledStreamError` to raise once they are sent.
+    """
+    status_code, message, param, code, log_message, log_level = _classify_stream_error(
+        exc
+    )
+    events = [
+        json_sse(
             "error",
             ResponseErrorEvent(
                 message=message,
@@ -4501,38 +4874,27 @@ async def format_stream(
                 sequence_number=state.next_seq(),
                 type="error",
             ),
-        )
-        yield json_sse(
+        ),
+        json_sse(
             "response.failed",
             ResponseFailedEvent(
-                response=_build_response_object(
-                    response_id,
-                    created_at,
-                    model_id,
+                response=snapshot(
                     state.output_items,
                     "failed",
                     None,
                     ResponseError(
-                        code=(
-                            "rate_limit_exceeded"
-                            if status_code == 429
-                            else "server_error"
-                        ),
-                        message=message,
+                        code=_response_error_code(status_code, code), message=message
                     ),
                     None,
-                    request,
-                    _openai_common.map_responses_service_tier(
-                        state.served_service_tier, service_tier
-                    ),
                 ),
                 sequence_number=state.next_seq(),
                 type="response.failed",
             ),
-        )
-        raise SseHandledStreamError(
-            log_message, status=status_code, level=log_level
-        ) from exc
+        ),
+    ]
+    return events, SseHandledStreamError(
+        log_message, status=status_code, level=log_level
+    )
 
 
 async def count_input_tokens_via_bedrock(
@@ -4612,3 +4974,224 @@ async def count_input_tokens_via_bedrock(
             "bedrock-runtime", region
         ).count_tokens(modelId=model_id, input={"converse": req})
     return resp["inputTokens"]
+
+
+def compaction_response(
+    response_id: str,
+    created_at: float,
+    model_id: str,
+    request: ResponseCreateParams,
+    item: ResponseCompactionItem,
+    usage: ResponseUsage | None,
+) -> Response:
+    """Build the response of a request that only compacts its context.
+
+    Args:
+        response_id: Unique identifier for this response.
+        created_at: Unix timestamp when the response was created.
+        model_id: The model serving this request.
+        request: The Responses API creation request.
+        item: The compaction item.
+        usage: Token usage of the compaction.
+
+    Returns:
+        The completed response, holding the compaction item alone.
+    """
+    return log_response_params(
+        _build_response_object(
+            response_id,
+            created_at,
+            model_id,
+            [item],
+            "completed",
+            None,
+            None,
+            usage,
+            request,
+        )
+    )
+
+
+async def format_failed_stream(
+    response_id: str,
+    created_at: float,
+    model_id: str,
+    request: ResponseCreateParams,
+    exc: Exception,
+) -> AsyncGenerator[JSONServerSentEvent]:
+    """Stream a response that failed before it started, as upstream reports it.
+
+    Args:
+        response_id: Unique identifier for this response.
+        created_at: Unix timestamp when the response was created.
+        model_id: The model serving this request.
+        request: The Responses API creation request.
+        exc: The failure.
+
+    Yields:
+        ``response.created``, ``response.in_progress``, ``error`` and
+        ``response.failed``.
+
+    Raises:
+        SseHandledStreamError: Once the failure was reported.
+    """
+    state = _StreamState(response_id)
+    snapshot = partial(
+        _build_response_object, response_id, created_at, model_id, request=request
+    )
+    for sse in _lifecycle_events(state, snapshot([], "in_progress", None, None, None)):
+        yield sse
+    events, error = _failure_events(state, exc, snapshot)
+    for sse in events:
+        yield sse
+    raise error from exc
+
+
+async def format_compaction_stream(
+    response_id: str,
+    created_at: float,
+    model_id: str,
+    request: ResponseCreateParams,
+    item_id: str,
+    compact: Callable[[], Awaitable[tuple[str, ResponseUsage | None]]],
+    answer: Callable[[CompactionItemParam], Awaitable[EventSourceResponse]] | None,
+) -> AsyncGenerator[ServerSentEvent]:
+    """Stream a response that compacts its context first.
+
+    The compaction item is announced at output index 0 while the summary is
+    produced, then completed; the answer generated from it follows, its items
+    shifted after the compaction item and its usage summed with it. Without an
+    answer (a ``compaction_trigger`` request), ``response.compaction.compacting``
+    reports the summary in progress and the response ends with the item.
+
+    Args:
+        response_id: Unique identifier for this response.
+        created_at: Unix timestamp when the response was created.
+        model_id: The model serving this request.
+        request: The Responses API creation request.
+        item_id: ID of the compaction item.
+        compact: Produces the compaction item content and the usage it cost.
+        answer: Opens the answer's stream from the compaction item, if any.
+
+    Yields:
+        The response's stream events.
+
+    Raises:
+        SseHandledStreamError: When a failure was reported in-stream.
+    """
+    state = _StreamState(response_id)
+    snapshot = partial(
+        _build_response_object, response_id, created_at, model_id, request=request
+    )
+    try:
+        for lifecycle in _lifecycle_events(
+            state, snapshot([], "in_progress", None, None, None)
+        ):
+            yield lifecycle
+        item = ResponseCompactionItem(
+            id=item_id, encrypted_content="", type="compaction"
+        )
+        yield json_sse(
+            "response.output_item.added",
+            ResponseOutputItemAddedEvent(
+                item=item,
+                output_index=0,
+                sequence_number=state.next_seq(),
+                type="response.output_item.added",
+            ),
+        )
+        if answer is None:
+            yield json_sse(
+                "response.compaction.compacting",
+                ResponseCompactionCompactingEvent(
+                    item_id=item_id,
+                    output_index=0,
+                    sequence_number=state.next_seq(),
+                    type="response.compaction.compacting",
+                ),
+            )
+        content, usage = await compact()
+        item = item.model_copy(update={"encrypted_content": content})
+        state.output_items.append(item)
+        yield json_sse(
+            "response.output_item.done",
+            ResponseOutputItemDoneEvent(
+                item=item,
+                output_index=0,
+                sequence_number=state.next_seq(),
+                type="response.output_item.done",
+            ),
+        )
+        if answer is None:
+            final = snapshot(state.output_items, "completed", None, None, usage)
+            log_response_params(final)
+            yield _terminal_event("completed", final, state)
+            return
+        inner = await answer(
+            CompactionItemParam(
+                id=item_id, encrypted_content=content, type="compaction"
+            )
+        )
+        async for sse in _relay_after_compaction(
+            state, inner.body_iterator, item, usage
+        ):
+            yield sse
+    except Exception as exc:
+        events, error = _failure_events(state, exc, snapshot)
+        for sse in events:
+            yield sse
+        raise error from exc
+
+
+#: Events of the answer's stream that the compacting response already sent.
+_RELAYED_LIFECYCLE_EVENTS: Final = frozenset(
+    {"response.created", "response.in_progress"}
+)
+
+
+async def _relay_after_compaction(
+    state: _StreamState,
+    events: AsyncIterable[Any],
+    item: ResponseCompactionItem,
+    usage: ResponseUsage | None,
+) -> AsyncGenerator[ServerSentEvent]:
+    """Relay an answer's stream after the compaction item that precedes it.
+
+    Args:
+        state: Stream state of the compacting response (sequence numbers).
+        events: The answer's stream events.
+        item: The compaction item, first in the output.
+        usage: Token usage of the compaction, added to the answer's.
+
+    Yields:
+        The answer's events, renumbered, shifted after the compaction item,
+        their response snapshots carrying it and the summed usage.
+    """
+    item_json = item.model_dump(mode="json", exclude_none=True)
+    try:
+        async for event in events:
+            data = event.data if isinstance(event, ServerSentEvent) else None
+            payload = try_parse_json(data) if isinstance(data, str) else None
+            if not isinstance(payload, dict):
+                yield event
+                continue
+            if payload.get("type") in _RELAYED_LIFECYCLE_EVENTS:
+                continue
+            if isinstance(index := payload.get("output_index"), int):
+                payload["output_index"] = index + 1
+            if "sequence_number" in payload:
+                payload["sequence_number"] = state.next_seq()
+            if isinstance(snapshot := payload.get("response"), dict):
+                output = snapshot.get("output")
+                snapshot["output"] = [
+                    item_json,
+                    *(output if isinstance(output, list) else ()),
+                ]
+                if isinstance(answered := snapshot.get("usage"), dict) and (
+                    total := merge_usage(usage, ResponseUsage.model_validate(answered))
+                ):
+                    snapshot["usage"] = total.model_dump(mode="json")
+            yield ServerSentEvent(to_json_str(payload), event=event.event)
+    finally:
+        if isinstance(events, AsyncGenerator):
+            await events.aclose()

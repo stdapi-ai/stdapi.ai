@@ -2,7 +2,7 @@
 
 from typing import Annotated, ClassVar, Final, Literal, Self
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from stdapi.api_errors import ApiError, UnsupportedParameterError
 from stdapi.types import (
@@ -3282,6 +3282,8 @@ class ResponsePrompt(BaseModelResponse):
 ResponseErrorCode = Literal[
     "server_error",
     "rate_limit_exceeded",
+    # Sent by the live API on a streamed context-window overflow; absent from the SDK literal.
+    "context_length_exceeded",
     "invalid_prompt",
     "data_residency_mismatch",
     "bio_policy",
@@ -3570,6 +3572,18 @@ class ResponseOutputItemDoneEvent(BaseModelResponse):
     sequence_number: int = Field(description="The sequence number of this event.")
     type: Literal["response.output_item.done"] = Field(
         description="The type of the event. Always `response.output_item.done`."
+    )
+
+
+# Ref: openai.types.responses.response_compaction_compacting_event.ResponseCompactionCompactingEvent
+class ResponseCompactionCompactingEvent(BaseModelResponse):
+    """Emitted while a compaction item's summary is being produced."""
+
+    item_id: str = Field(description="The ID of the compaction output item.")
+    output_index: int = Field(description="The index of the compaction output item.")
+    sequence_number: int = Field(description="The sequence number of this event.")
+    type: Literal["response.compaction.compacting"] = Field(
+        description="The type of the event. Always `response.compaction.compacting`."
     )
 
 
@@ -4124,6 +4138,7 @@ ResponseStreamEvent = Annotated[
     | ResponseIncompleteEvent
     | ResponseOutputItemAddedEvent
     | ResponseOutputItemDoneEvent
+    | ResponseCompactionCompactingEvent
     | ResponseReasoningSummaryPartAddedEvent
     | ResponseReasoningSummaryPartDoneEvent
     | ResponseReasoningSummaryTextDeltaEvent
@@ -4263,17 +4278,137 @@ class ResponseItemList(PaginatedListEnvelope):
 # ResponseCreateParams helpers
 
 
+#: Smallest ``compact_threshold`` the OpenAI API accepts.
+_MIN_COMPACT_THRESHOLD: Final = 1000
+
+#: Smallest ``max_output_tokens`` a ``compaction_trigger`` request may set.
+_MIN_TRIGGER_OUTPUT_TOKENS: Final = 20000
+
+
+def invalid_request(message: str, *, code: str | None, param: str) -> ApiError:
+    """Build the 400 carrying the OpenAI API's error code and parameter name.
+
+    Args:
+        message: Human-readable error message.
+        code: The OpenAI API's error code, if it sends one.
+        param: Name or path of the offending request parameter.
+
+    Returns:
+        The error to raise.
+    """
+    error = ApiError(message, status=400)
+    error.code = code
+    error.param = param
+    return error
+
+
 # Ref: openai.types.responses.response_create_params.ContextManagement
 class ContextManagement(BaseModelRequest):
     """A context management entry for the request."""
 
-    type: str = Field(
-        description="The context management entry type. Currently only `compaction` is supported."
+    type: Literal["compaction"] = Field(
+        description="The context management entry type."
     )
     compact_threshold: int | None = Field(
         default=None,
-        description="Token threshold at which compaction should be triggered for this entry.",
+        ge=_MIN_COMPACT_THRESHOLD,
+        description="Input tokens above which the conversation is compacted. An "
+        "entry without it compacts nothing on this implementation.",
     )
+
+
+#: JSON value types, named as the OpenAI API's validation errors name them; ``bool`` precedes ``int``.
+_JSON_KINDS: Final = (
+    (bool, "a boolean"),
+    (int, "an integer"),
+    (float, "a decimal number"),
+    (str, "a string"),
+    (list, "an array"),
+    (dict, "an object"),
+)
+
+
+def _invalid_type(value: object, expected: str, path: str) -> ApiError:
+    """Build upstream's ``invalid_type`` 400 for *path*.
+
+    Args:
+        value: The value received.
+        expected: The expected type, with its article.
+        path: Path of the offending parameter.
+
+    Returns:
+        The error to raise.
+    """
+    kind = next(
+        (name for type_, name in _JSON_KINDS if isinstance(value, type_)), "null"
+    )
+    msg = f"Invalid type for '{path}': expected {expected}, but got {kind} instead."
+    return invalid_request(msg, code="invalid_type", param=path)
+
+
+def _reject_invalid_context_management_entry(entry: object, path: str) -> None:
+    """Refuse a malformed ``context_management`` entry with upstream's errors.
+
+    Args:
+        entry: The raw entry.
+        path: Path of the entry, e.g. ``context_management[0]``.
+
+    Raises:
+        ApiError: 400 for an entry that is not an object, has no type, an
+            unknown type or an unknown key, or a ``compact_threshold`` that is
+            not an integer or is below 1000.
+    """
+    if not isinstance(entry, dict):
+        raise _invalid_type(entry, "an object", path)
+    if "type" not in entry:
+        msg = f"Missing required parameter: '{path}.type'."
+        raise invalid_request(
+            msg, code="missing_required_parameter", param=f"{path}.type"
+        )
+    if isinstance(kind := entry["type"], str) and kind != "compaction":
+        msg = f"Unsupported context_management type: '{kind}'."
+        raise invalid_request(msg, code=None, param="context_management")
+    if unknown := next(
+        (key for key in entry if key not in ContextManagement.model_fields), None
+    ):
+        msg = f"Unknown parameter: '{path}.{unknown}'."
+        raise invalid_request(msg, code="unknown_parameter", param=f"{path}.{unknown}")
+    threshold = entry.get("compact_threshold")
+    path = f"{path}.compact_threshold"
+    if threshold is None:
+        return
+    if isinstance(threshold, bool) or not isinstance(threshold, int):
+        raise _invalid_type(threshold, "an integer", path)
+    if threshold < _MIN_COMPACT_THRESHOLD:
+        msg = (
+            f"Invalid '{path}': integer below minimum value. Expected a value "
+            f">= {_MIN_COMPACT_THRESHOLD}, but got {threshold} instead."
+        )
+        raise invalid_request(msg, code="integer_below_min_value", param=path)
+
+
+def reject_invalid_context_management(value: object) -> None:
+    """Refuse a malformed ``context_management`` value with upstream's errors.
+
+    Args:
+        value: The raw ``context_management`` value.
+
+    Raises:
+        ApiError: 400 for a value that is not an array of objects, an empty
+            array, or a malformed entry.
+    """
+    if value is None:
+        return
+    if not isinstance(value, list):
+        raise _invalid_type(value, "an array of objects", "context_management")
+    if not value:
+        msg = (
+            "Invalid 'context_management': empty array. Expected an array with "
+            "minimum length 1, but got an empty array instead."
+        )
+        raise invalid_request(msg, code="empty_array", param="context_management")
+    for index, entry in enumerate(value):
+        _reject_invalid_context_management_entry(entry, f"context_management[{index}]")
 
 
 # Ref: openai.types.responses.response_create_params.StreamOptions
@@ -4358,10 +4493,6 @@ class PromptCacheOptions(BaseModelRequest):
     )
 
 
-#: Unsupported-parameter values naming the behavior this implementation already has.
-_ACCEPTED_DEFAULTS: Final[dict[str, str]] = {"truncation": "disabled"}
-
-
 # Ref: openai.types.responses.response_create_params.ResponseCreateParamsBase
 class ResponseCreateParams(BaseModelRequestWithExtra):
     """Request body for POST /v1/responses.
@@ -4391,7 +4522,11 @@ class ResponseCreateParams(BaseModelRequestWithExtra):
     )
     context_management: list[ContextManagement] | None = Field(
         default=None,
-        description="Context management configuration for this request.\nUNSUPPORTED on this implementation.",
+        min_length=1,
+        description="Compacts the conversation before generation (never "
+        "mid-response) once its input crosses `compact_threshold`: a `compaction` "
+        "item then leads `output`, and sent back as input it stands for every item "
+        "before it.",
     )
     conversation: ConversationParam = Field(
         default=None,
@@ -4504,8 +4639,11 @@ class ResponseCreateParams(BaseModelRequestWithExtra):
     )
     truncation: Literal["auto", "disabled"] | None = Field(
         default=None,
-        description="Truncation strategy. `disabled` (the default) is the "
-        "behavior served; `auto` is UNSUPPORTED on this implementation.",
+        description="What an input larger than the model's context window gets. "
+        "`disabled` (the default): a 400 `context_length_exceeded`. `auto`: its "
+        "oldest turns are dropped, then the latest turn's longest text is cut; "
+        "still a 400 `context_length_exceeded` when what cannot be trimmed "
+        "exceeds the window.",
     )
     user: str | None = Field(
         default=None, description="User identifier (use safety_identifier instead)."
@@ -4513,12 +4651,8 @@ class ResponseCreateParams(BaseModelRequestWithExtra):
 
     # Extra validations
     _UNSUPPORTED: ClassVar[frozenset[str]] = frozenset(
-        {
-            # Ignored silently: "background", "safety_identifier", "stream_options"
-            "context_management",
-            "max_tool_calls",
-            "truncation",
-        }
+        # Ignored silently: "background", "safety_identifier", "stream_options"
+        {"max_tool_calls"}
     )
 
     #: Parameters a managed prompt template carries itself, so a request cannot also set them
@@ -4559,6 +4693,55 @@ class ResponseCreateParams(BaseModelRequestWithExtra):
         reject_input_message_phase(self.input, "input")
         return self
 
+    @field_validator("context_management", mode="before")
+    @classmethod
+    def _context_management(cls, value: object) -> object:
+        """Refuse a malformed ``context_management`` with upstream's errors.
+
+        Args:
+            value: The raw parameter value.
+
+        Returns:
+            The value, for the field's own validation.
+        """
+        reject_invalid_context_management(value)
+        return value
+
+    @model_validator(mode="after")
+    def _compaction_trigger(self) -> Self:
+        """Validate the placement and output budget of a ``compaction_trigger``.
+
+        Raises:
+            ApiError: If there is more than one trigger, the trigger is not the
+                final input item, or the request sets ``max_output_tokens``
+                below 20000.
+        """
+        if not isinstance(self.input, list):
+            return self
+        triggers = [
+            index
+            for index, item in enumerate(self.input)
+            if isinstance(item, CompactionTrigger)
+        ]
+        if not triggers:
+            return self
+        if len(triggers) > 1:
+            msg = "Only one 'compaction_trigger' item may be provided."
+            raise invalid_request(msg, code=None, param="input")
+        if triggers != [len(self.input) - 1]:
+            msg = "The 'compaction_trigger' item must be the final input item."
+            raise invalid_request(msg, code=None, param="input")
+        if (
+            self.max_output_tokens is not None
+            and self.max_output_tokens < _MIN_TRIGGER_OUTPUT_TOKENS
+        ):
+            msg = (
+                "'compaction_trigger' requires 'max_output_tokens' to be at least "
+                f"{_MIN_TRIGGER_OUTPUT_TOKENS} when specified."
+            )
+            raise invalid_request(msg, code=None, param="max_output_tokens")
+        return self
+
     @model_validator(mode="after")
     def _unsupported(self) -> Self:
         """Validate that unsupported parameters are not used.
@@ -4577,14 +4760,9 @@ class ResponseCreateParams(BaseModelRequestWithExtra):
             ApiError: If a parameter is incompatible with ``prompt``.
         """
         for key in self._UNSUPPORTED & self.model_fields_set:
-            # `null`/`false`, and a value naming the behavior already in force,
-            # request the supported default behavior, like omission
+            # `null`/`false` request the default behavior, like omission
             value = getattr(self, key)
-            if (
-                value is not None
-                and value is not False
-                and value != _ACCEPTED_DEFAULTS.get(key)
-            ):
+            if value is not None and value is not False:
                 raise UnsupportedParameterError(key)
         if self.prompt is not None and (
             incompatible := sorted(self._PROMPT_INCOMPATIBLE & self.model_fields_set)
@@ -4629,8 +4807,8 @@ class InputTokenCountParams(BaseModelRequest):
     )
     truncation: Literal["auto", "disabled"] | None = Field(
         default=None,
-        description="Truncation strategy. `disabled` (the default) is the "
-        "behavior served; `auto` is UNSUPPORTED on this implementation.",
+        description="`auto` counts only what a response would keep of an input "
+        "larger than the model's context window, its oldest turns dropped.",
     )
     previous_response_id: str | None = Field(
         default=None,
@@ -4649,9 +4827,7 @@ class InputTokenCountParams(BaseModelRequest):
     )
 
     # Extra validations
-    _UNSUPPORTED: ClassVar[frozenset[str]] = frozenset(
-        {"text", "truncation", "previous_response_id"}
-    )
+    _UNSUPPORTED: ClassVar[frozenset[str]] = frozenset({"text", "previous_response_id"})
 
     @model_validator(mode="after")
     def _mutually_exclusive(self) -> Self:
@@ -4683,14 +4859,9 @@ class InputTokenCountParams(BaseModelRequest):
             UnsupportedParameterError: If a parameter marked as unsupported is used.
         """
         for key in self._UNSUPPORTED & self.model_fields_set:
-            # `null`/`false`, and a value naming the behavior already in force,
-            # request the supported default behavior, like omission
+            # `null`/`false` request the default behavior, like omission
             value = getattr(self, key)
-            if (
-                value is not None
-                and value is not False
-                and value != _ACCEPTED_DEFAULTS.get(key)
-            ):
+            if value is not None and value is not False:
                 raise UnsupportedParameterError(key)
         return self
 

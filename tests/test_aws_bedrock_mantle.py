@@ -60,7 +60,10 @@ from stdapi.aws_bedrock_mantle import (
 from stdapi.config import AWS_SESSION, SETTINGS, _Settings
 from stdapi.models import MANTLE_MODELS, MANTLE_SERVICE, ModelDetails
 from stdapi.models.chat import get_chat_model, serves_via_mantle
-from stdapi.models.chat._adapters._openai_responses import encode_compaction_content
+from stdapi.models.chat._adapters._openai_responses import (
+    encode_compaction_content,
+    encode_compaction_state,
+)
 from stdapi.models.chat._anthropic_claude import AnthropicClaudeChatModel
 from stdapi.models.chat._mantle import (
     _MANTLE_CHAT_MODEL_REGISTRY,
@@ -2489,16 +2492,19 @@ class TestMantleCompactionItemGuard:
          stdapi/models/chat/_adapters/_openai_responses.py:encode_compaction_content
     """
 
-    async def test_local_marker_prefixed_item_is_rejected(self) -> None:
-        """A locally-produced compaction item fails with 400 before upstream."""
+    @pytest.mark.parametrize("marker", ["summary", "state"])
+    async def test_local_marker_prefixed_item_is_rejected(self, marker: str) -> None:
+        """A locally-produced compaction item, of either kind, fails with 400 before upstream."""
+        content = (
+            encode_compaction_content("summary")
+            if marker == "summary"
+            else await encode_compaction_state("summary", [], [])
+        )
         request = ResponseCreateParams.model_validate(
             {
                 "model": "ignored",
                 "input": [
-                    {
-                        "type": "compaction",
-                        "encrypted_content": encode_compaction_content("summary"),
-                    },
+                    {"type": "compaction", "encrypted_content": content},
                     {"role": "user", "content": "next question"},
                 ],
             }

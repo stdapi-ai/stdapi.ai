@@ -1777,8 +1777,7 @@ class TestStreamedServiceTier:
 class TestPolicySwitches:
     """safety_identifier and stream_options are accepted and ignored.
 
-    The gateway rejects ``context_management``, ``conversation``,
-    ``max_tool_calls`` and ``truncation`` with a 400, but deliberately keeps
+    The gateway rejects ``max_tool_calls`` with a 400, but deliberately keeps
     ``background``, ``safety_identifier`` and ``stream_options`` out of that set so
     OpenAI clients that always send them keep working; they have no Bedrock
     equivalent and are dropped.

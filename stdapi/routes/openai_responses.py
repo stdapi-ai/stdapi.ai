@@ -53,6 +53,7 @@ from stdapi.models.chat._adapters._openai_responses import (
     encode_compaction_content,
     execute_file_search_calls,
 )
+from stdapi.models.chat._adapters._responses_context import estimate_tokens
 from stdapi.monitoring import (
     REQUEST_ID,
     REQUEST_TIME,
@@ -72,6 +73,15 @@ from stdapi.routes._moderation import (
     apply_request_moderation,
     build_response_moderation,
 )
+from stdapi.routes._responses_context import (
+    Generated,
+    compaction_item_id,
+    failed_response_error,
+    generate,
+    summarize,
+    truncating,
+    with_compaction,
+)
 from stdapi.types.openai_responses import (
     CompactedResponse,
     CompactionUserMessage,
@@ -90,18 +100,11 @@ from stdapi.types.openai_responses import (
     ResponseIncludable,
     ResponseInputItem,
     ResponseItemList,
-    ResponseOutputMessage,
-    ResponseOutputText,
     ResponsePrompt,
     ResponseUsage,
     conversation_id_of,
 )
-from stdapi.utils import (
-    hide_security_details,
-    to_json_str,
-    try_parse_json,
-    validation_error_handler,
-)
+from stdapi.utils import to_json_str, try_parse_json, validation_error_handler
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterable, Sequence
@@ -133,13 +136,6 @@ register_route_capability(
 
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1/responses", tags=["Chat", TAG_OPENAI]
-)
-
-#: Directive appended to the conversation to produce the compaction summary.
-_COMPACTION_PROMPT = (
-    "Summarize the conversation above in detail, preserving every fact, "
-    "decision, constraint, open task, and tool result needed to continue it. "
-    "Reply with the summary only."
 )
 
 #: Accepts native stored IDs (``resp-``) and region-tagged Mantle IDs (``resp_``).
@@ -202,29 +198,9 @@ def _previous_response_not_found(previous_response_id: str) -> Never:
     raise error
 
 
-def _failed_response_error(response: Response) -> Never:
-    """Raise the 502 for a synchronous terminal ``failed`` Response.
-
-    A ``status="failed"`` Response carries the upstream failure in its ``error``
-    field and no usable output; a synchronous request must report the failure
-    instead of returning an empty 200 body, matching the Mantle-served path.
-
-    Args:
-        response: The Response object with ``status == "failed"``.
-
-    Raises:
-        ApiError: Always, with status 502.
-    """
-    message = response.error.message if response.error else None
-    if not message:
-        # Same fallback wording as the Mantle passthrough failed-response guard.
-        message = "The upstream model response failed."
-    raise ApiError(hide_security_details(502, message), status=502)
-
-
 async def _apply_previous_response(
     request: ResponseCreateParams, *, native_supported: bool
-) -> ResponseCreateParams:
+) -> tuple[ResponseCreateParams, int | None]:
     """Resolve ``previous_response_id`` against the target model's storage.
 
     Local store IDs get their stored conversation merged into the request;
@@ -237,7 +213,8 @@ async def _apply_previous_response(
             natively (Bedrock Mantle Responses API).
 
     Returns:
-        The request, rebuilt with merged history for local store IDs.
+        The request, rebuilt with merged history for local store IDs, and the
+        tokens that history took when the stored response recorded them.
 
     Raises:
         ApiError: 404 when the stored response does not exist, is not a
@@ -246,31 +223,39 @@ async def _apply_previous_response(
     """
     previous_response_id = request.previous_response_id
     if not previous_response_id:
-        return request
+        return request, None
     if _decode_mantle_id(previous_response_id) is None:
         _require_local_response_id(previous_response_id)
         if not fullmatch(RESPONSE_ID_PATTERN, previous_response_id):
             # Rejects e.g. a session ARN smuggled past the `resp_` prefix
             # check, which the store would otherwise pass on to AWS verbatim.
             _previous_response_not_found(previous_response_id)
-        merged = await _merge_previous_response(request, previous_response_id)
+        merged, history_tokens = await _merge_previous_response(
+            request, previous_response_id
+        )
         if native_supported:
             # Falling back to native (Mantle) generation: the merged input
             # already carries the stored conversation inline, and the Mantle
             # payload builder rejects a previous_response_id that is not a
             # Mantle-tagged ID.
-            return merged
+            return merged, history_tokens
         # Restored so downstream consumers (e.g. streaming SSE events built
         # from this request) echo it, as the local-store backend does.
-        return merged.model_copy(update={"previous_response_id": previous_response_id})
+        return (
+            merged.model_copy(update={"previous_response_id": previous_response_id}),
+            history_tokens,
+        )
     if not native_supported:
         msg = (
             "previous_response_id cannot be continued with this model. "
             "Retry with the model that created it."
         )
         raise ApiError(msg, status=404)
-    return request
+    return request, None
 
+
+#: Stored-document key of the tokens the stored conversation took.
+_CONTEXT_TOKENS_KEY = "context_tokens"
 
 #: Adapter validating stored conversation entries against the ResponseInputItem union.
 _INPUT_HISTORY_ADAPTER: TypeAdapter[list[ResponseInputItem]] = TypeAdapter(
@@ -280,7 +265,7 @@ _INPUT_HISTORY_ADAPTER: TypeAdapter[list[ResponseInputItem]] = TypeAdapter(
 
 async def _merge_previous_response(
     request: ResponseCreateParams, previous_response_id: str
-) -> ResponseCreateParams:
+) -> tuple[ResponseCreateParams, int | None]:
     """Prepend a stored response's conversation to the request input.
 
     Rebuilds the request with the stored input items, the stored output
@@ -292,7 +277,8 @@ async def _merge_previous_response(
         previous_response_id: ID of the stored response to continue.
 
     Returns:
-        The rebuilt request without ``previous_response_id``.
+        The rebuilt request without ``previous_response_id``, and the tokens
+        the stored conversation took, when the stored response recorded them.
 
     Raises:
         ApiError: 404 when the stored response does not exist.
@@ -312,8 +298,12 @@ async def _merge_previous_response(
     new_input = request.input or []
     if isinstance(new_input, str):
         new_input = [EasyInputMessage(role="user", content=new_input)]
-    return request.model_copy(
-        update={"input": [*history, *new_input], "previous_response_id": None}
+    history_tokens = stored.get(_CONTEXT_TOKENS_KEY)
+    return (
+        request.model_copy(
+            update={"input": [*history, *new_input], "previous_response_id": None}
+        ),
+        history_tokens if isinstance(history_tokens, int) else None,
     )
 
 
@@ -533,7 +523,10 @@ async def _apply_conversation(
 
 
 async def _save_response(
-    response_id: str, request: ResponseCreateParams, result: Response
+    response_id: str,
+    request: ResponseCreateParams,
+    result: Response,
+    context_tokens: int | None,
 ) -> None:
     """Persist a stored response, discarding its storage when the write fails.
 
@@ -541,6 +534,8 @@ async def _save_response(
         response_id: Stored response identifier.
         request: The request that produced the response.
         result: The response to persist.
+        context_tokens: Tokens the conversation takes once the response is
+            added to it, when known.
 
     Raises:
         BaseException: Whatever the write raised, after cleanup is scheduled.
@@ -556,7 +551,8 @@ async def _save_response(
                 "response": result.model_dump(
                     mode="json", by_alias=True, exclude_none=True
                 ),
-            },
+            }
+            | ({} if context_tokens is None else {_CONTEXT_TOKENS_KEY: context_tokens}),
         )
     except BaseException:
         schedule_cleanup(discard_stored_response_session(response_id, "response"))
@@ -717,6 +713,48 @@ async def _apply_prompt_template(
     BEDROCK_PROMPT_VAR.set(resolved)
 
 
+async def _completed_response(
+    generated: Generated,
+    result: Response,
+    model_id: str,
+    response_id: str,
+    created_at: float,
+) -> tuple[Response, int | None]:
+    """Finish a non-streamed response: file search, compaction item, failure.
+
+    Args:
+        generated: The generation.
+        result: Its response.
+        model_id: Model ID resolved from the request's ``model`` field.
+        response_id: Identifier of the response.
+        created_at: Unix timestamp of the request.
+
+    Returns:
+        The response, and the tokens its conversation takes when known.
+
+    Raises:
+        ApiError: 502 when a synchronous response failed.
+    """
+    request = generated.request
+    # One call's usage: file search rounds each resend the whole conversation.
+    context_tokens = (
+        result.usage.total_tokens
+        if generated.answered and result.usage is not None
+        else None
+    )
+    result = await execute_file_search_calls(
+        result, request, model_id, response_id, created_at
+    )
+    if generated.compaction is not None:
+        result = with_compaction(
+            result, generated.compaction, generated.compaction_usage
+        )
+    if result.status == "failed" and not request.background:
+        # A synchronous failure is an error, not a 200; background keeps the state.
+        failed_response_error(result)
+    return result, context_tokens
+
+
 @router.post(
     "",
     summary="Generate a model response using the Responses API (OpenAI format)",
@@ -773,14 +811,13 @@ async def create_response(
     """
     log_request_params(request, user_id=request.safety_identifier or request.user)
     store = bool(request.store)
-    model_id = (
-        await validate_model(
-            request.model,
-            input_modality="TEXT",
-            output_modality="TEXT",
-            route="openai_response",
-        )
-    ).id
+    model = await validate_model(
+        request.model,
+        input_modality="TEXT",
+        output_modality="TEXT",
+        route="openai_response",
+    )
+    model_id = model.id
     # After the model: an alias may carry the guardrail 'moderation' reports on.
     apply_request_moderation(request.moderation)
     chat_model = get_chat_model(model_id)
@@ -788,7 +825,17 @@ async def create_response(
     await _apply_prompt_template(request.prompt, chat_model, model_id)
     previous_response_id = request.previous_response_id
     native_supported = chat_model.native_store_supported()
-    request = await _apply_previous_response(request, native_supported=native_supported)
+    # Only a continued conversation of a model the counter refuses reads it.
+    own_tokens = (
+        estimate_tokens(request.input)
+        if request.context_management
+        and request.previous_response_id
+        and not native_supported
+        else 0
+    )
+    request, history_tokens = await _apply_previous_response(
+        request, native_supported=native_supported
+    )
     request, conversation_id, turn_items = await _apply_conversation(request)
     appended_to = conversation_id if request.store is not False else None
     if native_supported:
@@ -805,30 +852,29 @@ async def create_response(
     response_id = f"resp-{session_id}" if store else f"resp-{REQUEST_ID.get()}"
     created_at = REQUEST_TIME.get().timestamp()
     try:
-        result = await chat_model.create_response(
+        generated = await generate(
+            chat_model,
+            model,
             request,
             response_id,
             created_at,
-            moderation_builder=partial(build_response_moderation, request.moderation),
+            partial(build_response_moderation, request.moderation),
+            history_tokens=history_tokens,
+            own_tokens=own_tokens,
         )
-        if isinstance(result, Response):
-            result = await execute_file_search_calls(
-                result, request, model_id, response_id, created_at
-            )
-            if result.status == "failed" and not request.background:
-                # A synchronous request must not swallow an upstream failure
-                # into a 200 with empty output (Mantle models already enforce
-                # this upstream); background requests keep the failed state.
-                _failed_response_error(result)
+        request = generated.request
+        if not isinstance(generated.result, Response):
+            return _streamed_result(generated.result, appended_to, turn_items)
+        result, context_tokens = await _completed_response(
+            generated, generated.result, model_id, response_id, created_at
+        )
     except BaseException:
         if store:
             schedule_cleanup(discard_stored_response_session(response_id, "response"))
         raise
-    if not isinstance(result, Response):
-        return _streamed_result(result, appended_to, turn_items)
     _echo_chaining(result, previous_response_id, conversation_id)
     if store:
-        await _save_response(response_id, request, result)
+        await _save_response(response_id, request, result, context_tokens)
     if appended_to and result.status not in _NOT_APPENDED_STATUSES:
         await _append_turn(
             appended_to,
@@ -904,17 +950,17 @@ async def count_input_tokens(
         raise ApiError(msg, status=400)
     if conversation_id := _resolve_conversation(request.conversation):
         request = await _with_conversation_prefix(request, conversation_id)
-    return log_response_params(
-        InputTokenCountResponse(
-            input_tokens=await count_input_tokens_via_bedrock(
-                request,
-                model_id,
-                model.regions[0],
-                # Not Mantle-served, so this is always a Converse chat model.
-                get_chat_model(model_id),  # type: ignore[arg-type]
-            )
-        )
+    count = partial(
+        count_input_tokens_via_bedrock,
+        model_id=model_id,
+        region=model.regions[0],
+        # Not Mantle-served, so this is always a Converse chat model.
+        chat_model=get_chat_model(model_id),  # type: ignore[arg-type]
     )
+    request, input_tokens = await truncating(
+        request, lambda counted, _retryable: count(counted)
+    )
+    return log_response_params(InputTokenCountResponse(input_tokens=input_tokens))
 
 
 @router.post(
@@ -984,51 +1030,38 @@ async def compact_response(
         previous_response_id=request.previous_response_id,
     )
     # Compaction never chains natively, so a Mantle-stored ID is a 404.
-    generation = await _apply_previous_response(generation, native_supported=False)
+    generation, _history_tokens = await _apply_previous_response(
+        generation, native_supported=False
+    )
     items: list[ResponseInputItem] = (
         [EasyInputMessage(role="user", content=generation.input)]
         if isinstance(generation.input, str)
         else list(generation.input or ())
     )
     if not items:
-        msg = "There is no conversation to compact."
+        msg = "Compaction requires either `input` items or a `previous_response_id`."
         raise ApiError(msg)
-    user_messages = _compaction_user_messages(items)
-    generation = generation.model_copy(
-        update={
-            "input": [*items, EasyInputMessage(role="user", content=_COMPACTION_PROMPT)]
-        }
-    )
-    response = await get_chat_model(model_id).create_response(
-        generation, response_id, created_at
-    )
-    if not isinstance(response, Response):  # pragma: no cover - stream is never set
-        msg = "Unexpected streaming response."
-        raise TypeError(msg)
-    if response.status == "failed":
-        # A failed summarisation run must not be wrapped into a 200 compaction
-        # item with an empty summary.
-        _failed_response_error(response)
-    summary = "".join(
-        part.text
-        for item in response.output
-        if isinstance(item, ResponseOutputMessage)
-        for part in item.content
-        if isinstance(part, ResponseOutputText)
+    summary, usage = await summarize(
+        get_chat_model(model_id),
+        generation,
+        items,
+        response_id,
+        created_at,
+        joins_user_messages=serves_via_mantle(model_id),
     )
     return log_response_params(
         CompactedResponse(
             id=response_id,
             created_at=int(created_at),
             output=[
-                *user_messages,
+                *_compaction_user_messages(items),
                 ResponseCompactionItem(
-                    id=f"ci-{REQUEST_ID.get()}",
+                    id=compaction_item_id(),
                     encrypted_content=encode_compaction_content(summary),
                     type="compaction",
                 ),
             ],
-            usage=response.usage
+            usage=usage
             or ResponseUsage(
                 input_tokens=0,
                 input_tokens_details=InputTokensDetails(cached_tokens=0),

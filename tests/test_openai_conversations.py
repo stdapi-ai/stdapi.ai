@@ -1242,10 +1242,11 @@ class TestResponsesConversationParameter:
             f"/v1/conversations/{conversation['id']}/items", params={"order": "asc"}
         )
         assert listed.status_code == 200, listed.text
+        # The trigger itself is never listed; the turn's output is its compaction.
         assert [item["type"] for item in listed.json()["data"]] == [
             "message",
             "additional_tools",
-            "message",
+            "compaction",
         ]
 
     def test_input_tokens_rejects_both_chaining_parameters(

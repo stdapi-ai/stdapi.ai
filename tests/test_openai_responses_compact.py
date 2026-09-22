@@ -1,10 +1,10 @@
 """Tests for the OpenAI-compatible POST /v1/responses/compact route.
 
-The gateway rejects ``context_management``, so the standalone compact endpoint is
-the only compaction path available.  It runs a summarisation turn on Bedrock and
-returns the conversation's user messages followed by one opaque ``compaction``
-item; the item content is self-contained (marker-prefixed base64url, not
-encrypted), so replaying it needs no server-side state.
+The compact endpoint runs a summarisation turn on Bedrock and returns the
+conversation's user messages followed by one opaque ``compaction`` item; the
+item content is self-contained (marker-prefixed base64url, not encrypted), so
+replaying it needs no server-side state. Compaction during a response
+(``context_management``) is covered in test_openai_responses_context.py.
 
 Ref: https://developers.openai.com/api/reference/resources/responses/methods/compact
      https://developers.openai.com/api/docs/guides/compaction
@@ -16,6 +16,7 @@ from base64 import urlsafe_b64decode, urlsafe_b64encode
 from typing import TYPE_CHECKING, Any, Literal
 
 import pytest
+from openai import BadRequestError
 from openai._models import construct_type
 from openai.types.responses import CompactedResponse as SdkCompactedResponse
 
@@ -47,6 +48,9 @@ if TYPE_CHECKING:
 
     from stdapi.models import ModelDetails
 
+#: Marker of the summary content the compact endpoint produces.
+_SUMMARY_PREFIX = COMPACTION_CONTENT_PREFIX[0]
+
 
 def _usage() -> ResponseUsage:
     return ResponseUsage(
@@ -67,6 +71,10 @@ class _StubChatModel:
         #: Terminal state overrides applied to the canned response, when set.
         self.status: Literal["failed"] | None = None
         self.error: ResponseError | None = None
+
+    def native_store_supported(self) -> bool:
+        """Report a model reading only this server's compaction items."""
+        return False
 
     async def create_response(
         self, request: ResponseCreateParams, response_id: str, created_at: float
@@ -153,10 +161,12 @@ class TestResponsesCompactRoute:
             {"type": "input_text", "text": "a long conversation"}
         ]
         assert item["type"] == "compaction"
-        assert item["encrypted_content"].startswith(COMPACTION_CONTENT_PREFIX)
-        encoded = item["encrypted_content"].removeprefix(COMPACTION_CONTENT_PREFIX)
+        assert item["encrypted_content"].startswith(_SUMMARY_PREFIX)
+        encoded = item["encrypted_content"].removeprefix(_SUMMARY_PREFIX)
         assert urlsafe_b64decode(encoded) == b"THE SUMMARY"
-        assert body["id"] == item["id"].replace("ci-", "resp-", 1)
+        # Upstream refuses a compaction item whose ID does not begin with "cmp".
+        assert item["id"].startswith("cmp_")
+        assert body["id"] == item["id"].replace("cmp_", "resp-", 1)
         assert body["usage"]["total_tokens"] == 18, (
             "the summarisation turn's usage is billed to the caller"
         )
@@ -170,7 +180,7 @@ class TestResponsesCompactRoute:
         that silently replaces its conversation; the guard mirrors the one on
         POST /v1/responses.
 
-        Ref: stdapi/routes/openai_responses.py:_failed_response_error
+        Ref: stdapi/routes/_responses_context.py:failed_response_error
         """
         chat_backend.status = "failed"
         chat_backend.error = ResponseError(
@@ -241,6 +251,34 @@ class TestResponsesCompactRoute:
         assert echo["content"] == parts
         assert item["type"] == "compaction"
 
+    def test_a_native_model_reads_its_own_compaction_items(
+        self,
+        app_client: TestClient,
+        chat_backend: _StubChatModel,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A compaction item this server did not produce reaches a native model as sent.
+
+        A model serving the Responses API natively produced it, and reads it back.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/compact
+        """
+        monkeypatch.setattr(chat_backend, "native_store_supported", lambda: True)
+        item = {"type": "compaction", "encrypted_content": "upstream-ciphertext"}
+        response = app_client.post(
+            "/v1/responses/compact",
+            json={
+                "model": "amazon.nova-pro-v1:0",
+                "input": [item, {"role": "user", "content": "next"}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        (request,) = chat_backend.requests
+        assert isinstance(request.input, list)
+        first = request.input[0]
+        assert isinstance(first, CompactionItemParam)
+        assert first.encrypted_content == "upstream-ciphertext"
+
     def test_compact_appends_summarization_directive(
         self, app_client: TestClient, chat_backend: _StubChatModel
     ) -> None:
@@ -299,8 +337,6 @@ class TestResponsesCompactRoute:
         )
         assert response.status_code == 200, response.text
         (request,) = chat_backend.requests
-        # Restored after the merge, though CompactedResponse has no field to echo it.
-        assert request.previous_response_id == "resp-1"
         assert isinstance(request.input, list)
         first = request.input[0]
         assert isinstance(first, EasyInputMessage | InputMessage)
@@ -337,7 +373,9 @@ class TestResponsesCompactRoute:
         response = app_client.post("/v1/responses/compact", json=body)
         assert response.status_code == 400, response.text
         error = response.json()["error"]
-        assert "no conversation to compact" in error["message"]
+        assert error["message"] == (
+            "Compaction requires either `input` items or a `previous_response_id`."
+        )
         assert error["type"] == "invalid_request_error"
         assert not chat_backend.requests, "no model is billed for an empty request"
 
@@ -448,7 +486,7 @@ class TestResponsesCompactRoute:
         assert [part.type for part in parsed.output] == ["message", "compaction"]
         item = next(part for part in parsed.output if part.type == "compaction")
         assert item.id
-        assert item.encrypted_content.startswith(COMPACTION_CONTENT_PREFIX)
+        assert item.encrypted_content.startswith(_SUMMARY_PREFIX)
         assert parsed.object == "response.compaction"
         assert parsed.usage.total_tokens == 18
 
@@ -499,7 +537,7 @@ class TestCompactionItemRoundTrip:
         """
         summary = "Summary: \xff\xff\xff details preserved."
         encrypted_content = encode_compaction_content(summary)
-        assert encrypted_content.startswith(COMPACTION_CONTENT_PREFIX)
+        assert encrypted_content.startswith(_SUMMARY_PREFIX)
         assert "+" not in encrypted_content
         assert "/" not in encrypted_content
         assert "-" in encrypted_content or "_" in encrypted_content
@@ -521,12 +559,12 @@ class TestCompactionItemRoundTrip:
         decode failure must surface as a client error rather than a 500.
         """
         item = CompactionItemParam(
-            encrypted_content=f"{COMPACTION_CONTENT_PREFIX}!!!", type="compaction"
+            encrypted_content=f"{_SUMMARY_PREFIX}!!!", type="compaction"
         )
-        with pytest.raises(ApiError, match="produced by this server") as excinfo:
+        with pytest.raises(ApiError, match="could not be verified") as excinfo:
             await map_input([item], None)
         assert excinfo.value.status == 400
-        assert "Invalid compaction item content" in str(excinfo.value)
+        assert excinfo.value.code == "invalid_encrypted_content"
 
     async def test_unmarked_content_is_rejected(self) -> None:
         """Content without the local marker is rejected even when decodable.
@@ -538,10 +576,10 @@ class TestCompactionItemRoundTrip:
             encrypted_content=urlsafe_b64encode(b"upstream ciphertext").decode(),
             type="compaction",
         )
-        with pytest.raises(ApiError, match="produced by this server") as excinfo:
+        with pytest.raises(ApiError, match="could not be verified") as excinfo:
             await map_input([item], None)
         assert excinfo.value.status == 400
-        assert "Invalid compaction item content" in str(excinfo.value)
+        assert excinfo.value.code == "invalid_encrypted_content"
 
 
 class TestResponsesCompactLive:
@@ -596,3 +634,22 @@ class TestResponsesCompactLive:
         )
         assert follow.status == "completed", follow.model_dump_json()
         assert "teal" in follow.output_text.lower()
+
+    def test_nothing_to_compact_is_refused(
+        self, openai_client: OpenAI, responses_model: str
+    ) -> None:
+        """No input and no ``previous_response_id`` is a 400, worded as upstream.
+
+        Refused before generation, so it costs nothing.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/compact
+        """
+        with pytest.raises(BadRequestError) as excinfo:
+            openai_client.responses.compact(model=responses_model, input=[])
+        assert excinfo.value.body == {
+            "type": "invalid_request_error",
+            "code": None,
+            "param": None,
+            "message": "Compaction requires either `input` items or a "
+            "`previous_response_id`.",
+        }

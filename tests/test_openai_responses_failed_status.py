@@ -1,7 +1,7 @@
 """Tests for the synchronous-failure HTTP contract of POST /v1/responses (unit).
 
 Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
-     stdapi/routes/openai_responses.py:_failed_response_error
+     stdapi/routes/_responses_context.py:failed_response_error
 """
 
 from __future__ import annotations
@@ -135,7 +135,7 @@ def test_failed_response_without_error_uses_the_fallback_message(
     same wording the Mantle passthrough guard uses, keeping both paths
     indistinguishable to the client.
 
-    Ref: stdapi/routes/openai_responses.py:_failed_response_error
+    Ref: stdapi/routes/_responses_context.py:failed_response_error
     """
     failed_chat_backend.error = None
     response = app_client.post(

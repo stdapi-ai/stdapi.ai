@@ -178,7 +178,7 @@ This is a hand-picked sample, not the full roster — the [Models](models.md) pa
 
 ### :material-chat: Text & Conversational AI
 
-- [Server-side conversations](api_openai_conversations.md) — a thread is kept server-side and continued by id instead of resending the history, its items listed and managed, and a response attached to it through the Responses API `conversation` parameter; a long thread can be [compacted](api_openai_responses.md#conversation-compaction) into a reusable summary item rather than replayed in full
+- [Server-side conversations](api_openai_conversations.md) — a thread is kept server-side and continued by id instead of resending the history, its items listed and managed, and a response attached to it through the Responses API `conversation` parameter; a long thread can be [compacted](api_openai_responses.md#conversation-compaction) into a reusable summary item rather than replayed in full, on request or [automatically past a token threshold](api_openai_responses.md#context-window-management), or have its oldest turns dropped once it outgrows the model's context window
 - Token counting before a call, so a prompt can be sized against a model's window without paying to generate
 - Streaming over Server-Sent Events with tokens delivered as they arrive; reasoning content blocks on the models that produce them, and web search results as context
 - Image, document, audio and video attachments on multimodal models — see [Attachment Size](#attachment-size) for how large ones are carried
