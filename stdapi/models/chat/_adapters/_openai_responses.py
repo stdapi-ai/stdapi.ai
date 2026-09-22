@@ -23,6 +23,8 @@ from pydantic_core import from_json, to_json
 from sse_starlette import ServerSentEvent
 
 from stdapi.api_errors import ApiError, denied_feature_unavailable
+from stdapi.api_providers import FORMATTER_BY_TAG
+from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import (
     AWS_ERROR_MAP,
@@ -98,6 +100,7 @@ from stdapi.types.openai_responses import (
     ResponseCreateParams,
     ResponseError,
     ResponseErrorEvent,
+    ResponseErrorEventError,
     ResponseFailedEvent,
     ResponseFileSearchCallCompletedEvent,
     ResponseFileSearchCallInProgressEvent,
@@ -4878,6 +4881,11 @@ def _failure_events(
                 param=param,
                 sequence_number=state.next_seq(),
                 type="error",
+                error=ResponseErrorEventError.model_validate(
+                    FORMATTER_BY_TAG[TAG_OPENAI](status_code, message, param, code)[0][
+                        "error"
+                    ]
+                ),
             ),
         ),
         json_sse(

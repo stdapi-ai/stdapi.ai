@@ -70,7 +70,10 @@ SDK_STREAM_EVENTS: dict[str, type[BaseModel]] = {
 STREAM_EVENT_DIVERGENCES: dict[tuple[str, str], str] = {
     ("ResponseOutputTextAnnotationAddedEvent", "annotation"): (
         "the gateway always emits the annotation the event announces"
-    )
+    ),
+    ("ResponseErrorEvent", "error"): (
+        "the live API nests the error there, and the SDK raises on it (#294)"
+    ),
 }
 
 

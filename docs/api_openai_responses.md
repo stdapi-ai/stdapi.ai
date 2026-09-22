@@ -131,7 +131,7 @@ curl -X POST "$BASE/v1/responses" \
 | `response.completed`                                                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Final event when generation finishes normally                                |
 | `response.incomplete`                                                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Final event when output is truncated or filtered (no `response.completed`)   |
 | `response.failed`                                                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Final event when generation fails; the response carries `error`              |
-| `error`                                                               |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Spec error event on mid-stream failures, followed by `response.failed`       |
+| `error`                                                               |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Error event on stream failures, followed by `response.failed`. On Converse-served models it carries the documented flat `code` / `message` / `param` fields and, as the live OpenAI API does, the same error nested under `error`, which the official SDK raises as an exception; Bedrock Mantle models converted to this API send the nested error only, with no `response.failed` after it |
 
 </div>
 

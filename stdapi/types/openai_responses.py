@@ -3532,14 +3532,31 @@ class ResponseIncompleteEvent(BaseModelResponse):
 
 
 # Ref: openai.types.responses.response_error_event.ResponseErrorEvent
+class ResponseErrorEventError(BaseModelResponse):
+    """The error of an ``error`` stream event, as the live API nests it."""
+
+    type: str = Field(description="The error type, e.g. `invalid_request_error`.")
+    code: str | None = Field(default=None, description="The error code.")
+    message: str = Field(description="The error message.")
+    param: str | None = Field(default=None, description="The error parameter.")
+
+
 class ResponseErrorEvent(BaseModelResponse):
-    """Emitted when an error occurs."""
+    """Emitted when an error occurs.
+
+    The live API nests the error under ``error``, which the official SDK
+    raises as an exception; the flat fields are those the API reference
+    documents. Both are sent.
+    """
 
     message: str = Field(description="The error message.")
     sequence_number: int = Field(description="The sequence number of this event.")
     type: Literal["error"] = Field(description="The type of the event. Always `error`.")
     code: str | None = Field(default=None, description="The error code.")
     param: str | None = Field(default=None, description="The error parameter.")
+    error: ResponseErrorEventError | None = Field(
+        default=None, description="The error, as the live API nests it."
+    )
 
 
 # Stream events — output items

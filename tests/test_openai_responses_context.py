@@ -166,24 +166,6 @@ def _stream_events(client: OpenAI, **params: Any) -> list[dict[str, Any]]:  # no
         ]
 
 
-def _error_event_fields(
-    event: dict[str, Any], *, use_official_api: bool
-) -> dict[str, Any]:
-    """Return the ``code``/``param``/``message`` of a streamed ``error`` event.
-
-    The official API nests them under ``error``; the gateway sends them flat,
-    the shape the SDK's ``ResponseErrorEvent`` types.
-
-    Args:
-        event: The ``error`` event payload.
-        use_official_api: Whether the official API sent it.
-
-    Returns:
-        The mapping carrying the error fields.
-    """
-    return event["error"] if use_official_api else event
-
-
 def _error_envelope(error: BadRequestError) -> dict[str, Any]:
     """Return the error envelope of a client exception (the SDK already unwrapped it).
 
@@ -250,10 +232,7 @@ class TestTruncation:
 
     @pytest.mark.slow
     def test_streamed_overflow_ends_in_a_failed_response(
-        self,
-        openai_client: OpenAI,
-        overflow_model: tuple[str, int],
-        use_official_api: bool,
+        self, openai_client: OpenAI, overflow_model: tuple[str, int]
     ) -> None:
         """A streamed overflow is an ``error`` event, then ``response.failed``.
 
@@ -270,14 +249,19 @@ class TestTruncation:
             input=_overflow_input(window),
             max_output_tokens=16,
         )
-        types = [event["type"] for event in events]
-        assert types[0] == "response.created"
-        assert types[-1] == "response.failed"
-        error = next(event for event in events if event["type"] == "error")
-        fields = _error_event_fields(error, use_official_api=use_official_api)
-        assert fields["code"] == "context_length_exceeded"
-        assert fields["param"] == "input"
-        assert types.index("error") < types.index("response.failed")
+        assert [event["type"] for event in events] == [
+            "response.created",
+            "response.in_progress",
+            "error",
+            "response.failed",
+        ]
+        assert [event["sequence_number"] for event in events] == [0, 1, 2, 3]
+        assert events[2]["error"] == {
+            "type": "invalid_request_error",
+            "code": "context_length_exceeded",
+            "param": "input",
+            "message": _OVERFLOW_MESSAGE,
+        }
         failed = events[-1]["response"]
         assert failed["status"] == "failed"
         assert failed["error"] == {
