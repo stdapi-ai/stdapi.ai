@@ -1,10 +1,10 @@
 {
- "schema_version": 5,
+ "schema_version": 6,
  "model_id": "qwen.qwen3-32b",
  "invoked_id": "qwen.qwen3-32b",
  "transport": "mantle",
  "region": "us-east-1",
- "probed_at": "2026-08-01",
+ "probed_at": "2026-09-22",
  "probes": [
   {
    "name": "baseline",
@@ -73,7 +73,8 @@
     ],
     "stop": [
      "STOPHERE"
-    ]
+    ],
+    "max_tokens": 1024
    }
   },
   {
@@ -143,7 +144,8 @@
        }
       }
      }
-    ]
+    ],
+    "max_tokens": 1024
    }
   },
   {
@@ -178,7 +180,8 @@
       }
      }
     ],
-    "tool_choice": "required"
+    "tool_choice": "required",
+    "max_tokens": 1024
    }
   },
   {
@@ -218,7 +221,8 @@
      "function": {
       "name": "get_weather"
      }
-    }
+    },
+    "max_tokens": 1024
    }
   },
   {
@@ -253,14 +257,15 @@
       }
      }
     ],
-    "parallel_tool_calls": false
+    "parallel_tool_calls": false,
+    "max_tokens": 1024
    }
   },
   {
    "name": "reasoning_effort_high",
    "feature": "reasoning_effort = high",
    "outcome": "supported",
-   "detail": "reasoning: 2873 chars",
+   "detail": "reasoning: 2043 chars",
    "request": {
     "messages": [
      {
@@ -354,7 +359,8 @@
     ],
     "response_format": {
      "type": "json_object"
-    }
+    },
+    "max_tokens": 1024
    }
   },
   {
@@ -390,7 +396,8 @@
        "additionalProperties": false
       }
      }
-    }
+    },
+    "max_tokens": 1024
    }
   },
   {

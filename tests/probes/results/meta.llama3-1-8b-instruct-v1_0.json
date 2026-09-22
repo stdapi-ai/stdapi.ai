@@ -1,10 +1,10 @@
 {
- "schema_version": 5,
+ "schema_version": 6,
  "model_id": "meta.llama3-1-8b-instruct-v1:0",
  "invoked_id": "us.meta.llama3-1-8b-instruct-v1:0",
  "transport": "converse",
  "region": "us-east-1",
- "probed_at": "2026-08-01",
+ "probed_at": "2026-09-22",
  "probes": [
   {
    "name": "baseline",
@@ -80,7 +80,7 @@
      }
     ],
     "inferenceConfig": {
-     "maxTokens": 64,
+     "maxTokens": 1024,
      "stopSequences": [
       "STOPHERE"
      ]
@@ -136,6 +136,9 @@
        }
       }
      ]
+    },
+    "inferenceConfig": {
+     "maxTokens": 1024
     }
    }
   },
@@ -180,6 +183,9 @@
      "toolChoice": {
       "any": {}
      }
+    },
+    "inferenceConfig": {
+     "maxTokens": 1024
     }
    }
   },
@@ -226,6 +232,9 @@
        "name": "get_weather"
       }
      }
+    },
+    "inferenceConfig": {
+     "maxTokens": 1024
     }
    }
   },
@@ -355,6 +364,58 @@
    }
   },
   {
+   "name": "reasoning_object_effort_none",
+   "feature": "additionalModelRequestFields.reasoning = {\"effort\": \"none\"} (meaningful where the model reasons by default)",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: Malformed input request: #: extraneous key [reasoning] is not permitted, please reformat your input and try again.",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only."
+       }
+      ]
+     }
+    ],
+    "inferenceConfig": {
+     "maxTokens": 4096
+    },
+    "additionalModelRequestFields": {
+     "reasoning": {
+      "effort": "none"
+     }
+    }
+   }
+  },
+  {
+   "name": "reasoning_disabled",
+   "feature": "additionalModelRequestFields.thinking = {\"type\": \"disabled\"} (meaningful where the model reasons by default)",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: Malformed input request: #: extraneous key [thinking] is not permitted, please reformat your input and try again.",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only."
+       }
+      ]
+     }
+    ],
+    "inferenceConfig": {
+     "maxTokens": 4096
+    },
+    "additionalModelRequestFields": {
+     "thinking": {
+      "type": "disabled"
+     }
+    }
+   }
+  },
+  {
    "name": "prompt_cache",
    "feature": "cachePoint in the message content",
    "outcome": "rejected",
@@ -381,6 +442,27 @@
    }
   },
   {
+   "name": "implicit_prompt_cache",
+   "feature": "A long prefix sent twice with no cachePoint",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects."
+       },
+       {
+        "text": "Reply with the single word OK."
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
    "name": "json_mode",
    "feature": "A prompt demanding a JSON object",
    "outcome": "supported",
@@ -395,7 +477,10 @@
        }
       ]
      }
-    ]
+    ],
+    "inferenceConfig": {
+     "maxTokens": 1024
+    }
    }
   },
   {
@@ -590,6 +675,9 @@
        }
       }
      }
+    },
+    "inferenceConfig": {
+     "maxTokens": 1024
     }
    }
   },

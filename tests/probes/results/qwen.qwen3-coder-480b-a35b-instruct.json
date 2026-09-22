@@ -1,10 +1,10 @@
 {
- "schema_version": 5,
+ "schema_version": 6,
  "model_id": "qwen.qwen3-coder-480b-a35b-instruct",
  "invoked_id": "qwen.qwen3-coder-480b-a35b-instruct",
  "transport": "mantle",
  "region": "us-east-1",
- "probed_at": "2026-08-01",
+ "probed_at": "2026-09-22",
  "probes": [
   {
    "name": "baseline",
@@ -73,7 +73,8 @@
     ],
     "stop": [
      "STOPHERE"
-    ]
+    ],
+    "max_tokens": 1024
    }
   },
   {
@@ -143,7 +144,8 @@
        }
       }
      }
-    ]
+    ],
+    "max_tokens": 1024
    }
   },
   {
@@ -178,7 +180,8 @@
       }
      }
     ],
-    "tool_choice": "required"
+    "tool_choice": "required",
+    "max_tokens": 1024
    }
   },
   {
@@ -218,7 +221,8 @@
      "function": {
       "name": "get_weather"
      }
-    }
+    },
+    "max_tokens": 1024
    }
   },
   {
@@ -253,7 +257,8 @@
       }
      }
     ],
-    "parallel_tool_calls": false
+    "parallel_tool_calls": false,
+    "max_tokens": 1024
    }
   },
   {
@@ -325,8 +330,8 @@
   {
    "name": "prompt_cache",
    "feature": "A prompt long enough to be cached",
-   "outcome": "supported",
-   "detail": "cached_tokens=1968",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "messages": [
      {
@@ -354,14 +359,15 @@
     ],
     "response_format": {
      "type": "json_object"
-    }
+    },
+    "max_tokens": 1024
    }
   },
   {
    "name": "json_schema",
    "feature": "response_format = {\"type\": \"json_schema\"}",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "supported",
+   "detail": "JSON object with keys ['city', 'country']",
    "request": {
     "messages": [
      {
@@ -390,7 +396,8 @@
        "additionalProperties": false
       }
      }
-    }
+    },
+    "max_tokens": 1024
    }
   },
   {

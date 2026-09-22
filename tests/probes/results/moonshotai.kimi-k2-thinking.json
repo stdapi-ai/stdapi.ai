@@ -1,10 +1,10 @@
 {
- "schema_version": 5,
+ "schema_version": 6,
  "model_id": "moonshotai.kimi-k2-thinking",
  "invoked_id": "moonshotai.kimi-k2-thinking",
  "transport": "mantle",
  "region": "us-east-1",
- "probed_at": "2026-08-01",
+ "probed_at": "2026-09-22",
  "probes": [
   {
    "name": "baseline",
@@ -16,8 +16,8 @@
   {
    "name": "system_prompt",
    "feature": "A system-role message",
-   "outcome": "error",
-   "detail": "no answer within 90s",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "messages": [
      {
@@ -43,8 +43,8 @@
   {
    "name": "top_p",
    "feature": "top_p",
-   "outcome": "error",
-   "detail": "no answer within 90s",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "top_p": 0.5
    }
@@ -62,8 +62,8 @@
   {
    "name": "stop_sequences",
    "feature": "stop",
-   "outcome": "error",
-   "detail": "no answer within 90s",
+   "outcome": "supported",
+   "detail": "halted at the sequence",
    "request": {
     "messages": [
      {
@@ -73,14 +73,15 @@
     ],
     "stop": [
      "STOPHERE"
-    ]
+    ],
+    "max_tokens": 1024
    }
   },
   {
    "name": "frequency_penalty",
    "feature": "frequency_penalty",
-   "outcome": "error",
-   "detail": "no answer within 90s",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "frequency_penalty": 0.5
    }
@@ -88,8 +89,8 @@
   {
    "name": "seed",
    "feature": "seed",
-   "outcome": "error",
-   "detail": "no answer within 90s",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "seed": 42
    }
@@ -97,8 +98,8 @@
   {
    "name": "logprobs",
    "feature": "logprobs",
-   "outcome": "error",
-   "detail": "no answer within 90s",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "logprobs": true
    }
@@ -115,8 +116,8 @@
   {
    "name": "tool_use",
    "feature": "tools with an auto tool choice",
-   "outcome": "error",
-   "detail": "no answer within 90s",
+   "outcome": "supported",
+   "detail": "tool_call: get_weather",
    "request": {
     "messages": [
      {
@@ -143,14 +144,15 @@
        }
       }
      }
-    ]
+    ],
+    "max_tokens": 1024
    }
   },
   {
    "name": "tool_choice_any",
    "feature": "tool_choice = \"required\"",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "supported",
+   "detail": "tool_call: get_weather",
    "request": {
     "messages": [
      {
@@ -178,14 +180,15 @@
       }
      }
     ],
-    "tool_choice": "required"
+    "tool_choice": "required",
+    "max_tokens": 1024
    }
   },
   {
    "name": "tool_choice_tool",
    "feature": "tool_choice naming one function",
-   "outcome": "error",
-   "detail": "no answer within 90s",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "messages": [
      {
@@ -218,14 +221,15 @@
      "function": {
       "name": "get_weather"
      }
-    }
+    },
+    "max_tokens": 1024
    }
   },
   {
    "name": "parallel_tool_calls_false",
    "feature": "parallel_tool_calls = false",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "supported",
+   "detail": "tool_call: get_weather",
    "request": {
     "messages": [
      {
@@ -253,14 +257,15 @@
       }
      }
     ],
-    "parallel_tool_calls": false
+    "parallel_tool_calls": false,
+    "max_tokens": 1024
    }
   },
   {
    "name": "reasoning_effort_high",
    "feature": "reasoning_effort = high",
    "outcome": "supported",
-   "detail": "reasoning: 789 chars",
+   "detail": "reasoning: 841 chars",
    "request": {
     "messages": [
      {
@@ -276,7 +281,7 @@
    "name": "reasoning_effort_low",
    "feature": "reasoning_effort = low",
    "outcome": "supported",
-   "detail": "reasoning: 3088 chars",
+   "detail": "reasoning: 616 chars",
    "request": {
     "messages": [
      {
@@ -308,7 +313,7 @@
    "name": "reasoning_request_object",
    "feature": "OpenRouter-style reasoning object",
    "outcome": "supported",
-   "detail": "reasoning: 644 chars",
+   "detail": "reasoning: 621 chars",
    "request": {
     "messages": [
      {
@@ -343,8 +348,8 @@
   {
    "name": "json_mode",
    "feature": "response_format = {\"type\": \"json_object\"}",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "supported",
+   "detail": "JSON object with keys ['city', 'country']",
    "request": {
     "messages": [
      {
@@ -354,14 +359,15 @@
     ],
     "response_format": {
      "type": "json_object"
-    }
+    },
+    "max_tokens": 1024
    }
   },
   {
    "name": "json_schema",
    "feature": "response_format = {\"type\": \"json_schema\"}",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "supported",
+   "detail": "JSON object with keys ['city', 'country']",
    "request": {
     "messages": [
      {
@@ -390,7 +396,8 @@
        "additionalProperties": false
       }
      }
-    }
+    },
+    "max_tokens": 1024
    }
   },
   {

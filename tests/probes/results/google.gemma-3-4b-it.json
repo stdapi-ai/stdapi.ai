@@ -1,10 +1,10 @@
 {
- "schema_version": 5,
+ "schema_version": 6,
  "model_id": "google.gemma-3-4b-it",
  "invoked_id": "google.gemma-3-4b-it",
  "transport": "mantle",
  "region": "us-east-1",
- "probed_at": "2026-08-01",
+ "probed_at": "2026-09-22",
  "probes": [
   {
    "name": "baseline",
@@ -73,7 +73,8 @@
     ],
     "stop": [
      "STOPHERE"
-    ]
+    ],
+    "max_tokens": 1024
    }
   },
   {
@@ -143,14 +144,15 @@
        }
       }
      }
-    ]
+    ],
+    "max_tokens": 1024
    }
   },
   {
    "name": "tool_choice_any",
    "feature": "tool_choice = \"required\"",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "error",
+   "detail": "the answer stopped at the output budget before the effect could appear",
    "request": {
     "messages": [
      {
@@ -178,7 +180,8 @@
       }
      }
     ],
-    "tool_choice": "required"
+    "tool_choice": "required",
+    "max_tokens": 1024
    }
   },
   {
@@ -218,7 +221,8 @@
      "function": {
       "name": "get_weather"
      }
-    }
+    },
+    "max_tokens": 1024
    }
   },
   {
@@ -253,7 +257,8 @@
       }
      }
     ],
-    "parallel_tool_calls": false
+    "parallel_tool_calls": false,
+    "max_tokens": 1024
    }
   },
   {
@@ -354,14 +359,15 @@
     ],
     "response_format": {
      "type": "json_object"
-    }
+    },
+    "max_tokens": 1024
    }
   },
   {
    "name": "json_schema",
    "feature": "response_format = {\"type\": \"json_schema\"}",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "error",
+   "detail": "the answer stopped at the output budget before the effect could appear",
    "request": {
     "messages": [
      {
@@ -390,7 +396,8 @@
        "additionalProperties": false
       }
      }
-    }
+    },
+    "max_tokens": 1024
    }
   },
   {

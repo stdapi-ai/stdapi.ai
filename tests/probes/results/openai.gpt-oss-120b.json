@@ -1,10 +1,10 @@
 {
- "schema_version": 5,
+ "schema_version": 6,
  "model_id": "openai.gpt-oss-120b",
  "invoked_id": "openai.gpt-oss-120b",
  "transport": "mantle",
  "region": "us-east-1",
- "probed_at": "2026-08-01",
+ "probed_at": "2026-09-22",
  "probes": [
   {
    "name": "baseline",
@@ -73,7 +73,8 @@
     ],
     "stop": [
      "STOPHERE"
-    ]
+    ],
+    "max_tokens": 1024
    }
   },
   {
@@ -143,7 +144,8 @@
        }
       }
      }
-    ]
+    ],
+    "max_tokens": 1024
    }
   },
   {
@@ -178,7 +180,8 @@
       }
      }
     ],
-    "tool_choice": "required"
+    "tool_choice": "required",
+    "max_tokens": 1024
    }
   },
   {
@@ -218,7 +221,8 @@
      "function": {
       "name": "get_weather"
      }
-    }
+    },
+    "max_tokens": 1024
    }
   },
   {
@@ -253,14 +257,15 @@
       }
      }
     ],
-    "parallel_tool_calls": false
+    "parallel_tool_calls": false,
+    "max_tokens": 1024
    }
   },
   {
    "name": "reasoning_effort_high",
    "feature": "reasoning_effort = high",
    "outcome": "supported",
-   "detail": "reasoning: 915 chars",
+   "detail": "reasoning: 633 chars",
    "request": {
     "messages": [
      {
@@ -276,7 +281,7 @@
    "name": "reasoning_effort_low",
    "feature": "reasoning_effort = low",
    "outcome": "supported",
-   "detail": "reasoning: 210 chars",
+   "detail": "reasoning: 223 chars",
    "request": {
     "messages": [
      {
@@ -308,7 +313,7 @@
    "name": "reasoning_request_object",
    "feature": "OpenRouter-style reasoning object",
    "outcome": "supported",
-   "detail": "reasoning: 263 chars",
+   "detail": "reasoning: 318 chars",
    "request": {
     "messages": [
      {
@@ -354,7 +359,8 @@
     ],
     "response_format": {
      "type": "json_object"
-    }
+    },
+    "max_tokens": 1024
    }
   },
   {
@@ -390,7 +396,8 @@
        "additionalProperties": false
       }
      }
-    }
+    },
+    "max_tokens": 1024
    }
   },
   {
