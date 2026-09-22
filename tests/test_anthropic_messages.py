@@ -113,6 +113,15 @@ _TOOLSETS: tuple[dict[str, object], ...] = (
 #: Claude model whose Converse token count is built the same way a message is.
 _COUNT_TOKENS_MODEL = "anthropic.claude-opus-5"
 
+#: Beta flag for interleaved thinking, spelled as clients such as Claude Code send it.
+_INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14"
+
+#: Output limit below the thinking budget, which only interleaved thinking accepts.
+_INTERLEAVED_MAX_TOKENS = 1500
+
+#: Thinking budget above ``_INTERLEAVED_MAX_TOKENS``.
+_INTERLEAVED_BUDGET = 2048
+
 #: The streamed event types carrying a content block ``index``.
 _BLOCK_EVENTS = (
     RawContentBlockStartEvent,
@@ -2898,6 +2907,47 @@ class TestAnthropicMessages:
         assert response.content[0].type == "text"
         assert response.content[0].text.strip()
         assert response.usage.output_tokens > 0
+
+    @pytest.mark.parametrize("interleaved", [False, True], ids=["no-flag", "flag"])
+    def test_interleaved_thinking_flag_lets_the_budget_exceed_max_tokens(
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_reasoning_model: str,
+        *,
+        interleaved: bool,
+    ) -> None:
+        """``interleaved-thinking-2025-05-14`` lets ``budget_tokens`` exceed ``max_tokens``.
+
+        Without the flag the budget must stay below ``max_tokens``: a 400
+        ``invalid_request_error`` refused before inference. With it, as clients
+        spell it, the budget spans the whole turn and the request is served, which
+        only happens when the flag reaches the model.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking#interleaved-thinking
+             stdapi/config.py:_ANTHROPIC_BETA_BEDROCK_FLAGS
+        """
+        kwargs: dict[str, Any] = {
+            "model": anthropic_chat_reasoning_model,
+            "max_tokens": _INTERLEAVED_MAX_TOKENS,
+            "messages": [{"role": "user", "content": "Say OK."}],
+            "thinking": {"type": "enabled", "budget_tokens": _INTERLEAVED_BUDGET},
+        }
+        if not interleaved:
+            with pytest.raises(BadRequestError) as excinfo:
+                anthropic_client.messages.create(**kwargs)
+            body = excinfo.value.body
+            assert excinfo.value.status_code == 400
+            assert isinstance(body, dict)
+            assert body["error"]["type"] == "invalid_request_error"
+            assert "budget_tokens" in body["error"]["message"]
+            return
+
+        response = anthropic_client.messages.create(
+            **kwargs, extra_headers={"anthropic-beta": _INTERLEAVED_THINKING_BETA}
+        )
+
+        assert response.stop_reason == "end_turn"
+        assert any(block.type == "thinking" for block in response.content)
 
     def test_document_plain_text(
         self, anthropic_client: Anthropic, anthropic_chat_model: str

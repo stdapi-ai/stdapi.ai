@@ -320,6 +320,34 @@ async def test_beta_flags_are_stripped_of_the_whitespace_around_the_separator() 
     assert request["additionalModelRequestFields"]["anthropic_beta"] == flags
 
 
+async def test_interleaved_thinking_flag_is_forwarded_as_clients_spell_it() -> None:
+    """``interleaved-thinking-2025-05-14``, as Claude Code sends it, reaches Bedrock.
+
+    Bedrock matches beta flags case-sensitively and rejects the capitalised
+    spelling, so an allowlist entry spelled any other way drops the flag and
+    silently turns interleaved thinking off.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-extended-thinking.html
+         stdapi/config.py:_ANTHROPIC_BETA_BEDROCK_FLAGS
+    """
+    model = _claude_model("anthropic.claude-haiku-4-5-20251001-v1:0")
+    flags = ["interleaved-thinking-2025-05-14"]
+    token = REQUEST.set(cast("Request", _StubRequest({"anthropic-beta": flags[0]})))
+    try:
+        request = await model._prepare_converse_request(  # noqa: SLF001
+            bedrock_messages=[{"role": "user", "content": [{"text": "Hello"}]}],
+            inference_cfg={},
+            system_blocks=None,
+            tool_config=None,
+            additional_request_fields={},
+            service_tier=None,
+        )
+    finally:
+        REQUEST.reset(token)
+
+    assert request["additionalModelRequestFields"]["anthropic_beta"] == flags
+
+
 class TestReasoningSignatureRequirement:
     """Only Claude declares that a replayed reasoning block must stay signed.
 

@@ -139,7 +139,7 @@ _ANTHROPIC_BETA_BEDROCK_FLAGS: frozenset[str] = frozenset(
         "computer-use-2025-01-24",
         "computer-use-2025-11-24",
         "token-efficient-tools-2025-02-19",
-        "Interleaved-thinking-2025-05-14",
+        "interleaved-thinking-2025-05-14",
         "output-128k-2025-02-19",
         "dev-full-thinking-2025-05-14",
         "context-1m-2025-08-07",
@@ -2239,7 +2239,7 @@ class _Settings(BaseSettings):
             '{"amazon.nova-micro-v1:0": {"temperature": 0.7, "max_tokens": 1000}}\n\n'
             "Provider-specific features:\n"
             '{"anthropic.claude-sonnet-4-5-20250929-v1:0": {\n'
-            '  "anthropic_beta": ["Interleaved-thinking-2025-05-14"]\n'
+            '  "anthropic_beta": ["interleaved-thinking-2025-05-14"]\n'
             "}}\n\n"
             "Multiple models:\n"
             '{"amazon.nova-micro-v1:0": {"temperature": 0.3},\n'

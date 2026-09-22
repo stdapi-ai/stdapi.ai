@@ -272,7 +272,7 @@ Create or edit `~/.claude/settings.json`:
     Claude Code refuses to start without a non-empty `ANTHROPIC_AUTH_TOKEN`, even if your stdapi.ai deployment has no API-key authentication configured. In that case, set it to any non-empty placeholder, e.g. `"ANTHROPIC_AUTH_TOKEN": "1"`.
 
 !!! tip "Beta Flag Compatibility"
-    stdapi.ai automatically filters unsupported `anthropic_beta` flags, so Claude Code works without needing `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`. Bedrock-supported flags (like `Interleaved-thinking-2025-05-14` and `token-efficient-tools-2025-02-19`) are preserved while unsupported ones are silently removed. See [`ANTHROPIC_BETA_FILTER`](operations_configuration_models.md#anthropic-beta-filter) and [`ANTHROPIC_BETA_ALLOWLIST`](operations_configuration_models.md#anthropic-beta-allowlist) for details.
+    stdapi.ai automatically filters unsupported `anthropic_beta` flags, so Claude Code works without needing `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`. Bedrock-supported flags (like `interleaved-thinking-2025-05-14` and `token-efficient-tools-2025-02-19`) are preserved while unsupported ones are silently removed. See [`ANTHROPIC_BETA_FILTER`](operations_configuration_models.md#anthropic-beta-filter) and [`ANTHROPIC_BETA_ALLOWLIST`](operations_configuration_models.md#anthropic-beta-allowlist) for details.
 
 ##### :material-brain: Effort-Based Reasoning
 

@@ -760,7 +760,7 @@ curl -X POST "$BASE/v1/chat/completions" \
   -d '{
     "model": "anthropic.claude-sonnet-5",
     "messages": [{"role":"user","content":"Summarize the news headline."}],
-    "anthropic_beta": ["Interleaved-thinking-2025-05-14"]
+    "anthropic_beta": ["interleaved-thinking-2025-05-14"]
   }'
 ```
 

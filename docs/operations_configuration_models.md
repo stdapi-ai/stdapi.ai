@@ -571,7 +571,7 @@ export DEFAULT_MODEL_PARAMS='{
 ```bash
 export DEFAULT_MODEL_PARAMS='{
   "anthropic.claude-sonnet-5": {
-    "anthropic_beta": ["Interleaved-thinking-2025-05-14"]
+    "anthropic_beta": ["interleaved-thinking-2025-05-14"]
   }
 }'
 ```
@@ -591,7 +591,7 @@ export DEFAULT_MODEL_PARAMS='{
   "anthropic.claude-sonnet-5": {
     "temperature": 0.5,
     "top_p": 0.9,
-    "anthropic_beta": ["Interleaved-thinking-2025-05-14"]
+    "anthropic_beta": ["interleaved-thinking-2025-05-14"]
   }
 }'
 ```
@@ -997,7 +997,7 @@ export DROP_UNSUPPORTED_SYSTEM_PROMPT=false
 
 Anthropic-compatible clients like Claude Code send `anthropic-beta` headers with experimental beta flags. Many of these flags (such as `files-api-2025-04-14`, `prompt-caching-2024-07-31`) are **not supported by Amazon Bedrock** and cause `ValidationException` errors (HTTP 400).
 
-stdapi.ai automatically filters out unsupported flags while preserving supported ones, so clients work without any special configuration. Previously, the workaround was to set `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` on the client side, but this also disabled Bedrock-supported flags like `Interleaved-thinking-2025-05-14` and `token-efficient-tools-2025-02-19`, degrading capabilities. This workaround is no longer needed.
+stdapi.ai automatically filters out unsupported flags while preserving supported ones, so clients work without any special configuration. Previously, the workaround was to set `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` on the client side, but this also disabled Bedrock-supported flags like `interleaved-thinking-2025-05-14` and `token-efficient-tools-2025-02-19`, degrading capabilities. This workaround is no longer needed.
 
 Filtering is controlled by two settings: [`ANTHROPIC_BETA_FILTER`](#anthropic-beta-filter) to enable or disable it, and [`ANTHROPIC_BETA_ALLOWLIST`](#anthropic-beta-allowlist) to extend the built-in set of allowed flags.
 
@@ -1058,7 +1058,7 @@ export ANTHROPIC_BETA_ALLOWLIST='new-feature-2026-03-01,another-flag-2026-04-01'
 | `computer-use-2025-01-24`          | Computer use (Claude 3.7)     |
 | `computer-use-2025-11-24`          | Computer use (Claude 4.5 and later) |
 | `token-efficient-tools-2025-02-19` | Token efficient tools         |
-| `Interleaved-thinking-2025-05-14`  | Interleaved thinking          |
+| `interleaved-thinking-2025-05-14`  | Interleaved thinking          |
 | `output-128k-2025-02-19`           | 128K output                   |
 | `dev-full-thinking-2025-05-14`     | Raw thinking dev mode         |
 | `context-1m-2025-08-07`            | 1M context                    |
