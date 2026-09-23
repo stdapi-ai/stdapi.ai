@@ -13,6 +13,7 @@ from stdapi.models import validate_model
 from stdapi.models.capabilities import register_route_capability
 from stdapi.models.chat import get_chat_model
 from stdapi.models.chat._adapters import _ollama as ollama_adapter
+from stdapi.models.chat._adapters._stream_open import context_refusal, open_peeked
 from stdapi.monitoring import (
     REQUEST_ID,
     REQUEST_TIME,
@@ -111,12 +112,14 @@ async def chat(
     # reported as one rather than raised from inside the translation.
     with validation_error_handler():
         completion_params = ollama_adapter.to_chat_completion_params(request, model_id)
-    result: ChatCompletion | EventSourceResponse = await get_chat_model(
-        model_id
-    ).create_completion(
-        completion_params,
-        f"chatcmpl-{REQUEST_ID.get()}",
-        int(REQUEST_TIME.get().timestamp()),
+    # A stream refused on its first event is refused as the unstreamed request is.
+    result: ChatCompletion | EventSourceResponse = await open_peeked(
+        get_chat_model(model_id).create_completion(
+            completion_params,
+            f"chatcmpl-{REQUEST_ID.get()}",
+            int(REQUEST_TIME.get().timestamp()),
+        ),
+        context_refusal,
     )
     if isinstance(result, EventSourceResponse):
         # The event stream is already logged and usage-recorded; this only

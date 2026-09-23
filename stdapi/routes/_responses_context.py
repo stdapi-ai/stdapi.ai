@@ -17,7 +17,6 @@ from stdapi.api_errors import ApiError
 from stdapi.models import reject_unsupported_token_counting
 from stdapi.models.chat import serves_via_mantle
 from stdapi.models.chat._adapters._openai_responses import (
-    close_stream,
     compaction_response,
     count_input_tokens_via_bedrock,
     encode_compaction_state,
@@ -26,7 +25,6 @@ from stdapi.models.chat._adapters._openai_responses import (
     format_failed_stream,
     join_summaries,
     merge_usage,
-    replay_stream,
     with_user_text,
 )
 from stdapi.models.chat._adapters._responses_context import (
@@ -34,7 +32,6 @@ from stdapi.models.chat._adapters._responses_context import (
     CompactionSplit,
     ContextLengthExceededError,
     capped_output_budget,
-    collect_stream_open_errors,
     context_overflow,
     estimate_tokens,
     output_budget_exceeded,
@@ -42,6 +39,7 @@ from stdapi.models.chat._adapters._responses_context import (
     split_for_compaction,
     truncate_input,
 )
+from stdapi.models.chat._adapters._stream_open import close_stream, open_peeked
 from stdapi.monitoring import (
     REQUEST_ID,
     log_error_details,
@@ -697,21 +695,12 @@ async def _open_once(
         Exception: Whatever the model raised, including an overflow refused
             on the stream's first event when ``retryable``.
     """
-    with collect_stream_open_errors() as errors:
-        result = await chat_model.create_response(
+    return await open_peeked(
+        chat_model.create_response(
             request, response_id, created_at, moderation_builder=moderation_builder
-        )
-        if isinstance(result, Response):
-            return result
-        body = aiter(result.body_iterator)
-        first = await anext(body, None)
-    if retryable and (
-        overflow := next((error for error in errors if context_overflow(error)), None)
-    ):
-        await close_stream(body)
-        raise overflow
-    result.body_iterator = replay_stream(() if first is None else (first,), body)
-    return result
+        ),
+        lambda error: error if retryable and context_overflow(error) else None,
+    )
 
 
 async def plan_compaction(

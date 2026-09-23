@@ -22,10 +22,14 @@ from stdapi.models.chat._adapters._anthropic_message import (
     count_tokens_via_bedrock,
     warn_mcp_connector_ignored,
 )
-from stdapi.models.chat._adapters._openai_responses import close_stream
 from stdapi.models.chat._adapters._responses_context import (
     capped_output_budget,
     context_overflow,
+)
+from stdapi.models.chat._adapters._stream_open import (
+    close_stream,
+    context_refusal,
+    open_peeked,
 )
 from stdapi.models.chat._mantle import get_mantle_chat_model
 from stdapi.models.chat._mantle._convert import messages_payload
@@ -289,14 +293,20 @@ async def create_message(
     )
     message_id = f"msg_{REQUEST_ID.get()}"
     try:
-        return await chat_model.create_message(request, message_id)
+        # A stream refused on its first event is refused as the unstreamed request is.
+        return await open_peeked(
+            chat_model.create_message(request, message_id), context_refusal
+        )
     except Exception as exc:
         # Upstream serves an input the window holds alone with its output capped.
         if (budget := capped_output_budget(context_overflow(exc))) is None:
             raise
     return _stopped_at_window(
-        await chat_model.create_message(
-            request.model_copy(update={"max_tokens": budget}), message_id
+        await open_peeked(
+            chat_model.create_message(
+                request.model_copy(update={"max_tokens": budget}), message_id
+            ),
+            context_refusal,
         )
     )
 

@@ -24,6 +24,7 @@ from stdapi.config import SETTINGS
 from stdapi.models import validate_model
 from stdapi.models.capabilities import register_route_capability
 from stdapi.models.chat import get_chat_model
+from stdapi.models.chat._adapters._stream_open import context_refusal, open_peeked
 from stdapi.monitoring import (
     REQUEST_ID,
     REQUEST_TIME,
@@ -221,13 +222,17 @@ async def create_chat_completion(
     apply_request_moderation(request.moderation)
     placeholder_id = f"chatcmpl-{REQUEST_ID.get()}"
     created = int(REQUEST_TIME.get().timestamp())
-    generation = get_chat_model(model_id).create_completion(
-        request,
-        placeholder_id,
-        created,
-        # A streamed completion reports the verdict itself: the trace only
-        # arrives with the last Bedrock event, long after this returns.
-        partial(build_chat_moderation, request.moderation),
+    # A stream refused on its first event is refused as the unstreamed request is.
+    generation = open_peeked(
+        get_chat_model(model_id).create_completion(
+            request,
+            placeholder_id,
+            created,
+            # A streamed completion reports the verdict itself: the trace only
+            # arrives with the last Bedrock event, long after this returns.
+            partial(build_chat_moderation, request.moderation),
+        ),
+        context_refusal,
     )
     session_id: str | None
     if store:

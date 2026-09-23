@@ -10,6 +10,7 @@ from stdapi.config import SETTINGS
 from stdapi.models import validate_model
 from stdapi.models.capabilities import register_route_capability
 from stdapi.models.chat import get_chat_model
+from stdapi.models.chat._adapters._stream_open import context_refusal, open_peeked
 from stdapi.monitoring import REQUEST_ID, REQUEST_TIME, log_request_params
 from stdapi.types.openai_completions import Completion, CompletionCreateParams
 
@@ -155,7 +156,7 @@ async def create_completion(
         ApiError: If model is invalid or does not support text output.
     """
     log_request_params(request, user_id=request.safety_identifier or request.user)
-    return await get_chat_model(
+    chat_model = get_chat_model(
         (
             await validate_model(
                 request.model,
@@ -164,6 +165,11 @@ async def create_completion(
                 route="openai_completion",
             )
         ).id
-    ).create_text_completion(
-        request, f"cmpl-{REQUEST_ID.get()}", int(REQUEST_TIME.get().timestamp())
+    )
+    # A stream refused on its first event is refused as the unstreamed request is.
+    return await open_peeked(
+        chat_model.create_text_completion(
+            request, f"cmpl-{REQUEST_ID.get()}", int(REQUEST_TIME.get().timestamp())
+        ),
+        context_refusal,
     )

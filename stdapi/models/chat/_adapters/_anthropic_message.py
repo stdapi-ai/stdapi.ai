@@ -26,6 +26,7 @@ from stdapi.aws_bedrock import (
     set_inference_configuration,
 )
 from stdapi.models.chat._adapters import _common
+from stdapi.models.chat._adapters._stream_open import primed
 from stdapi.monitoring import REQUEST_LOG, log_error_details, log_response_params
 from stdapi.types.anthropic_messages import (
     Base64ImageSource,
@@ -2218,6 +2219,8 @@ async def format_stream(
     Yields:
         JSON server-sent events in Anthropic streaming format.
     """
+    # Read the backend's first event so a refusal there still reaches the route.
+    stream = await primed(stream)
     yield _make_message_start_event(message_id, model_id)
     async for event in _process_stream_events(
         stream,

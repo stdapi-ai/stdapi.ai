@@ -3,11 +3,12 @@
 Chat Completions answers ``400 context_length_exceeded`` naming ``messages``;
 Anthropic Messages answers ``invalid_request_error`` with ``prompt is too
 long``. The backend's own wording never reaches the client. Streamed, the
-same error reaches the client as the stream's error, which the official SDKs
-raise. The live tests run unchanged against the vendors and the gateway, on
-each lane's cheapest model with the smallest context window, so the refused
-upload is small and costs nothing. An input the window holds alone, but not
-beside its output, is served instead, and billed.
+same ``400`` is answered before the stream starts, even from a model refusing
+only on its stream's first event. The live tests run unchanged against the
+vendors and the gateway, on each lane's cheapest model with the smallest
+context window, so the refused upload is small and costs nothing. An input
+the window holds alone, but not beside its output, is served instead, and
+billed.
 
 Ref: https://developers.openai.com/api/docs/guides/error-codes
      https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
@@ -23,36 +24,45 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from anthropic import APIStatusError as AnthropicAPIStatusError
 from anthropic import BadRequestError as AnthropicBadRequestError
-from openai import APIError, BadRequestError
-from sse_starlette import ServerSentEvent
+from openai import BadRequestError
+from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from stdapi.api_errors import ApiError
 from stdapi.api_providers.anthropic import TAG_ANTHROPIC
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.aws_bedrock import handle_bedrock_client_error
+from stdapi.models.chat._adapters import _openai_completion
 from stdapi.models.chat._adapters._responses_context import (
     OUTPUT_BUDGET_TOO_LARGE,
     ContextLengthExceededError,
     ContextOverflow,
     context_overflow,
+    record_stream_open_error,
 )
+from stdapi.models.chat._adapters._stream_open import context_refusal, open_peeked
 from stdapi.models.chat._default import ChatModel
 from stdapi.monitoring import (
     REQUEST,
     context_length_error,
     log_request_sse_stream_event,
 )
-from stdapi.routes import anthropic_messages, openai_chat_completions
-from tests._helpers import make_client_error, make_model_details
+from stdapi.routes import (
+    anthropic_messages,
+    ollama_chat,
+    ollama_generate,
+    openai_chat_completions,
+    openai_completions,
+)
+from tests._helpers import make_client_error, make_model_details, ollama_route
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Iterator
+    from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 
     from anthropic import Anthropic
     from openai import OpenAI
     from starlette.testclient import TestClient
+    from types_aiobotocore_bedrock_runtime.type_defs import ConverseStreamOutputTypeDef
 
     from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
     from stdapi.models import ModelDetails
@@ -69,6 +79,12 @@ _CHAT_MODELS: dict[bool, tuple[str, int]] = {
 #: Per lane: the cheapest Anthropic Messages model with the smallest window, and that window.
 _ANTHROPIC_MODELS: dict[bool, tuple[str, int]] = {
     True: ("claude-haiku-4-5-20251001", 200_000),
+    False: ("meta.llama3-8b-instruct-v1:0", 8_192),
+}
+
+#: Per lane: the cheapest legacy Completions model with the smallest window, and that window.
+_COMPLETION_MODELS: dict[bool, tuple[str, int]] = {
+    True: ("gpt-3.5-turbo-instruct", 4_096),
     False: ("meta.llama3-8b-instruct-v1:0", 8_192),
 }
 
@@ -640,6 +656,8 @@ class _RefusingBackend:
         self.stop_reason = "end_turn"
         #: Whether a streamed refusal comes on the first event instead of at open.
         self.refuse_in_stream = False
+        #: Error code of a refusal on the stream's first event.
+        self.stream_error = "validationException"
 
     def _refuses(self, request: ConverseRequestBaseTypeDef) -> bool:
         output = request.get("inferenceConfig", {}).get("maxTokens")
@@ -675,7 +693,7 @@ class _RefusingBackend:
             self._check(request)
         tokens = len(self.requests) * 100
         stop_reason = self.stop_reason
-        refusal = make_client_error("validationException", message=self.message)
+        refusal = make_client_error(self.stream_error, message=self.message)
 
         async def _events() -> AsyncGenerator[dict[str, Any]]:
             if refused:
@@ -713,6 +731,30 @@ def _sse_events(text: str) -> list[dict[str, Any]]:
     ]
 
 
+@pytest.fixture
+def backend(monkeypatch: pytest.MonkeyPatch) -> _RefusingBackend:
+    """Serve every chat route from the real Converse model over a scripted backend."""
+
+    async def _validate_model(
+        model_id: str, *_args: object, **_kwargs: object
+    ) -> ModelDetails:
+        return make_model_details(model_id)
+
+    stub = _RefusingBackend()
+    for route in (
+        anthropic_messages,
+        openai_chat_completions,
+        openai_completions,
+        ollama_chat,
+        ollama_generate,
+    ):
+        monkeypatch.setattr(route, "validate_model", _validate_model)
+        monkeypatch.setattr(route, "get_chat_model", ChatModel)
+    monkeypatch.setattr(ChatModel, "converse", stub.converse)
+    monkeypatch.setattr(ChatModel, "converse_stream", stub.converse_stream)
+    return stub
+
+
 @pytest.mark.local
 class TestCappedOutputRetry:
     """An input the window holds alone, but not beside its output.
@@ -724,23 +766,6 @@ class TestCappedOutputRetry:
          https://developers.openai.com/api/docs/guides/error-codes
          stdapi/routes/anthropic_messages.py:create_message
     """
-
-    @pytest.fixture
-    def backend(self, monkeypatch: pytest.MonkeyPatch) -> _RefusingBackend:
-        """Serve both routes from the real Converse model over a scripted backend."""
-
-        async def _validate_model(
-            model_id: str, *_args: object, **_kwargs: object
-        ) -> ModelDetails:
-            return make_model_details(model_id)
-
-        stub = _RefusingBackend()
-        for route in (anthropic_messages, openai_chat_completions):
-            monkeypatch.setattr(route, "validate_model", _validate_model)
-            monkeypatch.setattr(route, "get_chat_model", ChatModel)
-        monkeypatch.setattr(ChatModel, "converse", stub.converse)
-        monkeypatch.setattr(ChatModel, "converse_stream", stub.converse_stream)
-        return stub
 
     @staticmethod
     def _message(client: TestClient, *, stream: bool) -> Any:  # noqa: ANN401
@@ -812,35 +837,42 @@ class TestCappedOutputRetry:
         assert response.json()["stop_reason"] == "max_tokens"
         assert len(backend.requests) == 1
 
-    def test_anthropic_stream_refused_after_its_headers_is_not_retried(
+    def test_anthropic_stream_refused_on_its_first_event_is_served_capped(
         self, app_client: TestClient, backend: _RefusingBackend
     ) -> None:
-        """A refusal on the stream's first event ends the stream; nothing is resent.
+        """A refusal on the stream's first event is retried before the stream starts.
 
-        The headers are out, so the refusal is the stream's ``error`` event.
-
-        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+        Ref: https://platform.claude.com/docs/en/build-with-claude/context-windows
              stdapi/routes/anthropic_messages.py:create_message
         """
         backend.refuse_in_stream = True
         response = self._message(app_client, stream=True)
-        assert response.status_code == 200
-        (error,) = [e for e in _sse_events(response.text) if e["type"] == "error"]
-        assert error["error"]["type"] == "invalid_request_error"
-        assert error["error"]["message"].startswith(
-            "input length and `max_tokens` exceed"
-        )
-        assert len(backend.requests) == 1
+        assert response.status_code == 200, response.text
+        events = _sse_events(response.text)
+        assert "error" not in [event["type"] for event in events]
+        assert events[-1]["type"] == "message_stop"
+        first, served = backend.requests
+        assert first["inferenceConfig"]["maxTokens"] == 8192
+        assert served["inferenceConfig"]["maxTokens"] == 131072 - 125000
 
-    @pytest.mark.parametrize("stream", [False, True])
+    @pytest.mark.parametrize(
+        ("stream", "in_stream"),
+        [(False, False), (True, False), (True, True)],
+        ids=["unstreamed", "stream-open", "first-event"],
+    )
     def test_anthropic_messages_refused_again_gets_the_refusal(
-        self, app_client: TestClient, backend: _RefusingBackend, stream: bool
+        self,
+        app_client: TestClient,
+        backend: _RefusingBackend,
+        stream: bool,
+        in_stream: bool,
     ) -> None:
         """The capped retry happens once; refused again, the usual error follows.
 
         Ref: https://platform.claude.com/docs/en/api/errors
         """
         backend.output_room = None
+        backend.refuse_in_stream = in_stream
         response = self._message(app_client, stream=stream)
         assert response.status_code == 400, response.text
         error = response.json()["error"]
@@ -862,14 +894,23 @@ class TestCappedOutputRetry:
         assert response.json()["error"]["message"] == OUTPUT_BUDGET_TOO_LARGE
         assert len(backend.requests) == 1
 
-    @pytest.mark.parametrize("stream", [False, True])
+    @pytest.mark.parametrize(
+        ("stream", "in_stream"),
+        [(False, False), (True, False), (True, True)],
+        ids=["unstreamed", "stream-open", "first-event"],
+    )
     def test_chat_completions_still_refuses(
-        self, app_client: TestClient, backend: _RefusingBackend, stream: bool
+        self,
+        app_client: TestClient,
+        backend: _RefusingBackend,
+        stream: bool,
+        in_stream: bool,
     ) -> None:
         """Chat Completions answers ``context_length_exceeded`` naming the completion.
 
         Ref: https://developers.openai.com/api/docs/guides/error-codes
         """
+        backend.refuse_in_stream = in_stream
         response = app_client.post(
             "/v1/chat/completions",
             json={
@@ -887,6 +928,267 @@ class TestCappedOutputRetry:
         )
         assert error["message"] == _KINDS["combined"][2]
         assert len(backend.requests) == 1
+
+
+#: Per streamed route: its path, a streamed request, and the refusal the unstreamed request gets.
+_STREAMED_ROUTES: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {
+    "chat": (
+        "/v1/chat/completions",
+        {
+            "max_completion_tokens": 16,
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+        {
+            "error": {
+                "message": (
+                    "Input tokens exceed the context window of this model. Please "
+                    "reduce the length of the messages."
+                ),
+                "type": "invalid_request_error",
+                "param": "messages",
+                "code": "context_length_exceeded",
+            }
+        },
+    ),
+    "completions": (
+        "/v1/completions",
+        {"max_tokens": 16, "prompt": "hello"},
+        {
+            "error": {
+                "message": (
+                    "This model's maximum context length was exceeded by your "
+                    "prompt. Please reduce your prompt; or completion length."
+                ),
+                "type": "invalid_request_error",
+                "param": None,
+                "code": None,
+            }
+        },
+    ),
+    "anthropic": (
+        "/anthropic/v1/messages",
+        {"max_tokens": 16, "messages": [{"role": "user", "content": "hello"}]},
+        {
+            "type": "error",
+            "error": {"type": "invalid_request_error", "message": "prompt is too long"},
+        },
+    ),
+    "ollama-chat": (
+        ollama_route("/api/chat"),
+        {
+            "options": {"num_predict": 16},
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+        {
+            "error": (
+                "Your input exceeds the context window of this model. Please adjust "
+                "your input and try again."
+            )
+        },
+    ),
+    "ollama-generate": (
+        ollama_route("/api/generate"),
+        {"options": {"num_predict": 16}, "prompt": "hello"},
+        {
+            "error": (
+                "Your input exceeds the context window of this model. Please adjust "
+                "your input and try again."
+            )
+        },
+    ),
+}
+
+
+def _stream_on(client: TestClient, route: str) -> Any:  # noqa: ANN401
+    """Send a streamed request on one of ``_STREAMED_ROUTES``.
+
+    Args:
+        client: The client.
+        route: The route's key.
+
+    Returns:
+        The response.
+    """
+    path, body, _ = _STREAMED_ROUTES[route]
+    return client.post(
+        path, json={"model": "amazon.nova-micro-v1:0", "stream": True, **body}
+    )
+
+
+@pytest.mark.local
+@pytest.mark.parametrize("route", list(_STREAMED_ROUTES))
+class TestStreamRefusedOnItsFirstEvent:
+    """A stream the backend refuses on its first event answers before any byte.
+
+    Some models (Amazon Nova, Meta Llama) refuse an input over the window only
+    on the stream's first event. Every streamed route reads it before sending
+    its status, so the client gets the refusal the unstreamed request gets.
+
+    Ref: https://developers.openai.com/api/docs/guides/error-codes
+         https://platform.claude.com/docs/en/api/errors
+         stdapi/models/chat/_adapters/_stream_open.py:open_peeked
+    """
+
+    def test_the_refusal_is_the_unstreamed_one(
+        self, app_client: TestClient, backend: _RefusingBackend, route: str
+    ) -> None:
+        """A ``400`` in the route's own words, the backend's withheld, sent once.
+
+        Ref: stdapi/models/chat/_adapters/_stream_open.py:context_refusal
+        """
+        backend.message = _UNSIZED
+        backend.output_room = None
+        backend.refuse_in_stream = True
+        response = _stream_on(app_client, route)
+        assert response.status_code == 400, response.text
+        body = response.json()
+        body.pop("request_id", None)
+        assert body == _STREAMED_ROUTES[route][2]
+        assert "8192" not in response.text
+        assert len(backend.requests) == 1
+
+    def test_output_tokens_filling_the_window_get_a_plain_400(
+        self, app_client: TestClient, backend: _RefusingBackend, route: str
+    ) -> None:
+        """Output tokens filling the window alone are refused before the stream.
+
+        Ref: stdapi/models/chat/_adapters/_responses_context.py:output_budget_exceeded
+        """
+        backend.message = _OUTPUT_ONLY
+        backend.output_room = None
+        backend.refuse_in_stream = True
+        response = _stream_on(app_client, route)
+        assert response.status_code == 400, response.text
+        assert OUTPUT_BUDGET_TOO_LARGE in response.text
+        assert len(backend.requests) == 1
+
+    def test_a_served_stream_keeps_its_first_event(
+        self, app_client: TestClient, backend: _RefusingBackend, route: str
+    ) -> None:
+        """A stream the backend serves is relayed whole, its first event included.
+
+        Ref: stdapi/models/chat/_adapters/_stream_open.py:replay_stream
+        """
+        backend.output_room = 1_000_000
+        backend.refuse_in_stream = True
+        response = _stream_on(app_client, route)
+        assert response.status_code == 200, response.text
+        assert "OK" in response.text
+        assert "error" not in response.text
+        assert len(backend.requests) == 1
+
+    def test_an_error_other_than_the_window_is_streamed(
+        self, app_client: TestClient, backend: _RefusingBackend, route: str
+    ) -> None:
+        """Any other error on the first event ends a ``200`` stream, never retried.
+
+        Ref: stdapi/models/chat/_adapters/_stream_open.py:context_refusal
+        """
+        backend.message = (
+            "Too many requests to arn:aws:bedrock:us-east-1:123456789012:model/x"
+        )
+        backend.output_room = None
+        backend.refuse_in_stream = True
+        backend.stream_error = "ThrottlingException"
+        response = _stream_on(app_client, route)
+        assert response.status_code == 200, response.text
+        assert "error" in response.text
+        assert "123456789012" not in response.text
+        assert len(backend.requests) == 1
+
+
+@pytest.mark.local
+class TestBatchRefusedOnItsFirstEvent:
+    """A streamed legacy Completions batch is refused when any prompt's stream is.
+
+    Every prompt's stream is read in its own task before the first chunk.
+
+    Ref: https://developers.openai.com/api/docs/guides/error-codes
+         stdapi/models/chat/_adapters/_openai_completion.py:format_stream
+    """
+
+    @pytest.mark.parametrize("echo", [False, True])
+    def test_one_refused_prompt_refuses_the_batch(
+        self,
+        app_client: TestClient,
+        backend: _RefusingBackend,
+        monkeypatch: pytest.MonkeyPatch,
+        echo: bool,
+    ) -> None:
+        """The legacy ``400`` before any byte, and the served prompt's stream closed.
+
+        Ref: stdapi/models/chat/_adapters/_stream_open.py:open_peeked
+        """
+        closed: list[bool] = []
+
+        async def converse_stream(
+            _model: ChatModel, request: ConverseRequestBaseTypeDef
+        ) -> dict[str, Any]:
+            refused = "oversized" in str(request)
+            refusal = make_client_error("validationException", message=_UNSIZED)
+
+            async def _events() -> AsyncGenerator[dict[str, Any]]:
+                try:
+                    if refused:
+                        raise refusal
+                    yield {"messageStart": {"role": "assistant"}}
+                    yield {
+                        "contentBlockDelta": {
+                            "delta": {"text": "OK"},
+                            "contentBlockIndex": 0,
+                        }
+                    }
+                finally:
+                    closed.append(refused)
+
+            return {"stream": _events()}
+
+        monkeypatch.setattr(ChatModel, "converse_stream", converse_stream)
+        response = app_client.post(
+            "/v1/completions",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "prompt": ["hello", "oversized"],
+                "max_tokens": 16,
+                "stream": True,
+                "echo": echo,
+            },
+        )
+        assert response.status_code == 400, response.text
+        body = response.json()
+        body.pop("request_id", None)
+        assert body == _STREAMED_ROUTES["completions"][2]
+        assert sorted(closed) == [False, True]
+
+
+async def test_a_batch_closed_on_its_echo_closes_every_stream() -> None:
+    """A batch closed before its streams are drained closes each one at once.
+
+    Ref: stdapi/models/chat/_adapters/_openai_completion.py:format_stream
+    """
+    closed: list[int] = []
+
+    async def events(index: int) -> AsyncGenerator[ConverseStreamOutputTypeDef]:
+        """Yield content until closed, recording the close."""
+        try:
+            while True:
+                yield {
+                    "contentBlockDelta": {
+                        "delta": {"text": "OK"},
+                        "contentBlockIndex": 0,
+                    }
+                }
+        finally:
+            closed.append(index)
+
+    # Held here, so only the batch can close them.
+    streams: list[AsyncIterator[ConverseStreamOutputTypeDef]] = [events(0), events(1)]
+    batch = _openai_completion.format_stream(
+        "cmpl-1", 0, "model", streams, None, include_usage=False, echo_texts=["a", "b"]
+    )
+    await anext(batch)
+    await batch.aclose()
+    assert sorted(closed) == [0, 1]
 
 
 class TestLiveRefusals:
@@ -969,30 +1271,53 @@ class TestLiveRefusals:
     def test_chat_completions_streamed(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Streamed, the SDK raises the refusal, as a 400 or as the stream's error.
+        """Streamed, the refusal is the same ``400``, answered before the stream starts.
 
-        The official API refuses before the stream starts: ``BadRequestError``.
-        The gateway's Llama refuses on the stream's first event, after the 200,
-        so the SDK raises its base ``APIError`` carrying the same error.
+        The gateway's Llama refuses only on the stream's first event, which is
+        read before the status is sent.
 
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+             stdapi/models/chat/_adapters/_stream_open.py:open_peeked
         """
         model, window = _CHAT_MODELS[use_official_api]
-        with pytest.raises(APIError) as excinfo:  # noqa: PT012
-            stream = openai_client.chat.completions.create(
+        with pytest.raises(BadRequestError) as excinfo:
+            openai_client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": _prompt(window)}],
                 max_completion_tokens=16,
                 stream=True,
             )
-            for _ in stream:
-                pass
         error = excinfo.value
-        assert type(error) is (BadRequestError if use_official_api else APIError)
         assert error.code == "context_length_exceeded"
+        assert error.param == "messages"
         assert isinstance(error.body, dict)
-        assert error.body["param"] == "messages"
+        assert error.body["type"] == "invalid_request_error"
         assert "The model returned" not in error.message
+
+    @pytest.mark.slow
+    def test_completions_streamed(
+        self, openai_client: OpenAI, use_official_api: bool
+    ) -> None:
+        """A streamed legacy completion over the window is a ``400`` before the stream.
+
+        The gateway's Llama refuses only on the stream's first event, and states
+        no sizes, so only the wording's frame is asserted.
+
+        Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+             stdapi/models/chat/_adapters/_stream_open.py:open_peeked
+        """
+        model, window = _COMPLETION_MODELS[use_official_api]
+        with pytest.raises(BadRequestError) as excinfo:
+            openai_client.completions.create(
+                model=model, prompt=_prompt(window), max_tokens=16, stream=True
+            )
+        error = excinfo.value
+        assert (error.code, error.param) == (None, None)
+        assert isinstance(error.body, dict)
+        assert error.body["type"] == "invalid_request_error"
+        message = error.body["message"]
+        assert message.startswith("This model's maximum context length ")
+        assert message.endswith("Please reduce your prompt; or completion length.")
 
     @pytest.mark.slow
     def test_completions_states_the_tokens_requested(
@@ -1057,17 +1382,17 @@ class TestLiveRefusals:
     def test_anthropic_messages_streamed(
         self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Streamed, the SDK raises the refusal, as a 400 or as the stream's error.
+        """Streamed, the refusal is the same ``400``, answered before the stream starts.
 
-        The official API refuses before the stream starts: ``BadRequestError``.
-        The gateway's Llama refuses after the 200, so the SDK raises an
-        ``APIStatusError`` whose status is that 200.
+        The gateway's Llama refuses only on the stream's first event, which is
+        read before the status is sent.
 
         Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_stream_open.py:open_peeked
         """
         model, window = _ANTHROPIC_MODELS[use_official_api]
         with (
-            pytest.raises(AnthropicAPIStatusError) as excinfo,
+            pytest.raises(AnthropicBadRequestError) as excinfo,
             anthropic_client.messages.stream(
                 model=model,
                 max_tokens=16,
@@ -1076,13 +1401,10 @@ class TestLiveRefusals:
         ):
             for _ in stream:
                 pass
-        error = excinfo.value
-        if use_official_api:
-            assert isinstance(error, AnthropicBadRequestError)
-        else:
-            assert type(error) is AnthropicAPIStatusError
-            assert error.status_code == 200
-        assert "prompt is too long" in str(error)
+        assert isinstance(excinfo.value.body, dict)
+        error = excinfo.value.body["error"]
+        assert error["type"] == "invalid_request_error"
+        assert error["message"].startswith("prompt is too long")
 
 
 class TestLiveCappedOutput:
@@ -1161,3 +1483,113 @@ async def test_window_stop_relay_closes_the_stream_it_relays() -> None:
     await anext(relay)
     await relay.aclose()
     assert closed == [True]
+
+
+class TestOpenPeeked:
+    """A route reads its stream's first event before committing its status.
+
+    Ref: stdapi/models/chat/_adapters/_stream_open.py:open_peeked
+    """
+
+    @staticmethod
+    async def _opened(events: AsyncGenerator[ServerSentEvent]) -> EventSourceResponse:
+        """Answer a model call with a stream of *events*."""
+        return EventSourceResponse(events)
+
+    @staticmethod
+    async def _payloads(result: EventSourceResponse) -> list[object]:
+        """Read what a stream sends, each event as its payload."""
+        return [
+            event.data if isinstance(event, ServerSentEvent) else event
+            async for event in result.body_iterator
+        ]
+
+    async def test_only_the_first_event_is_read_before_returning(self) -> None:
+        """The status waits for one event, and the stream replays it first.
+
+        Ref: stdapi/models/chat/_adapters/_stream_open.py:replay_stream
+        """
+        reads: list[int] = []
+
+        async def events() -> AsyncGenerator[ServerSentEvent]:
+            """Yield three events, recording each read."""
+            for index in range(3):
+                reads.append(index)
+                yield ServerSentEvent(str(index))
+
+        result = await open_peeked(self._opened(events()), context_refusal)
+        assert reads == [0]
+        assert await self._payloads(result) == ["0", "1", "2"]
+
+    async def test_a_refused_stream_is_closed_and_its_refusal_raised(self) -> None:
+        """The refusal replaces the stream, which is closed at once.
+
+        Ref: stdapi/models/chat/_adapters/_stream_open.py:close_stream
+        """
+        closed: list[bool] = []
+        refused = ValueError("refused on the first event")
+        answered = ApiError("answered")
+
+        async def events() -> AsyncGenerator[ServerSentEvent]:
+            """Report a refusal on the first event, recording the close."""
+            try:
+                record_stream_open_error(refused)
+                yield ServerSentEvent("error")
+                yield ServerSentEvent("never read")  # pragma: no cover
+            finally:
+                closed.append(True)
+
+        with pytest.raises(ApiError) as excinfo:
+            await open_peeked(
+                self._opened(events()),
+                lambda error: answered if error is refused else None,
+            )
+        assert excinfo.value is answered
+        assert closed == [True]
+
+    async def test_an_error_nothing_refuses_is_streamed(self) -> None:
+        """An error the refusal does not claim stays the stream's own.
+
+        Ref: stdapi/models/chat/_adapters/_stream_open.py:open_peeked
+        """
+
+        async def events() -> AsyncGenerator[ServerSentEvent]:
+            """Report an unrelated error on the first event."""
+            record_stream_open_error(ValueError("throttled"))
+            yield ServerSentEvent("error")
+
+        result = await open_peeked(self._opened(events()), lambda _error: None)
+        assert await self._payloads(result) == ["error"]
+
+    async def test_a_response_is_returned_as_is(self) -> None:
+        """An unstreamed answer has no event to read.
+
+        Ref: stdapi/models/chat/_adapters/_stream_open.py:open_peeked
+        """
+        answer = object()
+
+        async def call() -> object:
+            """Answer without streaming."""
+            return answer
+
+        assert await open_peeked(call(), context_refusal) is answer
+
+
+def test_context_refusal_words_the_calling_api_and_logs_the_backend(
+    request_log: dict[str, Any],
+) -> None:
+    """A window refusal gets the route's words; the backend's go to the log only.
+
+    Ref: stdapi/models/chat/_adapters/_stream_open.py:context_refusal
+    """
+    with _on_route("/v1/chat/completions", TAG_OPENAI):
+        refused = context_refusal(
+            make_client_error("validationException", message=_UNSIZED)
+        )
+    assert isinstance(refused, ContextLengthExceededError)
+    assert refused.param == "messages"
+    assert "8192" not in str(refused)
+    assert "8192 tokens" in str(request_log)
+    mapped = ContextLengthExceededError(ContextOverflow(286028, 200000))
+    assert context_refusal(mapped) is mapped
+    assert context_refusal(ValueError("unrelated")) is None

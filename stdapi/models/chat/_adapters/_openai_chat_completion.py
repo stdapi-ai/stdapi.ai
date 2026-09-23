@@ -16,6 +16,7 @@ from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import build_system_blocks, set_inference_configuration
 from stdapi.models.audio import synthesize_speech
 from stdapi.models.chat._adapters import _common, _openai_common
+from stdapi.models.chat._adapters._stream_open import primed
 from stdapi.monitoring import log_error_details, log_response_params
 from stdapi.types.openai import (
     ChatModeration,
@@ -1421,6 +1422,8 @@ async def format_stream(
     Yields:
         JSONServerSentEvent chunks, terminated by the ``[DONE]`` sentinel.
     """
+    # Read the backend's first event so a refusal there still reaches the route.
+    stream = await primed(stream)
     yield JSONServerSentEvent(
         data=log_response_params(
             _dump_chunk(

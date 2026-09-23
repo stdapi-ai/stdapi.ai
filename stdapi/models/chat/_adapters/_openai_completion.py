@@ -16,6 +16,7 @@ from stdapi.aws import raise_first_exception
 from stdapi.aws_bedrock import set_inference_configuration
 from stdapi.input_file import InputFileUrl
 from stdapi.models.chat._adapters import _common, _openai_common
+from stdapi.models.chat._adapters._stream_open import close_stream, primed
 from stdapi.types.openai_chat_completions import (
     CompletionUsage,
     PromptTokensDetails,
@@ -390,10 +391,9 @@ async def format_stream(
             streams, if any.
     """
     prompt_count = len(streams)
-    for echo_chunk in _echo_chunks(
-        completion_id, created, model_id, echo_texts, openai_service_tier
-    ):
-        yield echo_chunk
+    sources = list(map(aiter, streams))
+    # A refusal on any stream's first event still reaches the route.
+    streams = await gather(*map(primed, sources))
     finish_reasons: list[CompletionFinishReasonLiteral | None] = [None] * prompt_count
     usage_total = (
         CompletionUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
@@ -403,6 +403,10 @@ async def format_stream(
     queue: Queue[tuple[int, ConverseStreamOutputTypeDef | None]] = Queue()
     tasks = [create_task(_drain(s, i, queue)) for i, s in enumerate(streams)]
     try:
+        for echo_chunk in _echo_chunks(
+            completion_id, created, model_id, echo_texts, openai_service_tier
+        ):
+            yield echo_chunk
         remaining = prompt_count
         while remaining:
             index, event = await queue.get()
@@ -441,6 +445,8 @@ async def format_stream(
             task.cancel()
         with suppress(CancelledError):
             results = await gather(*tasks, return_exceptions=True)
+            # A stream closed before its replay started is closed here.
+            await gather(*map(close_stream, sources))
             raise_first_exception(
                 [exc for exc in results if not isinstance(exc, CancelledError)]
             )

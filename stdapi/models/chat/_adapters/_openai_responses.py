@@ -48,8 +48,8 @@ from stdapi.models.chat._adapters._responses_context import (
     context_overflow,
     is_summary,
     output_budget_exceeded,
-    record_stream_open_error,
 )
+from stdapi.models.chat._adapters._stream_open import primed
 from stdapi.models.image import get_image_model
 from stdapi.monitoring import (
     SseHandledStreamError,
@@ -4789,7 +4789,7 @@ async def format_stream(
             _FILE_SEARCH_TOOL_NAME
         }
     try:
-        events = await _primed(stream)
+        events = await primed(stream)
         for sse in _lifecycle_events(
             state,
             _build_response_object(
@@ -4895,68 +4895,6 @@ def _close_open_blocks(state: _StreamState) -> Generator[JSONServerSentEvent]:
     """
     yield from _handle_block_stop(state)
     yield from _emit_code_call_done(state, None, "completed")
-
-
-async def _primed[T](stream: AsyncIterator[T]) -> AsyncGenerator[T]:
-    """Read a stream's first event now, and replay the stream from it.
-
-    A backend refusing the request on its first event (an oversized input, on
-    some models) is then reported to the caller that opened the stream, which
-    can still retry before the response is announced; the client receives the
-    usual failure events when the replay reaches it.
-
-    Args:
-        stream: The backend event stream.
-
-    Returns:
-        The stream, first event included, raising any error the first read did.
-    """
-    events = aiter(stream)
-    try:
-        first = await anext(events)
-    except StopAsyncIteration:
-        return replay_stream((), events)
-    except Exception as exc:  # noqa: BLE001 - raised again by the replay
-        record_stream_open_error(exc)
-        return replay_stream((), events, exc)
-    return replay_stream((first,), events)
-
-
-async def replay_stream[T](
-    first: Sequence[T], rest: AsyncIterator[T], error: Exception | None = None
-) -> AsyncGenerator[T]:
-    """Yield events read ahead, then the rest of their stream, closing it after.
-
-    Args:
-        first: Events already read.
-        rest: The stream they were read from.
-        error: The error reading ahead raised, raised here instead.
-
-    Yields:
-        Every event, in order.
-
-    Raises:
-        Exception: The error reading ahead raised.
-    """
-    try:
-        if error is not None:
-            raise error
-        for item in first:
-            yield item
-        async for item in rest:
-            yield item
-    finally:
-        await close_stream(rest)
-
-
-async def close_stream(stream: AsyncIterable[Any]) -> None:
-    """Close a stream, when it can be closed.
-
-    Args:
-        stream: The stream.
-    """
-    if (aclose := getattr(stream, "aclose", None)) is not None:
-        await aclose()
 
 
 def _lifecycle_events(
