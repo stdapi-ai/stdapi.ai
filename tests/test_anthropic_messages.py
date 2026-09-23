@@ -27,6 +27,7 @@ from anthropic import (
     BadRequestError,
     NotFoundError,
 )
+from anthropic.types import MessageTokensCount as SdkMessageTokensCount
 from anthropic.types import (
     RawContentBlockDeltaEvent,
     RawContentBlockStartEvent,
@@ -3718,25 +3719,35 @@ class TestAnthropicCountTokens:
         )
 
     def test_count_tokens_web_search_tool_rejected(
-        self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
+        self,
+        anthropic_client: Anthropic,
+        anthropic_count_tokens_model: str,
+        use_official_api: bool,
     ) -> None:
-        """A ``web_search`` server tool is rejected with HTTP 400 on count_tokens.
+        """A ``web_search`` server tool is refused on count_tokens, where Anthropic counts it.
 
-        The official Anthropic API's own ``count_tokens`` endpoint does not
-        support server tools either, regardless of backend; the gateway mirrors
-        that contract here instead of silently counting a request that could
-        never be generated.
+        A documented divergence, asserted on both targets so it stays one: the
+        backend's counting API takes no server tool, so the gateway refuses the
+        request rather than returning a count that leaves the tool out.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
              stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
         """
-        with pytest.raises(BadRequestError) as excinfo:
-            anthropic_client.messages.count_tokens(
+
+        def count() -> SdkMessageTokensCount:
+            """Count a one-word prompt offered the web search tool."""
+            return anthropic_client.messages.count_tokens(
                 model=anthropic_count_tokens_model,
                 messages=[{"role": "user", "content": "Hello"}],
                 tools=[{"type": "web_search_20250305", "name": "web_search"}],
             )
+
+        if use_official_api:
+            assert count().input_tokens > 0
+            return
+        with pytest.raises(BadRequestError) as excinfo:
+            count()
         assert excinfo.value.status_code == 400
         assert excinfo.value.type == "invalid_request_error"
 

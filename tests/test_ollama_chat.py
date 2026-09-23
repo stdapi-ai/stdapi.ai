@@ -57,10 +57,17 @@ _PROMPT = "Count from 1 to 5."
 _OPTION_SENTINELS: dict[str, Any] = {"seed": -1, "top_k": 0}
 
 #: The same kind of value, on the three options Ollama Cloud alone refuses.
-_CLOUD_REFUSED_SENTINELS: list[tuple[str, float, str]] = [
-    ("num_predict", -1, "max_tokens must be positive"),
-    ("top_p", 0, "Input should be greater than 0"),
-    ("temperature", -0.5, "Input should be greater than or equal to 0"),
+_CLOUD_REFUSED_SENTINELS: list[tuple[str, float, dict[int, str]]] = [
+    ("num_predict", -1, {400: "max_tokens must be positive"}),
+    ("top_p", 0, {400: "Input should be greater than 0", 500: "Internal Server Error"}),
+    (
+        "temperature",
+        -0.5,
+        {
+            400: "Input should be greater than or equal to 0",
+            500: "Internal Server Error",
+        },
+    ),
 ]
 
 #: Tool the model is offered whenever a test needs a tool call.
@@ -662,24 +669,24 @@ def test_chat_answers_the_option_values_that_mean_off(
     assert answer.done is True
 
 
-@pytest.mark.parametrize(("option", "value", "refusal"), _CLOUD_REFUSED_SENTINELS)
+@pytest.mark.parametrize(("option", "value", "refusals"), _CLOUD_REFUSED_SENTINELS)
 def test_chat_answers_the_sentinels_ollama_cloud_refuses(
     ollama_client: ollama.Client,
     ollama_chat_model: str,
     use_official_api: bool,
     option: str,
     value: float,
-    refusal: str,
+    refusals: dict[int, str],
 ) -> None:
     """Three more sentinels are answered here, and refused by Ollama Cloud.
 
     A deliberate divergence, asserted on both targets so it stays one. An
     Ollama server defaults ``num_predict`` to -1 and reads a non-positive
-    ``top_p`` or ``temperature`` as "off"; Ollama Cloud answers 400 for each.
-    Its wording, measured per option, names the bound rather than the option
-    -- only ``num_predict`` is named, and then as the ``max_tokens`` it is
-    forwarded to. A client sending its own defaults has to be answered, so
-    this gateway follows the server.
+    ``top_p`` or ``temperature`` as "off"; Ollama Cloud refuses each, measured
+    per option: 400 naming ``num_predict`` as the ``max_tokens`` it is
+    forwarded to, and for the other two either a 400 naming the bound or a bare
+    500, as its servers disagree. A client sending its own defaults has to be
+    answered, so this gateway follows the server.
 
     Ref: https://github.com/ollama/ollama/blob/main/api/types.go (DefaultOptions)
          https://github.com/ollama/ollama/blob/main/mlxrunner/sample/sample.go
@@ -697,8 +704,8 @@ def test_chat_answers_the_sentinels_ollama_cloud_refuses(
     if use_official_api:
         with pytest.raises(ollama.ResponseError) as raised:
             call()
-        assert raised.value.status_code == 400
-        assert refusal in raised.value.error, (
+        assert raised.value.status_code in refusals
+        assert refusals[raised.value.status_code] in raised.value.error, (
             "the refusal must be the one this option really draws, so that a "
             "vendor that starts accepting it shows up here"
         )

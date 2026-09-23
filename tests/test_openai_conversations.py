@@ -1650,6 +1650,7 @@ class TestConversationsLive:
             with contextlib.suppress(Exception):
                 openai_client.conversations.delete(conversation.id)
 
+    @pytest.mark.retry("a conversation item listing can lag behind its write")
     def test_an_additional_tools_item_round_trips(self, openai_client: OpenAI) -> None:
         """An ``additional_tools`` item survives a write and reads back whole.
 

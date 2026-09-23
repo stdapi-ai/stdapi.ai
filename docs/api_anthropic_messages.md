@@ -821,6 +821,8 @@ curl -X POST "$BASE/v1/messages" \
 
 **Token counting refuses an input larger than the context window.** The Anthropic API counts such an input; `POST /v1/messages/count_tokens` here answers `400` `prompt is too long`, and the figure in that message is not the input's real size. A client that counts to learn whether a conversation still fits should read that refusal as "it does not".
 
+**Token counting refuses server tools.** The Anthropic API counts a request offering a server tool such as `web_search`; `POST /v1/messages/count_tokens` here answers `400`, since a count leaving the tool out would be wrong. Count the request without its server tools and allow for them.
+
 **Token counting is refused for models served by an endpoint you run.** A Marketplace or SageMaker AI model endpoint exposes no token-counting API, so `POST /v1/messages/count_tokens` answers `400` for a model served by one, and the route is not listed for it in [`search_models`](api_search_models.md). Every foundation model served through Converse or Mantle is counted.
 
 **The official SDK no longer sends the sampling parameters.** `anthropic` ≥ 1.0 removed `temperature`, `top_p` and `top_k` from `messages.create()`. The gateway still accepts all three on the wire and older clients keep working; with the current SDK, pass them as `extra_body={"temperature": …}`.
