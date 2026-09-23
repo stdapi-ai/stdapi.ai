@@ -13,7 +13,6 @@ from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, PromptCaching
 from stdapi.config import SETTINGS
 from stdapi.input_file import prefetch_all_content_types
 from stdapi.models import _invoked_model_id
-from stdapi.models.capabilities import Capability
 from stdapi.models.chat import ChatModelBase
 from stdapi.models.chat._adapters import _anthropic_message as anthropic_adapter
 from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapter
@@ -194,16 +193,6 @@ class ChatModel(ChatModelBase[Any, Any]):
             family declares neither and a server tool is forwarded as a stub.
         """
         return self.SERVER_TOOLS_UNSERVED or self.CANONICAL_TO_BEDROCK_TOOL_MAP or None
-
-    @classmethod
-    def get_supported_operations(cls) -> Capability:
-        """Return capability flags for route-based model matching.
-
-        Returns:
-            Capability flags. Converse models support token counting via the
-            Bedrock CountTokens API (unavailable on Bedrock Mantle models).
-        """
-        return Capability.COUNT_TOKENS
 
     async def build_completion_request(
         self, request: ChatCompletionCreateParams

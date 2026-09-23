@@ -22,10 +22,16 @@ from stdapi.aws_bedrock import (
     PROMPT_CACHING_DEFAULT,
     PromptCaching,
     build_system_blocks,
-    handle_bedrock_client_error,
     set_inference_configuration,
 )
 from stdapi.models.chat._adapters import _common
+from stdapi.models.chat._adapters._count_tokens import (
+    CallBudget,
+    count_converse_tokens,
+    countable_media,
+    plain_server_tool_history,
+    server_tool_tokens,
+)
 from stdapi.models.chat._adapters._stream_open import primed
 from stdapi.monitoring import REQUEST_LOG, log_error_details, log_response_params
 from stdapi.types.anthropic_messages import (
@@ -148,7 +154,6 @@ if TYPE_CHECKING:
         ContentBlockTypeDef,
         ConverseStreamOutputTypeDef,
         ConverseTokensRequestTypeDef,
-        CountTokensResponseTypeDef,
         DocumentBlockTypeDef,
         InferenceConfigurationTypeDef,
         JsonSchemaDefinitionTypeDef,
@@ -2257,6 +2262,9 @@ async def count_tokens_via_bedrock(
     Context editing is counted as applied; the count without it is taken
     concurrently and reported as ``original_input_tokens``, as upstream does.
 
+    What CountTokens refuses (server tools, their replayed calls and results,
+    documents, inputs over the window) is counted as ``_count_tokens`` describes.
+
     Args:
         request: The count tokens request containing messages, system prompt, and tools.
         model_id: The Bedrock model identifier.
@@ -2273,8 +2281,9 @@ async def count_tokens_via_bedrock(
         request.cache_control is None and chat_model.PROMPT_CACHING_SUPPORTED
     )
     allow_tool_caching = chat_model.PROMPT_CACHING_TOOL_SUPPORTED
+    history, history_tokens = plain_server_tool_history(request.messages)
     messages, combined_system = _prepare_messages_and_system(
-        request.messages,
+        history,
         request.system,
         system_message_as_messages=chat_model.SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED,
     )
@@ -2302,13 +2311,24 @@ async def count_tokens_via_bedrock(
         chat_model._req_configure_reasoning(  # noqa: SLF001
             additional_request_fields=additional_request_fields, **reasoning
         )
+    # The counter takes no server tool: its stub is counted, plus its definition.
+    stubbed = (
+        {
+            getattr(tool, "name", None): tokens
+            for tool in request.tools or ()
+            if not isinstance(tool, ToolParam)
+            and (tokens := server_tool_tokens(getattr(tool, "type", None))) is not None
+        }
+        if chat_model.server_tool_names is None
+        else {}
+    )
     chat_model._req_configure_tools(  # noqa: SLF001
         tool_config=tool_config,
         additional_request_fields=additional_request_fields,
         server_tools=[
             t.model_dump(exclude_none=True)
             for t in (request.tools or ())
-            if not isinstance(t, ToolParam)
+            if not isinstance(t, ToolParam) and getattr(t, "name", None) not in stubbed
         ],
         bedrock_messages=bedrock_messages,
     )
@@ -2337,13 +2357,24 @@ async def count_tokens_via_bedrock(
     ):
         req["additionalModelRequestFields"] = additional_request_fields
 
+    stub_names = {
+        entry["toolSpec"]["name"]
+        for entry in req.get("toolConfig", {}).get("tools", ())
+        if "toolSpec" in entry
+    }
+    server_tokens = history_tokens + sum(
+        tokens for name, tokens in stubbed.items() if name in stub_names
+    )
+    server_tokens += await countable_media(req, region)
     client = get_client("bedrock-runtime", region)
+    budget = CallBudget()
     if "context_management" not in additional_request_fields:
-        with handle_bedrock_client_error():
-            resp: CountTokensResponseTypeDef = await client.count_tokens(
-                modelId=model_id, input={"converse": req}
+        return MessageTokensCount(
+            input_tokens=await count_converse_tokens(
+                client, model_id, req, budget=budget
             )
-        return MessageTokensCount(input_tokens=resp["inputTokens"])
+            + server_tokens
+        )
 
     # CountTokens is free, so the unedited count upstream reports costs nothing extra.
     unedited = req | {
@@ -2353,14 +2384,13 @@ async def count_tokens_via_bedrock(
             if key != "context_management"
         }
     }
-    with handle_bedrock_client_error():
-        edited_resp, unedited_resp = await gather(
-            client.count_tokens(modelId=model_id, input={"converse": req}),
-            client.count_tokens(modelId=model_id, input={"converse": unedited}),
-        )
+    edited_tokens, unedited_tokens = await gather(
+        count_converse_tokens(client, model_id, req, budget=budget),
+        count_converse_tokens(client, model_id, unedited, budget=budget),
+    )
     return MessageTokensCount(
-        input_tokens=edited_resp["inputTokens"],
+        input_tokens=edited_tokens + server_tokens,
         context_management=CountTokensContextManagementResponse(
-            original_input_tokens=unedited_resp["inputTokens"]
+            original_input_tokens=unedited_tokens + server_tokens
         ),
     )

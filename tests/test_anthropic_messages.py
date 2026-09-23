@@ -12,6 +12,8 @@ Ref: https://platform.claude.com/docs/en/api/messages
 
 import base64
 import json as _json
+from io import BytesIO
+from secrets import token_bytes
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, cast
 from unittest.mock import AsyncMock
@@ -27,12 +29,12 @@ from anthropic import (
     BadRequestError,
     NotFoundError,
 )
-from anthropic.types import MessageTokensCount as SdkMessageTokensCount
 from anthropic.types import (
     RawContentBlockDeltaEvent,
     RawContentBlockStartEvent,
     RawContentBlockStopEvent,
 )
+from PIL import Image, ImageDraw
 
 import stdapi.models as _models_mod
 import stdapi.models.chat._adapters._anthropic_message as _anthropic_message_adapter
@@ -42,6 +44,7 @@ from stdapi.aws_bedrock_mantle import mantle_request_headers, validate_pruning_e
 from stdapi.config import SETTINGS
 from stdapi.models import ModelDetails
 from stdapi.models.chat import get_chat_model
+from stdapi.models.chat._adapters import _count_tokens
 from stdapi.models.chat._adapters._anthropic_message import (
     _build_tool_config,
     count_tokens_via_bedrock,
@@ -64,9 +67,16 @@ from stdapi.types.anthropic_messages import (
     MessageTokensCount,
     ToolParam,
 )
+from tests._helpers import long_text
+from tests.conftest import REPO_ROOT
 
 if TYPE_CHECKING:
     from starlette.testclient import TestClient
+
+#: Every tokenizer's count of each content sample, measured 2026-09-23.
+_ESTIMATE_SAMPLES: dict[str, Any] = _json.loads(
+    (REPO_ROOT / "tests/fixtures/token_estimates.json").read_text()
+)
 
 #: Non-Anthropic model used to validate that extended thinking is rejected for non-Claude models.
 NON_ANTHROPIC_THINKING = "amazon.nova-2-lite-v1:0"
@@ -3718,38 +3728,299 @@ class TestAnthropicCountTokens:
             f"a one-sentence prompt cannot cost {response.input_tokens} tokens"
         )
 
-    def test_count_tokens_web_search_tool_rejected(
+    @pytest.mark.parametrize(
+        ("tool_type", "definition_tokens"),
+        [
+            ("web_search_20250305", 2206),
+            ("web_fetch_20250910", 1021),
+            ("code_execution_20250825", 2236),
+            ("tool_search_tool_bm25_20251119", 684),
+        ],
+    )
+    def test_count_tokens_counts_a_server_tool(
         self,
         anthropic_client: Anthropic,
         anthropic_count_tokens_model: str,
-        use_official_api: bool,
+        tool_type: str,
+        definition_tokens: int,
     ) -> None:
-        """A ``web_search`` server tool is refused on count_tokens, where Anthropic counts it.
+        """A server tool is counted, its definition included.
 
-        A documented divergence, asserted on both targets so it stays one: the
-        backend's counting API takes no server tool, so the gateway refuses the
-        request rather than returning a count that leaves the tool out.
+        ``definition_tokens`` is what the Anthropic API added to a one-word
+        prompt on Claude Haiku 4.5 (2026-09-23); the gateway counts the tool as
+        a stub plus the definition, so it lands within a few tokens of it.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
-             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
-             stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
+             https://platform.claude.com/docs/en/api/messages/count_tokens
+             stdapi/models/chat/_adapters/_count_tokens.py:server_tool_tokens
         """
+        messages: Any = [{"role": "user", "content": "Hello"}]
+        tool: Any = {"type": tool_type, "name": tool_type.rsplit("_", 1)[0]}
+        without = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model, messages=messages
+        )
+        with_tool = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model, messages=messages, tools=[tool]
+        )
+        added = with_tool.input_tokens - without.input_tokens
+        assert abs(added - definition_tokens) <= definition_tokens * 0.02, added
 
-        def count() -> SdkMessageTokensCount:
-            """Count a one-word prompt offered the web search tool."""
+    @pytest.mark.parametrize(
+        "sample", ["prose", "code", "json_schema", "base64", "identifiers"]
+    )
+    def test_count_tokens_of_a_newer_claude_is_never_below_upstream(
+        self, anthropic_client: Anthropic, use_official_api: bool, sample: str
+    ) -> None:
+        """Claude Opus 5.5 is counted at or above what the Anthropic API counts.
+
+        No backend counter serves Claude 4.7 and later, so the count is an
+        approximation that errs high. The reference is the Anthropic API's own
+        count of the sample (2026-09-23), which the official lane reproduces.
+
+        Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+             stdapi/models/chat/_adapters/_count_tokens.py:count_or_approximate
+        """
+        recorded = _ESTIMATE_SAMPLES[sample]
+        counted = anthropic_client.messages.count_tokens(
+            model="claude-opus-5-5"
+            if use_official_api
+            else "anthropic.claude-opus-5-5",
+            messages=[{"role": "user", "content": recorded["text"]}],
+        )
+        reference = recorded["tokens"]["claude-opus-5-5"]
+        assert counted.input_tokens >= reference
+
+    def test_count_tokens_counts_a_pdf_document(
+        self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
+    ) -> None:
+        """A PDF document is counted, at or above what the Anthropic API counts.
+
+        The Anthropic API counted this three-page PDF at 4,686 tokens on
+        Claude Haiku 4.5 (2026-09-23).
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/pdf-support
+             stdapi/models/chat/_adapters/_count_tokens.py:countable_media
+        """
+        pages = []
+        for page in range(3):
+            image = Image.new("RGB", (612, 792), "white")
+            draw = ImageDraw.Draw(image)
+            for line in range(60):
+                draw.text(
+                    (40, 20 + line * 18),
+                    f"Page {page} line {line}: the quick brown fox jumps over "
+                    "the lazy dog 0123456789",
+                    fill="black",
+                )
+            pages.append(image)
+        buffer = BytesIO()
+        pages[0].save(
+            buffer, format="PDF", save_all=True, append_images=pages[1:], resolution=72
+        )
+        counted = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": base64.b64encode(buffer.getvalue()).decode(),
+                            },
+                        },
+                        {"type": "text", "text": "Summarize."},
+                    ],
+                }
+            ],
+        )
+        assert counted.input_tokens >= 4686
+
+    def test_count_tokens_of_a_newer_claude_image_is_never_below_upstream(
+        self, anthropic_client: Anthropic, use_official_api: bool
+    ) -> None:
+        """A high-resolution image on Claude Opus 5.5 counts at or above upstream.
+
+        The Anthropic API counted this 2576 x 1932 image at 4,752 tokens
+        (2026-09-23), three times what an older Claude takes for it.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/vision
+             stdapi/models/chat/_adapters/_count_tokens.py:_PROXY_IMAGE_TOKENS
+        """
+        # The count depends on the dimensions only, not on the pixels.
+        image = Image.frombytes("RGB", (2576, 1932), token_bytes(2576 * 1932 * 3))
+        buffer = BytesIO()
+        image.save(buffer, format="JPEG", quality=60)
+        counted = anthropic_client.messages.count_tokens(
+            model="claude-opus-5-5"
+            if use_official_api
+            else "anthropic.claude-opus-5-5",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": base64.b64encode(buffer.getvalue()).decode(),
+                            },
+                        },
+                        {"type": "text", "text": "x"},
+                    ],
+                }
+            ],
+        )
+        assert counted.input_tokens >= 4752
+
+    @pytest.mark.gateway("counts models the Anthropic API does not serve")
+    @pytest.mark.parametrize(
+        "model", ["amazon.nova-micro-v1:0", "google.gemma-3-4b-it"]
+    )
+    @pytest.mark.parametrize(
+        "sample", ["prose", "code", "json_records", "ko", "digits", "identifiers"]
+    )
+    def test_count_tokens_of_another_model_is_never_below_its_tokenizer(
+        self, anthropic_client: Anthropic, model: str, sample: str
+    ) -> None:
+        """A model no counter serves is estimated at or above what it bills.
+
+        The reference is the prompt tokens the model billed for the sample
+        (2026-09-23).
+
+        Ref: stdapi/models/chat/_adapters/_count_tokens.py:estimate_request_tokens
+        """
+        recorded = _ESTIMATE_SAMPLES[sample]
+        counted = anthropic_client.messages.count_tokens(
+            model=model, messages=[{"role": "user", "content": recorded["text"]}]
+        )
+        reference = recorded["tokens"][model]
+        assert counted.input_tokens >= reference
+
+    @pytest.mark.parametrize("sample", ["web_search", "web_fetch", "code_execution"])
+    def test_count_tokens_counts_a_replayed_server_tool_turn(
+        self,
+        anthropic_client: Anthropic,
+        anthropic_count_tokens_model: str,
+        sample: str,
+    ) -> None:
+        """A history replaying a server tool call and its result is counted.
+
+        The samples are turns the Anthropic API produced on Claude Haiku 4.5
+        (2026-09-23), recorded with the count it gives their replay; a search
+        result's page is only known encrypted, so the gateway's count lands
+        within a few percent of it.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+             stdapi/models/chat/_adapters/_count_tokens.py:plain_server_tool_history
+        """
+        recorded = _json.loads(
+            (
+                REPO_ROOT / "tests/fixtures/anthropic/replayed_server_tools.json"
+            ).read_text()
+        )[sample]
+        betas = recorded["betas"]
+        counted = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model,
+            messages=recorded["messages"],
+            tools=recorded["tools"],
+            extra_headers={"anthropic-beta": ",".join(betas)} if betas else None,
+        )
+        expected = recorded["upstream_input_tokens"]
+        assert abs(counted.input_tokens - expected) <= expected * 0.025, (
+            counted.input_tokens
+        )
+
+    @pytest.mark.slow
+    def test_count_tokens_past_the_context_window(
+        self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
+    ) -> None:
+        """A prompt over the 200,000-token window is counted, not refused.
+
+        Each half fits the window; the whole is counted as their sum, less the
+        fixed tokens a request adds once.
+
+        Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+             stdapi/models/chat/_adapters/_count_tokens.py:count_converse_tokens
+        """
+        halves = [long_text(43_000, seed) for seed in (0, 1)]
+
+        def count(text: str) -> int:
+            """Count a single user message."""
             return anthropic_client.messages.count_tokens(
                 model=anthropic_count_tokens_model,
-                messages=[{"role": "user", "content": "Hello"}],
-                tools=[{"type": "web_search_20250305", "name": "web_search"}],
-            )
+                messages=[{"role": "user", "content": text}],
+            ).input_tokens
 
-        if use_official_api:
-            assert count().input_tokens > 0
-            return
-        with pytest.raises(BadRequestError) as excinfo:
-            count()
-        assert excinfo.value.status_code == 400
-        assert excinfo.value.type == "invalid_request_error"
+        first, second = (count(half) for half in halves)
+        whole = count(" ".join(halves))
+        assert whole > 200_000
+        assert abs(whole - (first + second)) < whole * 0.001, (whole, first, second)
+
+    @pytest.mark.slow
+    def test_count_tokens_past_the_context_window_with_tool_results(
+        self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
+    ) -> None:
+        """An agent conversation over the window is counted, each tool result in full.
+
+        Each tool round trip fits the window alone; the conversation holding
+        both is counted as about their sum.
+
+        Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+             stdapi/models/chat/_adapters/_count_tokens.py:count_converse_tokens
+        """
+        tools: Any = [
+            {
+                "name": "read_file",
+                "description": "Read a file.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            }
+        ]
+        question: Any = {"role": "user", "content": "Read both files."}
+
+        def round_trip(seed: int) -> list[Any]:
+            """Return one tool call and its result."""
+            return [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": f"toolu_{seed}",
+                            "name": "read_file",
+                            "input": {"path": f"file{seed}.txt"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": f"toolu_{seed}",
+                            "content": long_text(43_000, seed),
+                        }
+                    ],
+                },
+            ]
+
+        def count(messages: list[Any]) -> int:
+            """Count a conversation offering the tool."""
+            return anthropic_client.messages.count_tokens(
+                model=anthropic_count_tokens_model, messages=messages, tools=tools
+            ).input_tokens
+
+        first, second = (count([question, *round_trip(seed)]) for seed in (0, 1))
+        whole = count([question, *round_trip(0), *round_trip(1)])
+        assert whole > 200_000
+        assert abs(whole - (first + second)) < whole * 0.01, (whole, first, second)
 
     def test_count_tokens_with_system_blocks(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
@@ -3878,6 +4149,8 @@ class TestAnthropicCountTokensDispatch:
         mantle = AsyncMock(return_value=MessageTokensCount(input_tokens=99))
         monkeypatch.setattr(anthropic_messages, "count_tokens_via_bedrock", classic)
         monkeypatch.setattr(anthropic_messages, "_count_tokens_via_mantle", mantle)
+        # Known countable, so no trivial request probes the counter first.
+        monkeypatch.setattr(_count_tokens, "_COUNTABLE_MODELS", {runtime_model.id})
 
         response = anthropic_app_client.post(
             "/anthropic/v1/messages/count_tokens",
@@ -3911,6 +4184,8 @@ class TestAnthropicCountTokensDispatch:
         mantle = AsyncMock(return_value=MessageTokensCount(input_tokens=99))
         monkeypatch.setattr(anthropic_messages, "count_tokens_via_bedrock", classic)
         monkeypatch.setattr(anthropic_messages, "_count_tokens_via_mantle", mantle)
+        # Known countable, so no trivial request probes the counter first.
+        monkeypatch.setattr(_count_tokens, "_COUNTABLE_MODELS", {mantle_model.id})
 
         response = anthropic_app_client.post(
             "/anthropic/v1/messages/count_tokens",
@@ -4509,8 +4784,35 @@ class TestCountTokensViaMantlePayload:
         tokens = await anthropic_messages._count_tokens_via_mantle(  # noqa: SLF001
             request, "test.fake-mantle-model"
         )
-        assert tokens.input_tokens == 3
+        captured["input_tokens"] = tokens.input_tokens
         return captured
+
+    async def test_a_server_tool_is_counted_as_its_stub_and_definition(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A server tool the endpoint refuses is sent as a stub, its definition added.
+
+        The endpoint refuses ``web_search`` (measured 2026-09-23: ``Input tag
+        'web_search_20250305' found using 'type' does not match any of the
+        expected tags``); counted as a stub plus the definition, Claude Haiku
+        4.5 answered exactly what the Anthropic API answers.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+             stdapi/models/chat/_adapters/_count_tokens.py:stub_server_tools
+        """
+        captured = await self._capture(
+            monkeypatch, tools=[{"type": "web_search_20250305", "name": "web_search"}]
+        )
+        assert captured["input_tokens"] == 3 + 1678
+        payload = captured["payload"]
+        assert isinstance(payload, dict)
+        assert payload["tools"] == [
+            {
+                "name": "web_search",
+                "description": "web_search",
+                "input_schema": {"type": "object"},
+            }
+        ]
 
     async def test_payload_drops_max_tokens(
         self, monkeypatch: pytest.MonkeyPatch
@@ -4521,6 +4823,7 @@ class TestCountTokensViaMantlePayload:
         load-bearing even for a request that never mentioned the field.
         """
         captured = await self._capture(monkeypatch)
+        assert captured["input_tokens"] == 3
         payload = captured["payload"]
         assert isinstance(payload, dict)
         assert "max_tokens" not in payload

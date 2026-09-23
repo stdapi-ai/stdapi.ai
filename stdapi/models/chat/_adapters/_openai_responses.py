@@ -30,7 +30,6 @@ from stdapi.aws_bedrock import (
     AWS_ERROR_MAP,
     PromptCaching,
     build_system_blocks,
-    handle_bedrock_client_error,
     set_inference_configuration,
     without_model_refusal_prefix,
 )
@@ -41,6 +40,10 @@ from stdapi.models import validate_model
 from stdapi.models.chat._adapters import _common, _openai_common
 from stdapi.models.chat._adapters._anthropic_message import (
     _synthesize_tool_config_from_history,
+)
+from stdapi.models.chat._adapters._count_tokens import (
+    count_converse_tokens,
+    countable_media,
 )
 from stdapi.models.chat._adapters._responses_context import (
     OUTPUT_BUDGET_TOO_LARGE,
@@ -192,7 +195,6 @@ if TYPE_CHECKING:
         ConverseResponseTypeDef,
         ConverseStreamOutputTypeDef,
         ConverseTokensRequestTypeDef,
-        CountTokensResponseTypeDef,
         InferenceConfigurationTypeDef,
         JsonSchemaDefinitionTypeDef,
         MessageTypeDef,
@@ -5007,6 +5009,8 @@ async def count_input_tokens_via_bedrock(
     model_id: str,
     region: RegionName,
     chat_model: ChatModel,
+    *,
+    past_window: bool = False,
 ) -> int:
     """Count input tokens using the AWS Bedrock Runtime CountTokens API.
 
@@ -5022,12 +5026,15 @@ async def count_input_tokens_via_bedrock(
         model_id: The Bedrock model identifier.
         region: The AWS region of the model.
         chat_model: Model instance providing the request-building hooks.
+        past_window: Count an input over the context window in pieces
+            instead of refusing it.
 
     Returns:
         The total number of input tokens.
 
     Raises:
-        ApiError: If the input exceeds the model's context window.
+        ApiError: If the input exceeds the model's context window and
+            ``past_window`` is false.
     """
     bedrock_messages, system_blocks = await map_input(
         request.input,
@@ -5074,11 +5081,10 @@ async def count_input_tokens_via_bedrock(
     if additional_request_fields:
         req["additionalModelRequestFields"] = additional_request_fields
 
-    with handle_bedrock_client_error():
-        resp: CountTokensResponseTypeDef = await get_client(
-            "bedrock-runtime", region
-        ).count_tokens(modelId=model_id, input={"converse": req})
-    return resp["inputTokens"]
+    media_tokens = await countable_media(req, region)
+    return media_tokens + await count_converse_tokens(
+        get_client("bedrock-runtime", region), model_id, req, past_window=past_window
+    )
 
 
 def compaction_response(

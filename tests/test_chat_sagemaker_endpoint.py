@@ -306,7 +306,7 @@ def test_endpoint_is_published_in_the_catalogue(
     assert "/v1/chat/completions" in entries[0]["supported_routes"]
     assert "/v1/responses" in entries[0]["supported_routes"]
     assert "/anthropic/v1/messages" in entries[0]["supported_routes"]
-    assert "/v1/responses/input_tokens" not in entries[0]["supported_routes"]
+    assert "/v1/responses/input_tokens" in entries[0]["supported_routes"]
     assert SAGEMAKER_ENDPOINT_MODELS[sagemaker_model].service == SAGEMAKER_SERVICE
     endpoint = SAGEMAKER_ENDPOINT_MODELS[sagemaker_model].sagemaker_endpoint
     assert endpoint is not None

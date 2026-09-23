@@ -1,0 +1,230 @@
+{
+ "web_search": {
+  "tools": [
+   {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": 1
+   }
+  ],
+  "betas": [],
+  "messages": [
+   {
+    "role": "user",
+    "content": "Use web search once to find who won the 2022 FIFA World Cup final, then answer in one sentence."
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "id": "srvtoolu_01WDmAWMn2KUkaHkE3JJtztN",
+      "input": {
+       "query": "2022 FIFA World Cup final winner"
+      },
+      "name": "web_search",
+      "type": "server_tool_use"
+     },
+     {
+      "caller": {
+       "type": "direct"
+      },
+      "content": [
+       {
+        "encrypted_content": "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",
+        "page_age": "3 weeks ago",
+        "title": "2022 FIFA World Cup | Qatar, Controversy, Stadiums, Winner, & Final | Britannica",
+        "type": "web_search_result",
+        "url": "https://www.britannica.com/event/2022-FIFA-World-Cup"
+       },
+       {
+        "encrypted_content": "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",
+        "title": "2022 FIFA World Cup final",
+        "type": "web_search_result",
+        "url": "https://en.wikipedia.org/wiki/2022_FIFA_World_Cup_final"
+       },
+       {
+        "encrypted_content": "EqgKCioIFBgCIiQ3NTU0NmRjMC05MDM3LTQ2ODYtOWQxOS1lYjU3ZjY0OTMzYzESDGQ9Kkpz0pWzCNGUCBoMUU9/L+r2zFDTr0dRIjD9ZLEdNx+F7jXqKL3MLCbAxoqCg01QTTNcPYldq3EHrWCIFhieYHIRJI9T5AN+S3oqqwmV++/pwRTwutBJofRNjY/dLjrOl5XvUOYlStLnbmK+iMcgAllf0IImddQ+rENBgYdO0UKcJ8SDTyLA0XvoOV40hWoIrf5uFe9PNqakcQicpDkdhckpT2skRlU7P3rzwF9wwFqGsav4UG3Uv1QF80qnnz9FkYRT4u3LW4I3Rxk8qq/w30ziH7BcK+Hxv4ytnkFcVUO4pWxmhNR5LlFHq5PXceZKl4Naa6sX0Aqm3mvSTi12YL+WDV7cKNkulPzWmv4RINiDTkAuTtrf2id/VzJB3S5kYfKM+g5zCqVZ9qjEvT4ou2HVIRbpOOdZWXyLLJoF1GH03DqXT0GtfecbBLe+9wWgUQZM1tyN2+9pKDP9VNVfzbLryu7BsKhDsHHcziJRgQqwI5lHjqy675K5180PKE6bKRxD/nsxJWXu0UZet9ZpTpQfrmXlqdFQCfloZgBWkJufMjegNCen+DDrrNm66Gy9/Celuc6W6T8IFY5+SmoPhlZ9TVg+TnRGYRIVpxBeXowpdH8S4G7eZOoenxS0ej+FMLXXujsZKlW9prRTwiyiHJb+0Hq0BfAQom2nNdBfXBP90d9BuZXnOcxCEXmurG2vFSErtmczi7CoUOBhdnHpkiomYPovB8rFkI0mtOtFntBpnjImqUN/cRkJmRb70JXXJPtXQRERVClqeZmiTztDBRhqLBK9UE1ZYH40ECv+tlooeYmXjMptbOOl4QRcq+vPWCZIvJq0uxWdMmh01BMcV2nWnDEptVVdZX9Yy+41zt1QxWgCpvkXZwpBFsTG0OZKjQfTH586l501+j256Q8sG/aULDs+scIZZuUzZIqpCxRqXqUvJtOcxvsmVmyIqotNYtXNwFc+STy56t2dCBHkbJjw8vY4nSy5d3vb2IiOy4PT/IixtDSxkBLO3iXvAZsPaCaPbl28QmQGBbyDLZKyrk1l2Aapn+0nqy0ZusyYVmK/eRTUJ8Qvx3dXl+N4lD4q0lv2r6IFEk0tgQWhhD6anEIdvmHOYNuFI1iiIo3lXs8zmjpb7egyrbSpRUBP8Frq9ytIqZyCBZCU4NHMMRbYMb0Y4GSBtHqQTf3XluywIVDtVjIeSX4wnvMcVyz0EfHhVOpw8QJeLfl/hmPG7F9EsOzvf/FXAeKXVE1x5OPH2tnkrOx6z1mtCiG00PhK1/RTqZ6FyWWU+gJXdQOSTb8/sUpHkyPSvhQh2ODxckmHX1jE3YFvrweAftr6pq6/340xkxq6qvbvs26lpEiXbnamWICI3P+gQ310NgbagRbqHDt6PcIEz0lsWyA/QlslRN22Xi2V1wK3LmhhL7acCoAO9Y/QXgza8O+zcrcwzX7+fXc9gl1VdERDnS0jmKL/wIwAsWG8qS4pSCWlC1bj2zBRk0yCGvTvZ82s5NKiCcNTYSww0Xo9XB/NEysBUl6+CnL82cXjR8Frlb0l+X0td5M23w8Vx8P5qZDq9hqayw5lid3MazXdPZSm25fzijHL0SHLxmbYaBup/GUzhDsWiASGK43cHDTssrwP2HC4jbKC2Sn/OTV7wlZzJ/Zv8O0eCVDq9WZqc4WvJJdh183vIeJdteFKEn10D77hGAM=",
+        "page_age": "July 15, 2026",
+        "title": "Who won the last FIFA World Cup? | cbs8.com",
+        "type": "web_search_result",
+        "url": "https://www.cbs8.com/article/sports/soccer/world-cup/who-won-last-world-cup/507-38e0e34c-dd9c-435f-ad9c-227eaa9f6d7a"
+       },
+       {
+        "encrypted_content": "EtgICioIFBgCIiQ3NTU0NmRjMC05MDM3LTQ2ODYtOWQxOS1lYjU3ZjY0OTMzYzESDAJI7rbESST1MBmZKBoMEmh+xV2oj5XR21QBIjDNK02JwXmmASUp3GhGYYsPvmufPwsLFtwBGpeSkP2LiaC5b+UEFpAaG9eaVh9hxMAq2wfFR9ePpKUZKlEe+R0cAOATU1+1q2KsLkXWdxwe19g4OnNvEcE18HAXrdEEwY1dqteXB0kC4/JWK4KfrVnbLWse2nDyVUYmIcsao2NxGA4IoJu6bChv901NigEl3gItweyp814z5p0qCN55Cn8sIdyjXq7VUtF1N9Qi9PusAIJb3r/mcGxSvIQZjqUn5hBi0shTNG0ii3hdoSSWJyY1YC8okXQL1vRNz1bylWGo4ae5COrVhG02rDoJYrIQyqCyeNFE+W7yKI2NMwvYqQ6TWN37OkCf9iHfjP7wap7s0+JvFRhPJvQITZ13W4WTi7HQHeYAp2G3vT00eRDzH/3FQRSpR8aKTlHHAwBL3l67Pdcf8jhA0uyU2f8Z+oeC0/bC3An+BsKu3Mh/XaTH/nu1T8SF1syGhmZWyCvVnnlqrOn3ni5Deq1tXpuHWWAGSjsYNFWEP+zzeeBay4pfF7fmZB/YcCRElJO221+dBadY9bTFqQT4ZbvKr6h+1Z/b+a6mtTp5Eo0J6WlrYYgWmp0y2i9RnPs6u+1rZ0i4eTJK5WGBE1WZOoT5DPQgXiCdW97ZigdHdRYUT2HGXxVksvBZ8uL4HQmAjZ4DST53fW+7r4vsq1fcdy10JduRHARzzQLI2fjkVNBMWtSc/TsS4NlQtUr+5UJi1cyVeFk706uSc0Ho7pq4kANjsLgBKzhUb+N+gVfK7Y5ycTRqDvRzAwLmE2PozhA5NAKq4nWrT5J2fVRi+2eF8YVNf7Mr6YoICYIIWkzYa5LRkxIRuaEPnHq7ZGFRtt5Hbv6nimlI47rbgtUpJlNaA94Y7a7OFRgmNmv8zR1Um3CsY7OMbHRUG8VWxV4NCX4faiVsSuMOg7TDqR03jBwFYkcnmUb1RAgePtKlLbrIpFC+tZN8JWV7kT0+kS3wqQdeihFeTrwXhibiJ4BZNjfS/Ieylf/8riqCwN1DA8Ay8D/O+CWcjnX/hbLgae/xoSHEajRH7sIa+qWotDKVpb8Q47akcuyZim8+AJcTWsv5aQ526LOaU+fPsLvInMez8ggu3dRdSvNNJ15JkdWytJ4733k4TnE+AN99i6e8J5EHRfePX/KaAWE9LGfVVtmK5SHUhulO+PyAMKllN7/jVtiLusz4Yf87GlW5Q8HhLoH951IkLLGza50WzcdFJCvZRL/uoHaFNcTqdZzxF/HIazfXZIE/vGzbExG9RECMHlmthyYgmzbQHRQJyYbnbqE02DNrTCi9xhkXo4VzfoY6AlqtrE3Cnj4kVh8fHajVLJNTSaqIcm8w12p6ZCv7OHHqpDbd+yhI4l2E4XoYAw==",
+        "page_age": "July 15, 2026",
+        "title": "Who won the last FIFA World Cup? | abc10.com",
+        "type": "web_search_result",
+        "url": "https://www.abc10.com/article/sports/soccer/world-cup/who-won-last-world-cup/507-38e0e34c-dd9c-435f-ad9c-227eaa9f6d7a"
+       },
+       {
+        "encrypted_content": "EpcECioIFBgCIiQ3NTU0NmRjMC05MDM3LTQ2ODYtOWQxOS1lYjU3ZjY0OTMzYzESDGai2bDa1ZFU/afNRRoMERMqMVFsfwvFnux8IjDXuhHLiavMh7JW5PkecWGuRvyATsodOxxdjeQg38BPdICyRXDCSaFeSNOgGRCsQ1kqmgNHNXLj/CHPMeipbrRzpqIzVdIXQ1mxAbH9nLXWFnVoXCsU1Ibf5TIXfUQxMBM+Mqsi1RovtbNf1D/ftMp5HiAsCiIqXW+8VWfee6a3++XZQiOtI16hudps8io1AVDrtJNfysiUNH51IVvRVYdRmPSwXePvr2b98KZYCNYvd82p8LZSziSrBB+3817tYba0lQmrXlPqLkD9rTP9prP0V1UFGPoambKgrqFp+3VMXn23AjVze3I9aV9/iOHOjFrdd1FU/QoJJpFmIGDHWP0kvP3bHbFqXH5ErbJvU/1gICW1k8DY6rgh1ZfjXgc1luV3Z5wzlBeae7y//F9+WZ4SLmVmTZ/BVU1zsS7qM86ciTHNhtrLZkCoGSrsJ43YXx1Qj/GOZKXv25HdPqDxxBoxTnsXgkJd8B1oWHpe75T1inbN/gRs3xWcAGPU4j/zAtcngMfZO5WqIWp0psN0QUrP1X/EW0sMZZJ0TMj9Zh2MfoMYiRxIEtUGInG4qO4q6caaZ90YnHcZrEXJ+tCOiJ3KBGSq6r3gohFF0KuRwBgD",
+        "title": "Argentina 3-3 France (Dec 18, 2022) Final Score - ESPN",
+        "type": "web_search_result",
+        "url": "https://www.espn.com/soccer/match/_/gameId/633850/france-argentina"
+       },
+       {
+        "encrypted_content": "EtoICioIFBgCIiQ3NTU0NmRjMC05MDM3LTQ2ODYtOWQxOS1lYjU3ZjY0OTMzYzESDJVjL8NVeRm/UHIqyBoMxixRA32yShVM3Kg/IjBM2B6m5QdjQFwmiLjvMADcVcsIvEhHV1MaqKe73NTCWu8G6JsNptRM91bxYxugXpEq3QcYvtCy1TRbvNO9iUPK7uZw6JinWwmkL8TYY18JhkSO8mIjISfPSypEkzJWGEv59E6qIRch4ekyYGlqcw6slTV56uFV1bw2mtZ0oeUyOsvRpWY+v7klG3csvB2M/B5r9qj3VHBFbxOPPkvWilfV9CqwTHUSKmIDyHNln3aCQTiz+isZqmV5h4lrmBwJZwGuwO7xP/3uW2TfyiU5EkwWJx099YD64vOjDQPfL5HQO2roywJxdq8gHVpHeaeiBWxkPBJXPid4AJFqrsXZrhqqv3jFgcI2237iMxbOD6KYbKD3ao9BrBXcVCF1uNAm9wVnuDEy4cHoELzTKeCp5+MRaHDzkeETM1CbPXiWslFM6MjX+b2Yei7qxJSp7eKRDU09y0WkhxWjvownGTYem3vHSPkcDdbbsZbSPJbmgW9PTjHan1Ugbv+uI1JgmudGLOVdPPwK3oHgidJDOBg0xan0QC+IO8NKWHUQyzl16aDNikyLs7yfqZjGRWmZUWc9dxHK2Y/SuVeFm9bi52dBuKH90Ngzy0WXgvJJZcA7ce3qiRB9oWApqA2e3Brz/s1GExFQP8lZgIcYqq+y9Q2ThaZarIllJUYcf9VRUQSjl5SRGWd8aw1mhLv6r8ZzkqlmDlY5o0/kTx2bqJbI0WEPPNSyOWueoXXMGcn7ZinPoah/Q6wxZ9wpPkMEm3Lbb7/6MMMR+kXd3phFeTNrpzGwYDEYFr0ROxADpPjboZdO//a6dJqBjJ6H0qjO521BrlKTJ7NPKkpBGw6f4MHqJ9ToLJcz2DuNcWQADfqwrkXIPUnuLJk5XFFfpBZo0dV2fDk6vMWGLcERFsa++CljCcb/eIlc8imT1B31eOVpufWfELIlB4WlnrV0I71tJRgfpwq1Zak1v2TeBxWpvnXqNQgU0CYaQXjCyAWF4bZYCe+AYBNU+wAnitjsPRTfiGYZlvC6A+NJ5WAhO40Pv/67kV4pUfF7ujykBup7lZQk+6dTYm0PMbK4qnM3vUdtPOWO8fR2cyJS0yC4/VpLdM4yW/reX4udmHW1nU8HJgpvFAQv4HQfBB0kGJsrzagLx2u6kygWvCL0YEatG9eglRiOhT3lG36PWP3swD5upeXCRnMHEsYcFgaJzCQqScyolTDhV7NeT4/DCButLaSA529PKGseJE9iUIm+0YaaKsMtDPbKloXTXEo4j+HSZ/OpDbvtG9XQR6QzHibqc0AjdKCMfKXIl1F5UbwDUocAUJXqLKF0Y3WeomDqG8QyFuGi/ot8Rq4IUTHV7Ce4S1RRCSKHi9bx6MmoGJvXU7hjCVvkpXdRyvgzXxgD",
+        "title": "Who won the last FIFA World Cup? How Lionel Messi led his team to victory in 2022 | cbs8.com",
+        "type": "web_search_result",
+        "url": "https://www.cbs8.com/article/sports/soccer/world-cup/lionel-messi-argentina-fifa-world-cup-2022-champion/507-d51d563c-498d-4f0c-a201-05b787bf9ae8"
+       },
+       {
+        "encrypted_content": "EvcHCioIFBgCIiQ3NTU0NmRjMC05MDM3LTQ2ODYtOWQxOS1lYjU3ZjY0OTMzYzESDLvyfEccJSS285lxdRoMfnrLbUcRJtT+H4dFIjDujIEJqbR/Qkgw02oHRaRCk6xKKeTM5l3RVN+qBuiSdGyAbkBz04JIcIip79BnAxQq+gYrkktfKYJNlh5SZFoGlo1pRY5wjq/8Uui8cheQdxPvyu2bMOvMHJ2NRuXB47RuHGJ2YFLeJjjVzwuJtbg2UDmswz9iDTrhGVh0quO6sU95DFKXbiwVlSVKq/1ZA6P3DIkH2yRTU3wATDwkEiqhXC2egbjkmMsaQMEFV99iCb5bwuniG60NG5HIP5X9OvvMBbyoEuoOuUEqs4v2vaaiIM+tyvB7o85WjWJO8qFkbCQn5R0ysddtRrCf0h4OG6yxt3ynuBj7bS2A+4HdKg3Dt0wyFsXtBabwsUVljrbNqoL/AXtMgMJhdkoE5CgRE0OM8Hw2ktwtT0dJW28BoUJtkXFP9FORfZZwCsyB4kveor/0TLtc0Yi+igAoFo8RndBh6uDDy6tvFVvPSs5xY+BFdYqfOiype4lmN/Af7CC5MMTtrZ4Xd0zIHJflVVwI6wU7U139/2bs8SAJ237NEt7jtqD4ZByWIHUyY66+z9XYgpx8E+i6QVKEm9wl03JI/aBAXF7wf2ogWluewXcXeO4nmbFQHs0WmcBi32nShjNvpXIVc0iZJcDMSir9hMbn81mnsUcB785hwJ72pM5zt7At0aA7zZIqXRmplY2fqVAWgUs2ifW/v/lsYDnIFKCjA3u1oclLeURa7JvyORQYXkWNJwA//p5rK+X241KWTqZkLhIgMDDHFAhh2l8UHJE/0AsES7STi6lpZGA/sls9ThvnTR7ODipY1iqkHhVWAvo12RAibmh0iGsuHuP+gczLPG5V3yGpJknFBCHEO8t+Aw54N2lIDAXishX3OIYHQ03j/62eAz7AjU9KFsaDnfLisUQTO6fvKqVpqciKpAamDOtRxQdiWK+a4Z+I/5582WXESa0rSmf2my0n+c6OYKXxd7UiV+qY9qqOUuCaeD840hs04T2sJVu5jQfhKnCwbhpwngauMK0rBkHIoDrZOuQJP3r450v2HsfewyQphd2fJu84BYdMI9rOApDwnbeq3s35om1gyEtNfod1H8o4cTA1KD7md8b1i7P7XO7rjRige/jACYS4k7z9UhpBLyTjp/sWPJYvcDsS+jyUZfU7Hofq0MehutfNFA3DxNTuopCwS+2Hdq5Yu2Fid5WKF3/Qd+8XmKIFgdQWGfd2bQ6db5axulZzhO49BGAEEtwJkwcusdxjuUnw2TlmHkjGTUxeqBgD",
+        "title": "FIFA World Cup Qatar 2022\u2122",
+        "type": "web_search_result",
+        "url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022"
+       },
+       {
+        "encrypted_content": "EuUICioIFBgCIiQ3NTU0NmRjMC05MDM3LTQ2ODYtOWQxOS1lYjU3ZjY0OTMzYzESDAtCH9QxkapDZhC9TRoMbAPpn90lJEW7Mq0KIjAb5ZgMdbGJCgP5FAe8nR2+KYZFuS+o5xVOAz60RB3TzqiYMUTPKkUkV85iZIe3IjUq6AdcmpnzRm7YMDch9wWySY7+4grvSU8PFNmbnjvMRQatnuCGwKF/JXVsjPwpYO8HnZzBHP/mJwr3q4o5G5ZPTaPVznDyLawiYGaAR73032znBjmCqQeNUAAY8ehF4kiKG0dj5yd8o7V72rNpuiTHaHunDpYfBwpF3u6whO5oGWaJ1udqA8IyPE1/hD2QrW+OO/kkA+gUALZ8Q+qx+UMqKdT6w669V5uvVP1dOcEFeasfLTmrG/EwJLcWi/uEijlnc/GbLkKyWTHPKWhBufWyrw23ySuCCdcMgG2dXqBw9ruzpsMrzdFyEx5UtmgJYmRut6YqnHpZI6aiK7XzsW2su/K7s64E9gj9btzrm2HlddJLf8LmATLwNaR0EiVmDOyo3XyWvvzaoga0wRYHKv9HHJrGcfWf6Vb3aQCJ0AsuA1GQO8QSWmtH6rB8JIdcspTj7p4l+fofxZ5ZE18icmgq3LXQrsM8vlzGu9IbWoFtF1VW+IFtNrNsAeExMHsipQZd2lGVHTtWXWamjq5HvQ+mvwukJL0Gb7lTnOjacCtrYFWOZUVxWs7mEG0oAN+XWt53vKpFkj6I3LV4cGmpS4iAx3DE9zrCVfuzliQI2T3TzgwEF4OiGCHRjK3O67FtcPEmk5YqBkH/WuK3zj8JERAKdecudw5zmKed9gWLQTjvLLZLsqKQGuSEJ+LmvWlYA1JuPvXYk2LXUnrDyes8pbCL7xT5X12Ry+dGA6eluF4FGbMbwGyM51r3TMAPswd9gpztLAvFbgKlFwkW/7/R9jfinY7kT263j1Ir2dIOzp23vVZoZlZqsJ1fa1sP+dR/EYftGUFMpvYj4nCCxg2h2NsmiG8dXPh9J8v52LnY/4gsxFvt/8WfjdOczUysBYjfCcrgUtBsI98lSDdfA8+7bcEqYexzLQazg/UrMWlWD1OP5sQd0tyU2U7UCchqZ4OysZzM63Psg4BqzY905ajNaLKMpVsJBVx7ceS8szWNhGQSeoJIEq6m8SDqjCSzmWQzN2xatSfXlTdEdUdvr19sumYo5TqHjhpkUNAeofRoHvPngooL4v9i0p5c1M8Jqf44wtEq30s7Qnb+YYpUxQyj7yv5w1ZEKmuMyxmuFEu1CgynKo5sziEuLNp5yXzPU517eRv8WTmzE+xQqpP8DBncSkA9VIMNcvyBET9rXMRAlZDqaPXaK4dXeeMv5m5BjOGYiMhZ+Grdo+PAk2MHHqPQSghTxpC1Pr+5uEeaYTFI+ak54HPF01V5cYPZOtwVAsx52iQRlpCajgji0GdVSL7m8PMO+OuVv+ar5o3KmlWGzJYFUAbYCFDpXk5505XPGAM=",
+        "title": "2022 World Cup 2022 World Cup",
+        "type": "web_search_result",
+        "url": "https://www.npr.org/tags/1090282594/2022-world-cup"
+       },
+       {
+        "encrypted_content": "EpsICioIFBgCIiQ3NTU0NmRjMC05MDM3LTQ2ODYtOWQxOS1lYjU3ZjY0OTMzYzESDEImkJQ9JuHM0nmsFxoMnNRibOPAaUfbxgrrIjC1E79vq8R1iar/YzdXmW5Q198h0WBdX/kIPzUkwWDdj5rD/15s6hh4NHpH2m0czcsqngfIl41ASlvYD4NngXRqS7SAtXVg15zNNVR8jmjgrATys8nWNHQlFCgV1ZvdXaun7MPyB+wBxaAy1bbCV7VncqUMtqBWZbPCpepIWt+XhVErSze0EY7AoRVCJMbOkB3FVFlqryk3/KlhCrX7gFUxFeCqdM3QvI79xUL8aSJuMNRUUtMM0qq2H3AyoITTu92vuQ0Sog8ZcEoJ3E7itLpcD8sOrUNUhnavNigIa5BhbZlZJoVFSlIdZv9f+1Fe6OgA/H3Zot5gm7IRczf9Ti/Gvyk9pdeGOpyN1Hih/hpIgvlv3+FoAd3VLhNtgCFrl6MBEYuOmSIWuLqgiayhSL2gdgaAzYkZnXENDvV64y9LiI/ulJwXmuE2wrXE17bXLkQaPoFrLVyHLYgJPA0BApstG+rcGH5TvnRsjYpV3IS1lTOo82NDD1f6gXjdE94fBPd6QPCTRT7mkFpLpxU1OgJk9VrhSFugxopoSVnnO14VO1O9ZesLATWfg6jRIVyli2O/83lGPRW7iPTe855d4dS7nQvFQS9ASmKW740q3/BVOUOcLjhA84+eZl7+I5tObhwlZNTpc8XQUHupMc6z6ANaS/Rqz1tstqbpWeAg/IDMY7qKCBenPZ2tV4QriFwrG6YypeiPnoM1nJGEOg+Gl0AS6psHgooTV1EN08dhxS9/BtK3zaF3WSBWHBEJ1XAp/JRca2sWODxXqTLbXhWXzNecJJlRkzeq+8BeTI6eMmF112C4UKiiMk/qLt3toWDlszK25FakcdZ82Vb9URqkNCaVZAKKREPQRWO3lO2XlLWZq21cvTZGkGkSuHzvt6w2UmSq3thm+F9pJRXIwyTv1KQFD/naUgZdDPDuz9R4cwx+98Wr0zVoe2DQuymgfh9+Qmp33xxKD92uUiSnDwlQvu1qm0oJllZ/sA0/T2H/NadlfndTmA30DKc4Z7GLM/Jf78DpttboCTW9q7iLoVjdE+Bhok+VdYNRksTuWrvgVjjZnCSuXilEjPGMkYc8VnLA5eyltvyXcv84iRPBjGORvf5LU4jG3Jl4F8is3+Z7N2MRstM2PK1m70nBRFACPr9RKZMh6m7J+m+GOqrHyqlP+fBx9DPtjXwUrBohn4zSeDCGeuFvYYzZ0+FU+8xtksmmHE0YBph2BDRPZLrEZkqiZ+pVTNQxt80uQky/ogAg/mwle3xa1lVidoxUcfJTqZsmlfkJmClfVuCsjnk91GMdVBJdTRgD",
+        "title": "fifa world cup 2022",
+        "type": "web_search_result",
+        "url": "https://www.npr.org/series/1134840606/fifa-world-cup-2022"
+       }
+      ],
+      "tool_use_id": "srvtoolu_01WDmAWMn2KUkaHkE3JJtztN",
+      "type": "web_search_tool_result"
+     },
+     {
+      "citations": [
+       {
+        "cited_text": "Argentina defeated France in the final match to win its third World Cup title.\n\n",
+        "encrypted_index": "Eo8BCioIFBgCIiQ3NTU0NmRjMC05MDM3LTQ2ODYtOWQxOS1lYjU3ZjY0OTMzYzESDEjYE4lTih/726cAfBoMvig1EOlsowhaB2yOIjBgZROKvLhrEg2ha5r418D8bppEr+uFecE/Jbgsgl8ZQfXJJG/Ye5tZVp4SvJmAqwoqE8S32hQxX//8xJh5wVTqgcfV3jAYBA==",
+        "title": "2022 FIFA World Cup | Qatar, Controversy, Stadiums, Winner, & Final | Britannica",
+        "type": "web_search_result_location",
+        "url": "https://www.britannica.com/event/2022-FIFA-World-Cup"
+       }
+      ],
+      "text": "Argentina defeated France in the 2022 FIFA World Cup final to win its third World Cup title.",
+      "type": "text"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "Thanks."
+   }
+  ],
+  "upstream_input_tokens": 7399
+ },
+ "web_fetch": {
+  "tools": [
+   {
+    "type": "web_fetch_20250910",
+    "name": "web_fetch",
+    "max_uses": 1
+   }
+  ],
+  "betas": [
+   "web-fetch-2025-09-10"
+  ],
+  "messages": [
+   {
+    "role": "user",
+    "content": "Fetch https://example.com once and tell me its title in one sentence."
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "text": "I'll fetch that URL for you.",
+      "type": "text"
+     },
+     {
+      "id": "srvtoolu_01EPY2RK2epE8ZDJZ6SpfEki",
+      "input": {
+       "url": "https://example.com"
+      },
+      "name": "web_fetch",
+      "type": "server_tool_use"
+     },
+     {
+      "content": {
+       "content": {
+        "source": {
+         "data": "---\nmeta-viewport: width=device-width, initial-scale=1\ntitle: Example Domain\n---\n\n# Example Domain\n\nThis domain is for use in documentation examples without needing permission. Avoid use in operations.\n\n[Learn more](https://iana.org/domains/example)",
+         "media_type": "text/plain",
+         "type": "text"
+        },
+        "title": "Example Domain",
+        "type": "document"
+       },
+       "retrieved_at": "2026-09-23T09:48:10.818000+00:00",
+       "type": "web_fetch_result",
+       "url": "https://example.com"
+      },
+      "tool_use_id": "srvtoolu_01EPY2RK2epE8ZDJZ6SpfEki",
+      "type": "web_fetch_tool_result",
+      "caller": {
+       "type": "direct"
+      }
+     },
+     {
+      "text": "The page titled \"Example Domain\" is a documentation resource provided by IANA for use in examples without requiring permission.",
+      "type": "text"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "Thanks."
+   }
+  ],
+  "upstream_input_tokens": 1287
+ },
+ "code_execution": {
+  "tools": [
+   {
+    "type": "code_execution_20250825",
+    "name": "code_execution"
+   }
+  ],
+  "betas": [
+   "code-execution-2025-08-25"
+  ],
+  "messages": [
+   {
+    "role": "user",
+    "content": "Use code execution to compute 2**100 and print it. Answer with the number only."
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "id": "srvtoolu_01R9naeCKy8kouGjXQTbr4y8",
+      "input": {
+       "command": "python3 -c \"print(2**100)\""
+      },
+      "name": "bash_code_execution",
+      "type": "server_tool_use"
+     },
+     {
+      "content": {
+       "content": [],
+       "return_code": 0,
+       "stderr": "",
+       "stdout": "1267650600228229401496703205376\n",
+       "type": "bash_code_execution_result"
+      },
+      "tool_use_id": "srvtoolu_01R9naeCKy8kouGjXQTbr4y8",
+      "type": "bash_code_execution_tool_result"
+     },
+     {
+      "text": "1267650600228229401496703205376",
+      "type": "text"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "Thanks."
+   }
+  ],
+  "upstream_input_tokens": 2377
+ }
+}

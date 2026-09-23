@@ -11,7 +11,7 @@ from stdapi.aws_bedrock_mantle import API_PATHS, invoke, validate_pruning_extras
 from stdapi.config import SETTINGS
 from stdapi.models import (
     MANTLE_MODELS,
-    reject_unsupported_token_counting,
+    is_model_endpoint,
     route_and_execute,
     set_effective_region,
     validate_model,
@@ -21,6 +21,11 @@ from stdapi.models.chat import get_chat_model, serves_via_mantle
 from stdapi.models.chat._adapters._anthropic_message import (
     count_tokens_via_bedrock,
     warn_mcp_connector_ignored,
+)
+from stdapi.models.chat._adapters._count_tokens import (
+    count_or_approximate,
+    plain_server_tool_history,
+    stub_server_tools,
 )
 from stdapi.models.chat._adapters._responses_context import (
     capped_output_budget,
@@ -38,18 +43,22 @@ from stdapi.models.chat._mantle._default import messages_request_headers
 from stdapi.monitoring import REQUEST_ID, log_request_params, log_response_params
 from stdapi.region_routing import REGION_ROUTER
 from stdapi.types.anthropic_messages import (
+    CountTokensContextManagementResponse,
     Message,
     MessageCountTokensParams,
     MessageCreateParams,
+    MessageParam,
     MessageTokensCount,
 )
 from stdapi.utils import to_json_str, try_parse_json
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterable
+    from collections.abc import AsyncGenerator, AsyncIterable, Callable
 
     from sse_starlette import EventSourceResponse
     from types_aiobotocore_bedrock.literals import RegionName
+
+    from stdapi.models import ModelDetails
 
 
 register_route_capability(
@@ -128,22 +137,29 @@ async def _count_tokens_via_mantle(
 
     Mantle-only models are not reachable through the Bedrock Runtime
     CountTokens API, so the count is proxied to the Mantle endpoint with
-    region routing and failover across the model's regions.
+    region routing and failover across the model's regions. Server tools and
+    their replayed calls and results are counted as ``_count_tokens`` describes.
 
     Args:
         request: Count tokens request following Anthropic spec.
         model_id: Mantle model identifier.
 
     Returns:
-        The token count, as the Mantle endpoint reports it.
+        The token count.
 
     Raises:
         MantleError: When the Mantle upstream rejects the request.
     """
     # Reuse the Messages payload normalization (file inlining, system-role
     # folding, extension stripping); drop its generation-only default.
-    payload = await messages_payload(request, model_id)  # type: ignore[arg-type]
+    history, history_tokens = plain_server_tool_history(request.messages)
+    payload = await messages_payload(
+        request.model_copy(update={"messages": history}),  # type: ignore[arg-type]
+        model_id,
+    )
     payload.pop("max_tokens", None)
+    # The endpoint takes no server tool, nor its calls and results in history.
+    server_tokens = history_tokens + stub_server_tools(payload.get("tools") or [])
     if isinstance(mantle_model := get_mantle_chat_model(model_id), MantleChatModel):
         mantle_model.drop_unapplied_context_management(payload)
     model = MANTLE_MODELS.get(model_id)
@@ -165,7 +181,11 @@ async def _count_tokens_via_mantle(
         )
         return validate_pruning_extras(MessageTokensCount, result)
 
-    return await route_and_execute(model_id, regions, call)
+    counted = await route_and_execute(model_id, regions, call)
+    counted.input_tokens += server_tokens
+    if counted.context_management is not None:
+        counted.context_management.original_input_tokens += server_tokens
+    return counted
 
 
 @router.post(
@@ -320,6 +340,8 @@ async def create_message(
         "Accounts for all inputs — messages, system prompt, tools, images, and documents. "
         "Useful for estimating costs or checking whether a prompt fits within a model's context window "
         "before making a full `anthropic_message` call.\n\n"
+        "Every text model is counted: exactly where the model's own counter serves it, otherwise as "
+        "an approximation that is never below the exact count on the content measured.\n\n"
         "**Find compatible models:** Call `search_models` with `route=anthropic_message_count_tokens` "
         "to discover model IDs that support this endpoint."
     ),
@@ -379,8 +401,7 @@ async def count_tokens(
         MessageTokensCount with the input token count.
 
     Raises:
-        ApiError: If model is invalid, does not support text output, or is
-            served by a Marketplace or SageMaker AI model endpoint (400).
+        ApiError: If the model is invalid or does not support text output.
     """
     log_request_params(request)
     warn_mcp_connector_ignored(request)
@@ -390,16 +411,74 @@ async def count_tokens(
         output_modality="TEXT",
         route="anthropic_message_count_tokens",
     )
-    reject_unsupported_token_counting(model)
     model_id = model.get_id()
-    if serves_via_mantle(model_id):
-        return log_response_params(await _count_tokens_via_mantle(request, model_id))
-    return log_response_params(
-        await count_tokens_via_bedrock(
-            request,
+
+    async def exact(counted: MessageCountTokensParams = request) -> MessageTokensCount:
+        """Count with the model's own counter."""
+        if serves_via_mantle(model_id):
+            return await _count_tokens_via_mantle(counted, model_id)
+        return await count_tokens_via_bedrock(
+            counted,
             model_id,
             model.regions[0],
             # Not Mantle-served, so this is always a Converse chat model.
             get_chat_model(model_id),  # type: ignore[arg-type]
         )
+
+    async def proxy(counter: ModelDetails) -> MessageTokensCount:
+        """Count with another Claude model's counter."""
+        counter_id = counter.get_id()
+        return await count_tokens_via_bedrock(
+            request,
+            counter_id,
+            counter.regions[0],
+            get_chat_model(counter_id),  # type: ignore[arg-type]
+        )
+
+    def wrap(tokens: int) -> MessageTokensCount:
+        """Answer an estimate, the same with and without context editing."""
+        return MessageTokensCount(
+            input_tokens=tokens,
+            context_management=CountTokensContextManagementResponse(
+                original_input_tokens=tokens
+            )
+            if request.context_management is not None
+            else None,
+        )
+
+    return log_response_params(
+        await count_or_approximate(
+            model,
+            request,
+            None if is_model_endpoint(model) else exact,
+            proxy,
+            wrap,
+            _remapped,
+            lambda: exact(
+                MessageCountTokensParams(
+                    model=request.model,
+                    messages=[MessageParam(role="user", content=".")],
+                )
+            ),
+        )
     )
+
+
+def _remapped(
+    counted: MessageTokensCount, scale: Callable[[int], int]
+) -> MessageTokensCount:
+    """Apply a function to every token count of an answer.
+
+    Args:
+        counted: The answer.
+        scale: The function.
+
+    Returns:
+        The answer, changed in place.
+    """
+    counted.input_tokens = scale(counted.input_tokens)
+    if counted.context_management is not None:
+        counted.context_management.original_input_tokens = scale(
+            counted.context_management.original_input_tokens
+        )
+    return counted

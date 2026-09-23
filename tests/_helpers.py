@@ -321,3 +321,37 @@ def poll_batch_until_ended[T](
             )
         sleep(poll_interval)
     return current
+
+
+#: Words the long-text factory cycles through.
+_LONG_TEXT_WORDS = (
+    "alpha",
+    "beta",
+    "gamma",
+    "delta",
+    "epsilon",
+    "zeta",
+    "eta",
+    "theta",
+    "iota",
+    "kappa",
+    "lambda",
+)
+
+
+def long_text(words: int, seed: int = 0) -> str:
+    """Build a deterministic text of *words* numbered words.
+
+    About 3.3 tokens a word for Claude 4.5 and 2.3 for ``gpt-4o-mini``.
+
+    Args:
+        words: Number of words.
+        seed: Shifts the word sequence, so two texts differ.
+
+    Returns:
+        The text.
+    """
+    return " ".join(
+        f"{_LONG_TEXT_WORDS[(i * 7 + seed) % len(_LONG_TEXT_WORDS)]}{i % 89}"
+        for i in range(words)
+    )

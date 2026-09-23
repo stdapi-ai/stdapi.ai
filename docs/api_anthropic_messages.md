@@ -819,11 +819,11 @@ curl -X POST "$BASE/v1/messages" \
 
 **`max_tokens` is capped when only it overflows the context window.** An input the window holds alone but not beside `max_tokens` is answered with the output limited to what the window leaves, and an answer that fills that room stops with `stop_reason` `model_context_window_exceeded`. Writer Palmyra and Google Gemma refuse such an input with `400` `` input length and `max_tokens` exceed context limit ``. A streamed request is served, or refused, the same way, before its stream starts. A `max_tokens` filling the window on its own is refused with a plain `400` asking to lower it.
 
-**Token counting refuses an input larger than the context window.** The Anthropic API counts such an input; `POST /v1/messages/count_tokens` here answers `400` `prompt is too long`, and the figure in that message is not the input's real size. A client that counts to learn whether a conversation still fits should read that refusal as "it does not".
+**Token counting past the context window is approximate.** `POST /v1/messages/count_tokens` counts an input larger than the model's context window, as the Anthropic API does, and the answer is always above the window, so a client counting to learn whether a conversation still fits learns that it does not. On a model counted exactly, the figure past the window can differ slightly from the Anthropic API's: on Claude Haiku 4.5, a 300,000-token message came within 20 tokens of it, and a 300,000-token tool conversation within 0.4%.
 
-**Token counting refuses server tools.** The Anthropic API counts a request offering a server tool such as `web_search`; `POST /v1/messages/count_tokens` here answers `400`, since a count leaving the tool out would be wrong. Count the request without its server tools and allow for them.
+**Server tools are counted at their definition's usual size.** A request offering `web_search`, `web_fetch`, `code_execution`, `tool_search_tool_bm25` or `tool_search_tool_regex` is counted with the tool's definition at the size the Anthropic API gives it on Claude 4.5 and 4.6 models: a fixed size per tool version, whatever the prompt. An unknown version counts as the latest known one. A history replaying a server tool's calls, results and web search citations is counted too; the pages behind web search results are only known in encrypted form, so a count holding search results can differ from the Anthropic API's by a few percent (within 2% on Claude Haiku 4.5).
 
-**Token counting is refused for models served by an endpoint you run.** A Marketplace or SageMaker AI model endpoint exposes no token-counting API, so `POST /v1/messages/count_tokens` answers `400` for a model served by one, and the route is not listed for it in [`search_models`](api_search_models.md). Every foundation model served through Converse or Mantle is counted.
+**Token counting is exact for Claude up to 4.6, and an approximation that errs high elsewhere.** `POST /v1/messages/count_tokens` answers for every text model, and the Claude models served by Bedrock Mantle are counted exactly too. What each approximation guarantees, and how far above the exact count it typically lands, is under [Exact and approximate counts](api_openai_responses.md#input-token-counting); the usage a response reports is always exact.
 
 **The official SDK no longer sends the sampling parameters.** `anthropic` ≥ 1.0 removed `temperature`, `top_p` and `top_k` from `messages.create()`. The gateway still accepts all three on the wire and older clients keep working; with the current SDK, pass them as `extra_body={"temperature": …}`.
 
@@ -975,7 +975,7 @@ curl -X POST "$BASE/v1/messages/count_tokens" \
   -H "anthropic-version: 2023-06-01" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-fable-5",
+    "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
     "messages": [{"role": "user", "content": "Hello, how are you?"}]
   }'
 ```
@@ -983,13 +983,11 @@ curl -X POST "$BASE/v1/messages/count_tokens" \
 **Response:**
 
 ```json
-{"input_tokens": 13}
+{"input_tokens": 29}
 ```
 
 !!! info "Counted Request"
-    The count is computed on the exact request `anthropic_message` would send for the same body: `thinking`/`output_config.effort`, server tools in their model-native form, `cache_control` breakpoints, and mid-conversation system message placement are all taken into account.
-
-Models served by a Marketplace or SageMaker AI model endpoint have no token-counting API and answer `400`; every Converse- and Mantle-served foundation model is counted.
+    The count follows the request `anthropic_message` would send for the same body: `thinking`/`output_config.effort`, `cache_control` breakpoints and mid-conversation system message placement are taken into account. Server tools, documents, and models without an exact count are counted as [Limits and behaviour to know](#limits-and-behaviour-to-know) describes.
 
 ## Next steps
 

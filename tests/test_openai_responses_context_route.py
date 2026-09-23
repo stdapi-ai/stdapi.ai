@@ -19,6 +19,7 @@ import pytest
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from stdapi.api_errors import ApiError
+from stdapi.models.chat._adapters import _count_tokens
 from stdapi.models.chat._adapters._openai_responses import (
     encode_compaction_content,
     encode_compaction_state,
@@ -220,7 +221,7 @@ def backend(monkeypatch: pytest.MonkeyPatch) -> _Backend:
     monkeypatch.setattr(
         _responses_context, "count_input_tokens_via_bedrock", stub.count_tokens
     )
-    monkeypatch.setattr(_responses_context, "_UNCOUNTABLE_MODELS", set())
+    monkeypatch.setattr(_responses_context, "UNCOUNTABLE_MODELS", set())
     return stub
 
 
@@ -528,6 +529,9 @@ class TestTruncationRetries:
     ) -> None:
         """Counting under ``truncation: "auto"`` counts the input a response keeps.
 
+        Without it, the whole input is counted past the window, as upstream
+        counts it.
+
         Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count
         """
         counted: list[int] = []
@@ -542,15 +546,26 @@ class TestTruncationRetries:
         ) -> ModelDetails:
             return make_model_details(model_id)
 
-        async def _count(request: Any, *_args: object, **_kwargs: object) -> int:  # noqa: ANN401
+        async def _count(
+            request: Any,  # noqa: ANN401
+            *_args: object,
+            past_window: bool = False,
+            **_kwargs: object,
+        ) -> int:
             counted.append(len(request.input))
-            if len(request.input) > 5:
-                raise too_long
-            return 42
+            if len(request.input) <= 5:
+                return 42
+            if past_window:
+                return 300_000
+            raise too_long
 
         monkeypatch.setattr(openai_responses, "validate_model", _validate_model)
         monkeypatch.setattr(openai_responses, "count_input_tokens_via_bedrock", _count)
         monkeypatch.setattr(openai_responses, "serves_via_mantle", lambda _id: False)
+        # Known countable, so no trivial request probes the counter first.
+        monkeypatch.setattr(
+            _count_tokens, "_COUNTABLE_MODELS", {"anthropic.claude-haiku-4-5"}
+        )
         body = {"model": "anthropic.claude-haiku-4-5", "input": _turns(8)}
         response = app_client.post(
             "/v1/responses/input_tokens", json={**body, "truncation": "auto"}
@@ -559,9 +574,11 @@ class TestTruncationRetries:
         assert response.json()["input_tokens"] == 42
         assert counted[0] == 17
         assert counted[-1] <= 5
-        refused = app_client.post("/v1/responses/input_tokens", json=body)
-        assert refused.status_code == 400
-        assert refused.json()["error"]["code"] == "context_length_exceeded"
+        counted.clear()
+        whole = app_client.post("/v1/responses/input_tokens", json=body)
+        assert whole.status_code == 200, whole.text
+        assert whole.json()["input_tokens"] == 300_000
+        assert counted == [17], "counted once, untrimmed"
 
 
 class TestCompactionPass:

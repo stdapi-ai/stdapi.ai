@@ -351,13 +351,6 @@ _UNAPPLIABLE_GUARDRAIL_SERVICES: Final[frozenset[str]] = frozenset(
     {MANTLE_SERVICE, SAGEMAKER_SERVICE}
 )
 
-#: Operations answered by the token counter, which no model endpoint can satisfy.
-# Not gated behind Capability.COUNT_TOKENS: the Anthropic counter is also served
-# through Bedrock Mantle's own counter, whose classes do not carry that flag.
-_TOKEN_COUNTING_OPERATIONS: Final[frozenset[str]] = frozenset(
-    {"anthropic_message_count_tokens", "openai_response_input_tokens"}
-)
-
 
 def is_sagemaker_endpoint(model_id: str) -> bool:
     """Whether a model is served by an Amazon SageMaker AI endpoint.
@@ -385,24 +378,28 @@ def is_marketplace_endpoint(model_id: str) -> bool:
     )
 
 
-def reject_unsupported_token_counting(model: ModelDetails) -> None:
-    """Refuse token counting for a model the token counter cannot name.
-
-    Amazon Bedrock's token counter takes a foundation model identifier, so a
-    model served by an endpoint the operator runs can never satisfy it. The
-    gateway answers that itself: forwarding the backend's validation error
-    would hand the caller something they cannot act on, for a route the model
-    catalogue already does not advertise for these models.
+def is_model_endpoint(model: ModelDetails) -> bool:
+    """Whether a model is served by an endpoint the operator runs.
 
     Args:
-        model: The model the request named, already resolved.
+        model: The model, already resolved.
 
-    Raises:
-        ApiError: When the model is served by a model endpoint (400).
+    Returns:
+        True for a Marketplace or SageMaker AI model endpoint.
     """
-    if model.service in _ENDPOINT_SERVICES:
-        msg = "Token counting is not supported for this model on this endpoint."
-        raise ApiError(msg, status=400)
+    return model.service in _ENDPOINT_SERVICES
+
+
+def catalog_model(model_id: str) -> ModelDetails | None:
+    """Return a Bedrock model's details by exact ID, without resolving or logging it.
+
+    Args:
+        model_id: The model's catalog ID.
+
+    Returns:
+        The details, or None when this deployment does not serve the model.
+    """
+    return _MODELS.get(model_id)
 
 
 def usage_service(model_id: str) -> Service:
@@ -2036,20 +2033,16 @@ def _compute_model_capabilities(
         and not model_id.startswith(NON_CONVERSE_SPEECH_MODEL_PREFIXES)
     ):
         capability_flags |= Capability.STT | Capability.STT_TRANSLATE
-    excluded_operations: frozenset[str] = frozenset()
     if model.service in _ENDPOINT_SERVICES:
         # A model endpoint is served by a generic implementation whatever its
         # published model ID matches (see get_chat_model), so no
-        # capability-gated route applies to one, and it cannot be counted.
+        # capability-gated route applies to one.
         capability_flags = Capability(0)
-        excluded_operations = _TOKEN_COUNTING_OPERATIONS
     input_mods = model.input_modalities
     output_mods = model.output_modalities
     routes: list[str] = []
     tools: list[str] = []
     for op_id, cap in ROUTE_CAPABILITIES.items():
-        if op_id in excluded_operations:
-            continue
         if cap.required_input_modality not in input_mods:
             continue
         if cap.required_output_modality not in output_mods:

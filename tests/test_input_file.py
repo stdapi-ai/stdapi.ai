@@ -2429,3 +2429,21 @@ class TestBoundedInputConcurrency:
         assert [getcoroutinestate(read) for read in reads] == [CORO_CLOSED] * 8, (
             "a coroutine cancelled before it ran is closed, not left never-awaited"
         )
+
+
+@pytest.mark.parametrize(
+    ("value", "inline"),
+    [
+        ("aGVsbG8=", True),
+        ("data:text/plain;base64,aGVsbG8=", True),
+        ("https://example.com/a.png", False),
+    ],
+)
+def test_is_inline_reports_content_carried_by_the_request(
+    value: str, inline: bool
+) -> None:
+    """Base64 and data URIs are inline; a URL refers to the content.
+
+    Ref: stdapi/input_file.py:InputFile.is_inline
+    """
+    assert InputFile(value).is_inline is inline

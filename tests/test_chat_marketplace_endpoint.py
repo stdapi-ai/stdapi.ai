@@ -345,11 +345,11 @@ class TestDiscovery:
         """``/search_models`` publishes it as a text chat model, with no ARN in sight.
 
         The ARN carries the account ID, which is backend detail the catalogue
-        never publishes. Neither counting route may be advertised either: Bedrock's
-        token counter takes a foundation model identifier.
+        never publishes. Both counting routes are advertised: the model is
+        counted approximately.
 
         Ref: stdapi/models/marketplace_endpoints.py:_model_from_endpoint
-             stdapi/models/__init__.py:reject_unsupported_token_counting
+             stdapi/models/chat/_adapters/_count_tokens.py:count_or_approximate
         """
         response = local_test_client.get(
             "/search_models?route=/v1/chat/completions&output_modalities=TEXT",
@@ -366,8 +366,8 @@ class TestDiscovery:
         assert "/v1/chat/completions" in entry["supported_routes"]
         assert "/v1/responses" in entry["supported_routes"]
         assert "/anthropic/v1/messages" in entry["supported_routes"]
-        assert "/v1/responses/input_tokens" not in entry["supported_routes"]
-        assert "/anthropic/v1/messages/count_tokens" not in entry["supported_routes"]
+        assert "/v1/responses/input_tokens" in entry["supported_routes"]
+        assert "/anthropic/v1/messages/count_tokens" in entry["supported_routes"]
         assert "arn:aws:sagemaker" not in response.text
 
     def test_the_endpoint_is_pinned_to_its_own_region(
@@ -1265,7 +1265,7 @@ class TestRefusals:
             ),
         ],
     )
-    def test_token_counting_is_refused(
+    def test_token_counting_is_estimated(
         self,
         local_test_client: TestClientType,
         marketplace_model: str,
@@ -1273,13 +1273,12 @@ class TestRefusals:
         route: str,
         payload: dict[str, object],
     ) -> None:
-        """Both counters answer 400 from the gateway, not a backend validation error.
+        """Both counters answer the gateway's estimate, never a backend error.
 
         Bedrock's token counter takes a foundation model identifier, so an
-        endpoint has no counting form at all; answering with the backend's own
-        rejection would leak the reason.
+        endpoint is estimated locally, erring high.
 
-        Ref: stdapi/models/__init__.py:reject_unsupported_token_counting
+        Ref: stdapi/models/chat/_adapters/_count_tokens.py:estimate_request_tokens
         """
         response = local_test_client.post(
             route,
@@ -1287,9 +1286,8 @@ class TestRefusals:
             headers={"Authorization": f"Bearer {api_key}"},
         )
 
-        assert response.status_code == 400, response.text
-        assert "Token counting is not supported" in response.text
-        assert "arn:aws" not in response.text
+        assert response.status_code == 200, response.text
+        assert response.json()["input_tokens"] >= 53
 
     async def test_a_tenant_credential_cannot_reach_the_endpoint(
         self,

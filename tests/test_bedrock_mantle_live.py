@@ -23,14 +23,15 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
 
 from __future__ import annotations
 
+from json import loads
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from anthropic import BadRequestError as AnthropicBadRequestError
 from openai import BadRequestError, NotFoundError, OpenAI
 
-from tests._helpers import red_png_b64
-from tests.conftest import logged_usage_entries
+from tests._helpers import long_text, red_png_b64
+from tests.conftest import REPO_ROOT, logged_usage_entries
 
 #: The learned-routing caches are process-global, so these tests must not be split
 #: across xdist workers that would each learn a different routing surface.
@@ -1455,20 +1456,20 @@ class TestMantleResponsesSiblingGuards:
     def test_input_tokens_and_undecodable_id_guards(
         self, openai_client: OpenAI
     ) -> None:
-        """input_tokens rejects Mantle models (400); undecodable IDs are 404.
+        """input_tokens estimates Mantle models; undecodable IDs are 404.
 
-        Token counting needs Bedrock ``CountTokens``, which exists on
-        bedrock-runtime only. And a ``resp_`` ID whose Region fingerprint does not
-        match any configured Mantle Region must be a 404, never a 500 or a
-        fall-through to the local store.
+        No counter serves a Mantle model on this route, so the count is the
+        local estimate, erring high. And a ``resp_`` ID whose Region fingerprint
+        does not match any configured Mantle Region must be a 404, never a 500 or
+        a fall-through to the local store.
 
-        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
+        Ref: stdapi/models/chat/_adapters/_count_tokens.py:estimate_request_tokens
              stdapi/aws_bedrock_mantle.py:decode_mantle_response_id
         """
-        with pytest.raises(BadRequestError) as bad_request:
-            openai_client.responses.input_tokens.count(model=_GEMMA3, input="Hello")
-        assert bad_request.value.status_code == 400
-        assert "Token counting is not supported" in str(bad_request.value)
+        counted = openai_client.responses.input_tokens.count(
+            model=_GEMMA3, input="Hello"
+        )
+        assert counted.input_tokens >= 53
         with pytest.raises(NotFoundError) as undecodable:
             openai_client.responses.retrieve("resp_notdecodable")
         assert undecodable.value.status_code == 404
@@ -1481,24 +1482,75 @@ class TestMantleCountTokens:
          stdapi/aws_bedrock_mantle.py:_map_error
     """
 
-    def test_count_tokens_upstream_error_shape(
+    def test_count_tokens_estimates_a_model_the_counter_refuses(
         self, anthropic_client: Anthropic
     ) -> None:
-        """Models unsupported by the upstream counter yield a clean 400 error.
+        """A model the Mantle counter does not serve is estimated, never refused.
 
-        The failure is mapped into Anthropic's ``{"type": "error", "error": {...}}``
-        envelope rather than being relayed as a Mantle-shaped body or a 500.
+        Gemma 3 serves no Anthropic Messages API on Mantle; its count is the
+        local estimate, erring high.
 
-        Ref: https://platform.claude.com/docs/en/api/errors
+        Ref: stdapi/models/chat/_adapters/_count_tokens.py:count_or_approximate
         """
-        with pytest.raises(AnthropicBadRequestError) as exc_info:
-            anthropic_client.messages.count_tokens(
-                model=_GEMMA3, messages=[{"role": "user", "content": "Hello"}]
-            )
-        error = exc_info.value
-        assert error.status_code == 400
-        body = error.body
-        assert isinstance(body, dict)
-        assert body["type"] == "error"
-        assert body["error"]["type"] == "invalid_request_error"
-        assert body["error"]["message"]
+        counted = anthropic_client.messages.count_tokens(
+            model=_GEMMA3, messages=[{"role": "user", "content": "Hello"}]
+        )
+        assert counted.input_tokens >= 53
+
+    def test_count_tokens_past_the_context_window(
+        self, anthropic_client: Anthropic
+    ) -> None:
+        """Mantle's Claude counts a prompt over its 200,000-token window itself.
+
+        Measured 2026-09-23: Mantle answered 300,025 for a prompt the Anthropic
+        API counts at 300,025, where Bedrock's own counter refuses it.
+
+        Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+             stdapi/routes/anthropic_messages.py:_count_tokens_via_mantle
+        """
+        counted = anthropic_client.messages.count_tokens(
+            model=_CLAUDE_MANTLE,
+            messages=[{"role": "user", "content": long_text(86_000)}],
+        )
+        assert counted.input_tokens > 200_000
+
+    def test_count_tokens_counts_a_server_tool(
+        self, anthropic_client: Anthropic
+    ) -> None:
+        """A server tool the Mantle counter refuses is counted, as upstream counts it.
+
+        The Anthropic API counts this request as 2,214 tokens on Claude Haiku
+        4.5 (2026-09-23); counted as a stub plus the definition, Mantle's
+        Claude answers the same.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+             stdapi/models/chat/_adapters/_count_tokens.py:stub_server_tools
+        """
+        counted = anthropic_client.messages.count_tokens(
+            model=_CLAUDE_MANTLE,
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+        )
+        assert counted.input_tokens == 2214
+
+    def test_count_tokens_counts_a_replayed_web_search_turn(
+        self, anthropic_client: Anthropic
+    ) -> None:
+        """A replayed web search call, result and citation are counted, near upstream.
+
+        The Mantle counter refuses the result block and the citation; the
+        turn is the Anthropic API's own (2026-09-23), recorded with its count.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+             stdapi/models/chat/_adapters/_count_tokens.py:plain_server_tool_history
+        """
+        recorded = loads(
+            (
+                REPO_ROOT / "tests/fixtures/anthropic/replayed_server_tools.json"
+            ).read_text()
+        )["web_search"]
+        counted = anthropic_client.messages.count_tokens(
+            model=_CLAUDE_MANTLE, messages=recorded["messages"], tools=recorded["tools"]
+        )
+        expected = recorded["upstream_input_tokens"]
+        assert abs(counted.input_tokens - expected) <= expected * 0.025

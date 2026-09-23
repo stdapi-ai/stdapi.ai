@@ -40,13 +40,10 @@ from stdapi.conversations import (
     stored_item,
     validate_conversation_id,
 )
-from stdapi.models import (
-    reject_unsupported_token_counting,
-    resolve_bedrock_prompt,
-    validate_model,
-)
-from stdapi.models.capabilities import Capability, register_route_capability
+from stdapi.models import is_model_endpoint, resolve_bedrock_prompt, validate_model
+from stdapi.models.capabilities import register_route_capability
 from stdapi.models.chat import get_chat_model, serves_via_mantle
+from stdapi.models.chat._adapters._count_tokens import count_or_approximate
 from stdapi.models.chat._adapters._openai_responses import (
     check_file_search_stores,
     count_input_tokens_via_bedrock,
@@ -113,6 +110,7 @@ if TYPE_CHECKING:
     from types_aiobotocore_bedrock.literals import RegionName
 
     from stdapi.aws_bedrock_mantle import Surface
+    from stdapi.models import ModelDetails
     from stdapi.models.chat import ChatModelBase
 
 register_route_capability(
@@ -124,7 +122,6 @@ register_route_capability(
     f"{SETTINGS.openai_routes_prefix}/v1/responses/input_tokens",
     "TEXT",
     "TEXT",
-    required_capability=Capability.COUNT_TOKENS,
 )
 
 register_route_capability(
@@ -897,6 +894,9 @@ async def create_response(
         "tools, images, files) and returns only the token count. Useful for "
         "estimating costs or checking context-window fit before making a full "
         "`openai_response` call.\n\n"
+        "Every text model is counted: exactly where the model's own counter "
+        "serves it, otherwise as an approximation that is never below the "
+        "exact count on the content measured.\n\n"
         "**Find compatible models:** Call `search_models` with "
         "`route=openai_response_input_tokens` to discover model IDs that "
         "support this endpoint."
@@ -922,8 +922,8 @@ async def count_input_tokens(
 ) -> InputTokenCountResponse:
     """Count the number of input tokens for a Responses request.
 
-    Uses the AWS Bedrock CountTokens API to return an accurate,
-    model-specific token count without generating a response.
+    Counts exactly where the model's own counter serves it, and otherwise
+    answers an approximation that errs high.
 
     Args:
         request: Input-token count request following the OpenAI Responses spec.
@@ -933,8 +933,7 @@ async def count_input_tokens(
 
     Raises:
         ApiError: If the model is unknown (404, as upstream answers here), or
-            the request is unsupported, or the model is served by Bedrock
-            Mantle, Marketplace, or SageMaker AI (400).
+            the request is unsupported (400).
     """
     log_request_params(request)
     model = await validate_model(
@@ -943,20 +942,45 @@ async def count_input_tokens(
         output_modality="TEXT",
         route="openai_response_input_tokens",
     )
-    reject_unsupported_token_counting(model)
     model_id = model.get_id()
-    if serves_via_mantle(model_id):
-        msg = "Token counting is not supported for this model on this endpoint."
-        raise ApiError(msg, status=400)
     if conversation_id := _resolve_conversation(request.conversation):
         request = await _with_conversation_prefix(request, conversation_id)
-    count = partial(
-        count_input_tokens_via_bedrock,
-        model_id=model_id,
-        region=model.regions[0],
-        # Not Mantle-served, so this is always a Converse chat model.
-        chat_model=get_chat_model(model_id),  # type: ignore[arg-type]
-    )
+    countable = not (serves_via_mantle(model_id) or is_model_endpoint(model))
+
+    async def count(counted: InputTokenCountParams) -> int:
+        """Count a request, exactly where the model's own counter serves it."""
+
+        async def proxy(counter: ModelDetails) -> int:
+            """Count with another Claude model's counter."""
+            counter_id = counter.get_id()
+            return await count_input_tokens_via_bedrock(
+                counted,
+                counter_id,
+                counter.regions[0],
+                get_chat_model(counter_id),  # type: ignore[arg-type]
+                past_window=True,
+            )
+
+        exact = partial(
+            count_input_tokens_via_bedrock,
+            model_id=model_id,
+            region=model.regions[0],
+            # Not Mantle-served, so this is always a Converse chat model.
+            chat_model=get_chat_model(model_id),  # type: ignore[arg-type]
+        )
+        return await count_or_approximate(
+            model,
+            counted,
+            # An input over the window is counted unless truncation trims it.
+            partial(exact, counted, past_window=counted.truncation != "auto")
+            if countable
+            else None,
+            proxy,
+            int,
+            lambda tokens, scale: scale(tokens),
+            lambda: exact(InputTokenCountParams(model=counted.model, input=".")),
+        )
+
     request, input_tokens = await truncating(request, count)
     return log_response_params(InputTokenCountResponse(input_tokens=input_tokens))
 

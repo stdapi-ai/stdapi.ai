@@ -14,7 +14,7 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 - :material-lightning-bolt: **Streaming across the whole lifecycle.** `response.created` through `response.completed`, with text and tool-argument deltas, reasoning deltas, web-search brackets and citation annotations as separate events.
 - :material-code-json: **Structured output** through `text.format`: `json_object` on every model, `json_schema` with schema validation on the models that support it.
 - :material-brain: **Extended reasoning** through `reasoning.effort`, with the encrypted reasoning returned when `include` asks for it.
-- :material-server-network: **State on the server, in your AWS account.** `store: true`, `previous_response_id`, [conversations](api_openai_conversations.md), [compaction](#conversation-compaction) and [input-token counting](#input-token-counting) are backed by Amazon Bedrock, not by the gateway.
+- :material-server-network: **State on the server, in your AWS account.** `store: true`, `previous_response_id`, [conversations](api_openai_conversations.md) and [compaction](#conversation-compaction) are backed by Amazon Bedrock, not by the gateway.
 - :material-swap-horizontal: **Differs from OpenAI:** `store` defaults to `false` here, and response IDs are stdapi.ai's own — they carry the serving region and are not interchangeable with another provider's.
 
 ```bash
@@ -739,9 +739,8 @@ runs one or more queries, and grounds its answer in what it finds.
     under its default Global routing; the per-million figures are in the
     [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models)
     reference. Alongside it, Amazon Bedrock Guardrails cannot apply to these
-    models (configuring both is refused at startup),
-    [input token counting](#input-token-counting) answers `400` for them, and
-    their usage is billed and reported under Bedrock Mantle. Batch inference,
+    models (configuring both is refused at startup), and their usage is
+    billed and reported under Bedrock Mantle. Batch inference,
     prompt caching and stored response IDs are unaffected.
 
     Set `AWS_BEDROCK_MANTLE_PREFERRED_MODELS` to an empty value to serve both
@@ -963,6 +962,15 @@ curl -X POST "$BASE/v1/responses/input_tokens" \
 `input`. What token counting does not take is in
 [Limits and behaviour to know](#limits-and-behaviour-to-know).
 
+**Exact and approximate counts.** Every text model is counted, on this route and on [`/v1/messages/count_tokens`](api_anthropic_messages.md#limits-and-behaviour-to-know), and [`search_models`](api_search_models.md) lists both routes for all of them. The count is exact for Claude models up to 4.6. Every other model gets an approximation that errs high: on everything measured — English prose, code, JSON, requests offering tools, eight scripts, emoji, digits and encoded data, across 27 tokenizers — it was never below the exact count.
+
+- Claude 4.7 and later (Opus 4.7, Opus 5.5, Sonnet 5, Fable) are counted 7% to 70% above the exact figure, about 50% above typically. The count is closest when Claude Haiku 4.5 is enabled in your deployment.
+- Other models are counted at least 5% above it, about 30% above typically — more for one-line prompts and for non-Latin scripts. A model whose tokenizer was never measured gets the highest weights of all.
+- An image counts at an allowance that grows with its pixels, a PDF 3,000 tokens a page, and an image or file given only by URL, S3 URI or file ID an allowance from its size: it is never downloaded to be counted.
+- On a model counted approximately, `truncation: "auto"` counts the whole input, an upper bound of what a response keeps.
+
+The usage a response reports is always exact.
+
 ### Stored Responses
 
 Set `store: true` to persist a response in [Amazon Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html): one AWS-managed session per stored response, encrypted at rest (optionally with [your own KMS key](operations_configuration_bedrock.md#aws-bedrock-session-encryption-key-arn)), with no state on the server itself.
@@ -1065,7 +1073,7 @@ Continue from a compacted response as with the OpenAI API: with `previous_respon
 **The output is capped when only it overflows.** As with the OpenAI API, an input the window holds alone but not beside `max_output_tokens` is answered whatever `truncation` says, with the output limited to what the window leaves: the response still echoes the requested `max_output_tokens`, and an answer that runs out of room is `incomplete` with `incomplete_details.reason: "max_output_tokens"`. On Writer Palmyra and Google Gemma such an input is trimmed under `truncation: "auto"`, and otherwise refused with `context_length_exceeded`. A `max_output_tokens` filling the window on its own is refused with a plain `400` asking to lower it.
 
 !!! info "How this implementation measures and compacts"
-    - The threshold is exact on models that support [input token counting](#input-token-counting), and approximate on the others, where a compaction can come somewhat before or after it. An entry without `compact_threshold` never compacts.
+    - The threshold is exact on models counted exactly (see [input token counting](#input-token-counting)), and approximate on the others, where a compaction can come somewhat before or after it. An entry without `compact_threshold` never compacts.
     - Compaction happens before generation only, never while a response is being produced, and the summary is written by the requested model itself: it keeps the facts, decisions and tool results needed to continue, not the model's hidden reasoning state. The latest user message and the latest tool step are kept verbatim.
     - `context_management` is no way around the context window: a conversation too large to summarize is refused with `context_length_exceeded`, unless `truncation: "auto"` trims it first.
     - Compaction items, from a response or from the compact endpoint, are not encrypted: they carry the conversation's text, summarized or verbatim — a response's item includes its system and developer messages. Anyone holding one can read it, and alter it before sending it back: hand it only to parties that may see and change that conversation, or continue with `previous_response_id` to keep it on the server.
@@ -1117,7 +1125,7 @@ curl -X POST "$BASE/v1/responses" \
 
 **Tools with no backend equivalent are dropped, not refused.** `computer`, `mcp`, `local_shell`, `custom`, `programmatic_tool_calling` and the others leave the tool configuration before the request reaches the model, so the request succeeds and the model simply cannot call them; the full list, and what the model does instead, is under [Function Tool Calling](#function-tool-calling). `file_search` is the exception — it is served, from the vector stores the request names.
 
-**Token counting takes fewer parameters than a generation.** `previous_response_id` is not supported on `POST /v1/responses/input_tokens`, since resolving it would change the count; `truncation: "auto"` is, and counts the input a response would keep once its oldest turns are dropped — without it, an input larger than the context window is refused with `context_length_exceeded` rather than counted; `personality` (a token-counting-only schema field) and `reasoning.context` are accepted and ignored. Token counting is not available at all for models served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models), which reject the request with a `400` — the **OpenAI GPT-5.6 and GPT-6 families included**, since they are served from Mantle by default. Clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration_models.md#bedrock-mantle-preferred-models) brings both families back to the classic endpoint, where they count tokens. A model served by a [Marketplace](operations_configuration_models.md#bedrock-marketplace-endpoints-enabled) or [SageMaker AI](operations_configuration_models.md#aws-sagemaker-endpoints) endpoint answers the same `400`, because Bedrock's token counter takes a foundation model identifier and an endpoint you run has none; the route is not listed for those models in [`search_models`](api_search_models.md) either.
+**Token counting takes fewer parameters than a generation.** `previous_response_id` is not supported on `POST /v1/responses/input_tokens`, since resolving it would change the count; `truncation: "auto"` is, and counts the input a response would keep once its oldest turns are dropped — without it, an input larger than the context window is counted, as upstream counts it, with an answer always above the window, as exact as any other count on that model (see [Input Token Counting](#input-token-counting)); `personality` (a token-counting-only schema field) and `reasoning.context` are accepted and ignored.
 
 ## Request headers { #available-request-headers }
 

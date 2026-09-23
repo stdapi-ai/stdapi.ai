@@ -1,0 +1,232 @@
+{
+ "tools_one": {
+  "messages": {
+   "messages": [
+    {
+     "role": "user",
+     "content": "Hi"
+    }
+   ],
+   "tools": [
+    {
+     "name": "get_weather",
+     "description": "Get the current weather for a city.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string",
+        "description": "City name."
+       },
+       "unit": {
+        "type": "string",
+        "enum": [
+         "C",
+         "F"
+        ]
+       }
+      },
+      "required": [
+       "city"
+      ]
+     }
+    }
+   ]
+  },
+  "responses": {
+   "input": [
+    {
+     "role": "user",
+     "content": "Hi"
+    }
+   ],
+   "tools": [
+    {
+     "type": "function",
+     "name": "get_weather",
+     "description": "Get the current weather for a city.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string",
+        "description": "City name."
+       },
+       "unit": {
+        "type": "string",
+        "enum": [
+         "C",
+         "F"
+        ]
+       }
+      },
+      "required": [
+       "city"
+      ]
+     }
+    }
+   ]
+  },
+  "tokens": {
+   "amazon.nova-micro-v1:0": 420,
+   "amazon.nova-2-lite-v1:0": 934,
+   "meta.llama3-1-8b-instruct-v1:0": 78,
+   "mistral.ministral-3-3b-instruct": 92,
+   "mistral.magistral-small-2509": 92,
+   "openai.gpt-oss-20b": 134,
+   "qwen.qwen3-32b": 183,
+   "qwen.qwen3-coder-30b-a3b-instruct": 326,
+   "google.gemma-3-4b-it": 10,
+   "google.gemma-4-e2b": 102,
+   "deepseek.v3.1": 176,
+   "minimax.minimax-m2": 204,
+   "moonshotai.kimi-k2.5": 85,
+   "nvidia.nemotron-nano-9b-v2": 258,
+   "writer.palmyra-x4-v1:0": 29,
+   "zai.glm-4.7-flash": 190
+  }
+ },
+ "tools_two_system": {
+  "messages": {
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is the weather in Paris?"
+    },
+    {
+     "role": "assistant",
+     "content": "I will check."
+    },
+    {
+     "role": "user",
+     "content": "Also find the refund policy."
+    }
+   ],
+   "tools": [
+    {
+     "name": "get_weather",
+     "description": "Get the current weather for a city.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string",
+        "description": "City name."
+       },
+       "unit": {
+        "type": "string",
+        "enum": [
+         "C",
+         "F"
+        ]
+       }
+      },
+      "required": [
+       "city"
+      ]
+     }
+    },
+    {
+     "name": "search_docs",
+     "description": "Search the product documentation.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "query": {
+        "type": "string",
+        "description": "What to look up."
+       },
+       "limit": {
+        "type": "integer"
+       }
+      },
+      "required": [
+       "query"
+      ]
+     }
+    }
+   ],
+   "system": "You are a concise assistant. Use the tools when they help, and answer in one sentence otherwise."
+  },
+  "responses": {
+   "input": [
+    {
+     "role": "user",
+     "content": "What is the weather in Paris?"
+    },
+    {
+     "role": "assistant",
+     "content": "I will check."
+    },
+    {
+     "role": "user",
+     "content": "Also find the refund policy."
+    }
+   ],
+   "tools": [
+    {
+     "type": "function",
+     "name": "get_weather",
+     "description": "Get the current weather for a city.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string",
+        "description": "City name."
+       },
+       "unit": {
+        "type": "string",
+        "enum": [
+         "C",
+         "F"
+        ]
+       }
+      },
+      "required": [
+       "city"
+      ]
+     }
+    },
+    {
+     "type": "function",
+     "name": "search_docs",
+     "description": "Search the product documentation.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "query": {
+        "type": "string",
+        "description": "What to look up."
+       },
+       "limit": {
+        "type": "integer"
+       }
+      },
+      "required": [
+       "query"
+      ]
+     }
+    }
+   ],
+   "instructions": "You are a concise assistant. Use the tools when they help, and answer in one sentence otherwise."
+  },
+  "tokens": {
+   "amazon.nova-micro-v1:0": 516,
+   "meta.llama3-1-8b-instruct-v1:0": 178,
+   "mistral.ministral-3-3b-instruct": 207,
+   "mistral.magistral-small-2509": 207,
+   "openai.gpt-oss-20b": 212,
+   "qwen.qwen3-32b": 307,
+   "qwen.qwen3-coder-30b-a3b-instruct": 449,
+   "google.gemma-3-4b-it": 57,
+   "google.gemma-4-e2b": 209,
+   "deepseek.v3.1": 274,
+   "minimax.minimax-m2": 317,
+   "moonshotai.kimi-k2.5": 151,
+   "nvidia.nemotron-nano-9b-v2": 370,
+   "writer.palmyra-x4-v1:0": 57,
+   "zai.glm-4.7-flash": 307
+  }
+ }
+}

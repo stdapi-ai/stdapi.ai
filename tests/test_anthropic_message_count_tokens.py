@@ -426,3 +426,63 @@ async def test_count_tokens_counts_a_replayed_mcp_conversation(
     ]
     use_id = converse["messages"][0]["content"][0]["toolUse"]["toolUseId"]
     assert use_id == converse["messages"][1]["content"][0]["toolResult"]["toolUseId"]
+
+
+async def test_count_tokens_counts_a_claude_server_tool_as_its_stub_and_definition(
+    fake_client: _FakeCountTokensClient,
+) -> None:
+    """A server tool CountTokens refuses is sent as a stub, its definition added.
+
+    CountTokens refuses ``web_search`` in the native tool list (measured
+    2026-09-23: ``Input tag 'web_search_20250305' found using 'type' does not
+    match any of the expected tags``), while a tool it takes, ``bash``, is
+    still promoted natively.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+         stdapi/models/chat/_adapters/_count_tokens.py:server_tool_tokens
+         stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
+    """
+    request = MessageCountTokensParams(
+        model=_CLAUDE_MODEL,
+        messages=[MessageParam(role="user", content="hi")],
+        tools=[
+            WebSearchToolParam(type="web_search_20250305", name="web_search"),
+            ToolBashParam(type="bash_20250124", name="bash"),
+        ],
+    )
+    tokens = await count_tokens_via_bedrock(
+        request, _CLAUDE_MODEL, "us-east-1", _chat_model(_CLAUDE_MODEL)
+    )
+    assert tokens.input_tokens == 42 + 1678
+    (call,) = fake_client.calls
+    converse = call["input"]["converse"]
+    native = converse["additionalModelRequestFields"]["tools"]
+    assert [tool["name"] for tool in native] == ["bash"]
+    assert converse["toolConfig"]["tools"] == [
+        {
+            "toolSpec": {
+                "name": "web_search",
+                "description": "web_search",
+                "inputSchema": {"json": {"type": "object"}},
+            }
+        }
+    ]
+
+
+async def test_count_tokens_adds_no_definition_for_a_tool_served_as_a_system_tool(
+    fake_client: _FakeCountTokensClient,
+) -> None:
+    """A server tool another model serves as its own system tool is counted as sent.
+
+    Ref: stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
+    """
+    request = MessageCountTokensParams(
+        model=_NOVA_MODEL,
+        messages=[MessageParam(role="user", content="hi")],
+        tools=[WebSearchToolParam(type="web_search_20250305", name="web_search")],
+    )
+    tokens = await count_tokens_via_bedrock(
+        request, _NOVA_MODEL, "us-east-1", _chat_model(_NOVA_MODEL)
+    )
+    assert tokens.input_tokens == 42
+    assert fake_client.calls

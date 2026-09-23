@@ -14,8 +14,9 @@ from botocore.exceptions import BotoCoreError, ClientError
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from stdapi.api_errors import ApiError
-from stdapi.models import reject_unsupported_token_counting
+from stdapi.models import is_model_endpoint
 from stdapi.models.chat import serves_via_mantle
+from stdapi.models.chat._adapters._count_tokens import UNCOUNTABLE_MODELS, uncountable
 from stdapi.models.chat._adapters._openai_responses import (
     compaction_response,
     count_input_tokens_via_bedrock,
@@ -83,12 +84,6 @@ COMPACTION_PROMPT: Final = (
 
 #: Retries a ``truncation: "auto"`` request gets after its input overflows the context window.
 _MAX_TRUNCATION_RETRIES: Final = 3
-
-#: Refusal of the token counter for a model it cannot count.
-_UNCOUNTABLE_MESSAGE: Final = "support counting tokens"
-
-#: Models the token counter refused, whose compaction threshold is estimated instead.
-_UNCOUNTABLE_MODELS: set[str] = set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -764,10 +759,13 @@ async def _counted_tokens(
         The count, the largest integer for an input over the context window,
         or None when the model cannot be counted.
     """
-    if serves_via_mantle(model.id) or model.id in _UNCOUNTABLE_MODELS:
+    if (
+        serves_via_mantle(model.id)
+        or model.id in UNCOUNTABLE_MODELS
+        or is_model_endpoint(model)
+    ):
         return None
     try:
-        reject_unsupported_token_counting(model)
         return await count_input_tokens_via_bedrock(
             InputTokenCountParams(
                 model=request.model,
@@ -786,8 +784,6 @@ async def _counted_tokens(
     except (ApiError, ClientError, BotoCoreError) as exc:
         if context_overflow(exc) is not None:
             return maxsize
-        if isinstance(exc, ClientError) and _UNCOUNTABLE_MESSAGE in str(
-            exc.response.get("Error", {}).get("Message")
-        ):
-            _UNCOUNTABLE_MODELS.add(model.id)
+        if isinstance(exc, ClientError) and uncountable(exc):
+            UNCOUNTABLE_MODELS.add(model.id)
         return None

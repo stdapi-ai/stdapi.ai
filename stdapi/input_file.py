@@ -292,6 +292,11 @@ _ALREADY_STORED_ORIGINS: frozenset[_FileOrigin] = frozenset(
     {_FileOrigin.S3_URI, _FileOrigin.FILE_ID}
 )
 
+#: Origins whose content the request carries itself.
+_INLINE_ORIGINS: frozenset[_FileOrigin] = frozenset(
+    {_FileOrigin.BASE64, _FileOrigin.DATA_URI}
+)
+
 #: Origins that represent URL-like references rather than inline content.
 _URL_ONLY_ORIGINS: frozenset[_FileOrigin] = frozenset(
     {
@@ -330,6 +335,14 @@ class _FileSource(ABC):
     @abstractmethod
     async def _resolve_metadata(self) -> None:
         """Detect and store content type and size on ``self``, minimizing data reads."""
+
+    async def peek(self) -> bytes | None:
+        """Return the content without consuming the source, where it is held inline.
+
+        Returns:
+            None: a source holding no inline content never reads it.
+        """
+        return None
 
     @abstractmethod
     async def _read(self) -> bytes:
@@ -1089,6 +1102,19 @@ class _DataUriSource(_FileSource):
             return len(self._value) - self._data_start
         return await super().get_base64_size()
 
+    async def peek(self) -> bytes | None:
+        """Decode the payload without consuming the source.
+
+        Returns:
+            The content, or None once consumed or when the payload is invalid.
+        """
+        if not hasattr(self, "_value"):
+            return None
+        try:
+            return await b64decode(self._value[self._data_start :])
+        except ValueError:
+            return None
+
     async def _read(self) -> bytes:
         """Decode the base64 payload of the data URI.
 
@@ -1180,6 +1206,19 @@ class _Base64Source(_FileSource):
         if hasattr(self, "_value"):
             return len(self._value)
         return await super().get_base64_size()
+
+    async def peek(self) -> bytes | None:
+        """Decode the base64 string without consuming the source.
+
+        Returns:
+            The content, or None once consumed or when the string is invalid.
+        """
+        if not hasattr(self, "_value"):
+            return None
+        try:
+            return await b64decode(self._value)
+        except ValueError:
+            return None
 
     async def _read(self) -> bytes:
         """Decode the full base64 string.
@@ -1532,6 +1571,26 @@ class InputFile:
             True if a S3 file.
         """
         return self._source.is_s3()
+
+    @property
+    def is_inline(self) -> bool:
+        """Whether the request carries the content itself, as base64 or a data URI.
+
+        Returns:
+            True when reading the content fetches nothing.
+        """
+        return self._origin in _INLINE_ORIGINS
+
+    async def peek_inline(self) -> bytes | None:
+        """Return the content the request carries inline, without consuming the file.
+
+        Returns:
+            The content, or None for a file the request refers to, or one
+            already consumed.
+        """
+        if not self.is_inline:
+            return None
+        return await self._source.peek()
 
     async def get_filename(self) -> str | None:
         """Return a filename derived from the file source.
@@ -1963,6 +2022,37 @@ async def _gather_bounded[T](coroutines: Iterable[Coroutine[Any, Any, T]]) -> li
     async with TaskGroup() as task_group:
         tasks = [task_group.create_task(_run(coroutine)) for coroutine in coroutines]
     return [task.result() for task in tasks]
+
+
+async def resolve_inline_bedrock_content_blocks(
+    region: RegionName,
+) -> list[tuple[BedrockMediaType, int]]:
+    """Fill the pending Bedrock blocks of inline files, leaving referenced files unread.
+
+    A file given by URL, S3 URI or file ID keeps an empty block source, so the
+    caller can drop it; only its metadata is read, never its content.
+
+    Args:
+        region: Target AWS region.
+
+    Returns:
+        The media kind and size in bytes of each referenced file left unread.
+    """
+    pending = [
+        file
+        for file in _CURRENT_INPUT_FILES.get([])
+        if hasattr(file, "_bedrock_source")
+    ]
+    inline = [file for file in pending if file.is_inline]
+    referenced = [file for file in pending if not file.is_inline]
+    await _gather_bounded(
+        file.resolve_bedrock_content_block(region, to_s3=False) for file in inline
+    )
+    sizes = await _gather_bounded(file.get_size() for file in referenced)
+    return [
+        (file._bedrock_media_type, size)  # noqa: SLF001
+        for file, size in zip(referenced, sizes, strict=True)
+    ]
 
 
 async def prefetch_all_content_types() -> None:

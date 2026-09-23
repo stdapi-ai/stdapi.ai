@@ -31,7 +31,6 @@ from stdapi.models import (
     ModelDetails,
     _compute_model_capabilities,
     is_sagemaker_endpoint,
-    reject_unsupported_token_counting,
     usage_service,
 )
 from stdapi.models.capabilities import ROUTE_CAPABILITIES
@@ -270,25 +269,18 @@ class TestCapabilities:
         ):
             assert ROUTE_CAPABILITIES[operation].path in routes
 
-    def test_token_counting_is_not_advertised(
+    def test_token_counting_is_advertised(
         self, declared: dict[str, ModelDetails]
     ) -> None:
-        """Bedrock's token counter takes a foundation model, which this is not."""
+        """An endpoint model is counted approximately, so both counters are listed.
+
+        Ref: stdapi/models/chat/_adapters/_count_tokens.py:count_or_approximate
+        """
         routes, tools = _compute_model_capabilities(MODEL_ID, declared[MODEL_ID])
 
-        assert ROUTE_CAPABILITIES["anthropic_message_count_tokens"].path not in routes
-        assert "anthropic_message_count_tokens" not in tools
-        assert "openai_response_input_tokens" not in tools
-
-    def test_token_counting_is_refused_at_request_time(
-        self, declared: dict[str, ModelDetails]
-    ) -> None:
-        """The gateway answers it itself rather than forwarding a backend error."""
-        with pytest.raises(ApiError) as exc_info:
-            reject_unsupported_token_counting(declared[MODEL_ID])
-
-        assert exc_info.value.status == 400
-        assert "Token counting is not supported" in str(exc_info.value)
+        assert ROUTE_CAPABILITIES["anthropic_message_count_tokens"].path in routes
+        assert "anthropic_message_count_tokens" in tools
+        assert "openai_response_input_tokens" in tools
 
 
 class TestDispatch:

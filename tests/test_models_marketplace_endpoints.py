@@ -15,6 +15,7 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-marketplace-ca
 """
 
 from typing import TYPE_CHECKING, Any
+from unittest.mock import patch
 
 import pytest
 from botocore.exceptions import ClientError
@@ -23,6 +24,7 @@ import stdapi.models
 import stdapi.routes.anthropic_messages
 
 # Imported for its side effect: registering the token counter under test.
+import stdapi.routes.openai_audio_speech
 import stdapi.routes.openai_responses
 from stdapi import region_routing
 from stdapi.api_errors import ApiError
@@ -30,7 +32,6 @@ from stdapi.aws import _CLIENTS
 from stdapi.config import SETTINGS
 from stdapi.models import (
     _MODELS,
-    _TOKEN_COUNTING_OPERATIONS,
     MARKETPLACE_ENDPOINT_MODELS,
     MARKETPLACE_SERVICE,
     RUNTIME_SERVICE,
@@ -44,7 +45,7 @@ from stdapi.models import (
     resolve_routed_model_id,
     usage_service,
 )
-from stdapi.models.capabilities import ROUTE_CAPABILITIES
+from stdapi.models.capabilities import ROUTE_CAPABILITIES, Capability
 from stdapi.models.chat import _CHAT_MODEL_CACHE, get_chat_model
 from stdapi.models.chat._default import ChatModel
 from stdapi.models.marketplace_endpoints import (
@@ -61,6 +62,11 @@ if TYPE_CHECKING:
 
     from starlette.testclient import TestClient
     from types_aiobotocore_bedrock.type_defs import MarketplaceModelEndpointTypeDef
+
+#: Token-counting operations, advertised for every text model.
+_COUNTING_OPERATIONS = frozenset(
+    {"anthropic_message_count_tokens", "openai_response_input_tokens"}
+)
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
@@ -708,14 +714,13 @@ def test_an_endpoint_that_stopped_being_discovered_is_unpublished() -> None:
 
 
 def test_endpoint_advertises_no_capability_gated_route() -> None:
-    """An endpoint publishes the plain text routes and nothing a capability gates.
+    """An endpoint publishes the plain routes and nothing a capability gates.
 
-    ``CountTokens`` takes a foundation model identifier, and the class a listing
-    name happens to match is not the class that serves it, so publishing either
-    one's capabilities would advertise a route that fails at request time.
+    The class a listing name happens to match is not the class that serves it,
+    so publishing that class' capabilities would advertise a route that fails
+    at request time.
 
-    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
-         stdapi/models/__init__.py:_compute_model_capabilities
+    Ref: stdapi/models/__init__.py:_compute_model_capabilities
     """
     # A listing named like a family whose matcher could one day widen to it.
     endpoint = _published(
@@ -724,50 +729,43 @@ def test_endpoint_advertises_no_capability_gated_route() -> None:
                 "huggingface-reasoning-qwen3-4b", "amazon.nova-marketplace"
             )
         )
-    )
+    ).model_copy(update={"output_modalities": ["TEXT", "SPEECH"]})
     serverless = endpoint.model_copy(
         update={"service": RUNTIME_SERVICE, "marketplace_endpoints": None}
     )
     gated = {cap.path for cap in ROUTE_CAPABILITIES.values() if cap.required_capability}
     assert gated, "no route is capability-gated -- nothing was checked"
 
-    routes, _tools = _compute_model_capabilities(endpoint.id, endpoint)
+    with patch.object(
+        stdapi.models, "_model_capability_flags", return_value=Capability.TTS
+    ):
+        routes, _tools = _compute_model_capabilities(endpoint.id, endpoint)
+        served = _compute_model_capabilities(endpoint.id, serverless)[0]
 
     # The same ID as a serverless model does reach a capability-gated route.
-    assert gated & set(_compute_model_capabilities(endpoint.id, serverless)[0])
+    assert gated & set(served)
     assert not gated & set(routes)
     assert routes, "a text model endpoint must still publish its ungated routes"
 
 
-def test_endpoint_advertises_neither_token_counting_route() -> None:
-    """Both token counters are withheld, including the one no capability gates.
+def test_endpoint_advertises_both_token_counting_routes() -> None:
+    """Both token counters are advertised: an endpoint model is counted approximately.
 
-    ``/anthropic/v1/messages/count_tokens`` is published for every text model
-    because Bedrock Mantle serves it through a counter of its own, so its
-    absence here cannot come from the capability flags -- and a route the
-    catalogue advertises that the model cannot answer is the bug this guards.
-
-    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
-         stdapi/models/__init__.py:_TOKEN_COUNTING_OPERATIONS
+    Ref: stdapi/models/__init__.py:_compute_model_capabilities
+         stdapi/models/chat/_adapters/_count_tokens.py:count_or_approximate
     """
     endpoint = _published(_endpoint())
-    # A serverless Bedrock model of the same shape, which publishes both.
-    serverless_id = "amazon.nova-micro-v1:0"
-    serverless = endpoint.model_copy(
-        update={"service": RUNTIME_SERVICE, "marketplace_endpoints": None}
-    )
     counting = {
         ROUTE_CAPABILITIES[op].path
-        for op in _TOKEN_COUNTING_OPERATIONS
+        for op in _COUNTING_OPERATIONS
         if op in ROUTE_CAPABILITIES
     }
     assert len(counting) == 2, f"both counters must be registered, got {counting}"
 
     routes, tools = _compute_model_capabilities(MODEL_ID, endpoint)
 
-    assert counting <= set(_compute_model_capabilities(serverless_id, serverless)[0])
-    assert not counting & set(routes)
-    assert not _TOKEN_COUNTING_OPERATIONS & set(tools)
+    assert counting <= set(routes)
+    assert set(tools) >= _COUNTING_OPERATIONS
 
 
 @pytest.mark.parametrize(
@@ -780,20 +778,20 @@ def test_endpoint_advertises_neither_token_counting_route() -> None:
         ),
     ],
 )
-def test_token_counting_is_refused_by_the_gateway(
+def test_token_counting_is_estimated_by_the_gateway(
     app_client: TestClient,
     api_key: str,
     route: str,
     payload: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Counting tokens for an endpoint model answers 400 from the gateway itself.
+    """Counting tokens for an endpoint model answers the gateway's own estimate.
 
-    The backend would refuse it too, but with a validation error about an ARN
-    the caller never wrote and cannot act on. The gateway knows the counter
-    takes a foundation model identifier, so it answers first.
+    The backend's counter takes a foundation model identifier, so it is never
+    called: the answer is the local estimate, which errs high.
 
-    Ref: stdapi/models/__init__.py:reject_unsupported_token_counting
+    Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+         stdapi/models/chat/_adapters/_count_tokens.py:estimate_request_tokens
     """
     endpoint = _published(_endpoint())
     monkeypatch.setitem(_MODELS, MODEL_ID, endpoint)
@@ -804,10 +802,8 @@ def test_token_counting_is_refused_by_the_gateway(
         headers={"Authorization": f"Bearer {api_key}"},
     )
 
-    assert response.status_code == 400, response.text
-    assert "Token counting is not supported" in response.text
-    # Nothing of the backend reaches the caller (AGENTS.md, Never leak internals).
-    assert "sagemaker" not in response.text.lower()
+    assert response.status_code == 200, response.text
+    assert response.json()["input_tokens"] >= 53
     assert "arn:aws" not in response.text
 
 

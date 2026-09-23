@@ -2,19 +2,17 @@
 
 A route is advertised for a model only when the model's modalities and its
 model class' capability flags both satisfy the route's ``RouteCapability``
-descriptor. ``COUNT_TOKENS`` is the discriminating flag here: Bedrock
-``CountTokens`` has no Mantle equivalent. A route that is not an MCP tool is
-advertised as a path and stays filterable by its operation ID, but never
-appears in ``supported_mcp_tools``.
+descriptor. The token-counting routes need nothing beyond text in and out: every
+text model is counted, exactly or approximately. A route that is not an MCP
+tool is advertised as a path and stays filterable by its operation ID, but
+never appears in ``supported_mcp_tools``.
 
-Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
-     https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
      stdapi/models/__init__.py:_compute_model_capabilities
      stdapi/models/capabilities.py:RouteCapability
 """
 
 from typing import TYPE_CHECKING
-from unittest.mock import patch
 
 import pytest
 
@@ -22,9 +20,7 @@ import stdapi.routes.openai_responses  # noqa: F401  (registers the input-tokens
 from stdapi import models
 from stdapi.config import SETTINGS
 from stdapi.models import MANTLE_SERVICE, ModelDetails, _compute_model_capabilities
-from stdapi.models.capabilities import ROUTE_CAPABILITIES, Capability
-from stdapi.models.chat._default import ChatModel as ConverseChatModel
-from stdapi.models.chat._mantle._default import ChatModel as MantleChatModel
+from stdapi.models.capabilities import ROUTE_CAPABILITIES
 from stdapi.pricing import Dimension
 from tests._helpers import make_model_details
 from tests.conftest import set_test_price
@@ -35,11 +31,8 @@ if TYPE_CHECKING:
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
 
-#: MCP tool that must be gated on the COUNT_TOKENS capability.
-_INPUT_TOKENS_TOOL = "openai_response_input_tokens"
-
-#: Ungated sibling tool on the same modalities, used as the gating control.
-_RESPONSE_TOOL = "openai_response"
+#: Token-counting MCP tools, advertised for every text model.
+_COUNT_TOOLS = ("openai_response_input_tokens", "anthropic_message_count_tokens")
 
 #: Live speech-to-speech model, the discovery case for the realtime surface.
 _SPEECH_MODEL = "amazon.nova-2-sonic-v1:0"
@@ -95,64 +88,30 @@ def _text_model(service: str) -> ModelDetails:
     )
 
 
-class TestCountTokensCapabilityGating:
-    """The input-tokens tool is advertised only by models that can count tokens.
+class TestCountTokensAdvertised:
+    """The token-counting tools are advertised by every text model, whatever serves it.
 
     Ref: stdapi/models/__init__.py:_compute_model_capabilities
-         stdapi/routes/openai_responses.py:count_input_tokens
+         stdapi/models/chat/_adapters/_count_tokens.py:count_or_approximate
     """
 
-    def test_converse_declares_count_tokens(self) -> None:
-        """Converse chat models declare the COUNT_TOKENS capability.
+    @pytest.mark.parametrize(
+        "service", ["AWS Bedrock Runtime", MANTLE_SERVICE, models.MARKETPLACE_SERVICE]
+    )
+    def test_a_text_model_advertises_both_count_tools(self, service: str) -> None:
+        """Converse, Mantle and endpoint-served text models list both count routes.
 
-        Ref: stdapi/models/chat/_default.py:ChatModel
+        Ref: stdapi/routes/openai_responses.py:count_input_tokens
+             stdapi/routes/anthropic_messages.py:count_tokens
         """
-        assert ConverseChatModel.get_supported_operations() & Capability.COUNT_TOKENS
+        import stdapi.routes.anthropic_messages  # noqa: F401, PLC0415 - registers the route
 
-    def test_mantle_does_not_declare_count_tokens(self) -> None:
-        """Mantle chat models do not declare the COUNT_TOKENS capability.
-
-        Bedrock ``CountTokens`` lives on bedrock-runtime only, so the Mantle
-        chat model cannot serve it.
-
-        Ref: stdapi/models/chat/_mantle/_default.py:ChatModel
-        """
-        assert not (
-            MantleChatModel.get_supported_operations() & Capability.COUNT_TOKENS
+        routes, tools = _compute_model_capabilities(
+            "test.model-v1:0", _text_model(service)
         )
-
-    def test_converse_model_advertises_input_tokens_tool(self) -> None:
-        """A Converse-served TEXT model lists the input-tokens tool and route."""
-        with patch.object(
-            models,
-            "_model_capability_flags",
-            return_value=ConverseChatModel.get_supported_operations(),
-        ):
-            routes, tools = _compute_model_capabilities(
-                "test.model-v1:0", _text_model("AWS Bedrock Runtime")
-            )
-        assert _INPUT_TOKENS_TOOL in tools
-        assert ROUTE_CAPABILITIES[_INPUT_TOKENS_TOOL].path in routes
-
-    def test_mantle_model_hides_input_tokens_tool(self) -> None:
-        """A Mantle-served TEXT model omits the input-tokens tool it always rejects.
-
-        Only the ``COUNT_TOKENS``-gated entry is dropped: the ungated Responses
-        route on the same modalities stays advertised.
-        """
-        with patch.object(
-            models,
-            "_model_capability_flags",
-            return_value=MantleChatModel.get_supported_operations(),
-        ):
-            routes, tools = _compute_model_capabilities(
-                "test.model-v1:0", _text_model(MANTLE_SERVICE)
-            )
-        assert _INPUT_TOKENS_TOOL not in tools
-        assert ROUTE_CAPABILITIES[_INPUT_TOKENS_TOOL].path not in routes
-        assert _RESPONSE_TOOL in tools, (
-            "gating must drop only the COUNT_TOKENS route, not every TEXT route"
-        )
+        for tool in _COUNT_TOOLS:
+            assert tool in tools
+            assert ROUTE_CAPABILITIES[tool].path in routes
 
 
 class TestOperatorModelAliases:

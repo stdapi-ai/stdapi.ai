@@ -62,8 +62,8 @@ from stdapi.types.openai_responses import (
 from stdapi.usage import record_bedrock_usage
 from stdapi.vector_stores import SearchResult, StoreRecord
 from stdapi.vector_stores.backend import IndexCapabilities
-from tests._helpers import strip_code_fence
-from tests.conftest import OUTPUT_DIR
+from tests._helpers import long_text, strip_code_fence
+from tests.conftest import OUTPUT_DIR, REPO_ROOT
 from tests.test_openai_vector_stores import _PLANTED
 from tests.test_openai_vector_stores import indexed_store as _indexed_store
 
@@ -88,6 +88,11 @@ if TYPE_CHECKING:
 
     from stdapi.models import ModelDetails
     from stdapi.types.openai_vector_stores import SearchFilter
+
+#: Every tokenizer's count of each content sample, measured 2026-09-23.
+_ESTIMATE_SAMPLES: dict[str, Any] = json.loads(
+    (REPO_ROOT / "tests/fixtures/token_estimates.json").read_text()
+)
 
 #: Deterministic context long enough to exceed the minimum cacheable prompt size.
 _CACHEABLE_CONTEXT = (
@@ -2428,6 +2433,67 @@ class TestOpenAIInputTokens:
         assert response.input_tokens > 0
         assert response.object == "response.input_tokens"
 
+    @pytest.mark.slow
+    def test_input_tokens_past_the_context_window(
+        self, openai_client: OpenAI, responses_input_tokens_model: str
+    ) -> None:
+        """An input over the context window is counted when truncation is disabled.
+
+        The whole is over both lanes' windows (200k tokens for the local
+        counter, 128k upstream); each half fits, and the whole counts as their
+        sum, less the fixed tokens a request adds once.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count
+             stdapi/models/chat/_adapters/_count_tokens.py:count_converse_tokens
+        """
+        halves = [long_text(43_000, seed) for seed in (0, 1)]
+
+        def count(text: str) -> int:
+            """Count a single text input."""
+            return openai_client.responses.input_tokens.count(
+                model=responses_input_tokens_model, input=text
+            ).input_tokens
+
+        first, second = (count(half) for half in halves)
+        whole = count(" ".join(halves))
+        assert whole > 128_000
+        assert abs(whole - (first + second)) < whole * 0.001, (whole, first, second)
+
+    @pytest.mark.parametrize("sample", ["prose", "code", "json_records", "zh", "emoji"])
+    def test_input_tokens_of_a_model_no_counter_serves_is_never_below_upstream(
+        self, openai_client: OpenAI, use_official_api: bool, sample: str
+    ) -> None:
+        """An uncountable model's count is never below what its tokenizer counts.
+
+        The gateway lane counts gpt-oss-20b, which no backend counter serves,
+        against the prompt tokens it billed for the sample; the official lane
+        counts ``gpt-4o-mini``, whose count is the reference (2026-09-23).
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count
+             stdapi/models/chat/_adapters/_count_tokens.py:estimate_request_tokens
+        """
+        recorded = _ESTIMATE_SAMPLES[sample]
+        model = "gpt-4o-mini" if use_official_api else "openai.gpt-oss-20b"
+        counted = openai_client.responses.input_tokens.count(
+            model=model, input=recorded["text"]
+        )
+        assert counted.input_tokens >= recorded["tokens"][model]
+
+    @pytest.mark.gateway("counts a Claude model on the OpenAI route")
+    @pytest.mark.parametrize("sample", ["prose", "code", "base64", "identifiers"])
+    def test_input_tokens_of_a_newer_claude_is_never_below_upstream(
+        self, openai_client: OpenAI, sample: str
+    ) -> None:
+        """Claude Opus 5.5 is counted at or above the Anthropic API's count.
+
+        Ref: stdapi/models/chat/_adapters/_count_tokens.py:count_or_approximate
+        """
+        recorded = _ESTIMATE_SAMPLES[sample]
+        counted = openai_client.responses.input_tokens.count(
+            model="anthropic.claude-opus-5-5", input=recorded["text"]
+        )
+        assert counted.input_tokens >= recorded["tokens"]["claude-opus-5-5"]
+
 
 # code_interpreter integrated tool
 
@@ -2436,23 +2502,22 @@ _CODE_INTERP_MODELS = ("amazon.nova-2-lite-v1:0",)
 
 
 @pytest.mark.local
-class TestInputTokensMantleRejection:
-    """POST /v1/responses/input_tokens refuses Bedrock Mantle-served models.
+class TestInputTokensMantleEstimate:
+    """POST /v1/responses/input_tokens answers an estimate for a Mantle-served model.
 
-    Counting is backed by ``bedrock-runtime:CountTokens``, which does not know
-    Mantle-only model IDs, so the route rejects them itself instead of letting
-    an opaque AWS ``ValidationException`` surface.
+    No counter serves a Mantle-served model on this route, so it is estimated
+    locally, erring high, and ``CountTokens`` is never called.
 
-    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
+    Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count
          stdapi/routes/openai_responses.py:count_input_tokens
     """
 
-    def test_mantle_model_is_rejected_before_counting(
+    def test_mantle_model_is_estimated_without_counting(
         self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A Mantle-served model is a 400 and CountTokens is never called.
+        """A Mantle-served model gets a count and CountTokens is never called.
 
-        Ref: stdapi/aws_bedrock_mantle.py:serves_via_mantle
+        Ref: stdapi/models/chat/_adapters/_count_tokens.py:estimate_request_tokens
         """
         from stdapi.routes import openai_responses  # noqa: PLC0415
         from tests._helpers import make_model_details  # noqa: PLC0415
@@ -2477,11 +2542,40 @@ class TestInputTokensMantleRejection:
             json={"model": "openai.gpt-oss-120b-1:0", "input": "Hello"},
         )
 
-        assert response.status_code == 400, response.text
-        error = response.json()["error"]
-        assert "not supported" in error["message"]
-        assert error["type"] == "invalid_request_error"
+        assert response.status_code == 200, response.text
+        assert response.json()["input_tokens"] >= 53
         assert not counted, "CountTokens ran for a model it cannot resolve"
+
+    def test_truncation_auto_counts_the_whole_input_as_an_upper_bound(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Approximated, ``truncation: "auto"`` answers the whole input's count, never less.
+
+        Nothing reports this model's context window ahead of a generation, so
+        the count cannot know which turns a response would drop: it answers
+        the whole input, an upper bound of what a response keeps.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count
+             stdapi/routes/openai_responses.py:count_input_tokens
+        """
+        from stdapi.routes import openai_responses  # noqa: PLC0415
+        from tests._helpers import make_model_details  # noqa: PLC0415
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> ModelDetails:
+            return make_model_details(model_id)
+
+        monkeypatch.setattr(openai_responses, "validate_model", _validate_model)
+        monkeypatch.setattr(openai_responses, "serves_via_mantle", lambda _id: True)
+        body = {"model": "openai.gpt-oss-120b-1:0", "input": long_text(20_000)}
+        whole = app_client.post("/v1/responses/input_tokens", json=body)
+        auto = app_client.post(
+            "/v1/responses/input_tokens", json={**body, "truncation": "auto"}
+        )
+
+        assert whole.status_code == auto.status_code == 200, auto.text
+        assert auto.json()["input_tokens"] >= whole.json()["input_tokens"]
 
 
 @pytest.mark.local
