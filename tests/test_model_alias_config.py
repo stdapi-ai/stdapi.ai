@@ -93,10 +93,19 @@ def _headers(**values: str) -> dict[str, str]:
 
 @pytest.fixture
 def alias_overlay() -> Generator[None]:
-    """Reset the per-request alias overlay around each test."""
+    """Reset the per-request alias overlay around each test.
+
+    A live request clears ``GUARDRAIL_REQUEST_OVERRIDE_VAR`` too (see
+    ``set_guardrail_configuration``), which the tests here never call: without
+    resetting it, a guardrail-bearing overlay's ``apply_alias_overlay`` branch
+    reads whatever another test left the flag at, and silently skips setting
+    ``GUARDRAIL_CONFIG_VAR``.
+    """
     token = MODEL_ALIAS_OVERLAY_VAR.set(None)
     resolved = MODEL_ALIAS_OVERLAY_RESOLVED_VAR.set(False)
+    request_override = aws_bedrock.GUARDRAIL_REQUEST_OVERRIDE_VAR.set(False)
     yield
+    aws_bedrock.GUARDRAIL_REQUEST_OVERRIDE_VAR.reset(request_override)
     MODEL_ALIAS_OVERLAY_RESOLVED_VAR.reset(resolved)
     MODEL_ALIAS_OVERLAY_VAR.reset(token)
 
@@ -722,6 +731,53 @@ class TestAliasResolution:
             model = await models.validate_model(f"{_ALIAS}:latest")
             assert model.id == _TARGET
             assert resolve_service_tier(_TARGET, None) == "flex"
+            assert GUARDRAIL_CONFIG_VAR.get()["guardrailIdentifier"] == "gr-alias"
+        finally:
+            GUARDRAIL_CONFIG_VAR.reset(guardrail)
+
+    @pytest.fixture
+    def _stale_request_override_flag(self) -> None:
+        """Leave ``GUARDRAIL_REQUEST_OVERRIDE_VAR`` set, the way a leak would.
+
+        ``TestGuardrailPrecedence`` calls ``set_guardrail_configuration``
+        directly, outside a real request, which sets this flag; only its own
+        fixture resets it. Ordered before ``alias_overlay`` in the test below,
+        this reproduces exactly what a prior test's own cleanup gap would leave
+        behind on the shared context. No teardown: ``alias_overlay`` is the
+        fixture under test here.
+        """
+        aws_bedrock.GUARDRAIL_REQUEST_OVERRIDE_VAR.set(True)
+
+    @pytest.mark.usefixtures(
+        "catalog", "request_log", "_stale_request_override_flag", "alias_overlay"
+    )
+    async def test_a_stale_request_override_flag_does_not_suppress_the_alias_guardrail(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A flag another test left set must not silence this alias' guardrail.
+
+        ``apply_alias_overlay`` only installs a guardrail when
+        ``GUARDRAIL_REQUEST_OVERRIDE_VAR`` is not set: a call outside a real
+        request never clears it, so a value left over from an earlier test
+        would otherwise make this resolution serve the alias unguarded.
+
+        Ref: stdapi/aws_bedrock.py:apply_alias_overlay
+        """
+        monkeypatch.setitem(
+            MODEL_ALIAS_OVERLAYS,
+            _ALIAS,
+            build_alias_overlay(
+                _ALIAS,
+                ModelAliasConfig(
+                    model=_TARGET,
+                    guardrail_identifier="gr-alias",
+                    guardrail_version="1",
+                ),
+            ),
+        )
+        guardrail = GUARDRAIL_CONFIG_VAR.set(None)  # type: ignore[arg-type]
+        try:
+            await models.validate_model(_ALIAS)
             assert GUARDRAIL_CONFIG_VAR.get()["guardrailIdentifier"] == "gr-alias"
         finally:
             GUARDRAIL_CONFIG_VAR.reset(guardrail)
