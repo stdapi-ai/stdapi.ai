@@ -36,14 +36,18 @@ from ._podman import (
     start_service_container,
     stop_service_container,
 )
+from ._runner import ModelConfig, assert_result
 from ._server import find_free_port
 from ._tools import (
     AGENTIC_TOOLS,
     DEFAULT_IMAGE_GROUP,
     IMAGE_GROUPS,
+    AgenticResult,
     AgenticTool,
+    _codex_parse,
     npm_packages,
 )
+from .test_inspect_ai import _anthropic_batch_processed, _openai_batch_processed
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -490,3 +494,177 @@ class TestKeepIdMapping:
             "--gidmap=65536:0:1",
         )
         assert user == "1234567:65536"
+
+
+def _codex_jsonl(*events: dict[str, object]) -> str:
+    """Render *events* as the JSONL ``codex exec --json`` normally emits."""
+    return "\n".join(json.dumps(event) for event in events)
+
+
+class TestCodexTrace:
+    """``_codex_parse`` only grades commands that actually ran and read something.
+
+    Nothing here starts a container: these are unit tests of the pure JSONL
+    parser, added because the trace-grading path (``assert_result``'s
+    ``trace_any_of``, ``_codex_parse``'s ``commands``) had no offline coverage.
+
+    Ref: tests/agentic/_tools.py:_codex_parse
+         https://github.com/stdapi-ai/stdapi.ai/issues/299
+    """
+
+    def test_a_failed_command_is_dropped_from_commands_but_still_counted_as_a_step(
+        self,
+    ) -> None:
+        """A nonzero ``exit_code`` excludes a command from grading, not from the step count.
+
+        A command that named the right file but failed to run (a missing mount, a
+        wrong path) is not evidence the agent read anything, even though the CLI
+        still spent a turn on it.
+        """
+        stdout = _codex_jsonl(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "command_execution",
+                    "command": "sed -n '1,5p' _default.py",
+                    "exit_code": 2,
+                    "aggregated_output": "",
+                },
+            },
+            {"type": "turn.completed", "usage": {}},
+        )
+        result = _codex_parse(stdout)
+        assert result.commands == ()
+        assert result.steps == 1
+
+    def test_a_command_with_no_output_is_dropped_from_commands(self) -> None:
+        """A command that exits 0 but prints nothing is not evidence of a real read."""
+        stdout = _codex_jsonl(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "command_execution",
+                    "command": "grep -c _prepare_converse_request _default.py",
+                    "exit_code": 0,
+                    "aggregated_output": "",
+                },
+            },
+            {"type": "turn.completed", "usage": {}},
+        )
+        assert _codex_parse(stdout).commands == ()
+
+    def test_a_command_that_ran_and_produced_output_is_kept(self) -> None:
+        """A command exiting 0 with output is graded, in the order it ran."""
+        stdout = _codex_jsonl(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "command_execution",
+                    "command": "grep -n _prepare_converse_request _default.py",
+                    "exit_code": 0,
+                    "aggregated_output": "42:def _prepare_converse_request(...):",
+                },
+            },
+            {"type": "turn.completed", "usage": {}},
+        )
+        assert _codex_parse(stdout).commands == (
+            "grep -n _prepare_converse_request _default.py",
+        )
+
+    def test_a_command_carrying_neither_field_is_kept(self) -> None:
+        """A trace missing ``exit_code``/``aggregated_output`` is graded as before.
+
+        The gate only applies when the trace actually carries the field, so an
+        older or differently-shaped Codex build is not newly broken by it.
+        """
+        stdout = _codex_jsonl(
+            {
+                "type": "item.completed",
+                "item": {"type": "command_execution", "command": "cat _default.py"},
+            },
+            {"type": "turn.completed", "usage": {}},
+        )
+        assert _codex_parse(stdout).commands == ("cat _default.py",)
+
+
+class TestTraceAnyOf:
+    """``assert_result``'s ``trace_any_of`` grades the tool trace, not the prose.
+
+    Ref: tests/agentic/_runner.py:assert_result
+    """
+
+    @staticmethod
+    def _result(*, commands: tuple[str, ...]) -> AgenticResult:
+        return AgenticResult(
+            text="a long enough answer to pass the length floor",
+            steps=len(commands) or 1,
+            input_tokens=1,
+            output_tokens=1,
+            commands=commands,
+        )
+
+    def test_a_matching_command_passes(self) -> None:
+        """A command containing the keyword, case-insensitively, satisfies the check."""
+        result = self._result(commands=("GREP -n _prepare_converse_request x.py",))
+        assert_result(
+            result,
+            config=ModelConfig(model="test"),
+            trace_any_of=("_prepare_converse_request",),
+        )
+
+    def test_no_matching_command_fails(self) -> None:
+        """A trace that never names the keyword fails, even with a good answer."""
+        result = self._result(commands=("ls .",))
+        with pytest.raises(pytest.fail.Exception):
+            assert_result(
+                result,
+                config=ModelConfig(model="test"),
+                trace_any_of=("_prepare_converse_request",),
+            )
+
+    def test_empty_commands_fails_rather_than_passing_vacuously(self) -> None:
+        """A tool that exposes no trace fails this check instead of skipping it."""
+        result = self._result(commands=())
+        with pytest.raises(pytest.fail.Exception):
+            assert_result(
+                result,
+                config=ModelConfig(model="test"),
+                trace_any_of=("_prepare_converse_request",),
+            )
+
+
+class TestBatchProcessedPredicates:
+    """The predicates deciding whether a timed-out batch ever started.
+
+    Ref: tests/agentic/test_inspect_ai.py:_skip_or_fail_unstarted_batch
+    """
+
+    @pytest.mark.parametrize(
+        ("status", "expected"),
+        [("validating", False), ("in_progress", True), ("completed", True)],
+    )
+    def test_openai_batch_processed_reads_the_status(
+        self, status: str, expected: bool
+    ) -> None:
+        """Only `validating` counts as not yet started; every other status has."""
+        assert _openai_batch_processed({"status": status}) is expected
+
+    @pytest.mark.parametrize(
+        ("counts", "expected"),
+        [
+            ({"succeeded": 0, "errored": 0, "canceled": 0, "expired": 0}, False),
+            ({"succeeded": 1, "errored": 0, "canceled": 0, "expired": 0}, True),
+            ({"errored": 0, "canceled": 0, "expired": 1}, True),
+        ],
+    )
+    def test_anthropic_batch_processed_reads_the_counts(
+        self, counts: dict[str, int], expected: bool
+    ) -> None:
+        """At least one settled request of any kind counts as started."""
+        assert _anthropic_batch_processed({"request_counts": counts}) is expected
+
+    def test_anthropic_batch_processed_treats_a_missing_counts_dict_as_unstarted(
+        self,
+    ) -> None:
+        """A batch whose response carries no `request_counts` at all is not started."""
+        assert _anthropic_batch_processed({}) is False

@@ -133,6 +133,9 @@ class AgenticResult:
     codebase rather than answering from memory: Claude Code reports conversation
     turns, Codex reports completed shell executions. Both count up as the agent
     does more work, so a single floor expresses the same intent for either.
+
+    ``commands`` is the shell command line of each tool call that succeeded and
+    produced output, in order; empty for a tool that exposes no trace.
     """
 
     text: str
@@ -143,6 +146,7 @@ class AgenticResult:
     cache_created: int = 0
     is_error: bool = False
     error_detail: str = ""
+    commands: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -380,6 +384,20 @@ def _codex_build(invocation: Invocation) -> Command:
     return Command(tuple(argv), env)
 
 
+def _codex_command_ran(item: dict[str, object]) -> bool:
+    """Whether a `command_execution` item exited 0 and produced output, wherever it carries those fields.
+
+    A command naming the file a task points at is only evidence of a real read
+    once it is known to have actually run: a failed or silent command can name
+    it too, without opening the file at all.
+    """
+    exit_code = item.get("exit_code")
+    if exit_code is not None and exit_code != 0:
+        return False
+    output = item.get("aggregated_output")
+    return output is None or bool(str(output).strip())
+
+
 def _codex_parse(stdout: str) -> AgenticResult:
     """Normalise ``codex exec --json`` JSONL output.
 
@@ -410,6 +428,10 @@ def _codex_parse(stdout: str) -> AgenticResult:
 
     failed = [event for event in events if event.get("type") == "turn.failed"]
     messages = [str(item.get("text", "")) for item in _items("agent_message")]
+    executions = _items("command_execution")
+    commands = [
+        str(item.get("command", "")) for item in executions if _codex_command_ran(item)
+    ]
     completed = next(
         (event for event in events if event.get("type") == "turn.completed"), {}
     )
@@ -418,11 +440,12 @@ def _codex_parse(stdout: str) -> AgenticResult:
         usage = {}
     return AgenticResult(
         text=messages[-1] if messages else "",
-        steps=len(_items("command_execution")),
+        steps=len(executions),
         input_tokens=usage.get("input_tokens", 0),
         output_tokens=usage.get("output_tokens", 0),
         cache_read=usage.get("cached_input_tokens", 0),
         is_error=bool(failed),
+        commands=tuple(commands),
         error_detail=json.dumps(failed[0])[:500] if failed else "",
     )
 

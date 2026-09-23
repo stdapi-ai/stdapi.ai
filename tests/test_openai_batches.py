@@ -44,6 +44,7 @@ from stdapi.cleanup import CLEANUPS
 from stdapi.files import payload_created_at
 from tests import _batches
 from tests._batches import chat_lines, converse_output
+from tests._helpers import poll_batch_until_ended
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -3537,12 +3538,21 @@ class TestOpenAIBatchRoundTrip:
     each, so a translation bug belonging to one family cannot pass unseen.
 
     Ref: https://developers.openai.com/api/docs/guides/batch.md
+         https://github.com/stdapi-ai/stdapi.ai/issues/299
          stdapi/batches.py:iter_openai_results
     """
 
     @staticmethod
-    def _wait(client: OpenAI, batch_id: str) -> Batch:
+    def _processed(batch: Batch) -> bool:
+        """Whether `batch` has left the queue: `validating` is its only not-started status."""
+        return batch.status != "validating"
+
+    @classmethod
+    def _wait(cls, client: OpenAI, batch_id: str) -> Batch:
         """Read *batch_id* until it stops changing, and return it.
+
+        A batch still `validating` when the bound expires skips instead of
+        failing -- queue time is not this gateway's regression to own.
 
         Args:
             client: SDK client bound to the target.
@@ -3551,16 +3561,16 @@ class TestOpenAIBatchRoundTrip:
         Returns:
             The batch, in whichever terminal status it reached.
         """
-        deadline = monotonic() + _ROUND_TRIP_TIMEOUT
-        while (
-            batch := client.batches.retrieve(batch_id)
-        ).status not in _TERMINAL_STATUSES:
-            assert monotonic() < deadline, (
-                f"{batch_id} was still '{batch.status}' after "
-                f"{_ROUND_TRIP_TIMEOUT:.0f}s ({batch.request_counts})"
-            )
-            sleep(_POLL_INTERVAL)
-        return batch
+        return poll_batch_until_ended(
+            lambda: client.batches.retrieve(batch_id),
+            ended=lambda batch: batch.status in _TERMINAL_STATUSES,
+            processed=cls._processed,
+            describe=lambda batch: (
+                f"{batch_id} was '{batch.status}' ({batch.request_counts})"
+            ),
+            timeout=_ROUND_TRIP_TIMEOUT,
+            poll_interval=_POLL_INTERVAL,
+        )
 
     def _round_trip(
         self,

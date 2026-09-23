@@ -18,7 +18,6 @@ Ref: https://platform.claude.com/docs/en/build-with-claude/batch-processing
 
 import contextlib
 from datetime import datetime
-from time import monotonic, sleep
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -26,6 +25,7 @@ import pytest
 from stdapi import batches
 from tests import _batches
 from tests._batches import converse_output
+from tests._helpers import poll_batch_until_ended
 
 if TYPE_CHECKING:
     from anthropic import Anthropic
@@ -1093,6 +1093,7 @@ class TestMessageBatchRoundTrip:
     backing jobs accept, and every one of its results is read.
 
     Ref: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+         https://github.com/stdapi-ai/stdapi.ai/issues/299
          stdapi/batches.py:iter_anthropic_results
     """
 
@@ -1128,15 +1129,28 @@ class TestMessageBatchRoundTrip:
             ]
         )
         try:
-            deadline = monotonic() + _ROUND_TRIP_TIMEOUT
-            while (
-                current := anthropic_client.messages.batches.retrieve(batch.id)
-            ).processing_status != "ended":
-                assert monotonic() < deadline, (
-                    f"{batch.id} was still '{current.processing_status}' after "
-                    f"{_ROUND_TRIP_TIMEOUT:.0f}s ({current.request_counts})"
-                )
-                sleep(_POLL_INTERVAL)
+            current = poll_batch_until_ended(
+                lambda: anthropic_client.messages.batches.retrieve(batch.id),
+                ended=lambda state: state.processing_status == "ended",
+                # "in_progress" covers both a job still queued and one that has
+                # started but settled nothing yet; only a settled request is
+                # evidence the job actually ran.
+                processed=lambda state: (
+                    (
+                        state.request_counts.succeeded
+                        + state.request_counts.errored
+                        + state.request_counts.canceled
+                        + state.request_counts.expired
+                    )
+                    > 0
+                ),
+                describe=lambda state: (
+                    f"{batch.id} was '{state.processing_status}' "
+                    f"({state.request_counts})"
+                ),
+                timeout=_ROUND_TRIP_TIMEOUT,
+                poll_interval=_POLL_INTERVAL,
+            )
             assert current.ended_at is not None
             assert current.request_counts.succeeded == count
             assert current.request_counts.errored == 0

@@ -1,6 +1,5 @@
 """Anthropic-compatible Models API endpoints using AWS Bedrock."""
 
-from asyncio import Lock
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query
@@ -17,6 +16,7 @@ from stdapi.models import (
 )
 from stdapi.monitoring import log_request_params, log_response_params
 from stdapi.types.anthropic_messages import ModelInfo, ModelListResponse
+from stdapi.utils import LoopBoundLock
 
 
 def paginate_models(
@@ -62,7 +62,7 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
     #: Cached response for the common unpaginated call, rebuilt alongside `_ALL_MODELS`.
     _MODELS_RESPONSE = ModelListResponse(data=[])
     #: Guards concurrent rebuilds of the model caches above.
-    _ALL_MODELS_LOCK = Lock()
+    _ALL_MODELS_LOCK = LoopBoundLock()
     #: Catalog generation the caches above were built from; -1 until they are.
     _CATALOG_GENERATION = -1
 

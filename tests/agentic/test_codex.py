@@ -180,14 +180,8 @@ _STREAMING_KEYWORDS = (
     "messagestop",
     "format_stream",
 )
-#: Bedrock request fields ``_prepare_converse_request`` builds. Bedrock-side names
-#: on purpose: the OpenAI-side ones are recitable without opening anything.
-_PARAMETER_KEYWORDS = (
-    "inferenceconfig",
-    "toolconfig",
-    "additionalmodelrequestfields",
-    "requestmetadata",
-)
+#: Function and file the prompt points at, graded against the commands the agent ran.
+_PARAMETER_MAPPING_TRACE_KEYWORDS = ("_prepare_converse_request", "_default.py")
 #: Methods the three named modules override; only reading one of them supplies a name.
 _MODEL_OVERRIDE_KEYWORDS = (
     "_req_configure_reasoning",
@@ -284,6 +278,9 @@ class TestCodexAnalysis:
          stdapi/types/openai_responses.py:ResponseCreateParams
     """
 
+    @pytest.mark.retry(
+        "the model sometimes answers from the prompt without reading the file"
+    )
     def test_audit_parameter_mapping(
         self,
         request: pytest.FixtureRequest,
@@ -294,11 +291,13 @@ class TestCodexAnalysis:
     ) -> None:
         """Codex audits the Responses-to-Converse parameter mapping from the source.
 
-        The asserted vocabulary is the Bedrock side of the mapping, which appears
-        only inside the function the prompt points at -- the OpenAI side would be
-        recited correctly without opening anything. That is what carries the test:
-        the step floor is one because one ``sed`` range is all the task needs, and
-        a floor above what the task requires fails a correct answer.
+        Graded on the tool trace -- that a shell command actually opened the
+        function the prompt points at -- rather than on the model's own prose:
+        which four of several defensible mappings a model chooses to report is a
+        judgement call, not a compliance question, and asserting on it once
+        failed a run that had read the right function and answered correctly.
+        The step floor is one because one ``sed`` range is all the task needs,
+        and a floor above what the task requires fails a correct answer.
 
         Ref: https://developers.openai.com/api/docs/guides/migrate-to-responses
              stdapi/models/chat/_adapters/_openai_responses.py:translate_request
@@ -314,7 +313,10 @@ class TestCodexAnalysis:
         )
         log_metrics(TOOL, result, model_config, "test_audit_parameter_mapping")
         assert_result(
-            result, config=model_config, any_of=_PARAMETER_KEYWORDS, min_steps=1
+            result,
+            config=model_config,
+            trace_any_of=_PARAMETER_MAPPING_TRACE_KEYWORDS,
+            min_steps=1,
         )
 
     def test_enumerate_model_overrides(

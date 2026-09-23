@@ -46,6 +46,7 @@ the Batch API.
 
 Ref: https://inspect.aisi.org.uk/models.html
      https://inspect.aisi.org.uk/parallelism.html
+     https://github.com/stdapi-ai/stdapi.ai/issues/299
      stdapi/batches.py:MIN_REQUESTS_PER_MODEL
      stdapi/routes/openai_batches.py:create_batch
      stdapi/routes/anthropic_messages_batches.py:create_message_batch
@@ -54,6 +55,7 @@ Ref: https://inspect.aisi.org.uk/models.html
 
 from __future__ import annotations
 
+import subprocess
 from json import dumps
 from typing import TYPE_CHECKING
 
@@ -61,12 +63,15 @@ import httpx
 import pytest
 
 from stdapi.batches import MIN_REQUESTS_PER_MODEL
+from tests._helpers import batch_timeout_outcome
 
 from ._runner import ModelConfig, assert_result, log_metrics, run_agent
 from ._tools import INSPECT_AI, AgenticTool, inspect_record
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
+    from typing import NoReturn
 
     from ._server import AgenticServer
 
@@ -232,6 +237,79 @@ def _assert_every_sample_answered(record: dict[str, object], model: str) -> None
     )
 
 
+def _openai_batch_processed(batch: dict[str, object]) -> bool:
+    """Whether the OpenAI-dialect *batch* has left the queue: `validating` is its only not-started status."""
+    return batch.get("status") != "validating"
+
+
+def _anthropic_batch_processed(batch: dict[str, object]) -> bool:
+    """Whether the Anthropic-dialect *batch* has settled at least one request."""
+    counts = batch.get("request_counts")
+    if not isinstance(counts, dict):
+        return False
+    return (
+        sum(
+            int(counts.get(key, 0) or 0)
+            for key in ("succeeded", "errored", "canceled", "expired")
+        )
+        > 0
+    )
+
+
+def _skip_or_fail_unstarted_batch(
+    server: AgenticServer,
+    *,
+    log_start: int,
+    create_path: str,
+    retrieve_path: Callable[[str], str],
+    headers: dict[str, str],
+    processed: Callable[[dict[str, object]], bool],
+    timeout: float,
+) -> NoReturn:
+    """After the client's own poll gives up, decide whether the queue or the job is at fault.
+
+    The eval framework owns its poll loop and enforces no deadline, so the only bound
+    is the container timeout that killed the run -- which says nothing on its own
+    about whether the batch ever left the queue. The listing endpoint answers that
+    question for whichever batch is newest, not for this evaluation's own: the
+    bucket also holds batches from the unit round-trip tests and earlier runs, on
+    other xdist workers or from a previous timeout. The gateway's own log names the
+    one this evaluation created, so that is the batch read here.
+
+    Args:
+        server: Gateway the evaluation was pointed at.
+        log_start: Log index captured before the evaluation started.
+        create_path: Batch-creation route this evaluation's batch was submitted to.
+        retrieve_path: Builds the batch's retrieval route from its id.
+        headers: Auth headers for the batch's dialect.
+        processed: Whether the retrieved batch has processed at least one request.
+        timeout: Seconds the evaluation was given, for the message.
+
+    Raises:
+        pytest.fail.Exception: If no batch was created, or it started but did not finish.
+        pytest.skip.Exception: If the batch never started.
+    """
+    creations = _requests(server, log_start, create_path)
+    if not creations:
+        pytest.fail(
+            f"no batch was created at {create_path} before the evaluation timed out"
+        )
+    created = creations[-1].get("request_response")
+    batch_id = created.get("id") if isinstance(created, dict) else None
+    if not isinstance(batch_id, str):
+        pytest.fail(
+            f"the batch creation response at {create_path} carried no id: {created}"
+        )
+    response = httpx.get(
+        server.url(retrieve_path(batch_id)), headers=headers, timeout=_PROBE_TIMEOUT
+    )
+    response.raise_for_status()
+    batch = response.json()
+    batch_timeout_outcome(
+        processed=processed(batch), timeout=timeout, description=str(batch)
+    )
+
+
 def _evaluate(
     *,
     agentic_server: AgenticServer,
@@ -301,13 +379,24 @@ class TestOpenAIBatch:
         """
         log_start = len(agentic_server.logs)
 
-        record = _evaluate(
-            agentic_server=agentic_server,
-            agentic_image=agentic_image,
-            agentic_workdir=agentic_workdir,
-            model_config=model_config,
-            test_name=request.node.originalname or request.node.name,
-        )
+        try:
+            record = _evaluate(
+                agentic_server=agentic_server,
+                agentic_image=agentic_image,
+                agentic_workdir=agentic_workdir,
+                model_config=model_config,
+                test_name=request.node.originalname or request.node.name,
+            )
+        except subprocess.TimeoutExpired:
+            _skip_or_fail_unstarted_batch(
+                agentic_server,
+                log_start=log_start,
+                create_path="/v1/batches",
+                retrieve_path=lambda batch_id: f"/v1/batches/{batch_id}",
+                headers={"Authorization": f"Bearer {agentic_server.api_key}"},
+                processed=_openai_batch_processed,
+                timeout=model_config.timeout,
+            )
 
         _assert_every_sample_answered(record, model_config.model)
         uploads = _requests(agentic_server, log_start, "/v1/files")
@@ -360,13 +449,29 @@ class TestAnthropicMessageBatch:
         """
         log_start = len(agentic_server.logs)
 
-        record = _evaluate(
-            agentic_server=agentic_server,
-            agentic_image=agentic_image,
-            agentic_workdir=agentic_workdir,
-            model_config=model_config,
-            test_name=request.node.originalname or request.node.name,
-        )
+        try:
+            record = _evaluate(
+                agentic_server=agentic_server,
+                agentic_image=agentic_image,
+                agentic_workdir=agentic_workdir,
+                model_config=model_config,
+                test_name=request.node.originalname or request.node.name,
+            )
+        except subprocess.TimeoutExpired:
+            _skip_or_fail_unstarted_batch(
+                agentic_server,
+                log_start=log_start,
+                create_path="/anthropic/v1/messages/batches",
+                retrieve_path=lambda batch_id: (
+                    f"/anthropic/v1/messages/batches/{batch_id}"
+                ),
+                headers={
+                    "x-api-key": agentic_server.api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                processed=_anthropic_batch_processed,
+                timeout=model_config.timeout,
+            )
 
         _assert_every_sample_answered(record, model_config.model)
         batch_creations = _requests(

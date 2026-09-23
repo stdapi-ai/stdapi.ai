@@ -2,7 +2,7 @@
 
 import sys
 import warnings
-from asyncio import to_thread
+from asyncio import AbstractEventLoop, Lock, Semaphore, get_running_loop, to_thread
 from base64 import b32encode
 from binascii import Error as BinasciiError
 from contextlib import contextmanager
@@ -14,6 +14,7 @@ from re import ASCII
 from re import compile as compile_regex
 from typing import (
     TYPE_CHECKING,
+    Any,
     Literal,
     LiteralString,
     Never,
@@ -23,6 +24,7 @@ from typing import (
 )
 from urllib.parse import unquote
 from uuid import uuid7 as uuid
+from weakref import WeakKeyDictionary
 
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse as _JSONResponseBase
@@ -38,7 +40,7 @@ from sse_starlette import JSONServerSentEvent, ServerSentEvent
 from stdapi.api_errors import InvalidLanguageFormatError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Buffer, Generator
+    from collections.abc import AsyncIterator, Buffer, Coroutine, Generator
 
     class _AsyncReader(Protocol):
         """Protocol for objects with an async ``read(size)`` method."""
@@ -78,6 +80,81 @@ match_sagemaker_hub_content_arn = compile_regex(
 match_bedrock_prompt_arn = compile_regex(
     "(?P<base>arn:aws(?:-[^:]+)?:bedrock:(?P<region>[a-z0-9-]{1,20}):[0-9]{12}:prompt/[0-9a-zA-Z]{10})(?::(?P<version>[0-9]{1,5}))?\\Z"
 ).match
+
+
+class LoopBoundLock:
+    """An ``asyncio.Lock`` kept per event loop, so a closed loop cannot poison it.
+
+    A module-level ``asyncio.Lock()`` binds to the loop of its first contended
+    acquire and raises ``RuntimeError`` when later contended on another loop.
+    Production serves every request from one loop for the process lifetime, so
+    this changes nothing there; each loop gets its own lock, looked up by
+    ``get_running_loop()``, so a release always reaches the primitive its own
+    loop acquired even while another loop holds a lock of its own.
+    """
+
+    __slots__ = ("_locks",)
+
+    def __init__(self) -> None:
+        """Create the lock, with no per-loop primitive until first acquired."""
+        self._locks: WeakKeyDictionary[AbstractEventLoop, Lock] = WeakKeyDictionary()
+
+    def _lock(self) -> Lock:
+        """Return this running loop's own ``Lock``, creating it on first use."""
+        loop = get_running_loop()
+        lock = self._locks.get(loop)
+        if lock is None:
+            lock = self._locks[loop] = Lock()
+        return lock
+
+    async def __aenter__(self) -> None:
+        """Acquire the lock bound to the running loop."""
+        await self._lock().acquire()
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        """Release the lock bound to the running loop."""
+        self._lock().release()
+
+
+class LoopBoundSemaphore:
+    """An ``asyncio.Semaphore`` kept per event loop, so a closed loop cannot poison it.
+
+    Same rationale as :class:`LoopBoundLock`, for call sites that acquire and
+    release explicitly instead of using ``async with``.
+    """
+
+    __slots__ = ("_semaphores", "_value")
+
+    def __init__(self, value: int) -> None:
+        """Create the semaphore with `value` permits, unbound until first acquired.
+
+        Args:
+            value: Number of permits the semaphore grants concurrently.
+        """
+        self._value = value
+        self._semaphores: WeakKeyDictionary[AbstractEventLoop, Semaphore] = (
+            WeakKeyDictionary()
+        )
+
+    def _semaphore(self) -> Semaphore:
+        """Return this running loop's own ``Semaphore``, creating it on first use."""
+        loop = get_running_loop()
+        semaphore = self._semaphores.get(loop)
+        if semaphore is None:
+            semaphore = self._semaphores[loop] = Semaphore(self._value)
+        return semaphore
+
+    def acquire(self) -> Coroutine[Any, Any, bool]:
+        """Acquire a permit bound to the running loop.
+
+        Returns:
+            An awaitable that resolves once a permit is available.
+        """
+        return self._semaphore().acquire()
+
+    def release(self) -> None:
+        """Release a permit bound to the running loop."""
+        self._semaphore().release()
 
 
 def to_json_str(value: object) -> str:

@@ -1,6 +1,5 @@
 """OpenAI-compatible Models API implementation using AWS Bedrock."""
 
-from asyncio import Lock
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path
@@ -18,6 +17,7 @@ from stdapi.models import (
 )
 from stdapi.monitoring import log_request_params, log_response_params
 from stdapi.types.openai_models import Model
+from stdapi.utils import LoopBoundLock
 
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["Models", TAG_OPENAI]
@@ -34,7 +34,7 @@ class ModelsResponse(BaseModel):
 #: Cached /v1/models response, rebuilt when the catalog generation changes.
 _MODELS_RESPONSE = ModelsResponse(data=[])
 #: Guards concurrent rebuilds of the model caches above.
-_ALL_MODELS_LOCK = Lock()
+_ALL_MODELS_LOCK = LoopBoundLock()
 #: Catalog generation the caches above were built from; -1 until they are.
 _CATALOG_GENERATION = -1
 

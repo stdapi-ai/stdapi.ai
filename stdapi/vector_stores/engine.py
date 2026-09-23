@@ -9,7 +9,7 @@ degrades against what that backend declares rather than discovering a gap
 mid-request.
 """
 
-from asyncio import Semaphore, Task, create_task, gather, wait_for
+from asyncio import Task, create_task, gather, wait_for
 from base64 import b32hexencode
 from contextlib import suppress
 from dataclasses import dataclass
@@ -32,7 +32,7 @@ from stdapi.models import validate_model
 from stdapi.models.embedding import get_embedding_model
 from stdapi.monitoring import REQUEST_ID, log_background_event, log_error_details
 from stdapi.types import FILE_ID_PATTERN
-from stdapi.utils import now_utc_timestamp
+from stdapi.utils import LoopBoundSemaphore, now_utc_timestamp
 from stdapi.vector_stores._concurrency import gather_bounded
 from stdapi.vector_stores._paging import page_records
 from stdapi.vector_stores.backend import (
@@ -140,7 +140,7 @@ _LAST_ACTIVE_REFRESH_SECONDS: Final[int] = 3600
 _INDEXING_SLOTS: Final[int] = 2
 
 #: Bounds concurrent indexing to :data:`_INDEXING_SLOTS` files server-wide.
-_INDEXING_SEMAPHORE: Final[Semaphore] = Semaphore(_INDEXING_SLOTS)
+_INDEXING_SEMAPHORE: Final[LoopBoundSemaphore] = LoopBoundSemaphore(_INDEXING_SLOTS)
 
 #: Seconds a file may stay ``in_progress`` with nothing renewing its store's lease.
 _INDEXING_LEASE_SECONDS: Final[int] = 900

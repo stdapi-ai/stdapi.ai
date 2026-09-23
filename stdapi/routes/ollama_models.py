@@ -6,7 +6,6 @@
 - GET  /api/version — the Ollama API version this server is compatible with
 """
 
-from asyncio import Lock
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import TYPE_CHECKING, Annotated
@@ -35,6 +34,7 @@ from stdapi.types.ollama import (
     ShowResponse,
     VersionResponse,
 )
+from stdapi.utils import LoopBoundLock
 
 if TYPE_CHECKING:
     from stdapi.models import ModelDetails
@@ -58,7 +58,7 @@ _NO_RUNNING_MODELS = PsResponse(models=[])
 #: /api/tags route response cache
 _LIST_RESPONSE = ListResponse(models=[])
 #: Guards concurrent rebuilds of the cache above.
-_LIST_LOCK = Lock()
+_LIST_LOCK = LoopBoundLock()
 #: Catalog generation the cache above was built from; -1 until it is.
 _CATALOG_GENERATION = -1
 

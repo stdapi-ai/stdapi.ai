@@ -271,6 +271,7 @@ def assert_result(
     min_steps: int = 0,
     contains: str | None = None,
     any_of: Sequence[str] = (),
+    trace_any_of: Sequence[str] = (),
 ) -> str:
     """Assert an agentic run produced a real, codebase-derived answer.
 
@@ -286,6 +287,10 @@ def assert_result(
         min_steps: Minimum turns (Claude Code) or shell executions (Codex).
         contains: Substring that must appear in the answer, case-insensitive.
         any_of: Substrings of which at least one must appear, case-insensitive.
+        trace_any_of: Substrings of which at least one must appear in a tool call
+            the agent actually ran (``result.commands``), case-insensitive. Empty
+            ``result.commands`` always fails this check rather than passing it
+            vacuously.
 
     Returns:
         The answer text.
@@ -303,6 +308,18 @@ def assert_result(
     if any_of and not any(keyword.lower() in lowered for keyword in any_of):
         xfail_if_flaky(config, "content assertion")
         pytest.fail(f"Expected one of {list(any_of)} in result:\n{result.text}")
+    if trace_any_of:
+        lowered_commands = [command.lower() for command in result.commands]
+        if not any(
+            keyword.lower() in command
+            for keyword in trace_any_of
+            for command in lowered_commands
+        ):
+            xfail_if_flaky(config, "tool-trace assertion")
+            pytest.fail(
+                f"Expected one of {list(trace_any_of)} in a command the agent ran:\n"
+                + "\n".join(result.commands)
+            )
     if min_steps > 0 and result.steps < min_steps:
         xfail_if_flaky(config, "step-count assertion")
         pytest.fail(

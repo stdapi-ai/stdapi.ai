@@ -10,7 +10,7 @@ the batch reports the aggregate. Results are written per job and translated to
 the calling API's dialect on read.
 """
 
-from asyncio import Semaphore, Task, TaskGroup, create_task, gather, shield, timeout
+from asyncio import Task, TaskGroup, create_task, gather, shield, timeout
 from base64 import b32hexencode
 from binascii import crc32 as _crc32
 from collections.abc import AsyncGenerator
@@ -65,6 +65,7 @@ from stdapi.types.openai_chat_completions import CompletionCreateParams
 from stdapi.types.openai_embeddings import EmbeddingCreateParams
 from stdapi.usage import record_bedrock_usage
 from stdapi.utils import (
+    LoopBoundSemaphore,
     async_iter,
     now_utc_timestamp,
     to_json_bytes,
@@ -207,7 +208,7 @@ _BUILD_CONCURRENCY: int = 32
 _CREATE_SLOTS: int = 2
 
 #: Bounds concurrent translation waves to :data:`_CREATE_SLOTS`, server-wide.
-_CREATE_SEMAPHORE: Semaphore = Semaphore(_CREATE_SLOTS)
+_CREATE_SEMAPHORE: LoopBoundSemaphore = LoopBoundSemaphore(_CREATE_SLOTS)
 
 #: Seconds a creation waits for its first translation wave before being refused.
 _CREATE_WAIT_SECONDS: float = 30.0

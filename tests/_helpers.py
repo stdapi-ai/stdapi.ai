@@ -14,14 +14,15 @@ from __future__ import annotations
 import struct
 import zlib
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from time import monotonic, sleep
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import pytest
 from botocore.exceptions import ClientError
 from pybase64 import b64decode, b64encode
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from openai.types import CreateEmbeddingResponse
 
@@ -253,3 +254,70 @@ class FakeCollectedItem:
             marker: Marker the hook added.
         """
         self.added.append(marker)
+
+
+def batch_timeout_outcome(
+    *, processed: bool, timeout: float, description: str
+) -> NoReturn:
+    """Skip a batch that never started; fail one that started but did not finish.
+
+    The Bedrock batch queue, not the gateway, decides how long a job waits before
+    it is picked up, so a bound expiring on a job that never left the queue is
+    queue time, not a regression -- while one that expires after processing began
+    is a real failure the timeout should still catch.
+
+    Args:
+        processed: Whether at least one request in the batch has been processed
+            (succeeded, errored, canceled or expired), however the backend
+            currently reports the batch's own status.
+        timeout: Seconds the batch was given before this decision, for the message.
+        description: The batch's current state, for the message.
+
+    Raises:
+        pytest.fail.Exception: If `processed` is True.
+        pytest.skip.Exception: If `processed` is False.
+    """
+    if processed:
+        pytest.fail(f"batch did not finish within {timeout:.0f}s: {description}")
+    pytest.skip(
+        f"queue: batch had not started processing after {timeout:.0f}s: {description}"
+    )
+
+
+def poll_batch_until_ended[T](
+    retrieve: Callable[[], T],
+    *,
+    ended: Callable[[T], bool],
+    processed: Callable[[T], bool],
+    describe: Callable[[T], str],
+    timeout: float,
+    poll_interval: float,
+) -> T:
+    """Poll a batch until it ends, skipping instead of failing one that never started.
+
+    Args:
+        retrieve: Reads the batch's current state.
+        ended: Whether the batch has reached a terminal state.
+        processed: Whether at least one request has been processed; read only at
+            the deadline, to choose between failing and skipping.
+        describe: Renders the current state for a skip or failure message.
+        timeout: Seconds allowed before giving up.
+        poll_interval: Seconds between two reads.
+
+    Returns:
+        The batch, once ``ended`` is true of it.
+
+    Raises:
+        pytest.fail.Exception: If the deadline passes after processing started.
+        pytest.skip.Exception: If the deadline passes before processing started.
+    """
+    deadline = monotonic() + timeout
+    while not ended(current := retrieve()):
+        if monotonic() >= deadline:
+            batch_timeout_outcome(
+                processed=processed(current),
+                timeout=timeout,
+                description=describe(current),
+            )
+        sleep(poll_interval)
+    return current

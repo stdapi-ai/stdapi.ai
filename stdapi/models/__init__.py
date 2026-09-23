@@ -1,6 +1,6 @@
 """Models."""
 
-from asyncio import CancelledError, Lock, create_task, gather, shield, sleep
+from asyncio import CancelledError, create_task, gather, shield, sleep
 from asyncio import timeout as async_timeout
 from collections.abc import Mapping
 from contextlib import suppress
@@ -110,6 +110,7 @@ from stdapi.pricing import (
 from stdapi.region_routing import REGION_ROUTER, ROUTING_RETRYABLE_CODES
 from stdapi.usage import get_model_state, record_bedrock_usage
 from stdapi.utils import (
+    LoopBoundLock,
     match_bedrock_app_profile_arn,
     match_bedrock_prompt_arn,
     match_bedrock_prompt_router_arn,
@@ -159,12 +160,12 @@ if TYPE_CHECKING:
         updated_at: AwareDatetime | None
         update_interval: timedelta
         max_stale: timedelta
-        update_lock: Lock
+        update_lock: LoopBoundLock
         refresh_task: Task[None] | None
         generation: int
-        access_lock: Lock
-        user_profiles_access_lock: Lock
-        prompts_access_lock: Lock
+        access_lock: LoopBoundLock
+        user_profiles_access_lock: LoopBoundLock
+        prompts_access_lock: LoopBoundLock
         batch_price_source: frozenset[str] | None
 
 else:
@@ -527,14 +528,14 @@ _TWIN_SEPARATORS = re_compile(r"[^a-z0-9]+")
 _CACHE: _ModelCache = {
     "update_next": None,
     "updated_at": None,
-    "update_lock": Lock(),
+    "update_lock": LoopBoundLock(),
     "update_interval": timedelta(seconds=SETTINGS.model_cache_seconds),
     "max_stale": timedelta(seconds=SETTINGS.model_cache_max_stale_seconds),
     "refresh_task": None,
     "generation": 0,
-    "access_lock": Lock(),
-    "user_profiles_access_lock": Lock(),
-    "prompts_access_lock": Lock(),
+    "access_lock": LoopBoundLock(),
+    "user_profiles_access_lock": LoopBoundLock(),
+    "prompts_access_lock": LoopBoundLock(),
     "batch_price_source": None,
 }
 
