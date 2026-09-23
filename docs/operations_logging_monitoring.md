@@ -305,7 +305,7 @@ Pricing each request from published AWS prices is covered on the [Cost Managemen
 
 - High latency: Inspect `execution_time_ms` on the `request` event. If the response was streamed, also sum `request_stream` durations. Combine with OTel spans to locate downstream delays (model provider, S3, etc.).
 - Errors: Look for `level=critical` and `error_detail` (formatted exceptions). With OTel, the span is marked error with attributes `error=true` and `error.message`.
-- Rejected requests: A `400` from request validation lists the fields that failed and why, as `<field path>: <message>` entries in `error_detail` — the first 20 distinct faults, then a count of the rest. The values themselves are never logged, so a credential or an attachment a rejected body carries stays out of the log; the caller is answered with the most specific of those messages.
+- Rejected requests: A `400` from request validation lists the fields that failed and why, as `<field path>: <message>` entries in `error_detail` — the first 20 distinct faults, then a count of the rest. The values themselves are never logged, so a credential or an attachment a rejected body carries stays out of the log; the caller is answered in the wording of the API it called (see [Using stdapi.ai](api_overview.md#using-stdapiai)).
 - Payload issues: Temporarily enable `LOG_REQUEST_PARAMS=true` to validate requests/responses, then disable. It covers requests that pass validation — a request rejected before it reaches its endpoint is reported by field path only.
 - Client identification: `client_user_agent` and optional `request_user_id` / `request_org_id` help tie requests to users.
 - Routing confirmation: `model_id` and `voice_id` confirm which provider/model/voice handled the request.

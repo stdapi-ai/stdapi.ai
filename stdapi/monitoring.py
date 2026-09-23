@@ -18,7 +18,7 @@ from starlette.requests import HTTPConnection  # noqa: TC002
 from stdapi import server
 from stdapi.api_errors import ApiError, denied_feature_unavailable
 from stdapi.api_providers import format_http_error
-from stdapi.aws_bedrock import AWS_ERROR_MAP
+from stdapi.aws_bedrock import AWS_ERROR_MAP, without_model_refusal_prefix
 from stdapi.config import SETTINGS, LogLevel
 from stdapi.docs_assets import ASSET_PATHS
 from stdapi.metering import SERVER_FULL_VERSION
@@ -1294,7 +1294,9 @@ def _stream_backend_error(
         return status, (
             "The request could not be completed. Retry the request."
             if status >= 500
-            else hide_security_details(status, error["Message"])
+            else hide_security_details(
+                status, without_model_refusal_prefix(error["Message"])
+            )
         )
     status = AWS_ERROR_MAP.get(exc.__class__.__name__, (503, "server_error"))[0]
     log_error_details(str(exc), status=status)

@@ -1042,6 +1042,22 @@ def get_extra_model_parameters(
     return {**defaults, **filter_extra_model_parameters(request.model_extra)}
 
 
+#: Prefix Bedrock writes ahead of a model provider's own refusal of a request.
+_MODEL_REFUSAL_PREFIX: str = "The model returned the following errors: "
+
+
+def without_model_refusal_prefix(message: str) -> str:
+    """Return a backend message without the prefix Bedrock writes ahead of a model's refusal.
+
+    Args:
+        message: The message of a Bedrock error.
+
+    Returns:
+        The model provider's own text, or *message* unchanged when it has no prefix.
+    """
+    return message.removeprefix(_MODEL_REFUSAL_PREFIX)
+
+
 @contextmanager
 def handle_bedrock_client_error() -> Generator[None]:
     """Translate Bedrock ``ClientError`` to an :class:`ApiError` with an appropriate HTTP status.
@@ -1051,8 +1067,8 @@ def handle_bedrock_client_error() -> Generator[None]:
 
     Raises:
         ApiError: For recognised error codes (model errors, S3 credential issues,
-            an input over the context window, etc.).
-            Unrecognised errors are re-raised as-is.
+            an input over the context window, a model provider's own refusal,
+            etc.). Unrecognised errors are re-raised as-is.
     """
     try:
         yield
@@ -1077,6 +1093,11 @@ def handle_bedrock_client_error() -> Generator[None]:
                 # The backend's own wording names internals: logged, not sent.
                 log_error_details(error_message, status=overflow.status)
                 raise overflow from error
+            case "ValidationException" if error_message.startswith(
+                _MODEL_REFUSAL_PREFIX
+            ):
+                # The provider's own wording is relayed, without the prefix naming the backend.
+                raise ApiError(without_model_refusal_prefix(error_message)) from error
             case code if code in _BEDROCK_MODEL_ERROR_CODES:  # pragma: no cover
                 log_error_details(error_message, status=500)
                 msg = "The model failed to process the request."

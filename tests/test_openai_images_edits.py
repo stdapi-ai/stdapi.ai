@@ -300,10 +300,10 @@ class TestImagesEditsBasic:
         assert response.status_code == 400
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
-        expected = (
-            "application/x-www-form-urlencoded" if use_official_api else "body.image[]"
-        )
-        assert expected in error["message"], error["message"]
+        if use_official_api:
+            assert "application/x-www-form-urlencoded" in error["message"], error
+        else:
+            assert error["param"] == "image[0]", error
 
     @pytest.mark.skip("Currently no models to use for this test case")
     def test_model_not_supporting_image_editing(
@@ -519,15 +519,13 @@ class TestImagesEditsBasic:
             openai_client.files.delete(uploaded.id)
 
     def test_missing_images_returns_400(
-        self, openai_client: OpenAI, image_generation_model: str, use_official_api: bool
+        self, openai_client: OpenAI, image_generation_model: str
     ) -> None:
         """A JSON body without an ``images`` array is a 400 naming that field.
 
         The JSON encoding of this endpoint is not a gateway extension: OpenAI
-        accepts it too, and answers ``missing_required_parameter`` on
-        ``param="images"``. The gateway reports its Pydantic location instead,
-        so only the wording is target-specific -- the status, the envelope type
-        and the named field are common to both.
+        accepts it too, and both answer ``missing_required_parameter`` on
+        ``param="images"``.
 
         Ref: https://developers.openai.com/api/reference/resources/images/methods/edit
              stdapi/types/openai_images.py:ImageEditJsonBody
@@ -542,13 +540,9 @@ class TestImagesEditsBasic:
         assert response.status_code == 400
         error = response.json().get("error", {})
         assert error.get("type") == "invalid_request_error"
-        assert "images" in error["message"], error["message"]
-        if use_official_api:
-            assert error["message"] == "Missing required parameter: 'images'."
-            assert error.get("code") == "missing_required_parameter"
-            assert error.get("param") == "images"
-        else:
-            assert error["message"].startswith("Validation error"), error["message"]
+        assert error["message"] == "Missing required parameter: 'images'."
+        assert error.get("code") == "missing_required_parameter"
+        assert error.get("param") == "images"
 
     def test_empty_image_ref_returns_400(
         self, openai_client: OpenAI, image_generation_model: str, use_official_api: bool
@@ -556,11 +550,10 @@ class TestImagesEditsBasic:
         """An ``images`` entry with neither ``file_id`` nor ``image_url`` is rejected.
 
         Both targets reject it with a 400 that points at the offending element
-        by index and demands exactly one image source. They label it
-        differently: OpenAI answers ``image_generation_user_error`` with
-        ``param="images[0]"``, where the gateway answers the generic
-        ``invalid_request_error`` and reports the Pydantic location
-        ``images.0`` in the message.
+        by index in ``param="images[0]"`` and demands exactly one image source.
+        They label it differently: OpenAI answers ``image_generation_user_error``
+        with code ``mutually_exclusive_parameters``, where the gateway answers the
+        generic ``invalid_request_error`` with no code.
 
         Ref: https://developers.openai.com/api/reference/resources/images/methods/edit
              stdapi/types/openai_images.py:ImageInputReferenceParam
@@ -585,7 +578,7 @@ class TestImagesEditsBasic:
             assert "file_id" in error["message"], error["message"]
         else:
             assert error.get("type") == "invalid_request_error"
-            assert "images.0" in error["message"], error["message"]
+            assert error.get("param") == "images[0]", error
             assert "file_id" in error["message"], error["message"]
 
 
@@ -701,7 +694,7 @@ class TestImagesEditsImageFieldBinding:
         assert response.status_code == 400
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
-        assert "image[]" in error["message"]
+        assert (error["param"], error["code"]) == ("image[0]", "invalid_type")
 
     def test_bracket_suffixed_uploads_are_merged_with_the_bare_field(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch

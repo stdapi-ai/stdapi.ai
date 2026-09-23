@@ -397,8 +397,7 @@ class TestImagesVariationsJsonBody:
         """A JSON body without ``image`` is rejected, naming that field.
 
         ``image`` is the only required field the JSON body adds over the
-        multipart form, and the gateway reports the Pydantic location in the
-        message.
+        multipart form, and the gateway names it in ``param`` as OpenAI does.
 
         Ref: stdapi/main.py:handle_validation_exception
         """
@@ -411,7 +410,8 @@ class TestImagesVariationsJsonBody:
         assert response.status_code == 400
         error = response.json().get("error", {})
         assert error.get("type") == "invalid_request_error"
-        assert error.get("message", "").startswith("Validation error at image:")
+        assert error.get("param") == "image", error
+        assert error.get("code") == "missing_required_parameter", error
 
 
 @pytest.fixture
@@ -487,9 +487,12 @@ class TestImagesVariationsModelField:
             "/v1/images/variations", data={"model": image_variation_model}
         )
         assert response.status_code == 400
-        assert response.json()["error"]["type"] == "invalid_request_error"
-        assert response.json()["error"]["message"].startswith(
-            "Validation error at body.image:"
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert error["message"] == "Missing required parameter: 'image'."
+        assert (error["param"], error["code"]) == (
+            "image",
+            "missing_required_parameter",
         )
 
 

@@ -35,6 +35,7 @@ from anthropic.types.beta.beta_context_management_response import (
 from botocore.exceptions import ClientError
 
 import stdapi.models.chat._adapters._anthropic_message as anthropic_message_adapter
+from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock_mantle import mantle_request_headers
 from stdapi.models.chat import get_chat_model
 from stdapi.models.chat._adapters._anthropic_message import (
@@ -1047,7 +1048,11 @@ class TestContextManagementOffline:
     ) -> None:
         """A refused edit fails the count, even though the unedited count succeeds.
 
+        The refusal reaches the client in the provider's own words, without the
+        prefix the backend writes ahead of them.
+
         Ref: stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
+             stdapi/aws_bedrock.py:handle_bedrock_client_error
         """
         refusal = ClientError(
             {
@@ -1077,7 +1082,7 @@ class TestContextManagementOffline:
             }
         )
 
-        with pytest.raises(ClientError) as excinfo:
+        with pytest.raises(ApiError) as excinfo:
             await count_tokens_via_bedrock(
                 request,
                 _CLAUDE_CONVERSE,
@@ -1085,7 +1090,9 @@ class TestContextManagementOffline:
                 _converse_model(_CLAUDE_CONVERSE),
             )
 
-        assert excinfo.value is refusal
+        assert excinfo.value.status == 400
+        assert excinfo.value.args == ("invalid edit",)
+        assert excinfo.value.__cause__ is refusal
 
     @pytest.mark.parametrize(
         ("model_id", "forwarded"), [(_CLAUDE_MANTLE, True), (_NON_CLAUDE_MANTLE, False)]

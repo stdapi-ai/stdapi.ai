@@ -1650,7 +1650,9 @@ class TestOpenAIFilesMultipartWithoutAFile:
         assert response.status_code == 400, response.text
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
-        assert error["message"] == "Validation error at body.file: Field required"
+        # OpenAI's Files route words it in JSON-schema terms, param and code null.
+        assert error["message"] == "'file' is a required property"
+        assert (error["param"], error["code"]) == (None, None)
 
 
 @pytest.mark.local
@@ -3062,15 +3064,17 @@ class TestListFilesQueryValidationUnit:
 
         Ref: stdapi/routes/openai_files.py:list_files_endpoint
         """
-        assert "greater than or equal to 1" in self._reject(app_client, {"limit": 0})
+        assert self._reject(app_client, {"limit": 0}) == (
+            "0 is less than the minimum of 1"
+        )
 
     def test_limit_above_the_maximum_is_rejected(self, app_client: TestClient) -> None:
         """``limit=10001`` is refused rather than silently clamped.
 
         Ref: stdapi/routes/openai_files.py:list_files_endpoint
         """
-        assert "less than or equal to 10000" in self._reject(
-            app_client, {"limit": 10001}
+        assert self._reject(app_client, {"limit": 10001}) == (
+            "10001 is greater than the maximum of 10000"
         )
 
     def test_malformed_cursor_is_rejected(self, app_client: TestClient) -> None:
@@ -3262,8 +3266,9 @@ class TestOpenAIFilesExpiresAfterAnchorUnit:
         assert response.status_code == 400, response.text
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
-        assert "expires_after_anchor" in error["message"]
-        assert "'created_at'" in error["message"], error
+        assert error["message"] == (
+            "'updated_at' is not one of ['created_at'] - 'expires_after_anchor'"
+        ), error
         assert calls == [], "a rejected anchor must not reach storage"
 
     def test_unsupported_anchor_is_rejected_in_the_sdk_bracketed_form(
@@ -3344,7 +3349,9 @@ class TestOpenAIFilesExpiresAfterAnchorUnit:
         )
 
         assert response.status_code == 400, response.text
-        assert "expires_after_anchor" in response.json()["error"]["message"]
+        assert response.json()["error"]["message"] == (
+            "'updated_at' is not one of ['created_at'] - 'expires_after_anchor'"
+        )
         assert calls == []
 
     def test_created_at_anchor_is_accepted_with_its_ttl(

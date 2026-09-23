@@ -391,7 +391,8 @@ class TestAddUploadPartJsonBodyRemoteSources:
         assert response.status_code == 400, response.text
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
-        assert error["message"] == "Validation error at body.data: Field required"
+        assert error["message"] == "Missing required parameter: 'data'."
+        assert (error["param"], error["code"]) == ("data", "missing_required_parameter")
 
 
 class TestAddUploadPartSizeCap:

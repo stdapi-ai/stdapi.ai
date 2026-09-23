@@ -669,7 +669,12 @@ class TestAudioTranslationsWithoutAFile:
         assert response.status_code == 400, response.text
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
-        assert error["message"] == "Validation error at body.file: Field required"
+        # OpenAI's audio routes relay their validator's error list, param and code null.
+        assert error["message"] == (
+            "[{'type': 'missing', 'loc': ('body', 'file'), 'msg': 'Field required', "
+            "'input': None}]"
+        )
+        assert (error["param"], error["code"]) == (None, None)
 
 
 @pytest.mark.local

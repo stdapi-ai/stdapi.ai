@@ -1062,9 +1062,7 @@ class TestAnthropicFilesMultipartWithoutAFile:
         body = response.json()
         assert body["type"] == "error"
         assert body["error"]["type"] == "invalid_request_error"
-        assert body["error"]["message"] == (
-            "Validation error at body.file: Field required"
-        )
+        assert body["error"]["message"] == "file: Field required"
 
 
 class TestAnthropicFileContentDownloadHardening:

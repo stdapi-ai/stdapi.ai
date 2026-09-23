@@ -446,11 +446,12 @@ class TestAudioTranscriptions:
     def test_invalid_response_format_error(
         self, openai_client: OpenAI, sample_audio_file: bytes, transcription_model: str
     ) -> None:
-        """A ``response_format`` outside the enum is rejected with 400 and no error code.
+        """A ``response_format`` outside the enum is rejected with 400.
 
         ``AudioResponseFormat`` is a ``Literal``, so the request fails in request-body
-        validation; the gateway reports such failures as ``invalid_request_error``
-        with ``code`` unset and lists the accepted values in the message.
+        validation. OpenAI's transcription route relays its validator's error
+        list with ``param`` and ``code`` null; the accepted values are each
+        target's own.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/main.py:handle_validation_exception
@@ -467,7 +468,8 @@ class TestAudioTranscriptions:
         error_body = error.body
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
-        assert error_body["code"] is None
+        assert (error_body["param"], error_body["code"]) == (None, None)
+        assert "'loc': ('body', 'response_format')" in error_body["message"]
         error_message = str(error).lower()
         assert any(
             word in error_message

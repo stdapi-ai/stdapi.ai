@@ -374,9 +374,8 @@ class TestEmbeddings:
         """An out-of-enum ``encoding_format`` is rejected as a 400 before any backend call.
 
         ``encoding_format`` is a ``Literal["float", "base64"]``, so Pydantic rejects the
-        value and ``handle_validation_exception`` reports it as
-        ``Validation error at body.encoding_format: ...``. The message check stays
-        tolerant because the official API words its own 400 differently.
+        value, reported as OpenAI's embeddings route words it: a sentence of its
+        own, ``param`` and ``code`` null.
 
         Ref: https://developers.openai.com/api/docs/guides/error-codes
              stdapi/types/openai_embeddings.py:EmbeddingCreateParams
@@ -394,8 +393,11 @@ class TestEmbeddings:
         error_body = error.body
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error", error_body
-        message = error_body["message"].lower()
-        assert "encoding_format" in message or "format" in message, error_body
+        assert (error_body["param"], error_body["code"]) == (None, None)
+        assert error_body["message"] == (
+            "Invalid value for 'encoding_format' = invalid_format. Supported "
+            "values: ['float', 'base64']."
+        )
 
     def test_invalid_dimensions_error(
         self, openai_client: OpenAI, embedding_model: str
@@ -421,7 +423,10 @@ class TestEmbeddings:
         error_body = error.body
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error", error_body
-        assert "dimensions" in error_body["message"].lower(), error_body
+        assert (error_body["param"], error_body["code"]) == (None, None)
+        assert error_body["message"] == (
+            "Invalid value for 'dimensions' = 0. Must be greater than 0."
+        )
 
     def test_batch_size_limits(
         self, openai_client: OpenAI, embedding_model: str

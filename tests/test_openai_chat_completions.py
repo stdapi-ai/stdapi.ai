@@ -1924,10 +1924,11 @@ class TestChatCompletions:
 
         ``seed`` has no Bedrock ``inferenceConfig`` slot, so it is passed through in
         ``additionalModelRequestFields``; a model that does not declare it answers
-        with a ``ValidationException``, which the gateway maps to a 400.
+        with a ``ValidationException``, which the gateway maps to a 400 in the
+        model's own words.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
-             stdapi/aws_bedrock.py:AWS_ERROR_MAP
+             stdapi/aws_bedrock.py:handle_bedrock_client_error
         """
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(
@@ -1937,8 +1938,11 @@ class TestChatCompletions:
         body = exc_info.value.body
         assert isinstance(body, dict)
         assert body["type"] == "invalid_request_error"
-        assert "the model returned" in str(body["message"]).lower(), (
-            "The rejection must come from the model, not from request validation"
+        # Request validation would name the field in ``param``; the model does not.
+        assert body["param"] is None, "the rejection must come from the model"
+        assert "[seed]" in str(body["message"]), body
+        assert "the model returned" not in str(body["message"]).lower(), (
+            "the backend's prefix must not reach the client"
         )
 
     @pytest.mark.gateway("Unsupported fields are project-specific here")
@@ -1984,10 +1988,11 @@ class TestChatCompletions:
 
         Unlike ``logprobs`` the gateway does not blocklist ``top_logprobs``: it
         travels in ``additionalModelRequestFields`` and only models that declare
-        the field accept it, so this model answers with a ``ValidationException``.
+        the field accept it, so this model answers with a ``ValidationException``,
+        relayed in the model's own words.
 
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
-             stdapi/aws_bedrock.py:AWS_ERROR_MAP
+             stdapi/aws_bedrock.py:handle_bedrock_client_error
         """
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(
@@ -1999,8 +2004,11 @@ class TestChatCompletions:
         body = exc_info.value.body
         assert isinstance(body, dict)
         assert body["type"] == "invalid_request_error"
-        assert "the model returned" in str(body["message"]).lower(), (
-            "The rejection must come from the model, not from request validation"
+        # Request validation would name the field in ``param``; the model does not.
+        assert body["param"] is None, "the rejection must come from the model"
+        assert "[top_logprobs]" in str(body["message"]), body
+        assert "the model returned" not in str(body["message"]).lower(), (
+            "the backend's prefix must not reach the client"
         )
 
     @pytest.mark.retry(

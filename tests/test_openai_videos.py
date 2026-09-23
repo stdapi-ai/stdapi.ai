@@ -307,7 +307,8 @@ class TestOpenAIVideoRoutes:
         assert response.status_code == 400
         err = response.json()["error"]
         assert err["type"] == "invalid_request_error"
-        assert err["message"].startswith("Validation error at prompt")
+        assert err["message"] == "Missing required parameter: 'prompt'."
+        assert (err["param"], err["code"]) == ("prompt", "missing_required_parameter")
         assert not video_backend.calls
 
     def test_create_with_non_integer_seconds_is_rejected(
@@ -332,7 +333,7 @@ class TestOpenAIVideoRoutes:
         assert response.status_code == 400
         err = response.json()["error"]
         assert err["type"] == "invalid_request_error"
-        assert err["message"].startswith("Validation error at seconds")
+        assert (err["param"], err["code"]) == ("seconds", "invalid_value")
         assert not video_backend.calls
 
     def test_create_with_zero_size_is_rejected(
@@ -353,7 +354,7 @@ class TestOpenAIVideoRoutes:
         assert response.status_code == 400
         err = response.json()["error"]
         assert err["type"] == "invalid_request_error"
-        assert err["message"].startswith("Validation error at size")
+        assert (err["param"], err["code"]) == ("size", "invalid_value")
         assert not video_backend.calls
 
     def test_create_with_malformed_json_body_is_rejected(
@@ -374,7 +375,8 @@ class TestOpenAIVideoRoutes:
         assert response.status_code == 400, response.text
         err = response.json()["error"]
         assert err["type"] == "invalid_request_error"
-        assert "Invalid JSON" in err["message"]
+        assert err["message"] == "We could not parse the JSON body of your request."
+        assert (err["param"], err["code"]) == (None, None)
         assert not video_backend.calls
 
     def test_create_then_retrieve_roundtrip(

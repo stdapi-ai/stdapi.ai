@@ -399,11 +399,11 @@ class TestReasoningEffortReachesTheModel:
 class TestReasoningEffortValidation:
     """A reasoning effort outside the accepted values is refused with a 400.
 
-    OpenAI names the field in ``param`` and sets ``code`` (``unsupported_value``
-    on Chat Completions, listing the model's own levels, ``invalid_value`` on
-    Responses). The gateway validates the field before choosing a model and
-    answers with ``param`` and ``code`` unset, naming the field and every
-    accepted level in the message instead.
+    Both name the field in ``param`` and list the accepted levels. On Responses
+    both answer ``invalid_value``. On Chat Completions OpenAI checks the level
+    against the model and answers ``unsupported_value`` with the model's own
+    levels; the gateway validates the field before choosing a model, so it
+    answers ``invalid_value`` with every level, as Responses does.
 
     Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
          https://developers.openai.com/api/reference/resources/responses/methods/create
@@ -411,22 +411,16 @@ class TestReasoningEffortValidation:
     """
 
     @staticmethod
-    def _assert_refused(
-        error: BadRequestError, param: str, code: str, *, use_official_api: bool
-    ) -> None:
+    def _assert_refused(error: BadRequestError, param: str, code: str) -> None:
         """Assert *error* is the 400 refusing an unknown effort level in *param*."""
         assert error.status_code == 400
         body = error.body
         assert isinstance(body, dict)
         assert body["type"] == "invalid_request_error"
         assert "'low'" in body["message"], "the message lists the accepted levels"
-        if use_official_api:
-            assert body["param"] == param
-            assert body["code"] == code
-        else:
-            assert body["param"] is None
-            assert body["code"] is None
-            assert param in body["message"]
+        assert "'bogus'" in body["message"], "the message quotes the refused level"
+        assert body["param"] == param
+        assert body["code"] == code
 
     def test_chat_completions_refuses_an_unknown_level(
         self, openai_client: OpenAI, use_official_api: bool
@@ -442,8 +436,7 @@ class TestReasoningEffortValidation:
         self._assert_refused(
             exc_info.value,
             "reasoning_effort",
-            "unsupported_value",
-            use_official_api=use_official_api,
+            "unsupported_value" if use_official_api else "invalid_value",
         )
 
     def test_responses_refuses_an_unknown_level(
@@ -457,12 +450,7 @@ class TestReasoningEffortValidation:
                 reasoning={"effort": "bogus"},
             )
 
-        self._assert_refused(
-            exc_info.value,
-            "reasoning.effort",
-            "invalid_value",
-            use_official_api=use_official_api,
-        )
+        self._assert_refused(exc_info.value, "reasoning.effort", "invalid_value")
 
 
 @pytest.mark.local

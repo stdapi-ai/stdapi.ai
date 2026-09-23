@@ -991,9 +991,9 @@ class TestValidationErrorSelection:
 
         ``input`` accepts a string or a list of items, so a bad item yields one
         error per branch; reporting the first would answer "input should be a
-        valid string" about a list the client deliberately sent. The path also
-        has to stay readable: Pydantic names every union it descended through,
-        which would bury the field under a list of 30-odd member names.
+        valid string" about a list the client deliberately sent. The path is
+        the one the client wrote, in OpenAI's notation: Pydantic also names
+        every union branch it descended through, none of which the client sent.
         """
         response = app_client.post(
             "/v1/responses",
@@ -1010,12 +1010,12 @@ class TestValidationErrorSelection:
         )
 
         assert response.status_code == 400, response.text
-        message = response.json()["error"]["message"]
-        assert message == (
-            "Validation error at body.input.0.EasyInputMessage.content.0"
-            ".input_text.text: Field required"
-        ), message
-        assert "[" not in message, "the union wrappers Pydantic walked leaked out"
+        error = response.json()["error"]
+        assert error["param"] == "input[0].content[0].text", error
+        assert error["code"] == "missing_required_parameter", error
+        assert error["message"] == (
+            "Missing required parameter: 'input[0].content[0].text'."
+        ), error
 
 
 class TestValidationErrorLogging:

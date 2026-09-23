@@ -32,6 +32,7 @@ from stdapi.aws_bedrock import (
     build_system_blocks,
     handle_bedrock_client_error,
     set_inference_configuration,
+    without_model_refusal_prefix,
 )
 from stdapi.cleanup import schedule_cleanup
 from stdapi.config import SETTINGS
@@ -4209,7 +4210,7 @@ def _classify_stream_error(
         client_message = (
             "The request could not be completed. Retry the request."
             if status >= 500
-            else hide_security_details(status, message)
+            else hide_security_details(status, without_model_refusal_prefix(message))
         )
         return (status, client_message, None, code, message, None)
     if isinstance(exc, HTTPClientError | BotocoreConnectionError):

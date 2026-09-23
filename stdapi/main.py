@@ -7,7 +7,6 @@ and AWS service integrations for providing OpenAI-compatible endpoints.
 from asyncio import gather
 from contextlib import asynccontextmanager
 from functools import cache
-from re import compile as compile_regex
 from time import time_ns
 from traceback import format_exception
 from types import SimpleNamespace
@@ -32,6 +31,8 @@ from stdapi.api_providers import (
     set_log_fields,
     set_response_headers,
 )
+from stdapi.api_providers.anthropic import TAG_ANTHROPIC
+from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import initialize_authentication
 from stdapi.aws import (
     AWSConnectionManager,
@@ -44,6 +45,7 @@ from stdapi.aws_bedrock import (
     AWS_ERROR_MAP,
     set_guardrail_configuration,
     set_performance_configuration,
+    without_model_refusal_prefix,
 )
 from stdapi.aws_bedrock_mantle import set_mantle_project
 from stdapi.aws_bidi import drain_stream_closes, initialize_bidi_clients
@@ -111,6 +113,12 @@ from stdapi.tenant_rate_limits import (
     tenant_retry_after,
 )
 from stdapi.utils import JSONResponse, hide_security_details
+from stdapi.validation_errors import (
+    anthropic_validation_message,
+    openai_validation_error,
+    reported_error,
+    validation_error_path,
+)
 from stdapi.vector_stores.engine import drain_indexing
 from stdapi.vector_stores.jobs import (
     close_job_consumer,
@@ -729,28 +737,6 @@ async def _handle_request_setup_error(request: Request, exc: ApiError) -> JSONRe
     return await handle_api_error(request, exc)
 
 
-#: Pydantic's own container and union tags in an error location, e.g. ``list[union[A,B]]``.
-_PYDANTIC_TYPE_TAG = compile_regex(r"[a-z-]+\[.+\]")
-
-
-def _validation_error_path(loc: Iterable[Any]) -> str:
-    """Join a Pydantic error location into a field path a client can act on.
-
-    Drops the union and list wrappers Pydantic descended through, which bury the
-    failing field: only those carry a parameterized type name, while a field the
-    client sent, such as the multipart ``image[]``, keeps its empty brackets.
-
-    Args:
-        loc: Location parts of one Pydantic error.
-
-    Returns:
-        The dotted field path, empty when nothing addressable remains.
-    """
-    return ".".join(
-        part for part in map(str, loc) if not _PYDANTIC_TYPE_TAG.fullmatch(part)
-    )
-
-
 #: How many distinct validation faults of one request are described in its log.
 _MAX_LOGGED_VALIDATION_ERRORS: Final = 20
 
@@ -776,7 +762,7 @@ def _validation_error_details(errors: Iterable[Any]) -> list[str]:
     details = list(
         dict.fromkeys(
             f"{path}: {msg}"
-            if (path := _validation_error_path(error.get("loc", ())))
+            if (path := validation_error_path(error.get("loc", ())))
             else msg
             for error in errors
             if (msg := str(error.get("msg", "")))
@@ -795,6 +781,9 @@ async def handle_validation_exception(
 ) -> JSONResponse:
     """Format Pydantic/FastAPI validation errors as invalid_request_error.
 
+    OpenAI and Anthropic routes word the fault as the vendor's route words it
+    (``stdapi.validation_errors``); the other dialects keep the gateway's sentence.
+
     Args:
         request: The current request.
         exc: The RequestValidationError raised by FastAPI/Pydantic.
@@ -803,24 +792,39 @@ async def handle_validation_exception(
         JSONResponse with status 400 and the appropriate error schema.
     """
     errors = exc.errors()
-
-    # Report the deepest location: a union-typed field reports one error per
-    # branch, and the shallowest blames the whole field instead of the single
-    # item inside it that actually failed.
-    match max(errors, key=lambda error: len(error.get("loc", ())), default=None):
-        case {"loc": loc, "msg": msg} if path := _validation_error_path(loc):
-            message = f"Validation error at {path}: {msg}"
+    error = reported_error(errors)
+    match error:
+        case {"loc": loc, "msg": msg} if path := validation_error_path(loc):
+            logged = f"Validation error at {path}: {msg}"
         case {"msg": msg}:
-            message = f"Validation error: {msg}"
+            logged = f"Validation error: {msg}"
         case _:
-            message = "Validation error"
+            logged = "Validation error"
     # Every fault stays server-side, described but never quoted: the other union
     # branches remain visible for debugging, the caller's payload never is.
     details = _validation_error_details(errors)
     log_error_details(
-        [message, *details] if len(details) > 1 else message, level="warning"
+        [logged, *details] if len(details) > 1 else logged, level="warning"
     )
-    return JSONResponse(*format_http_error(request, 400, message))
+    route = request.scope.get("route")
+    tags = getattr(route, "tags", None) or ()
+    dialect = next((tag for tag in tags if tag in FORMATTER_BY_TAG), None)
+    message, param, code = logged, None, None
+    if dialect == TAG_OPENAI:
+        form = request.headers.get("content-type", "").startswith(
+            ("multipart/form-data", "application/x-www-form-urlencoded")
+        )
+        # The wordings are keyed on the unprefixed path the OpenAI API serves.
+        path = str(getattr(route, "path", ""))
+        message, param, code = openai_validation_error(
+            (request.method, path.removeprefix(SETTINGS.openai_routes_prefix)),
+            errors,
+            exc.body,
+            form=form,
+        )
+    elif dialect == TAG_ANTHROPIC:
+        message = anthropic_validation_message(errors)
+    return JSONResponse(*format_http_error(request, 400, message, param, code))
 
 
 @app.exception_handler(ClientError)
@@ -850,7 +854,9 @@ async def handle_botocore_client_error(
     message = (
         "The request could not be completed. Retry the request."
         if status >= 500
-        else hide_security_details(status, error["Message"])
+        else hide_security_details(
+            status, without_model_refusal_prefix(error["Message"])
+        )
     )
     return JSONResponse(*format_http_error(request, status, message))
 

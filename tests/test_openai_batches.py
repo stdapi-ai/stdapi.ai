@@ -748,7 +748,8 @@ class TestOpenAIBatchValidation:
             },
         )
         assert response.status_code == 400
-        assert "endpoint" in response.json()["error"]["message"]
+        error = response.json()["error"]
+        assert (error["param"], error["code"]) == ("endpoint", "invalid_value")
 
     def test_a_guarded_request_is_refused(self) -> None:
         """A request a configured guardrail covers is refused, not run unguarded.

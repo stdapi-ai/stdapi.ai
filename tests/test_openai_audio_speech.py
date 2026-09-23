@@ -332,8 +332,8 @@ class TestAudioSpeech:
         """Polly extra parameters are validated: bad type and unknown name are 400s.
 
         Extra body fields are parsed by ``_PollyExtraParams``, which forbids
-        unknown keys, so both failures surface as the gateway's
-        ``invalid_request_error`` naming the offending field.
+        unknown keys, so both failures surface as an ``invalid_request_error``
+        listing the failed validation, as OpenAI's speech route words its own.
 
         Ref: https://stdapi.ai/api_openai_audio_speech/
              stdapi/models/audio/amazon_polly.py:_PollyExtraParams
@@ -351,7 +351,8 @@ class TestAudioSpeech:
         assert exc_info.value.status_code == 400
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
-        assert "SampleRate" in str(error_body["message"])
+        assert (error_body["param"], error_body["code"]) == (None, None)
+        assert "'loc': ('SampleRate',)" in error_body["message"], error_body
         assert "integer" in str(error_body["message"]).lower()
 
         with pytest.raises(BadRequestError) as exc_info:
@@ -366,10 +367,9 @@ class TestAudioSpeech:
         assert exc_info.value.status_code == 400
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
-        assert "Invalid" in str(error_body["message"])
-        assert "permitted" in str(error_body["message"]), (
-            "unknown extra parameters must be rejected, not ignored"
-        )
+        assert (
+            "'type': 'extra_forbidden', 'loc': ('Invalid',)" in (error_body["message"])
+        ), "unknown extra parameters must be rejected, not ignored"
 
     # "alloy" is covered by test_basic_speech_generation; each extra voice is a
     # billed Polly synthesis plus a Comprehend language detection.
@@ -612,8 +612,8 @@ class TestAudioSpeech:
         """An empty ``input`` is rejected as an ``invalid_request_error``.
 
         ``input`` has a minimum length of one character, so the request never
-        reaches Polly: the failure comes from request validation and carries
-        no OpenAI error ``code``.
+        reaches Polly. OpenAI's speech route relays its validator's error list,
+        with ``param`` and ``code`` null.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/types/openai_audio.py:SpeechCreateParams
@@ -628,13 +628,11 @@ class TestAudioSpeech:
         error_body = error.body
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
-        assert error_body["code"] is None
-        error_message = str(error).lower()
-        assert any(
-            word in error_message
-            for word in ["input", "required", "empty", "character"]
+        assert (error_body["param"], error_body["code"]) == (None, None)
+        assert error_body["message"] == (
+            "[{'type': 'string_too_short', 'loc': ('body', 'input'), 'msg': 'String "
+            "should have at least 1 character', 'ctx': {'min_length': 1}}]"
         )
-        assert "input" in error_message, "the error must name the offending field"
 
     def test_invalid_model_error(self, openai_client: OpenAI) -> None:
         """An unknown model is rejected as a 404 ``model_not_found``.
@@ -771,8 +769,9 @@ class TestAudioSpeech:
         """Out-of-range ``speed`` values are rejected as ``invalid_request_error``.
 
         All three values sit outside the range OpenAI documents on either side
-        of it, so they fail request validation before any synthesis and carry
-        no error ``code``.
+        of it, so they fail request validation before any synthesis. OpenAI's
+        speech route relays its validator's error list, ``param`` and ``code``
+        null; the bounds are each target's own.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/types/openai_audio.py:SpeechCreateParams
@@ -790,23 +789,19 @@ class TestAudioSpeech:
         error_body = error.body
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
-        assert error_body["code"] is None
-        error_message = str(error).lower()
-        assert any(
-            word in error_message
-            for word in ["speed", "range", "0.25", "4.0", "greater", "less"]
-        )
-        assert "speed" in error_message, "the error must name the offending field"
+        assert (error_body["param"], error_body["code"]) == (None, None)
+        bound = "less_than_equal" if speed > 1 else "greater_than_equal"
+        assert error_body["message"].startswith(
+            f"[{{'type': '{bound}', 'loc': ('body', 'speed'), "
+        ), error_body
 
     def test_invalid_response_format_error(
-        self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
+        self, openai_client: OpenAI, speech_standard_model: str
     ) -> None:
         """An unsupported ``response_format`` is rejected, naming the offending field.
 
-        OpenAI points at the field through ``param`` and tags the failure with
-        the ``unsupported_value`` code, its message staying terse. The gateway
-        surfaces the pydantic validation error instead: it enumerates the
-        accepted formats in the message but leaves ``param`` and ``code`` null.
+        OpenAI checks this field ahead of the rest of the body, and answers
+        ``unsupported_value`` on ``param`` with a terse message of its own.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              https://developers.openai.com/api/docs/guides/error-codes
@@ -825,19 +820,9 @@ class TestAudioSpeech:
         error_body = error.body
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
-        error_message = str(error).lower()
-        assert "response_format" in error_message, (
-            "the error must name the offending field"
-        )
-        if use_official_api:
-            assert error_body["code"] == "unsupported_value"
-            assert error_body["param"] == "response_format"
-        else:
-            assert error_body["code"] is None
-            assert "mp3" in error_message, (
-                "the error must enumerate the accepted formats"
-            )
-            assert "pcm" in error_message
+        assert error_body["param"] == "response_format"
+        assert error_body["code"] == "unsupported_value"
+        assert error_body["message"] == "Invalid response_format."
 
     def test_missing_required_parameters(
         self, openai_client: OpenAI, speech_standard_model: str

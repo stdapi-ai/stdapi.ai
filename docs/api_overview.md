@@ -266,6 +266,8 @@ What the base URL buys is the catalogue behind it. A model name is resolved agai
 
 Anywhere a request accepts a model name, it also accepts a glob pattern — `claude-sonnet-*`, say — and the server serves the most recently released model that matches. The response always names the concrete model that served the request, never the pattern. See [Model Wildcard Patterns](operations_configuration_models.md#model-wildcard-patterns) for the syntax and its rules, and [`GET /search_models`](api_search_models.md#query-parameters) to see everything a pattern matches before relying on it.
 
+On every API, a parameter the model provider rejects returns `400` with the provider's own message.
+
 ### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Using the OpenAI-Compatible API
 
 **To connect your OpenAI application:**
@@ -276,6 +278,8 @@ Anywhere a request accepts a model name, it also accepts a glob pattern — `cla
 
 That's it: the rest of the OpenAI SDK call is unchanged.
 
+A malformed request is refused the way the same OpenAI endpoint refuses it, so client code that branches on the error keeps working. Most endpoints — Chat Completions, Responses, Images, Batches, Vector Stores, Conversations, Videos — name the offending parameter in `error.param` (e.g., `messages[0].content`) and the failure in `error.code` (`unknown_parameter`, `missing_required_parameter`, `invalid_type`, `invalid_value`, or a range code such as `integer_below_min_value`). Moderations, Audio, Embeddings, Files and Uploads word the message as OpenAI does on those endpoints and mostly leave both `null` — Moderations and Audio relay the validator's list of faults, capped at the first 20. As OpenAI does, a refused speech `response_format` or `instructions` and a refused Files or Uploads `purpose` still name the parameter.
+
 ### ![Anthropic](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Using the Anthropic-Compatible API
 
 **To connect your Anthropic application:**
@@ -285,6 +289,8 @@ That's it: the rest of the OpenAI SDK call is unchanged.
 3. **Check the model name against what this deployment serves** — official Anthropic names (e.g., `claude-opus-5`) resolve to their Bedrock IDs automatically, or use Bedrock model IDs directly
 
 Anthropic names resolving on their own makes the base URL the only change for most applications — the same mechanism that resolves OpenAI's names on the surface above. A Claude version Bedrock no longer serves returns `404` rather than a substitute, so name a current one.
+
+A malformed request is refused in Anthropic's wording, the field then the reason (e.g., `messages.0.content: Field required`).
 
 ### ![Cohere](styles/logo_cohere.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Using the Cohere-Compatible API
 

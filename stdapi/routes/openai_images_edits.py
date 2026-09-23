@@ -89,7 +89,8 @@ def _merge_image_parameters(
                     [
                         {
                             "type": "is_instance_of",
-                            "loc": ("body", "image[]"),
+                            # Indexed among every image, as the client counts them.
+                            "loc": ("body", "image", len(images)),
                             "input": value,
                             "ctx": {"class": "UploadFile"},
                         }
@@ -99,15 +100,7 @@ def _merge_image_parameters(
     if not images:
         msg = "ValidationError"
         raise ValidationError.from_exception_data(
-            msg,
-            [
-                {
-                    "type": "too_short",
-                    "loc": ("body", "image"),
-                    "input": [],
-                    "ctx": {"field_type": "List", "min_length": 1, "actual_length": 0},
-                }
-            ],
+            msg, [{"type": "missing", "loc": ("body", "image"), "input": None}]
         )
 
     return images

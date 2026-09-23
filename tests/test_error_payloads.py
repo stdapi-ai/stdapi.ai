@@ -19,19 +19,29 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from botocore.exceptions import ClientError
+from fastapi.exceptions import RequestValidationError
 from starlette.requests import Request
 from starlette.responses import Response
 
+from stdapi.api_errors import ApiError
 from stdapi.api_providers.anthropic import TAG_ANTHROPIC
 from stdapi.api_providers.anthropic import _format_error as anthropic_format_error
 from stdapi.api_providers.cohere import TAG_COHERE
 from stdapi.api_providers.cohere import _format_error as cohere_format_error
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.api_providers.openai import _format_error as openai_format_error
+from stdapi.aws_bedrock import handle_bedrock_client_error
 from stdapi.config import SETTINGS
-from stdapi.main import handle_botocore_client_error, set_retry_after_header
-from stdapi.monitoring import REQUEST
+from stdapi.main import (
+    handle_botocore_client_error,
+    handle_validation_exception,
+    set_retry_after_header,
+)
+from stdapi.models.chat._adapters._openai_responses import _classify_stream_error
+from stdapi.monitoring import REQUEST, _stream_backend_error
 from stdapi.region_routing import RegionRouter, quota_retry_after
+from stdapi.validation_errors import openai_validation_error, reported_error
 from tests._helpers import make_client_error
 
 if TYPE_CHECKING:
@@ -39,6 +49,9 @@ if TYPE_CHECKING:
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
+
+#: The Chat Completions route, whose wording names ``param`` and ``code``.
+_CHAT = ("POST", "/v1/chat/completions")
 
 #: What a model-not-found body may not exceed: one sentence plus its pointer.
 _MODEL_NOT_FOUND_MAX_CHARS = 300
@@ -302,11 +315,11 @@ class TestOpenaiErrorPayloads:
     ) -> None:
         """A request-body validation failure yields 400 ``invalid_request_error``.
 
-        The handler flattens the first Pydantic error into a single
-        ``"Validation error at <loc>: <msg>"`` sentence naming the offending
-        field, and leaves ``param``/``code`` null.
+        The field is named in ``param`` and the failure class in ``code``, as
+        OpenAI answers the same body.
 
-        Ref: stdapi/main.py:handle_validation_exception
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+             stdapi/main.py:handle_validation_exception
         """
         resp = test_client.post(
             "/v1/chat/completions",
@@ -316,10 +329,11 @@ class TestOpenaiErrorPayloads:
         assert resp.status_code == 400
         err = _assert_openai_error_shape(resp.json())
         assert err["type"] == "invalid_request_error"
-        assert err["message"].startswith("Validation error")
-        assert "messages" in err["message"]
-        assert err["param"] is None
-        assert err["code"] is None
+        assert err["message"] == (
+            "Invalid type for 'messages': expected an array, but got a string instead."
+        )
+        assert err["param"] == "messages"
+        assert err["code"] == "invalid_type"
 
     def test_auth_error_returns_openai_envelope(self, test_client: TestClient) -> None:
         """A wrong API key yields 401 ``authentication_error`` with a detail-free message.
@@ -380,9 +394,10 @@ class TestAnthropicErrorPayloads:
 
         400 has no entry in the Anthropic status table either, so it resolves
         through the same default as OpenAI's — but wrapped in Anthropic's
-        ``{"type": "error", ...}`` envelope.
+        ``{"type": "error", ...}`` envelope, and worded ``<loc>: <msg>``.
 
-        Ref: stdapi/main.py:handle_validation_exception
+        Ref: https://platform.claude.com/docs/en/api/errors
+             stdapi/main.py:handle_validation_exception
         """
         resp = test_client.post(
             "/anthropic/v1/messages",
@@ -392,8 +407,7 @@ class TestAnthropicErrorPayloads:
         assert resp.status_code == 400
         err = _assert_anthropic_error_shape(resp.json())
         assert err["type"] == "invalid_request_error"
-        assert err["message"].startswith("Validation error")
-        assert "messages" in err["message"]
+        assert err["message"] == "messages: Input should be a valid list"
 
     def test_auth_error_returns_anthropic_envelope(
         self, test_client: TestClient
@@ -449,6 +463,9 @@ class TestCohereErrorPayloads:
     ) -> None:
         """A request-body validation failure yields 400 with the flattened Pydantic message.
 
+        Cohere's reference specifies no validation wording, so the gateway's own
+        ``Validation error at <loc>: <msg>`` sentence stays.
+
         Ref: stdapi/main.py:handle_validation_exception
         """
         resp = test_client.post(
@@ -460,6 +477,27 @@ class TestCohereErrorPayloads:
         message = _assert_cohere_error_shape(resp.json())
         assert message.startswith("Validation error")
         assert "documents" in message
+
+    def test_an_ollama_validation_error_keeps_the_gateway_sentence(
+        self, app_client: TestClient
+    ) -> None:
+        """An Ollama route answers a validation fault with the gateway's own sentence.
+
+        Ollama's API reference specifies no validation wording, so only the
+        OpenAI and Anthropic routes word the fault as their vendor does.
+
+        Ref: https://docs.ollama.com/api/chat
+             stdapi/main.py:handle_validation_exception
+        """
+        resp = app_client.post(
+            f"{SETTINGS.ollama_routes_prefix}/api/chat",
+            json={"messages": [{"role": "user", "content": "hi"}]},
+        )
+
+        assert resp.status_code == 400, resp.text
+        assert resp.json() == {
+            "error": "Validation error at body.model: Field required"
+        }
 
     def test_auth_error_returns_cohere_envelope(self, test_client: TestClient) -> None:
         """A wrong API key on the rerank route yields 401 with a detail-free message.
@@ -949,3 +987,934 @@ class TestRetryAfterHeader:
             request, "ThrottlingException", region="us-west-2", router=router
         )
         assert quota_retry_after(request) == base
+
+
+class TestValidationErrorWording:
+    """Validation faults read as the dialect's API reads the same fault.
+
+    The per-class shapes are proved against the vendors in
+    ``tests/test_validation_errors.py``; these cover the paths no vendor request
+    reaches from both targets alike: an unparsable body, a value of the wrong
+    type for a list of accepted values, the failure classes the gateway's own
+    models rarely hit, and a body the route validates itself.
+
+    Ref: https://developers.openai.com/api/docs/guides/error-codes
+         https://platform.claude.com/docs/en/api/errors
+         stdapi/main.py:handle_validation_exception
+    """
+
+    @pytest.mark.parametrize("content", [b"{bad", b'["x"]'])
+    def test_an_unparsable_openai_body_names_no_parameter(
+        self, app_client: TestClient, content: bytes
+    ) -> None:
+        """Malformed JSON and a body that is no object both answer OpenAI's parse error."""
+        response = app_client.post(
+            "/v1/chat/completions",
+            content=content,
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 400, response.text
+        err = _assert_openai_error_shape(response.json())
+        assert err["message"] == "We could not parse the JSON body of your request."
+        assert (err["param"], err["code"]) == (None, None)
+
+    def test_an_unparsable_anthropic_body_says_it_is_not_json(
+        self, anthropic_app_client: TestClient
+    ) -> None:
+        """Malformed JSON answers Anthropic's sentence, with the parser's reason."""
+        response = anthropic_app_client.post(
+            "/anthropic/v1/messages",
+            content=b"{bad",
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 400, response.text
+        err = _assert_anthropic_error_shape(response.json())
+        assert err["message"].startswith("The request body is not valid JSON: "), err
+
+    def test_a_value_of_the_wrong_type_for_an_enum_lists_the_values(
+        self, app_client: TestClient
+    ) -> None:
+        """A number where a set of strings is accepted is a type error listing them.
+
+        OpenAI answers ``service_tier: 5`` with ``invalid_type`` and ``expected
+        one of 'auto', ..., or 'priority', but got an integer instead``.
+        """
+        response = app_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "x",
+                "messages": [{"role": "user", "content": "hi"}],
+                "service_tier": 5,
+            },
+        )
+
+        err = _assert_openai_error_shape(response.json())
+        assert (err["param"], err["code"]) == ("service_tier", "invalid_type")
+        assert err["message"].startswith(
+            "Invalid type for 'service_tier': expected one of 'auto', "
+        ), err
+        assert err["message"].endswith(", but got an integer instead."), err
+
+    @pytest.mark.parametrize(
+        ("error", "expected"),
+        [
+            pytest.param(
+                {
+                    "type": "string_too_long",
+                    "loc": ("body", "metadata", "k"),
+                    "msg": "String should have at most 512 characters",
+                    "input": "x" * 600,
+                    "ctx": {"max_length": 512},
+                },
+                (
+                    (
+                        "Invalid 'metadata.k': string too long. Expected a string with "
+                        "maximum length 512, but got a string with length 600 instead."
+                    ),
+                    "metadata.k",
+                    "string_above_max_length",
+                ),
+                id="string_above_max_length",
+            ),
+            pytest.param(
+                {
+                    "type": "too_long",
+                    "loc": ("body", "stop"),
+                    "msg": "List should have at most 4 items after validation, not 5",
+                    "input": ["a", "b", "c", "d", "e"],
+                    "ctx": {"field_type": "List", "max_length": 4, "actual_length": 5},
+                },
+                (
+                    (
+                        "Invalid 'stop': array too long. Expected an array with maximum "
+                        "length 4, but got an array with length 5 instead."
+                    ),
+                    "stop",
+                    "array_above_max_length",
+                ),
+                id="array_above_max_length",
+            ),
+            pytest.param(
+                {
+                    "type": "string_too_short",
+                    "loc": ("body", "prompt"),
+                    "msg": "String should have at least 1 character",
+                    "input": "",
+                    "ctx": {"min_length": 1},
+                },
+                (
+                    (
+                        "Invalid 'prompt': empty string. Expected a string with minimum "
+                        "length 1, but got an empty string instead."
+                    ),
+                    "prompt",
+                    "empty_string",
+                ),
+                id="empty_string",
+            ),
+            pytest.param(
+                {
+                    "type": "greater_than",
+                    "loc": ("body", "dimensions"),
+                    "msg": "Input should be greater than 0",
+                    "input": 0,
+                    "ctx": {"gt": 0},
+                },
+                (
+                    (
+                        "Invalid 'dimensions': integer below minimum value. Expected a "
+                        "value > 0, but got 0 instead."
+                    ),
+                    "dimensions",
+                    "integer_below_min_value",
+                ),
+                id="exclusive_bound",
+            ),
+            pytest.param(
+                {
+                    "type": "value_error",
+                    "loc": ("body", "input"),
+                    "msg": "Value error, Unsupported input type: 'dict'",
+                    "input": {"a": 1},
+                    "ctx": {"error": "Unsupported input type: 'dict'"},
+                },
+                ("Unsupported input type: 'dict'", "input", None),
+                id="gateway_check",
+            ),
+            pytest.param(
+                {
+                    "type": "string_pattern_mismatch",
+                    "loc": ("body", "size"),
+                    "msg": "String should match pattern '^[0-9]+x[0-9]+$'",
+                    "input": "big",
+                    "ctx": {"pattern": "^[0-9]+x[0-9]+$"},
+                },
+                (
+                    (
+                        "Invalid value for 'size': String should match pattern "
+                        "'^[0-9]+x[0-9]+$'."
+                    ),
+                    "size",
+                    "invalid_value",
+                ),
+                id="other",
+            ),
+        ],
+    )
+    def test_each_failure_class_maps_to_its_code(
+        self, error: dict[str, Any], expected: tuple[str, str, str | None]
+    ) -> None:
+        """Each Pydantic failure class maps to the code OpenAI uses for it.
+
+        The wording and codes of the first three were observed on OpenAI's Chat
+        Completions and Images routes; a failure OpenAI has no class for keeps
+        the field and ``invalid_value``, and a check of the gateway's own keeps
+        its sentence and no code.
+        """
+        body = {
+            "metadata": {"k": "x" * 600},
+            "stop": ["a", "b", "c", "d", "e"],
+            "prompt": "",
+            "dimensions": 0,
+            "input": {"a": 1},
+            "size": "big",
+        }
+
+        assert openai_validation_error(_CHAT, [error], body, form=False) == expected
+
+    def test_a_body_the_route_parses_itself_keeps_camel_case_fields(self) -> None:
+        """Without the payload, a field name is told from a union branch by its shape.
+
+        The provider parameters a route validates itself name their fields in
+        ``CamelCase``, which must not be mistaken for a Pydantic model class.
+        """
+        error = {
+            "type": "int_parsing",
+            "loc": ("SampleRate",),
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "input": "fast",
+        }
+
+        assert openai_validation_error(_CHAT, [error], None, form=False) == (
+            (
+                "Invalid type for 'SampleRate': expected an integer, but got a string "
+                "instead."
+            ),
+            "SampleRate",
+            "invalid_type",
+        )
+
+    def test_a_body_the_route_parses_itself_drops_the_union_branches(self) -> None:
+        """Without the payload, the container and scalar branches Pydantic names are dropped."""
+        errors = [
+            {
+                "type": "string_type",
+                "loc": ("input", "str"),
+                "msg": "Input should be a valid string",
+                "input": 5,
+            },
+            {
+                "type": "list_type",
+                "loc": ("input", "list[str]"),
+                "msg": "Input should be a valid list",
+                "input": 5,
+            },
+        ]
+
+        assert openai_validation_error(_CHAT, errors, None, form=False) == (
+            (
+                "Invalid type for 'input': expected one of a string or an array, but got "
+                "an integer instead."
+            ),
+            "input",
+            "invalid_type",
+        )
+
+
+class TestValidationErrorPerRoute:
+    """Each OpenAI route words a fault as that route of OpenAI's does.
+
+    Observed with raw requests on 2026-09-23: Moderations and Audio relay their
+    validator's error list, Embeddings writes a sentence per field, Files and
+    Uploads use JSON-schema wording, all with ``param`` and ``code`` null save a
+    few named fields, and the routes that read ``model`` first answer its
+    absence in a fixed sentence.
+
+    Ref: https://developers.openai.com/api/docs/guides/error-codes
+         stdapi/validation_errors.py:openai_validation_error
+    """
+
+    @pytest.mark.parametrize(
+        ("route", "errors", "expected"),
+        [
+            pytest.param(
+                ("POST", "/v1/moderations"),
+                [
+                    {
+                        "type": "missing",
+                        "loc": ("body", "input"),
+                        "msg": "Field required",
+                        "input": {"model": "x"},
+                    }
+                ],
+                (
+                    (
+                        "[{'type': 'missing', 'loc': ('body', 'input'), 'msg': 'Field "
+                        "required'}]"
+                    ),
+                    None,
+                    None,
+                ),
+                id="error_list",
+            ),
+            pytest.param(
+                ("POST", "/v1/audio/speech"),
+                [
+                    {
+                        "type": "string_too_short",
+                        "loc": ("body", "input"),
+                        "msg": "String should have at least 1 character",
+                        "input": "",
+                        "ctx": {"min_length": 1},
+                    }
+                ],
+                (
+                    (
+                        "[{'type': 'string_too_short', 'loc': ('body', 'input'), 'msg': "
+                        "'String should have at least 1 character', 'ctx': {'min_length': "
+                        "1}}]"
+                    ),
+                    None,
+                    None,
+                ),
+                id="error_list_with_context",
+            ),
+            pytest.param(
+                ("POST", "/v1/audio/speech"),
+                [
+                    {
+                        "type": "literal_error",
+                        "loc": ("body", "response_format"),
+                        "msg": "Input should be 'mp3' or 'wav'",
+                        "input": "bogus",
+                        "ctx": {"expected": "'mp3' or 'wav'"},
+                    }
+                ],
+                ("Invalid response_format.", "response_format", "unsupported_value"),
+                id="speech_response_format",
+            ),
+            pytest.param(
+                ("POST", "/v1/audio/speech"),
+                [
+                    {
+                        "type": "string_type",
+                        "loc": ("body", "instructions"),
+                        "msg": "Input should be a valid string",
+                        "input": 5,
+                    }
+                ],
+                (
+                    (
+                        "Invalid type for 'instructions': expected a string, but got an "
+                        "integer instead."
+                    ),
+                    "instructions",
+                    "invalid_type",
+                ),
+                id="speech_instructions",
+            ),
+            pytest.param(
+                ("POST", "/v1/embeddings"),
+                [
+                    {
+                        "type": "missing",
+                        "loc": ("body", "input"),
+                        "msg": "Field required",
+                        "input": {},
+                    }
+                ],
+                ("Please submit an `input`.", None, None),
+                id="embeddings_missing_input",
+            ),
+            pytest.param(
+                ("POST", "/v1/embeddings"),
+                [
+                    {
+                        "type": "literal_error",
+                        "loc": ("body", "encoding_format"),
+                        "msg": "Input should be 'float' or 'base64'",
+                        "input": "bogus",
+                        "ctx": {"expected": "'float' or 'base64'"},
+                    }
+                ],
+                (
+                    (
+                        "Invalid value for 'encoding_format' = bogus. Supported values: "
+                        "['float', 'base64']."
+                    ),
+                    None,
+                    None,
+                ),
+                id="embeddings_enum",
+            ),
+            pytest.param(
+                ("POST", "/v1/embeddings"),
+                [
+                    {
+                        "type": "greater_than_equal",
+                        "loc": ("body", "dimensions"),
+                        "msg": "Input should be greater than or equal to 1",
+                        "input": 0,
+                        "ctx": {"ge": 1},
+                    }
+                ],
+                (
+                    "Invalid value for 'dimensions' = 0. Must be greater than 0.",
+                    None,
+                    None,
+                ),
+                id="embeddings_range",
+            ),
+            pytest.param(
+                ("POST", "/v1/embeddings"),
+                [
+                    {
+                        "type": "int_parsing",
+                        "loc": ("body", "dimensions"),
+                        "msg": "Input should be a valid integer",
+                        "input": "abc",
+                    }
+                ],
+                ("'abc' is not of type 'integer' - 'dimensions'", None, None),
+                id="embeddings_type",
+            ),
+            pytest.param(
+                ("POST", "/v1/uploads"),
+                [
+                    {
+                        "type": "literal_error",
+                        "loc": ("body", "purpose"),
+                        "msg": "Input should be 'batch' or 'vision'",
+                        "input": "bogus",
+                        "ctx": {"expected": "'batch' or 'vision'"},
+                    }
+                ],
+                (
+                    "'bogus' is not one of ['batch', 'vision'] - 'purpose'",
+                    "purpose",
+                    None,
+                ),
+                id="json_schema_enum",
+            ),
+            pytest.param(
+                ("GET", "/v1/files"),
+                [
+                    {
+                        "type": "int_parsing",
+                        "loc": ("query", "limit"),
+                        "msg": "Input should be a valid integer",
+                        "input": "abc",
+                    }
+                ],
+                (
+                    "Wrong type, expected 'integer' for query parameter 'limit'",
+                    None,
+                    None,
+                ),
+                id="json_schema_query_type",
+            ),
+            pytest.param(
+                ("POST", "/v1/chat/completions"),
+                [
+                    {
+                        "type": "missing",
+                        "loc": ("body", "messages"),
+                        "msg": "Field required",
+                        "input": {},
+                    },
+                    {
+                        "type": "missing",
+                        "loc": ("body", "model"),
+                        "msg": "Field required",
+                        "input": {},
+                    },
+                ],
+                ("you must provide a model parameter", None, None),
+                id="model_first",
+            ),
+            pytest.param(
+                ("POST", "/v1/chat/completions"),
+                [
+                    {
+                        "type": "string_too_short",
+                        "loc": ("body", "model"),
+                        "msg": "String should have at least 1 character",
+                        "input": "",
+                        "ctx": {"min_length": 1},
+                    }
+                ],
+                ("you must provide a model parameter", None, None),
+                id="model_empty",
+            ),
+            pytest.param(
+                ("POST", "/v1/chat/completions"),
+                [
+                    {
+                        "type": "string_too_long",
+                        "loc": ("body", "model"),
+                        "msg": "String should have at most 255 characters",
+                        "input": "m" * 300,
+                        "ctx": {"max_length": 255},
+                    },
+                    {
+                        "type": "string_type",
+                        "loc": ("body", "messages", 0, "user", "content", "str"),
+                        "msg": "Input should be a valid string",
+                        "input": 5,
+                    },
+                ],
+                (
+                    (
+                        "Invalid 'model': string too long. Expected a string with "
+                        "maximum length 255, but got a string with length 300 instead."
+                    ),
+                    "model",
+                    "string_above_max_length",
+                ),
+                id="model_too_long",
+            ),
+            pytest.param(
+                ("POST", "/v1/chat/completions"),
+                [
+                    {
+                        "type": "missing",
+                        "loc": ("body",),
+                        "msg": "Field required",
+                        "input": None,
+                    }
+                ],
+                ("We could not parse the JSON body of your request.", None, None),
+                id="missing_body",
+            ),
+            pytest.param(
+                ("POST", "/v1/moderations"),
+                [
+                    {
+                        "type": "missing",
+                        "loc": ("body",),
+                        "msg": "Field required",
+                        "input": None,
+                    }
+                ],
+                (
+                    (
+                        "[{'type': 'missing', 'loc': ('body',), 'msg': 'Field "
+                        "required', 'input': None}]"
+                    ),
+                    None,
+                    None,
+                ),
+                id="error_list_missing_body",
+            ),
+            pytest.param(
+                ("POST", "/v1/moderations"),
+                [
+                    {
+                        "type": "json_invalid",
+                        "loc": ("body", 1),
+                        "msg": "JSON decode error",
+                        "input": {},
+                        "ctx": {
+                            "error": "Expecting property name enclosed in double quotes"
+                        },
+                    }
+                ],
+                (
+                    (
+                        "[{'type': 'json_invalid', 'loc': ('body', 1), 'msg': 'JSON "
+                        "decode error', 'input': {}, 'ctx': {'error': 'Expecting "
+                        "property name enclosed in double quotes'}}]"
+                    ),
+                    None,
+                    None,
+                ),
+                id="error_list_unparsable_body",
+            ),
+            pytest.param(
+                ("POST", "/v1/embeddings"),
+                [
+                    {
+                        "type": "string_type",
+                        "loc": ("body", "input", "list[str]", 0),
+                        "msg": "Input should be a valid string",
+                        "input": 5,
+                    }
+                ],
+                ("Invalid 'input': expected a string or token array.", None, None),
+                id="embeddings_input_type",
+            ),
+            pytest.param(
+                ("POST", "/v1/images/edits"),
+                [
+                    {
+                        "type": "is_instance_of",
+                        "loc": ("body", "image"),
+                        "msg": "Input should be an instance of UploadFile",
+                        "input": "not_a_file",
+                        "ctx": {"class": "UploadFile"},
+                    }
+                ],
+                (
+                    (
+                        "Invalid type for 'image': expected one of an array of files or "
+                        "file, but got a string instead."
+                    ),
+                    "image",
+                    "invalid_type",
+                ),
+                id="file_or_files",
+            ),
+            pytest.param(
+                ("GET", "/v1/batches"),
+                [
+                    {
+                        "type": "int_parsing",
+                        "loc": ("query", "limit"),
+                        "msg": "Input should be a valid integer",
+                        "input": "abc",
+                    }
+                ],
+                (
+                    (
+                        "Invalid type for 'limit': expected an integer, but got a string "
+                        "value that could not be converted into an integer."
+                    ),
+                    "limit",
+                    "invalid_type",
+                ),
+                id="query_text",
+            ),
+        ],
+    )
+    def test_the_route_words_the_fault_as_openai_does(
+        self,
+        route: tuple[str, str],
+        errors: list[dict[str, Any]],
+        expected: tuple[str, str | None, str | None],
+    ) -> None:
+        """The message, ``param`` and ``code`` are those OpenAI's route answers."""
+        assert openai_validation_error(route, errors, None, form=False) == expected
+
+    def test_an_item_is_judged_by_the_member_it_names(self) -> None:
+        """A union member whose ``type`` the item does not match cannot be the one blamed.
+
+        The ``function_call_output`` item below fails the message member on its
+        ``type`` and ``role``, which is deeper than the one real fault: the
+        unknown field of the member the item names.
+        """
+        body = {
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "c",
+                    "output": "x",
+                    "bogus": 1,
+                }
+            ]
+        }
+        errors: list[dict[str, Any]] = [
+            {
+                "type": "literal_error",
+                "loc": ("body", "input", "list[...]", 0, "EasyInputMessage", "type"),
+                "msg": "Input should be 'message'",
+                "input": "function_call_output",
+                "ctx": {"expected": "'message'"},
+            },
+            {
+                "type": "missing",
+                "loc": ("body", "input", "list[...]", 0, "EasyInputMessage", "content"),
+                "msg": "Field required",
+                "input": {},
+            },
+            {
+                "type": "extra_forbidden",
+                "loc": ("body", "input", "list[...]", 0, "FunctionCallOutput", "bogus"),
+                "msg": "Extra inputs are not permitted",
+                "input": 1,
+            },
+        ]
+
+        assert reported_error(errors) is errors[2]
+        assert openai_validation_error(_CHAT, errors, body, form=False)[1:] == (
+            "input[0].bogus",
+            "unknown_parameter",
+        )
+
+    def test_a_tag_named_like_a_field_is_not_the_field(self) -> None:
+        """A ``text`` part's tag is not its ``text`` field: the unknown key is named."""
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "hi", "bogus": 1}],
+                }
+            ]
+        }
+        error = {
+            "type": "extra_forbidden",
+            "loc": (
+                "body",
+                "messages",
+                0,
+                "user",
+                "content",
+                "list[...]",
+                0,
+                "text",
+                "bogus",
+            ),
+            "msg": "Extra inputs are not permitted",
+            "input": 1,
+        }
+
+        assert openai_validation_error(_CHAT, [error], body, form=False)[1] == (
+            "messages[0].content[0].bogus"
+        )
+
+    def test_a_form_value_that_is_no_integer_says_it_could_not_be_converted(
+        self,
+    ) -> None:
+        """Form text no integer reads from is refused as OpenAI refuses it, not as a string."""
+        error = {
+            "type": "int_parsing",
+            "loc": ("body", "n"),
+            "msg": "Input should be a valid integer",
+            "input": "abc",
+        }
+
+        assert openai_validation_error(
+            ("POST", "/v1/images/edits"), [error], None, form=True
+        ) == (
+            (
+                "Invalid type for 'n': expected an integer, but got a string value "
+                "that could not be converted into an integer."
+            ),
+            "n",
+            "invalid_type",
+        )
+
+    def test_a_multipart_request_is_read_as_a_form(
+        self, app_client: TestClient
+    ) -> None:
+        """The handler tells a multipart body from JSON, so its text is not a JSON string.
+
+        Ref: https://developers.openai.com/api/reference/resources/images/methods/edit
+             stdapi/main.py:handle_validation_exception
+        """
+        response = app_client.post(
+            "/v1/images/edits",
+            data={"model": "x", "prompt": "x", "n": "abc"},
+            files={"image": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+        )
+
+        assert response.status_code == 400, response.text
+        err = _assert_openai_error_shape(response.json())
+        assert (err["param"], err["code"]) == ("n", "invalid_type")
+        assert err["message"].endswith(
+            "but got a string value that could not be converted into an integer."
+        ), err
+
+    def test_an_error_list_is_capped_and_quotes_no_exception(self) -> None:
+        """The list stops at twenty faults, and a validator's exception reads as its message.
+
+        Upstream relays every fault (a 30 KB body earns a 900 KB answer) and its
+        validators raise nothing of their own; the gateway's do, and their
+        exception objects are not the client's to read.
+        """
+        errors: list[dict[str, Any]] = [
+            {
+                "type": "value_error",
+                "loc": ("body", "input"),
+                "msg": "Value error, 'input' accepts at most 2048 elements",
+                "input": ["a"] * 3000,
+                "ctx": {"error": ValueError("'input' accepts at most 2048 elements")},
+            },
+            *(
+                {
+                    "type": "string_type",
+                    "loc": ("body", "input", "list[str]", index),
+                    "msg": "Input should be a valid string",
+                    "input": 1,
+                }
+                for index in range(24)
+            ),
+        ]
+
+        message, param, code = openai_validation_error(
+            ("POST", "/v1/moderations"), errors, None, form=False
+        )
+
+        assert (param, code) == (None, None)
+        assert message.startswith(
+            "[{'type': 'value_error', 'loc': ('body', 'input'), 'msg': \"Value error, "
+            "'input' accepts at most 2048 elements\", 'ctx': {'error': \"'input' "
+            'accepts at most 2048 elements"}}, '
+        ), message
+        assert "ValueError" not in message
+        assert message.count("'type': ") == 20
+        assert message.endswith(", 'and 5 more validation errors']"), message
+
+    def test_an_unhashable_type_value_is_compared_not_hashed(
+        self, app_client: TestClient
+    ) -> None:
+        """An object or array sent as ``type`` still earns the 400 of the real fault.
+
+        Ref: stdapi/validation_errors.py:_sent_field_path
+        """
+        response = app_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "m",
+                "type": [],
+                "messages": [{"role": "user", "content": 5}],
+            },
+        )
+
+        assert response.status_code == 400, response.text
+        err = _assert_openai_error_shape(response.json())
+        assert (err["param"], err["code"]) == ("messages[0].content", "invalid_type")
+
+    async def test_a_prefixed_deployment_keeps_each_route_wording(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Under a routes prefix, a route still words its fault as OpenAI's route does.
+
+        Ref: stdapi/config.py:Settings.openai_routes_prefix
+        """
+        monkeypatch.setattr(SETTINGS, "openai_routes_prefix", "/openai")
+        missing = {"type": "missing", "loc": ("body", "input"), "msg": "Field required"}
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/openai/v1/moderations",
+                "headers": [],
+                "route": SimpleNamespace(
+                    tags=[TAG_OPENAI], path="/openai/v1/moderations"
+                ),
+            }
+        )
+
+        response = await handle_validation_exception(
+            request, RequestValidationError([{**missing, "input": {}}], body={})
+        )
+
+        err = _assert_openai_error_shape(json.loads(bytes(response.body)))
+        assert err["message"] == (
+            "[{'type': 'missing', 'loc': ('body', 'input'), 'msg': 'Field required'}]"
+        )
+        assert (err["param"], err["code"]) == (None, None)
+
+
+class TestAnthropicBodyValidation:
+    """A body that is absent or no object is refused as Anthropic refuses it.
+
+    Probed on 2026-09-23: Anthropic answers ``null`` with ``The request body must
+    be a JSON object, got NoneType.`` and ``[1]`` with ``..., got list.``. An
+    absent body reaches validation as None too, so it earns the first sentence.
+
+    Ref: https://platform.claude.com/docs/en/api/errors
+         stdapi/validation_errors.py:anthropic_validation_message
+    """
+
+    @pytest.mark.parametrize(
+        ("content", "got"),
+        [(None, "NoneType"), (b"null", "NoneType"), (b"[1]", "list")],
+        ids=["absent", "null", "array"],
+    )
+    def test_the_body_must_be_an_object(
+        self, anthropic_app_client: TestClient, content: bytes | None, got: str
+    ) -> None:
+        """The message names the body and what it was, never Pydantic's bare sentence."""
+        response = anthropic_app_client.post(
+            "/anthropic/v1/messages",
+            content=content,
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 400, response.text
+        err = _assert_anthropic_error_shape(response.json())
+        assert err["message"] == f"The request body must be a JSON object, got {got}."
+
+
+class TestModelRefusalWording:
+    """A model provider's own refusal reaches the client without the backend's prefix.
+
+    Bedrock writes ``The model returned the following errors: `` ahead of the
+    provider's text; with it removed, an Anthropic refusal reads as Anthropic
+    words it.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
+         stdapi/aws_bedrock.py:handle_bedrock_client_error
+    """
+
+    def test_the_prefix_is_stripped(self) -> None:
+        """The refusal becomes a 400 carrying the provider's text alone."""
+        refusal = make_client_error(
+            "ValidationException",
+            message=(
+                "The model returned the following errors: reasoning: Extra inputs "
+                "are not permitted"
+            ),
+        )
+
+        with pytest.raises(ApiError) as excinfo, handle_bedrock_client_error():
+            raise refusal
+
+        assert excinfo.value.status == 400
+        assert excinfo.value.args == ("reasoning: Extra inputs are not permitted",)
+        assert excinfo.value.__cause__ is refusal
+
+    def test_a_refusal_of_the_backend_itself_is_left_alone(self) -> None:
+        """A validation error written by the backend, not the model, is re-raised."""
+        refusal = make_client_error(
+            "ValidationException", message="The provided model identifier is invalid."
+        )
+
+        with pytest.raises(ClientError) as excinfo, handle_bedrock_client_error():
+            raise refusal
+
+        assert excinfo.value is refusal
+
+    def test_a_refusal_ending_a_stream_is_stripped(self) -> None:
+        """A refusal arriving after the headers reads the same, on every stream.
+
+        Ref: stdapi/monitoring.py:_stream_backend_error
+             stdapi/models/chat/_adapters/_openai_responses.py:_classify_stream_error
+        """
+        refusal = make_client_error(
+            "ValidationException",
+            message="The model returned the following errors: tools.0: invalid",
+        )
+
+        assert _stream_backend_error(refusal) == (400, "tools.0: invalid")
+        assert _classify_stream_error(refusal)[:2] == (400, "tools.0: invalid")
+
+    @pytest.mark.usefixtures("request_log")
+    async def test_a_refusal_reaching_the_application_handler_is_stripped(self) -> None:
+        """A refusal no backend call converted still reaches the client without the prefix.
+
+        Ref: stdapi/main.py:handle_botocore_client_error
+        """
+        refusal = make_client_error(
+            "ValidationException",
+            message="The model returned the following errors: x: invalid",
+        )
+
+        response = await handle_botocore_client_error(_openai_request(), refusal)
+
+        assert response.status_code == 400
+        err = _assert_openai_error_shape(json.loads(bytes(response.body)))
+        assert err["message"] == "x: invalid"

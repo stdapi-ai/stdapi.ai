@@ -439,7 +439,7 @@ Grouped by what you see. The two `401` entries live under [Authentication & Iden
 ??? failure "`400 Bad Request` — invalid parameters from Bedrock"
     Bedrock rejected the request parameters (`ValidationException` / `BadRequestException`), mapped to HTTP `400` with error type `invalid_request_error` — for example an unsupported parameter for the chosen model, an out-of-range value, or content that exceeds the model's limits.
 
-    - Read the message detail returned in the response (correlate with `x-request-id` in the server logs).
+    - Read the message detail returned in the response (correlate with `x-request-id` in the server logs). A parameter the model provider rejects carries the provider's own message.
     - Confirm the parameter is supported by the model — see the per-API **Feature Compatibility** tables.
 
 ??? failure "`400 Bad Request` — a client's own control flag reaches Bedrock as a model parameter"
