@@ -3,7 +3,7 @@
   "name": "ai.stdapi/stdapi-ai",
   "title": "stdapi.ai",
   "description": "Self-hosted MCP tools for Amazon Bedrock and the AWS AI services, in your own AWS account.",
-  "version": "1.18.0",
+  "version": "1.19.0",
   "websiteUrl": "https://stdapi.ai/",
   "repository": {
     "url": "https://github.com/stdapi-ai/stdapi.ai",
@@ -12,7 +12,7 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/stdapi-ai/stdapi.ai-community:1.18.0",
+      "identifier": "ghcr.io/stdapi-ai/stdapi.ai-community:1.19.0",
       "runtimeHint": "docker",
       "transport": {
         "type": "streamable-http",
