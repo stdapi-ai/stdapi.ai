@@ -141,10 +141,13 @@ validation:
     anchors: warn
 
 plugins:
+  # Before search, so generated archive and category pages are indexed.
   - blog:
       blog_dir: blog
       post_url_format: "{slug}"
       post_excerpt: required
+      # A post scheduled for a later date stays out of the build until that date,
+      # so the campaign can queue drafts ahead without publishing them early.
       draft_if_future_date: true
       archive_toc: true
       categories_allowed:
@@ -161,9 +164,7 @@ plugins:
   # Mermaid is self-hosted too. The plugin rewrites its URL in the theme bundle
   # to an absolute site_url path, so diagrams render on the canonical domain but
   # not in a local preview served from another origin.
-  - privacy:
-      assets_exclude:
-        - plausible.io/*
+  - privacy
   - redoc-tag
   - meta
   # Ships the built assets without the comments and indentation the sources are
