@@ -136,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         accept_retirements=args.accept_retirements,
     )
     build_module.write(catalog, price_cards, facts, report)
-    unmatched = build_module.write_unmatched(catalog, collected)
+    unmatched = build_module.write_unmatched(catalog, collected, report.card_prices)
     page.write(catalog)
 
     print(f"models            {report.models}")
@@ -165,6 +165,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     unscored = len(unmatched["models_without_a_score"])
     print(f"models without a score  {unscored}  (see {UNMATCHED_PATH})")
+    print(
+        f"card prices       {len(report.card_prices)} disagreement(s) with the AWS "
+        f"model cards  (see {UNMATCHED_PATH})"
+    )
+    for line in report.card_prices:
+        print(f"  card price: {line}", file=sys.stderr)
     for note in report.notes:
         print(f"note: {note}", file=sys.stderr)
     if catalog.manifest.unreachable_regions:

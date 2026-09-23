@@ -86,6 +86,7 @@ class BuildReport:
         merge: What folding this run into the published data set changed.
         enrichment: What the hand-curated overlay contributed.
         citations: Published values the overlay is the recorded source of.
+        card_prices: Rates on which an AWS model card and the gateway disagree.
         notes: Anything that degraded during the run.
     """
 
@@ -99,6 +100,7 @@ class BuildReport:
         default_factory=lambda: enrichment_module.Applied({}, {}, 0, [], [])
     )
     citations: int = 0
+    card_prices: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
 
@@ -591,6 +593,8 @@ def build(
     region_index = {region: index for index, region in enumerate(regions)}
 
     card_facts, published_facts = _stated_facts(models, report, refresh=refresh)
+    # After _stated_facts, which has just refreshed the card snapshot this reads.
+    _report_card_prices(price_cards, report)
 
     collected = collect_sources(refresh=refresh, only=sources)
     for result in collected.values():
@@ -987,6 +991,25 @@ def _stated_facts(
         published = {}
         report.notes.append(f"models.dev unreadable: {type(error).__name__}: {error}")
     return cards, published
+
+
+def _report_card_prices(
+    price_cards: dict[str, dict[str, Any]], report: BuildReport
+) -> None:
+    """Record where an AWS model card's rates disagree with the gateway's.
+
+    The card is never published; the disagreement is, in the run report.
+
+    Args:
+        price_cards: Model ID to its full ``model_pricing`` card.
+        report: Run report, filled in place.
+    """
+    try:
+        report.card_prices = aws_model_cards.price_disagreements(price_cards)
+    except Exception as error:  # noqa: BLE001 -- one bad source must not fail the build
+        report.notes.append(
+            f"aws model card prices unreadable: {type(error).__name__}: {error}"
+        )
 
 
 def fold_service_variants(
@@ -1459,13 +1482,17 @@ def _priced_where_served(card: dict[str, Any], available: set[str]) -> dict[str,
 
 
 def write_unmatched(
-    catalog: Catalog, collected: dict[str, SourceResult]
+    catalog: Catalog,
+    collected: dict[str, SourceResult],
+    card_prices: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Record what neither pass could map, in both directions.
 
     Args:
         catalog: The assembled catalogue.
         collected: Source key to what it contributed.
+        card_prices: Rates on which an AWS model card and the gateway disagree,
+            recorded beside the unmatched names for the same review.
 
     Returns:
         The report that was written.
@@ -1500,6 +1527,9 @@ def write_unmatched(
             for (source, board, name), ids in sorted(claims.items())
             if len(ids) > 1
         },
+        # The gateway is the only price source the page publishes; a card that
+        # disagrees means AWS changed a rate or the gateway bills one wrongly.
+        "prices_disagreeing_with_a_model_card": list(card_prices),
     }
     UNMATCHED_PATH.parent.mkdir(parents=True, exist_ok=True)
     UNMATCHED_PATH.write_text(_dump(report))

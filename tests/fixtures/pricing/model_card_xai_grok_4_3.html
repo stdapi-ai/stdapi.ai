@@ -1,0 +1,61 @@
+<h1 class="topictitle" id="model-card-xai-grok-4-3">Grok 4.3</h1>
+<h2 id="model-card-xai-grok-4-3-pricing">Pricing</h2>
+  <div class="table-container"><div class="table-contents"><table id="w633aac11c38b6b8b3"><thead>
+     <tr>
+      <th><b>Inference option</b></th>
+      <th><b>Input</b></th>
+      <th><b>Output</b></th>
+      <th><b>Cache read</b></th>
+     </tr>
+    </thead>
+     <tr><td tabindex="-1">In-Region</td><td tabindex="-1">$1.25</td><td tabindex="-1">$2.50</td><td tabindex="-1">$0.20</td></tr>
+    </table></div></div>
+  <p><b>AWS GovCloud (US-West)</b></p>
+  <div class="table-container"><div class="table-contents"><table id="w633aac11c38b6b8b7"><thead>
+     <tr>
+      <th><b>Inference option</b></th>
+      <th><b>Input</b></th>
+      <th><b>Output</b></th>
+      <th><b>Cache read</b></th>
+     </tr>
+    </thead>
+     <tr><td tabindex="-1">In-Region</td><td tabindex="-1">$1.50</td><td tabindex="-1">$3.00</td><td tabindex="-1">$0.24</td></tr>
+    </table></div></div>
+  <p><em>All prices are per 1 million tokens. Pricing shown is for the Standard tier. Grok 4.3 supports In-Region inference only.</em></p>
+  <p><b>Priority and Flex tier support:</b> In addition to Standard, Grok 4.3 supports the Priority and Flex service tiers. Priority is billed at <b>1.75x</b> the Standard per-token rate (a 75% premium) and Flex at <b>0.5x</b> the Standard rate (a 50% discount); apply these multipliers to the Standard rates shown above. For details on each service tier, see <a href="service-tiers-inference.html" rel="noopener noreferrer" target="_blank">service tiers</a>.</p>
+<h2 id="model-card-xai-grok-4-3-programmatic-access">Programmatic Access</h2>
+  <p>Use the following model IDs and endpoint URLs to access this model programmatically. For more information about the available APIs and endpoints, see <a href="apis.html" rel="noopener noreferrer" target="_blank">APIs supported</a> and <a href="endpoints.html" rel="noopener noreferrer" target="_blank">Endpoints supported</a>.</p>
+  <div class="table-container"><div class="table-contents"><table id="w633aac11c38b6c10b5"><thead>
+     <tr>
+      <th><b>Endpoint</b></th>
+      <th><b>Model ID</b></th>
+      <th><b>In-Region endpoint URL</b></th>
+      <th><b>Geo inference ID</b></th>
+      <th><b>Global inference ID</b></th>
+     </tr>
+    </thead>
+     <tr>
+      <td tabindex="-1"><code class="code">bedrock-mantle</code></td>
+      <td tabindex="-1"><code class="code">xai.grok-4.3</code></td>
+      <td tabindex="-1"><code class="code">https://bedrock-mantle.<span>{</span>region}.api.aws/openai/v1</code></td>
+      <td tabindex="-1">Not supported</td>
+      <td tabindex="-1">Not supported</td>
+     </tr>
+    </table></div></div>
+  <p><em>For example, if region is us-west-2 (Oregon), then the bedrock-mantle endpoint URL will be "https://bedrock-mantle.us-west-2.api.aws/openai/v1".</em></p>
+<h2 id="model-card-xai-grok-4-3-regional-availability">Regional Availability</h2>
+  <p><b><u>Regional availability at a glance</u></b></p>
+  <p>Amazon Bedrock offers three inference options: <b>In-Region</b> keeps requests within a single Region for strict compliance, <b>Geo Cross-Region</b> routes across Regions within a geography (such as US, EU, and APAC) while respecting data residency, and <b>Global Cross-Region</b> routes anywhere worldwide when there are no residency constraints. Refer to the <a href="./models-region-compatibility.html">Regional availability by models</a> page for more details.</p>
+  <div class="table-container"><div class="table-contents"><table id="w633aac11c38b6c14b7"><thead>
+     <tr>
+      <th><b>Region</b></th>
+      <th><b>In-Region</b></th>
+      <th><b>Geo</b></th>
+      <th><b>Global</b></th>
+     </tr>
+    </thead>
+     <tr><td tabindex="-1"><code class="code">us-west-2</code> (Oregon)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="Green circle with white checkmark icon." data-alt-text-source="generated" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">us-east-1</code> (N. Virginia)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="Green circle with white checkmark icon." data-alt-text-source="generated" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">us-east-2</code> (Ohio)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="Green circle with white checkmark icon." data-alt-text-source="generated" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">us-gov-west-1</code> (GovCloud West)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="Green circle with white checkmark icon." data-alt-text-source="generated" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." style="max-width:10px" height="10px" /></td></tr>
+    </table></div></div>

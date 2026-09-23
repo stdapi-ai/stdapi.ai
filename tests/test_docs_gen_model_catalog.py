@@ -11,6 +11,7 @@ import gzip
 import json
 import os
 import re
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from urllib.request import Request
 
@@ -51,6 +52,7 @@ from docs_gen.model_catalog.sources import (
     RawScore,
     SourceResult,
     aws_model_cards,
+    model_card_prices,
     models_dev,
     open_asr,
 )
@@ -1183,6 +1185,231 @@ def test_a_card_is_only_joined_to_a_model_the_catalogue_has(
         "acme.known-v1:0": {"context_window": "200K", "max_output_tokens": 4000}
     }
     assert notes == ["1 model card(s) describe no model this gateway serves"]
+
+
+#: The recorded GPT-5.6 Sol card the pricing tests read, shared with the drift lane.
+_SOL_CARD: Path = (
+    REPO_ROOT / "tests" / "fixtures" / "pricing" / "model_card_openai_gpt_56_sol.html"
+)
+
+
+def _sol_card_entry(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Read the recorded Sol card the way a run reads a served one.
+
+    Args:
+        monkeypatch: Serves the fixture in place of the user guide.
+
+    Returns:
+        The card's snapshot entry.
+    """
+    monkeypatch.setattr(
+        "docs_gen.model_catalog.sources.aws_model_cards.get_bytes",
+        lambda _url: _SOL_CARD.read_bytes(),
+    )
+    return aws_model_cards._read_card("model-card-openai-gpt-56-sol.html")  # noqa: SLF001
+
+
+def _gateway_price_row(
+    routing: str, dimension: str, per_million: str, context: str = ""
+) -> dict[str, str]:
+    """Build one gateway ``model_pricing`` row in us-east-1.
+
+    Args:
+        routing: The row's routing, the region itself for a regional rate.
+        dimension: The billed dimension.
+        per_million: The rate per million units.
+        context: "long" for a long-context row.
+
+    Returns:
+        The row.
+    """
+    row = {
+        "region": "us-east-1",
+        "dimension": dimension,
+        "tier": "standard",
+        "routing": routing,
+        "unit_price": str(Decimal(per_million) / 1_000_000),
+        "currency": "USD",
+    }
+    if context:
+        row["context"] = context
+    return row
+
+
+def _sol_gateway_rows(**changed: str) -> list[dict[str, str]]:
+    """Return the gateway rows billing the Sol card's own rates, bar *changed*.
+
+    Args:
+        **changed: ``<kind>_<context>_<dimension>`` to a different per-1M rate,
+            or "" to drop the row.
+
+    Returns:
+        The rows.
+    """
+    published = {
+        ("us-east-1", ""): ("4.40", "5.50", "0.44", "22.00"),
+        ("global", ""): ("4.00", "5.00", "0.40", "20.00"),
+        ("us-east-1", "long"): ("8.80", "11.00", "0.88", "33.00"),
+        ("global", "long"): ("8.00", "10.00", "0.80", "30.00"),
+    }
+    dimensions = (
+        "input_tokens",
+        "cache_write_tokens",
+        "cache_read_tokens",
+        "output_tokens",
+    )
+    rows = []
+    for (routing, context), rates in published.items():
+        for dimension, rate in zip(dimensions, rates, strict=True):
+            kind = "global" if routing == "global" else "regional"
+            key = f"{kind}_{context or 'short'}_{dimension}"
+            value = changed.get(key, rate)
+            if value:
+                rows.append(_gateway_price_row(routing, dimension, value, context))
+    return rows
+
+
+def test_a_priced_card_is_snapshotted_with_its_rate_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The card's commercial rates reach the snapshot, per option and tier.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
+    """
+    entry = _sol_card_entry(monkeypatch)
+    prices = model_card_prices.prices_from_json(entry["prices"])
+    assert prices.threshold == 272_000
+    assert prices.rates["global", "long"]["output_tokens"] == Decimal("0.00003")
+    assert "price_problem" not in entry
+
+
+def test_an_unreadable_rate_table_is_snapshotted_as_a_problem(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A changed unit note is recorded, never guessed into a rate.
+
+    Ref: docs_gen/model_catalog/sources/model_card_prices.py
+    """
+    body = _SOL_CARD.read_text().replace(
+        "per 1 million tokens", "per 1 thousand tokens"
+    )
+    monkeypatch.setattr(
+        "docs_gen.model_catalog.sources.aws_model_cards.get_bytes",
+        lambda _url: body.encode(),
+    )
+    entry = aws_model_cards._read_card("model-card-openai-gpt-56-sol.html")  # noqa: SLF001
+    assert "prices" not in entry
+    assert "no longer states rates" in entry["price_problem"]
+
+
+@pytest.mark.parametrize(
+    ("changed", "expected"),
+    [
+        ({}, []),
+        (
+            {"global_short_input_tokens": "4.10"},
+            [
+                (
+                    "openai.gpt-5.6-sol (Global) input_tokens: gateway publishes 4.1/1M "
+                    "in us-east-1, model-card-openai-gpt-56-sol.html states 4/1M"
+                )
+            ],
+        ),
+        (
+            {"regional_long_cache_write_tokens": ""},
+            [
+                (
+                    "openai.gpt-5.6-sol (In-Region/Geo, long context) "
+                    "cache_write_tokens: gateway publishes nothing, "
+                    "model-card-openai-gpt-56-sol.html states 11/1M"
+                )
+            ],
+        ),
+    ],
+    ids=["agreeing", "drift", "card-only"],
+)
+def test_a_card_disagreeing_with_the_gateway_is_reported_not_published(
+    monkeypatch: pytest.MonkeyPatch, changed: dict[str, str], expected: list[str]
+) -> None:
+    """Each rate the card and the gateway state differently is one report line.
+
+    Ref: docs_gen/model_catalog/sources/aws_model_cards.py:price_disagreements
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
+    """
+    entry = _sol_card_entry(monkeypatch)
+    monkeypatch.setattr(
+        "docs_gen.model_catalog.sources.aws_model_cards.snapshot",
+        lambda *_args, **_kwargs: [entry],
+    )
+    price_cards = {"openai.gpt-5.6-sol": {"prices": _sol_gateway_rows(**changed)}}
+    assert aws_model_cards.price_disagreements(price_cards) == expected
+
+
+def test_a_long_rate_on_a_single_tier_card_is_reported_as_the_gateways(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A card pricing one tier states it for every prompt size.
+
+    Ref: docs_gen/model_catalog/sources/aws_model_cards.py:price_disagreements
+    """
+    single = model_card_prices.CardPrices(
+        {("in_region", ""): {"input_tokens": Decimal("0.00000125")}}
+    )
+    cards = [
+        {
+            "page": "model-card-xai-grok-4-3.html",
+            "ids": ["xai.grok-4.3"],
+            "facts": {},
+            "prices": model_card_prices.prices_to_json(single),
+        },
+        {
+            "page": "model-card-stranger.html",
+            "ids": ["other.stranger"],
+            "facts": {},
+            "price_problem": "the card has no Pricing section",
+        },
+    ]
+    monkeypatch.setattr(
+        "docs_gen.model_catalog.sources.aws_model_cards.snapshot",
+        lambda *_args, **_kwargs: cards,
+    )
+    rows = [
+        _gateway_price_row("us-east-1", "input_tokens", "1.25"),
+        _gateway_price_row("us-east-1", "input_tokens", "2.50", "long"),
+    ]
+    expected = (
+        "xai.grok-4.3 (In-Region/Geo, long context) input_tokens: gateway publishes "
+        "2.5/1M in us-east-1, model-card-xai-grok-4-3.html states 1.25/1M"
+    )
+    assert aws_model_cards.price_disagreements({"xai.grok-4.3": {"prices": rows}}) == [
+        expected
+    ]
+
+
+def test_card_price_disagreements_reach_the_unmatched_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The review file carries the disagreements beside the unmatched names.
+
+    Ref: docs_gen/model_catalog/build.py:write_unmatched
+    """
+    monkeypatch.setattr(build, "UNMATCHED_PATH", tmp_path / "unmatched.json")
+    catalog = Catalog(
+        manifest=Manifest(
+            generated="2026-09-23",
+            gateway_version="1.19.0",
+            partitions=["aws"],
+            currencies=["USD"],
+            reference_region="us-east-1",
+            regions=["us-east-1"],
+            region_buckets={"us-east-1": "americas"},
+        ),
+        models=[],
+    )
+    written = build.write_unmatched(catalog, {}, ["a: gateway publishes nothing"])
+    assert written["prices_disagreeing_with_a_model_card"] == [
+        "a: gateway publishes nothing"
+    ]
 
 
 # --- refusing to publish a collection failure ------------------------------

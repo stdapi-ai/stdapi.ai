@@ -1,4 +1,13 @@
-"""Drift detection for ``DEFAULT_MODEL_PRICES`` against the sources it was copied from.
+"""Drift detection for the gateway's prices against the AWS sources that publish them.
+
+Two lanes. The first checks the hand-copied tables against the pages they were
+copied from. The second, the **card lane**, checks every AWS model card that
+publishes a rate table -- found through the provider index pages, whichever
+way the gateway gets that model's rate -- against the rate the gateway
+actually bills. It runs the gateway's own catalog load, then resolves each
+endpoint, region, serving option and context tier the card offers. The card
+parser both lanes use is shared with the Models page generator
+(``docs_gen/model_catalog/sources/model_card_prices.py``).
 
 ``stdapi/models/pricing_overrides.py:DEFAULT_MODEL_PRICES`` and its Global
 cross-Region twin ``DEFAULT_MODEL_GLOBAL_PRICES`` are hand-copied tables of
@@ -25,15 +34,20 @@ Both are HTML, so the detector's first duty is to tell "the price changed" from
 "I could not read the page". They are different events with different answers,
 and conflating them produces the false alarms that get a detector switched off:
 
-===========  =============================================  ================
-Outcome      Meaning                                        Effect
-===========  =============================================  ================
-MATCH        the table agrees with the source               none
-DRIFT        the source publishes a different rate          **fails**
-VANISHED     the source no longer publishes this rate       reported only
-NEW          the source publishes a rate the table lacks    reported only
-UNREACHABLE  the source could not be fetched or parsed      reported only
-===========  =============================================  ================
+============  =============================================  ================
+Outcome       Meaning                                        Effect
+============  =============================================  ================
+MATCH         the table agrees with the source               none
+DRIFT         the source publishes a different rate          **fails**
+CARD-ONLY     the gateway bills nothing for a card's rate    **fails**
+VANISHED      the source no longer publishes this rate       reported only
+GATEWAY-ONLY  the gateway bills a rate no card publishes     reported only
+NEW           the source publishes a rate the table lacks    reported only
+UNREACHABLE   the source could not be fetched or parsed      reported only
+============  =============================================  ================
+
+CARD-ONLY and GATEWAY-ONLY come from the card lane alone. A card-only rate
+fails because it is reported as zero cost.
 
 **A vanished price is never removed and never fails.** Usage recorded against a
 delisted, renamed or enrollment-gated model still has to be priced, so the entry
@@ -63,22 +77,32 @@ not known to work.
 Ref: stdapi/models/pricing_overrides.py:DEFAULT_MODEL_PRICES
      stdapi/models/pricing_overrides.py:DEFAULT_MODEL_GLOBAL_PRICES
      stdapi/pricing.py:register_default_prices
+     stdapi/pricing.py:resolve_price
+     https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html
      https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards-openai.html
      https://aws.amazon.com/bedrock/pricing/
 """
 
+import asyncio
 import re
 import warnings
+from collections import defaultdict
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
-from html import unescape
 from typing import TYPE_CHECKING, Final
 
 import httpx
 import pytest
 from botocore.exceptions import BotoCoreError, ClientError
 
+from docs_gen.model_catalog.sources import model_card_prices as card_prices
+from docs_gen.model_catalog.sources.model_card_prices import (
+    PER_MILLION_NOTE,
+    UnreadableSourceError,
+    card_is_withdrawn,
+    parse_context_window,
+)
 from stdapi import pricing
 from stdapi.aws import AWSConnectionManager, get_client
 from stdapi.config import SETTINGS
@@ -89,11 +113,11 @@ from stdapi.models.pricing_overrides import (
     DEFAULT_MODEL_PRICES,
     MODEL_LONG_CONTEXT_THRESHOLDS,
 )
-from stdapi.pricing import ContextLength, Dimension, PriceKey, Routing, Service
+from stdapi.pricing import ContextLength, Dimension, Routing, Service
 from tests.conftest import REPO_ROOT
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Collection, Iterable, Mapping
 
 #: Recorded source excerpts backing the offline classifier tests.
 FIXTURES_DIR: Final = REPO_ROOT / "tests" / "fixtures" / "pricing"
@@ -116,16 +140,58 @@ _MODEL_CARD_URLS: Final[dict[str, str]] = {
     "openai.gpt-6-astra": "model-card-openai-gpt-6-astra",
 }
 
-#: Model card per Price List-priced model, cross-checked against the rows ingested.
-_PRICE_LIST_CARD_URLS: Final[dict[str, str]] = {
-    "moonshotai.kimi-k3": "model-card-moonshot-ai-kimi-k3"
-}
-
-#: Region whose Price List rows that cross-check reads.
-_CARD_CHECK_REGION: Final[str] = "us-east-1"
-
 #: Where a model card lives, given its slug.
 _USER_GUIDE: Final[str] = "https://docs.aws.amazon.com/bedrock/latest/userguide/"
+
+#: The user guide's table of contents, which lists every provider's card index.
+_USER_GUIDE_TOC: Final[str] = f"{_USER_GUIDE}toc-contents.json"
+
+#: Card pages fetched at once by the card lane.
+_CARD_FETCH_CONCURRENCY: Final[int] = 8
+
+#: Commercial regions the card lane resolves the gateway's rates in, one or more per geography.
+_CARD_LANE_REGIONS: Final[frozenset[str]] = frozenset(
+    {
+        "us-east-1",
+        "us-east-2",
+        "us-west-2",
+        "ca-central-1",
+        "eu-west-1",
+        "eu-central-1",
+        "ap-northeast-1",
+        "ap-south-1",
+        "ap-southeast-2",
+        "sa-east-1",
+    }
+)
+
+#: Price-catalog service billing each endpoint a card names.
+_ENDPOINT_SERVICE: Final[dict[str, Service]] = {
+    "bedrock-runtime": Service.BEDROCK,
+    "bedrock-mantle": Service.BEDROCK_MANTLE,
+}
+
+#: Routing the gateway records for a call served through each card option.
+_OPTION_ROUTING: Final[dict[card_prices.Option, Routing]] = {
+    "in_region": "",
+    "geo": "",
+    "global": "global",
+}
+
+#: How the report names each card option.
+_OPTION_LABEL: Final[dict[card_prices.Option, str]] = {
+    "in_region": "In-Region",
+    "geo": "Geo",
+    "global": "Global",
+}
+
+#: Token dimensions compared whether or not a card prices them.
+_CARD_DIMENSIONS: Final[tuple[str, ...]] = (
+    Dimension.INPUT_TOKENS,
+    Dimension.CACHE_WRITE_TOKENS,
+    Dimension.CACHE_READ_TOKENS,
+    Dimension.OUTPUT_TOKENS,
+)
 
 #: The OpenAI card index, scanned for frontier GPT cards no table entry prices.
 _OPENAI_CARD_INDEX: Final[str] = f"{_USER_GUIDE}model-cards-openai.html"
@@ -155,79 +221,14 @@ _OPENAI_CARD_LINK: Final[re.Pattern[str]] = re.compile(
     r"(model-card-openai-gpt-(?!oss)[a-z0-9.-]+)\.html"
 )
 
-#: Divisor turning a card's per-1M-token rate into a per-token one.
-_PER_MILLION: Final[Decimal] = Decimal(1_000_000)
-
-#: The card note stating the unit; a change to it invalidates the division above.
-_PER_MILLION_NOTE: Final[str] = "per 1 million tokens"
-
-#: The card row naming the rate that applies in the model's own region.
-_IN_REGION_ROW: Final[str] = "in-region"
-
-#: The row a card with no In-Region row prices its regional (Geo) rate in.
-_US_CRIS_ROW: Final[str] = "us cris"
-
-#: The card row naming the rate the ``global.`` inference profile is billed at.
-_GLOBAL_ROW: Final[str] = "global cris"
-
-#: Caption fragment labelling the short-context table; an uncaptioned table is one.
-_SHORT_CONTEXT_CAPTION: Final[str] = "short context"
-
-#: Caption fragment labelling the long-context table, absent from most cards.
-_LONG_CONTEXT_CAPTION: Final[str] = "long context"
-
-#: Heading opening the AWS GovCloud rates, which DEFAULT_MODEL_PRICES excludes.
-_GOVCLOUD_HEADING: Final[str] = "aws govcloud"
-
-#: How a card states its context tables' boundary, e.g. "(272K input tokens or fewer)".
-_CONTEXT_WINDOW_SIZE: Final[re.Pattern[str]] = re.compile(
-    r"\((\d+)\s*K\b", re.IGNORECASE
-)
-
-#: Multiplier turning a card's "K" context-window size into prompt tokens.
-_THOUSAND: Final[int] = 1_000
-
 #: Header of the pricing-page table holding the Stability rates.
 _STABILITY_HEADING: Final[str] = "stability ai image services"
 
 #: The unit that table states; a change to it invalidates a direct comparison.
 _PER_GENERATION_NOTE: Final[str] = "price per generation"
 
-#: Card column header fragment to dimension, longest-qualified fragment first.
-_CARD_COLUMNS: Final[tuple[tuple[str, Dimension], ...]] = (
-    ("cache write", Dimension.CACHE_WRITE_TOKENS),
-    ("cache read", Dimension.CACHE_READ_TOKENS),
-    ("input", Dimension.INPUT_TOKENS),
-    ("output", Dimension.OUTPUT_TOKENS),
-)
-
-_TAG: Final[re.Pattern[str]] = re.compile(r"<[^>]+>")
-_SPACES: Final[re.Pattern[str]] = re.compile(r"\s+")
+#: A table on the Bedrock pricing page.
 _TABLE: Final[re.Pattern[str]] = re.compile(r"<table.*?</table>", re.DOTALL)
-_ROW: Final[re.Pattern[str]] = re.compile(r"<tr.*?</tr>", re.DOTALL)
-_CELL: Final[re.Pattern[str]] = re.compile(r"<t[hd][^>]*>(.*?)</t[hd]>", re.DOTALL)
-_MONEY: Final[re.Pattern[str]] = re.compile(r"^\$([0-9]+(?:\.[0-9]+)?)$")
-_H1: Final[re.Pattern[str]] = re.compile(r"<h1[\s>]")
-_PARAGRAPH_OR_HEADING: Final[re.Pattern[str]] = re.compile(
-    r"<(p|h[3-6])[\s>].*?</\1>", re.DOTALL
-)
-_PRICING_SECTION: Final[re.Pattern[str]] = re.compile(
-    r'<h2[^>]*id="[^"]*-pricing"[^>]*>.*?</h2>(.*?)(?=<h2|\Z)', re.DOTALL
-)
-#: A bold caption or sub-heading labelling the table that follows it, or a table.
-_CAPTION_OR_TABLE: Final[re.Pattern[str]] = re.compile(
-    r"<p[^>]*>\s*<b>(.*?)</b>\s*</p>|<h[3-6][^>]*>(.*?)</h[3-6]>|<table.*?</table>",
-    re.DOTALL,
-)
-
-
-class UnreadableSourceError(Exception):
-    """The source was served but its pricing could not be read with confidence.
-
-    Raised instead of guessing whenever the structure the parser depends on is
-    absent or ambiguous, so a redesigned page reports as unreachable rather than
-    as a drift or a vanished rate.
-    """
 
 
 class PriceSourceWarning(UserWarning):
@@ -235,14 +236,18 @@ class PriceSourceWarning(UserWarning):
 
 
 class Outcome(StrEnum):
-    """What comparing one table entry against its source established.
+    """What comparing one rate against its source established.
 
     Declared worst first: the report is grouped in this order, so the one
-    outcome that needs a person shows above the many that do not.
+    outcome that needs a person shows above the many that do not. ``CARD_ONLY``
+    and ``GATEWAY_ONLY`` come from the card lane, which compares what the
+    gateway actually bills rather than a hand-copied table.
     """
 
     DRIFT = "DRIFT"
+    CARD_ONLY = "CARD-ONLY"
     VANISHED = "VANISHED"
+    GATEWAY_ONLY = "GATEWAY-ONLY"
     NEW = "NEW"
     UNREACHABLE = "UNREACHABLE"
     MATCH = "MATCH"
@@ -302,209 +307,18 @@ class CardReadings:
     threshold: ThresholdReading
 
 
-def _text(fragment: str) -> str:
-    """Return *fragment*'s visible text, unescaped and whitespace-collapsed."""
-    return _SPACES.sub(" ", unescape(_TAG.sub(" ", fragment))).strip()
+def _dimensions(rates: Mapping[str, Decimal] | None) -> dict[Dimension, Decimal] | None:
+    """Key a shared-parser reading by the gateway's own dimension type.
 
+    Args:
+        rates: Per-token rates keyed by dimension value, or None.
 
-def _rows(table: str) -> list[list[str]]:
-    """Return *table*'s rows as lists of cell texts."""
-    return [[_text(cell) for cell in _CELL.findall(row)] for row in _ROW.findall(table)]
-
-
-def _money(cell: str) -> Decimal | None:
-    """Return the USD amount *cell* states, or None when it states no rate.
-
-    A card writes an em dash where a rate does not apply, which is a published
-    absence rather than an unreadable cell.
+    Returns:
+        The same rates keyed by :class:`Dimension`, or None.
     """
-    match = _MONEY.match(cell)
-    return Decimal(match.group(1)) if match else None
-
-
-def _card_dimension(header: str) -> Dimension | None:
-    """Return the dimension a card column header names, or None for the others."""
-    lowered = header.casefold()
-    return next(
-        (dimension for fragment, dimension in _CARD_COLUMNS if fragment in lowered),
-        None,
+    return (
+        None if rates is None else {Dimension(key): rate for key, rate in rates.items()}
     )
-
-
-def _captioned_tables(section: str) -> list[tuple[str | None, str]]:
-    """Return the section's pricing tables, each with the caption labelling it.
-
-    A card carries one unlabelled table, or several captioned ones -- by a bold
-    paragraph or a sub-heading: a short and a long context window, or a
-    separate AWS GovCloud block. Pairing each table with its own caption is
-    what keeps one tier's rate from being read as another's.
-    """
-    tables: list[tuple[str | None, str]] = []
-    caption: str | None = None
-    for match in _CAPTION_OR_TABLE.finditer(section):
-        if match.group(0).startswith("<table"):
-            tables.append((caption, match.group(0)))
-            caption = None
-        else:
-            bold, heading = match.group(1, 2)
-            caption = _text(bold if bold is not None else heading)
-    return tables
-
-
-def _short_context_table(section: str) -> str:
-    """Return the card's commercial short-context pricing table.
-
-    Only an absent caption or one naming the short context window prices what
-    ``DEFAULT_MODEL_PRICES`` registers, and anything else is a different rate
-    that must not be guessed at.
-
-    Raises:
-        UnreadableSourceError: If the section holds no single such table.
-    """
-    candidates = [
-        table
-        for caption, table in _captioned_tables(section)
-        if caption is None or _SHORT_CONTEXT_CAPTION in caption.casefold()
-    ]
-    if len(candidates) != 1:
-        msg = (
-            f"expected exactly one uncaptioned or short-context pricing table, "
-            f"found {len(candidates)}"
-        )
-        raise UnreadableSourceError(msg)
-    return candidates[0]
-
-
-def _long_context_table(section: str) -> str | None:
-    """Return the card's long-context pricing table, or None when it has none.
-
-    Most cards price a single context window and carry no such table at all,
-    which is a published absence rather than a fault. Two would mean the
-    caption stopped naming one table, which must not be guessed at either.
-
-    Raises:
-        UnreadableSourceError: If the section holds more than one.
-    """
-    candidates = [
-        table
-        for caption, table in _captioned_tables(section)
-        if caption is not None and _LONG_CONTEXT_CAPTION in caption.casefold()
-    ]
-    if len(candidates) > 1:
-        msg = (
-            f"expected at most one long-context pricing table, found {len(candidates)}"
-        )
-        raise UnreadableSourceError(msg)
-    return candidates[0] if candidates else None
-
-
-def _pricing_section(page: str) -> str:
-    """Return the card's Pricing section, checked to still quote per-1M rates.
-
-    Raises:
-        UnreadableSourceError: If the section or its unit note is absent.
-    """
-    section = _PRICING_SECTION.search(page)
-    if section is None:
-        msg = "the card has no Pricing section"
-        raise UnreadableSourceError(msg)
-    body = section.group(1)
-    if _PER_MILLION_NOTE not in _text(body).casefold():
-        msg = f"the Pricing section no longer states rates {_PER_MILLION_NOTE!r}"
-        raise UnreadableSourceError(msg)
-    return _commercial_block(body)
-
-
-def _commercial_block(section: str) -> str:
-    """Return *section* truncated before the AWS GovCloud rates it may carry.
-
-    A card pricing GovCloud repeats the same context-window captions below a
-    GovCloud paragraph or heading, so those tables are not distinguishable from
-    the commercial ones by caption alone. ``DEFAULT_MODEL_PRICES`` registers
-    only commercial rates, which are the ones above that heading.
-    """
-    for block in _PARAGRAPH_OR_HEADING.finditer(section):
-        if _GOVCLOUD_HEADING in _text(block.group(0)).casefold():
-            return section[: block.start()]
-    return section
-
-
-def _pricing_rows(page: str, context: ContextLength = "") -> list[list[str]] | None:
-    """Return the rows of one of a card's commercial pricing tables.
-
-    Every inference option is a row of one table, so the In-Region and the
-    Global rate of a context tier are both read from it -- and both are
-    therefore protected from the other tier's block and from GovCloud by the
-    same table selection.
-
-    Args:
-        page: The model card's HTML.
-        context: "" for the short-context table, "long" for the long-context one.
-
-    Returns:
-        The header row followed by one row per inference option, or None when
-        *context* is "long" and the card prices a single context window.
-
-    Raises:
-        UnreadableSourceError: If the pricing section, its unit note or the
-            wanted table cannot be identified.
-    """
-    body = _pricing_section(page)
-    table = _long_context_table(body) if context else _short_context_table(body)
-    return _rows(table) if table is not None else None
-
-
-def parse_context_window(page: str) -> int | None:
-    """Return the prompt size at which a card leaves its short-context rate.
-
-    A split card captions its first table with the window it prices, e.g.
-    "Short Context Window (272K)". That figure is the boundary
-    ``MODEL_LONG_CONTEXT_THRESHOLDS`` has to carry: registering a different one
-    prices real calls from the wrong tier in whichever direction it errs.
-
-    Args:
-        page: The model card's HTML.
-
-    Returns:
-        The boundary in prompt tokens, or None when the card captions no
-        context window -- the ordinary case of a card pricing a single tier.
-
-    Raises:
-        UnreadableSourceError: If the pricing section or its unit note is
-            absent, or a short-context caption states no readable size.
-    """
-    for caption, _ in _captioned_tables(_pricing_section(page)):
-        if caption is None or _SHORT_CONTEXT_CAPTION not in caption.casefold():
-            continue
-        if (size := _CONTEXT_WINDOW_SIZE.search(caption)) is None:
-            msg = f"the short-context caption {caption!r} states no window size"
-            raise UnreadableSourceError(msg)
-        return int(size.group(1)) * _THOUSAND
-    return None
-
-
-def _row_rates(rows: list[list[str]], label: str) -> dict[Dimension, Decimal] | None:
-    """Return the per-token rates the row labelled *label* states.
-
-    Args:
-        rows: A pricing table, header row first.
-        label: The casefolded inference option naming the wanted row.
-
-    Returns:
-        The rate per token, per dimension, or None when the table has no such
-        row -- which is a published absence for every option but In-Region.
-    """
-    labelled = next(
-        (row for row in rows[1:] if row and row[0].casefold() == label), None
-    )
-    if labelled is None:
-        return None
-    return {
-        dimension: amount / _PER_MILLION
-        for header, cell in zip(rows[0], labelled, strict=False)
-        if (dimension := _card_dimension(header)) is not None
-        and (amount := _money(cell)) is not None
-    }
 
 
 def parse_model_card(
@@ -512,8 +326,8 @@ def parse_model_card(
 ) -> dict[Dimension, Decimal] | None:
     """Return the per-token regional rates a Bedrock model card publishes.
 
-    That is the In-Region row, or the US CRIS row of a card with none (Kimi
-    K3 is served only through cross-Region profiles).
+    That is the In-Region row, or the Geo row of a card with none (Kimi K3 is
+    served only through cross-Region profiles, and calls it "US CRIS").
 
     Args:
         page: The model card's HTML.
@@ -529,19 +343,16 @@ def parse_model_card(
         UnreadableSourceError: If the pricing section, its unit note, the
             wanted table or its regional row cannot be identified.
     """
-    rows = _pricing_rows(page, context)
+    rows = card_prices.tier_rows(page, context)
     if rows is None:
         return None
-    rates = _row_rates(rows, _IN_REGION_ROW)
+    rates = card_prices.option_rates(rows, "in_region")
     if rates is None:
-        rates = _row_rates(rows, _US_CRIS_ROW)
+        rates = card_prices.option_rates(rows, "geo")
     if rates is None:
-        msg = "the pricing table has no In-Region or US CRIS row"
+        msg = "the pricing table has no In-Region or Geo CRIS row"
         raise UnreadableSourceError(msg)
-    if not rates:
-        msg = "the regional row states no rate"
-        raise UnreadableSourceError(msg)
-    return rates
+    return _dimensions(rates)
 
 
 def parse_model_card_global(
@@ -565,14 +376,10 @@ def parse_model_card_global(
             but prices nothing, which reads as changed columns rather than as
             a withdrawn rate.
     """
-    rows = _pricing_rows(page, context)
-    if rows is None:
-        return None
-    rates = _row_rates(rows, _GLOBAL_ROW)
-    if rates is not None and not rates:
-        msg = "the Global CRIS row states no rate"
-        raise UnreadableSourceError(msg)
-    return rates
+    rows = card_prices.tier_rows(page, context)
+    return (
+        None if rows is None else _dimensions(card_prices.option_rates(rows, "global"))
+    )
 
 
 def parse_stability_prices(page: str) -> dict[str, Decimal]:
@@ -589,7 +396,7 @@ def parse_stability_prices(page: str) -> dict[str, Decimal]:
             prices per generation, or states no rate.
     """
     for table in _TABLE.findall(page):
-        rows = _rows(table)
+        rows = card_prices.rows(table)
         heading = " ".join(rows[0]).casefold() if rows else ""
         if _STABILITY_HEADING not in heading:
             continue
@@ -599,7 +406,7 @@ def parse_stability_prices(page: str) -> dict[str, Decimal]:
         prices = {
             row[0].casefold(): amount
             for row in rows[1:]
-            if len(row) > 1 and (amount := _money(row[1])) is not None
+            if len(row) > 1 and (amount := card_prices.money(row[1])) is not None
         }
         if not prices:
             msg = "the Stability table states no rate"
@@ -834,18 +641,6 @@ def _card_url(slug: str) -> str:
     return f"{_USER_GUIDE}{slug}.html"
 
 
-def card_is_withdrawn(slug: str, page: str) -> bool:
-    """Whether *page* is the stub the user guide serves for a card that is gone.
-
-    ``docs.aws.amazon.com`` answers an unknown page with 200 and a near-empty
-    document, so the HTTP status cannot tell a withdrawn card from a served
-    one. A served card carries an ``<h1>`` and derives its section anchors from
-    its own slug; the stub has neither. Both are required, because reading a
-    served card as withdrawn would stop checking that model without failing.
-    """
-    return slug not in page and not _H1.search(page)
-
-
 def _withdrawn_readings(url: str) -> CardReadings:
     """Return the readings of a card the user guide no longer serves."""
     return CardReadings(
@@ -978,15 +773,33 @@ def unpriced_openai_cards(index: str) -> list[Finding]:
     ]
 
 
-def format_report(findings: list[Finding]) -> str:
-    """Render *findings* grouped by outcome, worst first."""
-    lines = ["The hand-copied price tables vs. the sources they were copied from:", ""]
+def format_report(
+    findings: list[Finding],
+    title: str = "The hand-copied price tables vs. the sources they were copied from:",
+    *,
+    counted: frozenset[Outcome] = frozenset(),
+) -> str:
+    """Render *findings* grouped by outcome, worst first.
+
+    Args:
+        findings: What the run established.
+        title: The report's first line.
+        counted: Outcomes shown as a count only, for a lane whose matches
+            would otherwise bury what needs a person.
+
+    Returns:
+        The report.
+    """
+    lines = [title, ""]
     for outcome in Outcome:
         selected = [finding for finding in findings if finding.outcome is outcome]
         if not selected:
             continue
         lines.append(f"{outcome.value} ({len(selected)}):")
-        lines.extend(f"  {finding.model_id}: {finding.detail}" for finding in selected)
+        if outcome not in counted:
+            lines.extend(
+                f"  {finding.model_id}: {finding.detail}" for finding in selected
+            )
         lines.append("")
     return "\n".join(lines)
 
@@ -1216,90 +1029,411 @@ _LONG_CAPTION: Final[str] = (
 )
 
 
-async def _ingested_rates(model_id: str) -> dict[Routing, dict[Dimension, str]]:
-    """Return the standard-tier rates a bedrock-runtime call to *model_id* resolves.
+#: What the card lane does about a finding that fails it.
+_FIX_CARD_LANE: Final[str] = (
+    "FIX: the gateway bills a different rate than the model card publishes, or "
+    "none at all. A card rate AWS also publishes in the Price List points at "
+    "the ingestion in stdapi/pricing.py; a card-only rate (the frontier OpenAI "
+    "models) at the tables in stdapi/models/pricing_overrides.py; a context "
+    "window at MODEL_LONG_CONTEXT_THRESHOLDS. Divide a card's per-1M rate by 1e6."
+)
 
-    Runs the gateway's own ingestion over the region's Bedrock rows, Mantle
-    fallback included, so a row it misreads or drops shows here as it does in
-    a real call's cost.
+#: Resolves the gateway's standard-tier unit price for one call shape, or None.
+type Resolver = Callable[
+    [Service, str, str, Dimension, Routing, ContextLength], Decimal | None
+]
+
+
+@dataclass(frozen=True, slots=True)
+class PricedCard:
+    """One model card that publishes a rate table, read in full.
+
+    Attributes:
+        url: Where the card was read from, quoted by every finding.
+        prices: The commercial rates and tier boundary it publishes.
+        serving: The model IDs and per-endpoint availability it states.
+    """
+
+    url: str
+    prices: card_prices.CardPrices
+    serving: card_prices.CardServing
+
+
+def _expected_rates(
+    prices: card_prices.CardPrices, option: card_prices.Option, context: ContextLength
+) -> tuple[Mapping[str, Decimal] | None, bool]:
+    """Return what a card says one option bills in one context tier.
+
+    A card that prices a single tier states that rate for every prompt size,
+    so a long prompt is expected at the short rate; a gateway rate that differs
+    there is one the card does not publish, not a changed one.
+
+    Args:
+        prices: What the card publishes.
+        option: The serving option.
+        context: The context tier.
 
     Returns:
-        Per-token rate per dimension, keyed by routing ("" regional, "global").
+        The card's rates, or None when it prices nothing there, and whether
+        they were published for this tier rather than carried from the short one.
+    """
+    split = any(tier == "long" for _, tier in prices.rates)
+    if context and not split:
+        return prices.rates.get((option, "")), False
+    return prices.rates.get((option, context)), True
+
+
+def _rate_findings(
+    card: PricedCard,
+    endpoint: str,
+    region: str,
+    option: card_prices.Option,
+    resolve: Resolver,
+) -> list[tuple[Outcome, str, str]]:
+    """Compare one endpoint, region and option of a card against the gateway.
+
+    Args:
+        card: The card.
+        endpoint: The endpoint serving the call.
+        region: The region the call is sent to.
+        option: The serving option the card offers there.
+        resolve: The gateway's rate resolver.
+
+    Returns:
+        (outcome, subject, detail) per dimension and context tier compared.
+    """
+    model_id = card.serving.model_ids[endpoint]
+    service = _ENDPOINT_SERVICE[endpoint]
+    contexts: tuple[ContextLength, ...] = ("", "long")
+    results: list[tuple[Outcome, str, str]] = []
+    for context in contexts:
+        expected, published = _expected_rates(card.prices, option, context)
+        subject = (
+            f"{model_id} ({endpoint}, {_OPTION_LABEL[option]}"
+            f"{', long context' if context else ''})"
+        )
+        billed = {
+            dimension: rate
+            for dimension in _CARD_DIMENSIONS
+            if (
+                rate := resolve(
+                    service,
+                    model_id,
+                    region,
+                    Dimension(dimension),
+                    _OPTION_ROUTING[option],
+                    context,
+                )
+            )
+            is not None
+        }
+        diffs = {
+            diff.dimension: diff for diff in card_prices.diff_rates(expected, billed)
+        }
+        for dimension in sorted({*(expected or {}), *billed}):
+            diff = diffs.get(dimension)
+            if diff is None:
+                results.append(
+                    (Outcome.MATCH, subject, f"{dimension}: {billed[dimension]:f}")
+                )
+                continue
+            outcome = (
+                Outcome.GATEWAY_ONLY
+                if diff.kind == "gateway-only" or not published
+                else Outcome.CARD_ONLY
+                if diff.kind == "card-only"
+                else Outcome.DRIFT
+            )
+            card_side = "none" if diff.card is None else f"{diff.card:f}"
+            gateway_side = "none" if diff.gateway is None else f"{diff.gateway:f}"
+            detail = (
+                f"{dimension}: gateway bills {gateway_side}, {card.url} publishes "
+                f"{card_side}"
+            )
+            results.append((outcome, subject, detail))
+    return results
+
+
+def classify_card_against_gateway(
+    card: PricedCard,
+    regions: Collection[str],
+    resolve: Resolver,
+    threshold: Callable[[str], int],
+) -> list[Finding]:
+    """Compare every rate a card publishes against what the gateway bills.
+
+    Each endpoint the card names is checked in every region its availability
+    table offers it in, among *regions*, for every serving option offered
+    there -- the call shapes a real request takes -- and in both context
+    tiers. A finding identical across regions is reported once, with its
+    regions, so a wrong rate reads as one line rather than thirty.
+
+    Args:
+        card: The card.
+        regions: The regions the gateway's rates were loaded for.
+        resolve: The gateway's rate resolver.
+        threshold: The gateway's long-context boundary per model ID.
+
+    Returns:
+        The findings, including a context-window one when the card splits its
+        rates.
+    """
+    grouped: dict[tuple[Outcome, str, str], list[str]] = defaultdict(list)
+    for endpoint in card.serving.model_ids:
+        offered = card.serving.availability.get(endpoint, {})
+        for region in sorted(set(offered) & set(regions)):
+            for option in sorted(offered[region], key=card_prices.OPTIONS.index):
+                for key in _rate_findings(card, endpoint, region, option, resolve):
+                    grouped[key].append(region)
+    findings = [
+        Finding(outcome, subject, f"{detail} [{', '.join(where)}]")
+        for (outcome, subject, detail), where in grouped.items()
+    ]
+    if card.prices.threshold is not None:
+        for model_id in sorted(set(card.serving.model_ids.values())):
+            billed = threshold(model_id)
+            outcome = (
+                Outcome.MATCH if billed == card.prices.threshold else Outcome.DRIFT
+            )
+            findings.append(
+                Finding(
+                    outcome,
+                    _qualified_key(model_id, "context window"),
+                    f"gateway switches past {billed} prompt tokens, {card.url} "
+                    f"past {card.prices.threshold}",
+                )
+            )
+    return findings
+
+
+async def _fetch_text(client: httpx.AsyncClient, url: str) -> str:
+    """Return the body of *url*.
+
+    Args:
+        client: The HTTP client.
+        url: The page.
+
+    Returns:
+        The page text.
+
+    Raises:
+        httpx.HTTPError: When the page cannot be fetched.
+    """
+    response = await client.get(url)
+    response.raise_for_status()
+    return response.text
+
+
+async def _discover_card_slugs(client: httpx.AsyncClient) -> set[str]:
+    """Return every model card the provider index pages link to.
+
+    Args:
+        client: The HTTP client.
+
+    Returns:
+        Card page names without ``.html``.
+
+    Raises:
+        httpx.HTTPError: When the table of contents or an index page cannot
+            be fetched.
+    """
+    toc = await _fetch_text(client, _USER_GUIDE_TOC)
+    indexes = await asyncio.gather(
+        *(
+            _fetch_text(client, f"{_USER_GUIDE}{page}")
+            for page in card_prices.index_pages(toc)
+        )
+    )
+    return set().union(*(card_prices.card_slugs(index) for index in indexes))
+
+
+def read_priced_card(url: str, slug: str, page: str) -> PricedCard | None:
+    """Read a served card, or None when it publishes no rate table.
+
+    Args:
+        url: Where the card was read from.
+        slug: The card's page name without ``.html``.
+        page: The card's HTML.
+
+    Returns:
+        The card, or None for a withdrawn card or one that only links to the
+        pricing page.
+
+    Raises:
+        UnreadableSourceError: If its rates or serving tables cannot be read.
+    """
+    if card_prices.card_is_withdrawn(slug, page) or not card_prices.has_price_table(
+        page
+    ):
+        return None
+    return PricedCard(
+        url, card_prices.parse_card_prices(page), card_prices.parse_serving(page)
+    )
+
+
+async def _read_priced_cards(
+    client: httpx.AsyncClient, slugs: Iterable[str]
+) -> tuple[list[PricedCard], list[Finding]]:
+    """Fetch every card and keep the ones publishing a rate table.
+
+    Args:
+        client: The HTTP client.
+        slugs: The cards to read.
+
+    Returns:
+        The priced cards, and an unreachable finding per card that could not
+        be fetched or read.
+    """
+    semaphore = asyncio.Semaphore(_CARD_FETCH_CONCURRENCY)
+
+    async def read(slug: str) -> PricedCard | Finding | None:
+        url = _card_url(slug)
+        async with semaphore:
+            try:
+                return read_priced_card(url, slug, await _fetch_text(client, url))
+            except (httpx.HTTPError, UnreadableSourceError) as exc:
+                return Finding(Outcome.UNREACHABLE, url, f"{type(exc).__name__}: {exc}")
+
+    outcomes = await asyncio.gather(*(read(slug) for slug in sorted(slugs)))
+    return (
+        [outcome for outcome in outcomes if isinstance(outcome, PricedCard)],
+        [outcome for outcome in outcomes if isinstance(outcome, Finding)],
+    )
+
+
+async def _load_gateway_catalog(monkeypatch: pytest.MonkeyPatch) -> bool:
+    """Load the gateway's own price catalog for the card lane's regions.
+
+    Runs ``_load_price_catalog`` itself -- Price List ingestion, Mantle
+    fallback, hand-copied defaults, regional fallback -- into a fresh state,
+    restricted to the Bedrock service codes, so a resolved rate is exactly
+    what a call in that region would be billed.
+
+    Args:
+        monkeypatch: Scopes the catalog to this test.
+
+    Returns:
+        Whether every fetch succeeded; a partial catalog would report rates it
+        never loaded as missing.
 
     Raises:
         BotoCoreError: When the Price List API is unreachable.
         ClientError: When the Price List API refuses the request.
     """
+    monkeypatch.setattr(pricing, "_state", pricing._PriceCatalogState())  # noqa: SLF001
+    monkeypatch.setattr(pricing, "_catalog_regions", lambda: set(_CARD_LANE_REGIONS))
+    monkeypatch.setattr(
+        pricing,
+        "_SERVICE_CODE_TO_SERVICE",
+        dict.fromkeys(_BEDROCK_SERVICE_CODES, Service.BEDROCK),
+    )
     endpoint = pricing.pricing_endpoint_region()
-    index: dict[PriceKey, pricing.Price] = {}
     # type-ignore: the RegionName stub Literal lags EUSC/China (works live).
     async with AWSConnectionManager(("pricing", endpoint)):  # type: ignore[arg-type]
-        client = get_client("pricing", endpoint)  # type: ignore[arg-type]
-        for service_code in _BEDROCK_SERVICE_CODES:
-            rows, _claims = await pricing._fetch_service_pricing(  # noqa: SLF001
-                client, service_code, _CARD_CHECK_REGION, []
-            )
-            index.update(rows)
-    pricing._apply_mantle_fallback(index)  # noqa: SLF001
-    model = pricing.resolve_model_key(model_id)
-    rates: dict[Routing, dict[Dimension, str]] = {"": {}, "global": {}}
-    for key, price in index.items():
-        if (
-            key.service == Service.BEDROCK
-            and key.model == model
-            and key.tier == "standard"
-            and key.routing in rates
-            and not (key.cache_ttl or key.spec or key.context)
-        ):
-            rates[key.routing][key.dimension] = f"{price.amount:f}"
-    return rates
+        await pricing._load_price_catalog([])  # noqa: SLF001
+    return pricing._state.catalog_complete  # noqa: SLF001
+
+
+def _resolve_standard(
+    service: Service,
+    model_id: str,
+    region: str,
+    dimension: Dimension,
+    routing: Routing,
+    context: ContextLength,
+) -> Decimal | None:
+    """Resolve the gateway's standard-tier unit price, as a call is billed.
+
+    Args:
+        service: The service billing the call.
+        model_id: The model invoked.
+        region: The region the call is sent to.
+        dimension: The billed dimension.
+        routing: The serving profile.
+        context: The context tier.
+
+    Returns:
+        The per-unit amount, or None when the gateway prices nothing.
+    """
+    price = pricing.resolve_price(
+        service, model_id, region, dimension, routing=routing, context=context
+    )
+    return None if price is None else price.amount
 
 
 @pytest.mark.drift
-async def test_the_price_list_rates_match_the_model_card() -> None:
-    """A Price List-priced model must resolve every rate its card publishes.
+async def test_every_priced_model_card_matches_what_the_gateway_bills(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every rate an AWS model card publishes must be the rate the gateway bills.
 
-    The Price List is authoritative, but the gateway reads it through its own
-    ingestion, and a row it misreads is invisible: Kimi K3 resolved no price on
-    bedrock-runtime, its Global rate was unreachable and its cache rows were
-    dropped. The card is compared against what a runtime call resolves, so a
-    rate the card has and the gateway lacks fails here as much as a
-    different one.
+    A card is an authoritative AWS price source whichever way the gateway gets
+    the rate -- the Price List, or a hand-copied table -- so the comparison is
+    against the gateway's effective rate: its own catalog load, resolved for
+    each endpoint, region and serving option the card offers the model on, in
+    both context tiers. That catches what reading a table cannot: an ingestion
+    that drops or misreads a row (Kimi K3 resolved nothing on bedrock-runtime),
+    a regional fallback carrying the wrong rate, a routing priced at the
+    wrong option, a boundary registered at the wrong size.
 
-    Ref: stdapi/pricing.py:_ingest_native_item
-         stdapi/pricing.py:_apply_mantle_fallback
-         https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3.html
+    Cards are discovered from the provider index pages, so a new priced card
+    is checked the day AWS publishes it. A rate the gateway bills differently
+    or not at all fails; a rate only the gateway has, and a card that cannot
+    be read, are reported.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
+         stdapi/pricing.py:resolve_price
+         stdapi/pricing.py:_load_price_catalog
     """
     if pricing.pricing_endpoint_region() is None:
         pytest.skip("this partition has no AWS Price List API endpoint")
-    findings: list[Finding] = []
-    with httpx.Client(
+    async with httpx.AsyncClient(
         timeout=_FETCH_TIMEOUT,
         follow_redirects=True,
         headers={"User-Agent": _USER_AGENT},
     ) as client:
-        for model_id, slug in _PRICE_LIST_CARD_URLS.items():
-            card = _read_model_card(client, slug)
-            try:
-                ingested = await _ingested_rates(model_id)
-            except (BotoCoreError, ClientError) as exc:
-                pytest.skip(f"the AWS Price List API is not reachable: {exc}")
-            findings.extend(classify(model_id, ingested[""], card.in_region))
-            findings.extend(
-                classify(_global_key(model_id), ingested["global"], card.cross_region)
+        try:
+            slugs = await _discover_card_slugs(client)
+        except httpx.HTTPError as exc:
+            pytest.skip(f"the user guide's card index is not reachable: {exc}")
+        cards, findings = await _read_priced_cards(client, slugs)
+    try:
+        complete = await _load_gateway_catalog(monkeypatch)
+    except (BotoCoreError, ClientError) as exc:
+        pytest.skip(f"the AWS Price List API is not reachable: {exc}")
+    if not complete:
+        pytest.skip("the AWS Price List API answered only part of the catalog")
+    for card in cards:
+        findings.extend(
+            classify_card_against_gateway(
+                card,
+                _CARD_LANE_REGIONS,
+                _resolve_standard,
+                pricing.long_context_threshold,
             )
+        )
 
-    report = format_report(findings)
+    report = format_report(
+        findings,
+        f"What the gateway bills vs. the {len(cards)} AWS model card(s) publishing "
+        f"a rate table, of {len(slugs)} discovered:",
+        counted=frozenset({Outcome.MATCH}),
+    )
     print(report)  # noqa: T201 -- shown by pytest on failure, and with -s
     if not any(finding.outcome is Outcome.MATCH for finding in findings):
         pytest.skip(f"No card published a rate to compare against.\n{report}")
-    unpriced = {Outcome.DRIFT, Outcome.NEW}
-    if any(finding.outcome in unpriced for finding in findings):
-        pytest.fail(
-            f"{report}\nFIX: the gateway resolves a different rate than the card, "
-            "or none at all: the Price List ingestion in stdapi/pricing.py "
-            "misreads these rows."
-        )
+    reported = [
+        finding
+        for finding in findings
+        if finding.outcome in {Outcome.GATEWAY_ONLY, Outcome.UNREACHABLE}
+    ]
+    if reported:
+        warnings.warn(format_report(reported), PriceSourceWarning, stacklevel=2)
+    if any(
+        finding.outcome in {Outcome.DRIFT, Outcome.CARD_ONLY} for finding in findings
+    ):
+        pytest.fail(f"{report}\n{_FIX_CARD_LANE}")
 
 
 @pytest.fixture(scope="module")
@@ -1508,7 +1642,7 @@ class TestModelCardParsing:
 
     def test_a_changed_unit_note_is_unreadable(self, gpt_56_cyber_card: str) -> None:
         """Rates stated in another unit must not be divided by a million."""
-        card = gpt_56_cyber_card.replace(_PER_MILLION_NOTE, "per 1 thousand tokens")
+        card = gpt_56_cyber_card.replace(PER_MILLION_NOTE, "per 1 thousand tokens")
         with pytest.raises(UnreadableSourceError, match="no longer states"):
             parse_model_card(card)
 
@@ -2069,3 +2203,298 @@ class TestReport:
         assert "DRIFT (2):" in report
         assert "VANISHED" not in report
         assert report.index("DRIFT") < report.index("MATCH")
+
+    def test_counted_outcomes_are_reported_as_a_count_only(self) -> None:
+        """A lane with hundreds of matches lists only the findings that need a person."""
+        report = format_report(
+            [Finding(Outcome.MATCH, "a", "ok"), Finding(Outcome.DRIFT, "b", "moved")],
+            counted=frozenset({Outcome.MATCH}),
+        )
+        assert "MATCH (1):" in report
+        assert "a: ok" not in report
+        assert "b: moved" in report
+
+
+@pytest.fixture(scope="module")
+def sol_card_page() -> str:
+    """The recorded GPT-5.6 Sol card: Pricing, Programmatic Access and availability."""
+    return (FIXTURES_DIR / "model_card_openai_gpt_56_sol.html").read_text()
+
+
+@pytest.fixture(scope="module")
+def grok_43_card_page() -> str:
+    """The recorded Grok 4.3 card: a GovCloud block and one availability table."""
+    return (FIXTURES_DIR / "model_card_xai_grok_4_3.html").read_text()
+
+
+@pytest.fixture(scope="module")
+def kimi_k3_card_page() -> str:
+    """The recorded Kimi K3 card: US CRIS and Global rows, bedrock-runtime only."""
+    return (FIXTURES_DIR / "model_card_moonshot_ai_kimi_k3.html").read_text()
+
+
+def _per_token(*per_million: str) -> dict[str, Decimal]:
+    """Build a card rate set from per-1M figures, in card column order.
+
+    Args:
+        *per_million: Input, cache write, cache read and output, "" for none.
+
+    Returns:
+        Per-token rates keyed by dimension value.
+    """
+    return {
+        dimension: Decimal(rate) / 1_000_000
+        for dimension, rate in zip(_CARD_DIMENSIONS, per_million, strict=True)
+        if rate
+    }
+
+
+class TestCardServingParsing:
+    """The shared parser reads every rate, endpoint and region a priced card states.
+
+    Ref: docs_gen/model_catalog/sources/model_card_prices.py
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-3.html
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3.html
+    """
+
+    def test_a_split_card_yields_every_option_in_both_tiers(
+        self, sol_card_page: str
+    ) -> None:
+        """In-Region, Geo and Global are each read from both context tables."""
+        prices = card_prices.parse_card_prices(sol_card_page)
+        assert prices.threshold == 272_000
+        assert prices.rates == {
+            ("in_region", ""): _per_token("4.40", "5.50", "0.44", "22.00"),
+            ("geo", ""): _per_token("4.40", "5.50", "0.44", "22.00"),
+            ("global", ""): _per_token("4.00", "5.00", "0.40", "20.00"),
+            ("in_region", "long"): _per_token("8.80", "11.00", "0.88", "33.00"),
+            ("geo", "long"): _per_token("8.80", "11.00", "0.88", "33.00"),
+            ("global", "long"): _per_token("8.00", "10.00", "0.80", "30.00"),
+        }
+
+    def test_availability_is_read_per_endpoint(self, sol_card_page: str) -> None:
+        """Mantle serves In-Region only and bedrock-runtime Geo and Global only."""
+        serving = card_prices.parse_serving(sol_card_page)
+        assert serving.model_ids == {
+            "bedrock-runtime": "openai.gpt-5.6-sol",
+            "bedrock-mantle": "openai.gpt-5.6-sol",
+        }
+        assert serving.availability["bedrock-mantle"] == {
+            "us-east-1": frozenset({"in_region"}),
+            "us-east-2": frozenset({"in_region"}),
+        }
+        runtime = serving.availability["bedrock-runtime"]
+        assert runtime["us-east-1"] == frozenset({"geo", "global"})
+        assert runtime["eu-west-1"] == frozenset({"global"})
+
+    def test_a_govcloud_block_after_the_commercial_table_is_excluded(
+        self, grok_43_card_page: str
+    ) -> None:
+        """A bold-paragraph GovCloud heading ends the commercial rates."""
+        prices = card_prices.parse_card_prices(grok_43_card_page)
+        assert prices.rates == {
+            ("in_region", ""): _per_token("1.25", "", "0.20", "2.50")
+        }
+        assert prices.threshold is None
+
+    def test_one_availability_table_applies_to_the_only_endpoint(
+        self, grok_43_card_page: str
+    ) -> None:
+        """An unsplit table is the one endpoint's, and GovCloud rows are left out."""
+        serving = card_prices.parse_serving(grok_43_card_page)
+        assert serving.model_ids == {"bedrock-mantle": "xai.grok-4.3"}
+        assert set(serving.availability["bedrock-mantle"]) == {
+            "us-east-1",
+            "us-east-2",
+            "us-west-2",
+        }
+
+    def test_a_us_cris_row_is_the_geo_rate(self, kimi_k3_card_page: str) -> None:
+        """Kimi K3 prices its Geo profile under "US CRIS", with no In-Region row."""
+        prices = card_prices.parse_card_prices(kimi_k3_card_page)
+        assert set(prices.rates) == {("geo", ""), ("global", "")}
+        assert prices.rates["geo", ""] == _per_token("3.30", "4.125", "0.33", "16.50")
+
+    def test_supported_icons_mark_availability_whatever_their_alt_text(
+        self, kimi_k3_card_page: str
+    ) -> None:
+        """The "supported" alt text reads as the same yes as the green-circle one."""
+        serving = card_prices.parse_serving(kimi_k3_card_page)
+        runtime = serving.availability["bedrock-runtime"]
+        assert runtime["us-east-1"] == frozenset({"geo", "global"})
+
+    def test_a_card_linking_to_the_pricing_page_has_no_price_table(self) -> None:
+        """Most cards only link out, which is not a card to compare."""
+        page = (
+            '<h1>Nova</h1><h2 id="model-card-nova-pricing">Pricing</h2>'
+            '<p>See the <a href="https://aws.amazon.com/bedrock/pricing/">page</a>.</p>'
+        )
+        assert not card_prices.has_price_table(page)
+        assert read_priced_card("u", "model-card-nova", page) is None
+
+    def test_cards_are_discovered_from_the_provider_index(self) -> None:
+        """Every card an index page links is found, the contents naming the index."""
+        index = (FIXTURES_DIR / "model_cards_openai_index.html").read_text()
+        slugs = card_prices.card_slugs(index)
+        assert {
+            "model-card-openai-gpt-56-sol",
+            "model-card-openai-gpt-oss-20b",
+        } <= slugs
+        toc = '{"href":"model-cards-openai.html"},{"href":"model-card-openai-gpt-54.html"}'
+        assert card_prices.index_pages(toc) == ["model-cards-openai.html"]
+
+    def test_card_prices_survive_a_snapshot_round_trip(
+        self, sol_card_page: str
+    ) -> None:
+        """What the generator caches reads back as exactly what was parsed."""
+        prices = card_prices.parse_card_prices(sol_card_page)
+        restored = card_prices.prices_from_json(card_prices.prices_to_json(prices))
+        assert restored == prices
+
+
+class TestCardAgainstGateway:
+    """A priced card is compared with the rate the gateway bills per call shape.
+
+    Ref: tests/test_pricing_drift.py:classify_card_against_gateway
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
+    """
+
+    @staticmethod
+    def _card(slug: str, page: str) -> PricedCard:
+        """Read a recorded card as the lane reads a served one."""
+        card = read_priced_card("card", slug, page)
+        assert card is not None
+        return card
+
+    @staticmethod
+    def _resolver(
+        prices: card_prices.CardPrices,
+        overrides: Mapping[tuple[str, Routing, ContextLength, str], Decimal | None]
+        | None = None,
+    ) -> Resolver:
+        """Return a resolver billing exactly the card's rates, bar *overrides*.
+
+        Args:
+            prices: The card whose rates the gateway is to bill.
+            overrides: (service, routing, context, dimension) to a different
+                rate, or None to bill nothing.
+
+        Returns:
+            The resolver.
+        """
+        options: dict[Routing, card_prices.Option] = {
+            "": "in_region",
+            "global": "global",
+        }
+
+        def resolve(
+            service: Service,
+            _model_id: str,
+            _region: str,
+            dimension: Dimension,
+            routing: Routing,
+            context: ContextLength,
+        ) -> Decimal | None:
+            key = (service.value, routing, context, dimension.value)
+            if overrides and key in overrides:
+                return overrides[key]
+            tier = context if (options[routing], context) in prices.rates else ""
+            return prices.rates.get((options[routing], tier), {}).get(dimension.value)
+
+        return resolve
+
+    @staticmethod
+    def _grouped(findings: list[Finding]) -> dict[Outcome, list[str]]:
+        """Group finding subjects by outcome."""
+        grouped: dict[Outcome, list[str]] = defaultdict(list)
+        for finding in findings:
+            grouped[finding.outcome].append(finding.model_id)
+        return grouped
+
+    def test_a_gateway_billing_the_card_matches_everywhere(
+        self, sol_card_page: str
+    ) -> None:
+        """Every endpoint, region, option and tier the card offers compares equal."""
+        card = self._card("model-card-openai-gpt-56-sol", sol_card_page)
+        findings = classify_card_against_gateway(
+            card,
+            {"us-east-1", "eu-west-1"},
+            self._resolver(card.prices),
+            lambda _: 272_000,
+        )
+        grouped = self._grouped(findings)
+        assert set(grouped) == {Outcome.MATCH}
+        subjects = set(grouped[Outcome.MATCH])
+        assert (
+            "openai.gpt-5.6-sol (bedrock-mantle, In-Region, long context)" in subjects
+        )
+        assert "openai.gpt-5.6-sol (bedrock-runtime, Global)" in subjects
+        assert "openai.gpt-5.6-sol (bedrock-mantle, Global)" not in subjects
+
+    def test_a_different_global_rate_is_one_drift_across_regions(
+        self, sol_card_page: str
+    ) -> None:
+        """A wrong rate reads as one finding naming every region it is wrong in."""
+        card = self._card("model-card-openai-gpt-56-sol", sol_card_page)
+        resolve = self._resolver(
+            card.prices,
+            {("bedrock-runtime", "global", "", "input_tokens"): Decimal("0.0000044")},
+        )
+        drifts = [
+            finding
+            for finding in classify_card_against_gateway(
+                card, {"us-east-1", "eu-west-1"}, resolve, lambda _: 272_000
+            )
+            if finding.outcome is Outcome.DRIFT
+        ]
+        assert len(drifts) == 1
+        assert drifts[0].model_id == "openai.gpt-5.6-sol (bedrock-runtime, Global)"
+        assert "gateway bills 0.0000044" in drifts[0].detail
+        assert drifts[0].detail.endswith("[eu-west-1, us-east-1]")
+
+    def test_a_rate_the_gateway_cannot_price_is_card_only(
+        self, sol_card_page: str
+    ) -> None:
+        """A dropped row is reported at zero cost, so it fails like a drift."""
+        card = self._card("model-card-openai-gpt-56-sol", sol_card_page)
+        resolve = self._resolver(
+            card.prices, {("bedrock-mantle", "", "long", "cache_write_tokens"): None}
+        )
+        grouped = self._grouped(
+            classify_card_against_gateway(
+                card, {"us-east-1"}, resolve, lambda _: 272_000
+            )
+        )
+        assert grouped[Outcome.CARD_ONLY] == [
+            "openai.gpt-5.6-sol (bedrock-mantle, In-Region, long context)"
+        ]
+
+    def test_a_long_rate_on_a_single_tier_card_is_gateway_only(
+        self, grok_43_card_page: str
+    ) -> None:
+        """A single-tier card bills every prompt size at one rate; a second is ours."""
+        card = self._card("model-card-xai-grok-4-3", grok_43_card_page)
+        resolve = self._resolver(
+            card.prices,
+            {("bedrock-mantle", "", "long", "input_tokens"): Decimal("0.0000025")},
+        )
+        grouped = self._grouped(
+            classify_card_against_gateway(
+                card, {"us-west-2"}, resolve, lambda _: 200_000
+            )
+        )
+        assert Outcome.DRIFT not in grouped
+        assert grouped[Outcome.GATEWAY_ONLY] == [
+            "xai.grok-4.3 (bedrock-mantle, In-Region, long context)"
+        ]
+
+    def test_a_different_context_window_is_a_drift(self, sol_card_page: str) -> None:
+        """The boundary selects between two correct rates, so a wrong one mis-bills."""
+        card = self._card("model-card-openai-gpt-56-sol", sol_card_page)
+        findings = classify_card_against_gateway(
+            card, set(), self._resolver(card.prices), lambda _: 200_000
+        )
+        assert [(finding.outcome, finding.model_id) for finding in findings] == [
+            (Outcome.DRIFT, "openai.gpt-5.6-sol (context window)")
+        ]
