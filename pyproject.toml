@@ -157,6 +157,7 @@ suppress-dummy-args = true
 runtime-evaluated-base-classes = [
     "pydantic.BaseModel",
     "stdapi.types.BaseModelRequest",
+    "stdapi.types.BaseModelRequestIgnoringExtra",
     "stdapi.types.BaseModelRequestWithExtra",
     "stdapi.types.BaseModelRequestWithFormExtra",
     "stdapi.types.BaseModelResponse",

@@ -7,6 +7,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from stdapi.api_errors import ApiError, UnsupportedParameterError
 from stdapi.types import (
     BaseModelRequest,
+    BaseModelRequestIgnoringExtra,
     BaseModelRequestWithExtra,
     BaseModelResponse,
     JsonMapping,
@@ -261,7 +262,7 @@ ToolAllowedCallers = list[Literal["direct", "programmatic"]] | None
 
 
 # Ref: openai.types.responses.function_tool.FunctionTool
-class FunctionTool(BaseModelRequest):
+class FunctionTool(BaseModelRequestIgnoringExtra):
     """Defines a function in your own code the model can choose to call."""
 
     name: str = Field(description="Function name.")

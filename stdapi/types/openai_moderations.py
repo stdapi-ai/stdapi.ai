@@ -5,10 +5,10 @@ from typing import Annotated, Literal
 from pydantic import Field, field_validator
 
 from stdapi.input_file import IngestInputFile
-from stdapi.types import BaseModelRequest, BaseModelResponse
+from stdapi.types import BaseModelRequestIgnoringExtra, BaseModelResponse
 
 
-class ModerationImageURL(BaseModelRequest):
+class ModerationImageURL(BaseModelRequestIgnoringExtra):
     """Image container for an image moderation input."""
 
     url: IngestInputFile = Field(
@@ -16,14 +16,14 @@ class ModerationImageURL(BaseModelRequest):
     )
 
 
-class ModerationImageURLInput(BaseModelRequest):
+class ModerationImageURLInput(BaseModelRequestIgnoringExtra):
     """An image input to a moderation request."""
 
     type: Literal["image_url"] = Field(description="Input type. Always `image_url`.")
     image_url: ModerationImageURL = Field(description="The image to classify.")
 
 
-class ModerationTextInput(BaseModelRequest):
+class ModerationTextInput(BaseModelRequestIgnoringExtra):
     """A text input to a moderation request."""
 
     type: Literal["text"] = Field(description="Input type. Always `text`.")
@@ -35,7 +35,7 @@ _MAX_INPUT_ITEMS = 2048
 
 
 # Ref: openai.types.moderation_create_params.ModerationCreateParams
-class ModerationCreateParams(BaseModelRequest):
+class ModerationCreateParams(BaseModelRequestIgnoringExtra):
     """Request body for POST /v1/moderations."""
 
     input: (

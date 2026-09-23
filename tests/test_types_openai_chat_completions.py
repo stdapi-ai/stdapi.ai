@@ -38,6 +38,12 @@ _NAMED_TOOL_RESULT: dict[str, Any] = {
     "name": "compute",
 }
 
+#: A file content descriptor carrying its data inline.
+_PDF_FILE: dict[str, Any] = {
+    "file_data": "data:application/pdf;base64,JVBERi0=",
+    "filename": "a.pdf",
+}
+
 
 class TestReasoningEffort:
     """``reasoning_effort`` accepts every upstream OpenAI literal.
@@ -292,15 +298,17 @@ class TestUnsupportedParameters:
 
 
 class TestStrictValidationOfMessageFields:
-    """``strict_input_validation`` decides the fate of an undeclared message field.
+    """``strict_input_validation`` refuses an undeclared message field only where OpenAI does.
 
-    The setting is what makes the difference between a deployment that tolerates
-    a client's extra field and one that refuses the request, and it is read when
-    the models are built, so only a whole session can hold one value. This pins
-    the strict half; the permissive half is the shipped default and what the
-    agentic lane's clients are run against.
+    The setting is read when the models are built, so only a whole session can
+    hold one value. This pins the strict half; the permissive half is the
+    shipped default and what the agentic lane's clients are run against.
 
-    ``name`` on a ``tool`` message is the real case: it belongs to the legacy
+    OpenAI ignores an unknown field on a user, system, assistant, tool or function
+    message, a text, image or refusal part and a tool call, and refuses one on a
+    developer message, a file or audio part and an assistant's ``audio`` (probed
+    2026-09-23). ``name`` on a
+    ``tool`` message is the real case of the first: it belongs to the legacy
     ``function`` role, is absent from the tool message the OpenAI SDK defines,
     and clients still send it -- Hermes does on every tool result.
 
@@ -310,17 +318,145 @@ class TestStrictValidationOfMessageFields:
          tests/agentic/_server.py:_OVERRIDDEN_SETTINGS
     """
 
+    def test_an_undeclared_tool_message_field_is_ignored(self) -> None:
+        """``name`` on a tool message is dropped in either mode, as OpenAI drops it."""
+        request = CompletionCreateParams.model_validate(
+            _BASE_REQUEST | {"messages": [_NAMED_TOOL_RESULT]}
+        )
+        assert request.messages[0].tool_call_id == "call_1"  # type: ignore[union-attr]
+        assert not hasattr(request.messages[0], "name")
+
     @pytest.mark.skipif(
         not SETTINGS.strict_input_validation,
         reason="the models were built permissive; extra fields are ignored",
     )
-    def test_an_undeclared_tool_message_field_is_refused(self) -> None:
-        """Strict mode rejects ``name`` on a tool message, naming the field."""
+    def test_an_undeclared_developer_message_field_is_refused(self) -> None:
+        """Strict mode rejects an unknown field on a developer message, naming it."""
         with pytest.raises(ValidationError) as excinfo:
             CompletionCreateParams.model_validate(
-                _BASE_REQUEST | {"messages": [_NAMED_TOOL_RESULT]}
+                _BASE_REQUEST
+                | {"messages": [{"role": "developer", "content": "x", "bogus": 1}]}
             )
-        assert "name" in str(excinfo.value)
+        assert "bogus" in str(excinfo.value)
+
+    @pytest.mark.parametrize(
+        "messages",
+        [
+            pytest.param(
+                [
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "refusal", "refusal": "no", "bogus": 1}],
+                    }
+                ],
+                id="refusal_part",
+            ),
+            pytest.param(
+                [{"role": "function", "name": "f", "content": "x", "bogus": 1}],
+                id="function_message",
+            ),
+            pytest.param(
+                [
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "type": "custom",
+                                "id": "c1",
+                                "custom": {"name": "f", "input": "x", "bogus": 1},
+                                "bogus": 1,
+                            }
+                        ],
+                    }
+                ],
+                id="custom_tool_call",
+            ),
+        ],
+    )
+    def test_the_other_surfaces_openai_ignores_ignore_it(
+        self, messages: list[dict[str, Any]]
+    ) -> None:
+        """A refusal part, a function message and a custom tool call drop an unknown field.
+
+        OpenAI accepts each of them carrying one (probed 2026-09-23).
+        """
+        request = CompletionCreateParams.model_validate(
+            _BASE_REQUEST | {"messages": messages}
+        )
+        assert "bogus" not in request.model_dump_json()
+
+    @pytest.mark.skipif(
+        not SETTINGS.strict_input_validation,
+        reason="the models were built permissive; extra fields are ignored",
+    )
+    @pytest.mark.parametrize(
+        "message",
+        [
+            pytest.param(
+                {
+                    "role": "user",
+                    "content": [{"type": "file", "file": _PDF_FILE, "bogus": 1}],
+                },
+                id="file_part",
+            ),
+            pytest.param(
+                {
+                    "role": "user",
+                    "content": [{"type": "file", "file": _PDF_FILE | {"bogus": 1}}],
+                },
+                id="file",
+            ),
+            pytest.param(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_audio",
+                            "input_audio": {"data": "AAAA", "format": "wav"},
+                            "bogus": 1,
+                        }
+                    ],
+                },
+                id="input_audio_part",
+            ),
+            pytest.param(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": "AAAA",
+                                "format": "wav",
+                                "bogus": 1,
+                            },
+                        }
+                    ],
+                },
+                id="input_audio",
+            ),
+            pytest.param(
+                {"role": "assistant", "audio": {"id": "audio_1", "bogus": 1}},
+                id="assistant_audio",
+            ),
+        ],
+    )
+    def test_the_file_and_audio_surfaces_refuse_it(
+        self, message: dict[str, Any]
+    ) -> None:
+        """A file or audio part and an assistant's audio refuse an unknown field, as OpenAI does.
+
+        Probed on 2026-09-23: OpenAI answers each with ``unknown_parameter``.
+        """
+        with pytest.raises(ValidationError) as excinfo:
+            CompletionCreateParams.model_validate(
+                _BASE_REQUEST | {"messages": [message]}
+            )
+        assert [
+            error
+            for error in excinfo.value.errors()
+            if error["type"] == "extra_forbidden" and error["loc"][-1] == "bogus"
+        ], excinfo.value
 
     def test_the_declared_fields_still_validate(self) -> None:
         """The same message without the extra field validates in either mode.

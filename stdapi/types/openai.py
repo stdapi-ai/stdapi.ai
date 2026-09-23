@@ -74,6 +74,9 @@ class LegacyFunction(BaseModelRequest):
 class FunctionDefinition(LegacyFunction, _Strict):
     """Function tool definition following OpenAI shared schema."""
 
+    # Upstream accepts a tool definition carrying unknown fields.
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
 
 # Ref: openai.types.shared_params.response_format_text.ResponseFormatText
 class ResponseFormatText(BaseModelResponse):

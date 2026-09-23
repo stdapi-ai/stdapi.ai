@@ -171,7 +171,7 @@ The settings below decide what the gateway writes; the [Logging and Monitoring](
 #### `STRICT_INPUT_VALIDATION` { #strict-input-validation }
 
 :octicons-package-24: **Purpose**
-:   Reject API requests containing unknown/extra fields instead of ignoring them
+:   Reject API requests containing unknown/extra fields instead of ignoring them. On OpenAI-compatible routes, unknown fields that OpenAI ignores stay ignored: those on a Chat Completions message other than a `developer` one, on a text, image or refusal content part, on a tool call or tool definition, on a Responses function tool, and on a moderation request or its inputs. File and audio content parts, an assistant message's `audio`, and a Responses input item still refuse them, as OpenAI does. A refused field is answered with `400` `unknown_parameter`, naming it in `error.param`.
 
 :octicons-database-24: **Type**
 :   Boolean

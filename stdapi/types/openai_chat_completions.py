@@ -4,6 +4,7 @@ from typing import Annotated, Any, ClassVar, Literal, Self
 
 from pydantic import (
     AliasChoices,
+    ConfigDict,
     Field,
     SerializerFunctionWrapHandler,
     model_serializer,
@@ -15,6 +16,7 @@ from stdapi.config import SETTINGS
 from stdapi.input_file import FileIdInputFile, InputFile
 from stdapi.types import (
     BaseModelRequest,
+    BaseModelRequestIgnoringExtra,
     BaseModelRequestWithExtra,
     BaseModelResponse,
     JsonMapping,
@@ -98,7 +100,7 @@ _CACHE_BREAKPOINT_DESCRIPTION = (
 
 
 # Ref: openai.types.chat.chat_completion_content_part_text_param.ChatCompletionContentPartTextParam
-class ChatCompletionContentPartTextParam(BaseModelRequest):
+class ChatCompletionContentPartTextParam(BaseModelRequestIgnoringExtra):
     """Text message content part."""
 
     type: TextLiteral = Field(description="Content part type. Always `text`.")
@@ -108,8 +110,14 @@ class ChatCompletionContentPartTextParam(BaseModelRequest):
     )
 
 
+class _DeveloperContentPartTextParam(ChatCompletionContentPartTextParam):
+    """Text part of a developer message, where upstream refuses an unknown field."""
+
+    model_config = BaseModelRequest.model_config
+
+
 # Ref: openai.types.chat.chat_completion_content_part_refusal_param.ChatCompletionContentPartRefusalParam
-class ChatCompletionContentPartRefusalParam(BaseModelRequest):
+class ChatCompletionContentPartRefusalParam(BaseModelRequestIgnoringExtra):
     """Refusal message content part."""
 
     type: Literal["refusal"] = Field(description="Content part type. Always `refusal`.")
@@ -120,7 +128,7 @@ class ChatCompletionContentPartRefusalParam(BaseModelRequest):
 
 
 # Ref: openai.types.chat.chat_completion_content_part_image.ImageURL
-class ImageURL(BaseModelRequest):
+class ImageURL(BaseModelRequestIgnoringExtra):
     """Image URL detail for image content part."""
 
     url: InputFile = Field(
@@ -133,7 +141,7 @@ class ImageURL(BaseModelRequest):
 
 
 # Ref: openai.types.chat.chat_completion_content_part_image_param.ChatCompletionContentPartImageParam
-class ChatCompletionContentPartImageParam(BaseModelRequest):
+class ChatCompletionContentPartImageParam(BaseModelRequestIgnoringExtra):
     """Image message content part (via URL)."""
 
     type: Literal["image_url"] = Field(
@@ -243,6 +251,9 @@ class ChatCompletionPredictionContentParam(BaseModelRequest):
 class FunctionCall(BaseModelResponse):
     """Function tool call payload used within assistant tool calls."""
 
+    # A replayed call is read back ignoring unknown fields, as upstream reads it.
+    model_config = ConfigDict(extra="ignore")
+
     name: str = Field(description="The name of the function to call.")
     arguments: str = Field(
         description="JSON arguments for the function call. May be invalid or hallucinated; validate before use."
@@ -271,6 +282,9 @@ class CustomTool(BaseModelResponse):
     UNSUPPORTED on this implementation.
     """
 
+    # A replayed call is read back ignoring unknown fields, as upstream reads it.
+    model_config = ConfigDict(extra="ignore")
+
     name: str = Field(
         description="The name of the custom tool to call.\nUNSUPPORTED on this implementation."
     )
@@ -284,6 +298,9 @@ class CustomTool(BaseModelResponse):
 class ChatCompletionMessageFunctionToolCall(BaseModelResponse):
     """Assistant tool call for a function tool."""
 
+    # A replayed call is read back ignoring unknown fields, as upstream reads it.
+    model_config = ConfigDict(extra="ignore")
+
     type: FunctionLiteral = Field(description="Tool type. Always `function`.")
     function: FunctionCall = Field(description="The function that the model called.")
     id: str = Field(description="The ID of the tool call.")
@@ -296,6 +313,9 @@ class ChatCompletionMessageCustomToolCall(BaseModelResponse):
 
     UNSUPPORTED on this implementation.
     """
+
+    # A replayed call is read back ignoring unknown fields, as upstream reads it.
+    model_config = ConfigDict(extra="ignore")
 
     type: CustomLiteral = Field(
         description="Tool type. Always `custom`. UNSUPPORTED on this implementation."
@@ -315,7 +335,7 @@ ChatCompletionMessageToolCallUnion = Annotated[
 
 
 # Ref: openai.types.chat.chat_completion_function_tool_param.ChatCompletionFunctionToolParam
-class ChatCompletionFunctionToolParam(BaseModelRequest):
+class ChatCompletionFunctionToolParam(BaseModelRequestIgnoringExtra):
     """Function tool specification."""
 
     type: FunctionLiteral = Field(description="Tool type. Always `function`.")
@@ -511,7 +531,7 @@ class Audio(BaseModelRequest):
     id: str = Field(description="ID of a previous audio response from the model.")
 
 
-class _MessageParam(BaseModelRequest):
+class _MessageParam(BaseModelRequestIgnoringExtra):
     """Common role message fields."""
 
     name: str | None = Field(
@@ -611,16 +631,19 @@ class ChatCompletionSystemMessageParam(_MessageParam):
 class ChatCompletionDeveloperMessageParam(_MessageParam):
     """Developer role message."""
 
+    # Unlike the other roles, upstream refuses an unknown field here.
+    model_config = BaseModelRequest.model_config
+
     role: Literal["developer"] = Field(
         description="Message author role. Always `developer`."
     )
-    content: str | list[ChatCompletionContentPartTextParam] = Field(
+    content: str | list[_DeveloperContentPartTextParam] = Field(
         description="Developer message content."
     )
 
 
 # Ref: openai.types.chat.chat_completion_tool_message_param.ChatCompletionToolMessageParam
-class ChatCompletionToolMessageParam(BaseModelRequest):
+class ChatCompletionToolMessageParam(BaseModelRequestIgnoringExtra):
     """Tool role message."""
 
     role: Literal["tool"] = Field(description="Message author role. Always `tool`.")
@@ -645,7 +668,7 @@ class ToolMessageWithImages(ChatCompletionToolMessageParam):
 
 
 # Ref: openai.types.chat.chat_completion_function_message_param.ChatCompletionFunctionMessageParam
-class ChatCompletionFunctionMessageParam(BaseModelRequest):
+class ChatCompletionFunctionMessageParam(BaseModelRequestIgnoringExtra):
     """Function role message."""
 
     role: FunctionLiteral = Field(description="Message author role. Always `function`.")

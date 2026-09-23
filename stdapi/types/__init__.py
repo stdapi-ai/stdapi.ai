@@ -48,6 +48,16 @@ class BaseModelRequest(BaseModel):
     )
 
 
+class BaseModelRequestIgnoringExtra(BaseModel):
+    """Pydantic Basemodel request ignoring unknown fields whatever the setting.
+
+    For the objects the upstream API itself accepts with unknown fields, so a
+    strict deployment refuses only what the vendor refuses.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+
 class BaseModelRequestWithExtra(BaseModel):
     """Pydantic Basemodel request storing extra JSON fields."""
 
