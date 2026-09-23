@@ -25,23 +25,26 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from anthropic import BadRequestError as AnthropicBadRequestError
-from openai import BadRequestError
+from openai import APIError, BadRequestError
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from stdapi.api_errors import ApiError
 from stdapi.api_providers.anthropic import TAG_ANTHROPIC
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.aws_bedrock import handle_bedrock_client_error
+from stdapi.aws_bedrock_mantle import MantleError, _map_error
 from stdapi.models.chat._adapters import _openai_completion
 from stdapi.models.chat._adapters._responses_context import (
     OUTPUT_BUDGET_TOO_LARGE,
     ContextLengthExceededError,
     ContextOverflow,
+    collect_stream_open_errors,
     context_overflow,
     record_stream_open_error,
 )
 from stdapi.models.chat._adapters._stream_open import context_refusal, open_peeked
 from stdapi.models.chat._default import ChatModel
+from stdapi.models.chat._mantle import _default as mantle_default
 from stdapi.monitoring import (
     REQUEST,
     context_length_error,
@@ -53,7 +56,9 @@ from stdapi.routes import (
     ollama_generate,
     openai_chat_completions,
     openai_completions,
+    openai_responses,
 )
+from stdapi.utils import to_json_str
 from tests._helpers import make_client_error, make_model_details, ollama_route
 
 if TYPE_CHECKING:
@@ -65,6 +70,7 @@ if TYPE_CHECKING:
     from types_aiobotocore_bedrock_runtime.type_defs import ConverseStreamOutputTypeDef
 
     from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
+    from stdapi.aws_http import SseEvent
     from stdapi.models import ModelDetails
 
 #: Filler vocabulary: every tokenizer measured reads each word as about one token.
@@ -163,6 +169,18 @@ _UNSIZED = (
     "length is 8192 tokens. Please reduce the length of the prompt"
 )
 
+
+#: A Mantle-served model's refusal, as Google Gemma 4 words it.
+_MANTLE_GEMMA = (
+    "prompt tokens (170029) exceed model maximum (131072) for google.gemma-4-e2b"
+)
+
+#: A Mantle-served model's refusal on the Responses API, as gpt-oss words it.
+_MANTLE_ENGINE = (
+    'ErrorEvent { error: APIError { type: "invalid_request_error", code: Some(400), '
+    'message: "The engine prompt length 185692 exceeds the max_model_len 131072. '
+    'Please reduce prompt.", param: Some("input") } }'
+)
 
 #: vLLM's refusal of a prompt that fits, but not with the output tokens requested.
 _COMBINED = (
@@ -1593,3 +1611,609 @@ def test_context_refusal_words_the_calling_api_and_logs_the_backend(
     mapped = ContextLengthExceededError(ContextOverflow(286028, 200000))
     assert context_refusal(mapped) is mapped
     assert context_refusal(ValueError("unrelated")) is None
+
+
+@pytest.mark.parametrize(
+    ("message", "sizes"),
+    [
+        (_MANTLE_GEMMA, ContextOverflow(170029, 131072)),
+        (_MANTLE_ENGINE, ContextOverflow(185692, 131072)),
+    ],
+    ids=["gemma", "engine"],
+)
+def test_mantle_refusals_are_recognized_with_their_sizes(
+    message: str, sizes: ContextOverflow
+) -> None:
+    """The refusals Mantle-served models word their own way are overflows too.
+
+    Ref: stdapi/models/chat/_adapters/_responses_context.py:context_overflow
+    """
+    assert context_overflow(MantleError(message, status=400)) == sizes
+
+
+#: The Mantle-served model the scripted Mantle endpoint answers for.
+_MANTLE_MODEL = "test.mantle-overflow"
+
+#: The upstream APIs a Mantle-served model can serve a request on.
+_MANTLE_APIS = ("chat_completions", "responses", "messages")
+
+#: A Chat Completions chunk opening a stream with the assistant role only.
+_ROLE_CHUNK = to_json_str(
+    {"choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]}
+)
+
+
+class _MantleEndpoint:
+    """Scripted Mantle endpoint refusing every request as Gemma 4 does."""
+
+    def __init__(self) -> None:
+        #: Upstream API the model serves.
+        self.api = "chat_completions"
+        #: Whether a stream opens, then refuses in an error event after its opening events.
+        self.refuse_in_stream = False
+        #: Requests received.
+        self.requests = 0
+        #: Wording of the refusal.
+        self.message = _MANTLE_GEMMA
+
+    def _refusal(self) -> MantleError:
+        return _map_error(
+            400,
+            to_json_str(
+                {"error": {"code": "validation_error", "message": self.message}}
+            ),
+            "us-east-1",
+        )
+
+    async def invoke(self, *_args: object, **_kwargs: object) -> dict[str, Any]:
+        self.requests += 1
+        if self.api == "responses":
+            # A Responses answer can fail instead of raising.
+            return {
+                "object": "response",
+                "status": "failed",
+                "error": {"code": "invalid_prompt", "message": self.message},
+                "output": [],
+            }
+        raise self._refusal()
+
+    async def invoke_stream(
+        self, *_args: object, **_kwargs: object
+    ) -> AsyncGenerator[SseEvent]:
+        self.requests += 1
+        if not self.refuse_in_stream:
+            raise self._refusal()
+        events = _refusing_stream(self.api, self.message)
+
+        async def _events() -> AsyncGenerator[SseEvent]:
+            for event in events:
+                yield event
+
+        return _events()
+
+
+#: Per route: the refusal of the Gemma 4 wording, as the unstreamed request gets it.
+_MANTLE_REFUSALS: dict[str, dict[str, Any]] = {
+    "chat": {
+        "error": {
+            "message": (
+                "Input tokens exceed the configured limit of 131072 tokens. Your "
+                "messages resulted in 170029 tokens. Please reduce the length of "
+                "the messages."
+            ),
+            "type": "invalid_request_error",
+            "param": "messages",
+            "code": "context_length_exceeded",
+        }
+    },
+    "completions": {
+        "error": {
+            "message": (
+                "This model's maximum context length is 131072 tokens, however your "
+                "prompt is 170029 tokens. Please reduce your prompt; or completion "
+                "length."
+            ),
+            "type": "invalid_request_error",
+            "param": None,
+            "code": None,
+        }
+    },
+    "anthropic": {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": "prompt is too long: 170029 tokens > 131072 maximum",
+        },
+    },
+    "ollama-chat": {
+        "error": (
+            "Your input exceeds the context window of this model. Please adjust "
+            "your input and try again."
+        )
+    },
+    "ollama-generate": {
+        "error": (
+            "Your input exceeds the context window of this model. Please adjust "
+            "your input and try again."
+        )
+    },
+}
+
+
+@pytest.mark.local
+class TestMantleRefusals:
+    """A Mantle-served model's refusal is each API's own, streamed or not.
+
+    Mantle answers a refusal either on the call or, streamed, in an error
+    event after the stream opened; the backend's wording, which names the
+    model, never reaches the client.
+
+    Ref: https://developers.openai.com/api/docs/guides/error-codes
+         https://platform.claude.com/docs/en/api/errors
+         stdapi/models/chat/_mantle/_default.py:ChatModel._serve
+    """
+
+    @pytest.fixture
+    def endpoint(self, monkeypatch: pytest.MonkeyPatch) -> _MantleEndpoint:
+        """Serve every chat route from a Mantle model over a scripted endpoint."""
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> ModelDetails:
+            return make_model_details(model_id)
+
+        stub = _MantleEndpoint()
+        for route in (
+            anthropic_messages,
+            openai_chat_completions,
+            openai_completions,
+            ollama_chat,
+            ollama_generate,
+        ):
+            monkeypatch.setattr(route, "validate_model", _validate_model)
+            monkeypatch.setattr(route, "get_chat_model", mantle_default.ChatModel)
+        monkeypatch.setitem(
+            mantle_default._LEARNED_APIS,  # noqa: SLF001
+            _MANTLE_MODEL,
+            frozenset({"chat_completions"}),
+        )
+        monkeypatch.setattr(mantle_default, "invoke", stub.invoke)
+        monkeypatch.setattr(mantle_default, "invoke_stream", stub.invoke_stream)
+        return stub
+
+    @pytest.mark.parametrize(
+        ("stream", "in_stream"),
+        [(False, False), (True, False), (True, True)],
+        ids=["unstreamed", "stream-open", "in-stream"],
+    )
+    @pytest.mark.parametrize("route", list(_MANTLE_REFUSALS))
+    @pytest.mark.parametrize("api", _MANTLE_APIS)
+    def test_the_refusal_is_the_api_own(
+        self,
+        app_client: TestClient,
+        endpoint: _MantleEndpoint,
+        monkeypatch: pytest.MonkeyPatch,
+        api: str,
+        route: str,
+        stream: bool,
+        in_stream: bool,
+    ) -> None:
+        """A ``400`` in the route's words, before any byte when streamed.
+
+        Whatever upstream API serves it, a failed Responses answer included.
+
+        Ref: stdapi/models/chat/_mantle/_default.py:_read_past_preamble
+             stdapi/models/chat/_mantle/_default.py:_failed_response_error
+        """
+        monkeypatch.setitem(
+            mantle_default._LEARNED_APIS,  # noqa: SLF001
+            _MANTLE_MODEL,
+            frozenset({api}),
+        )
+        endpoint.api = api
+        endpoint.refuse_in_stream = in_stream
+        path, body, _ = _STREAMED_ROUTES[route]
+        response = app_client.post(
+            path, json={"model": _MANTLE_MODEL, "stream": stream, **body}
+        )
+        assert response.status_code == 400, response.text
+        payload = response.json()
+        payload.pop("request_id", None)
+        assert payload == _MANTLE_REFUSALS[route]
+        assert "gemma" not in response.text
+        assert endpoint.requests == 1
+
+    @pytest.mark.parametrize("route", list(_MANTLE_REFUSALS))
+    def test_an_error_other_than_the_window_is_streamed(
+        self, app_client: TestClient, endpoint: _MantleEndpoint, route: str
+    ) -> None:
+        """Any other error event after the stream opened ends a ``200`` stream.
+
+        Ref: stdapi/models/chat/_adapters/_stream_open.py:context_refusal
+        """
+        endpoint.refuse_in_stream = True
+        endpoint.message = (
+            "Engine failure on arn:aws:bedrock:us-east-1:123456789012:model/x"
+        )
+        path, body, _ = _STREAMED_ROUTES[route]
+        response = app_client.post(
+            path, json={"model": _MANTLE_MODEL, "stream": True, **body}
+        )
+        assert response.status_code == 200, response.text
+        assert "error" in response.text
+        assert "123456789012" not in response.text
+        assert endpoint.requests == 1
+
+    def test_a_responses_retry_refused_in_stream_fails_as_the_first_attempt(
+        self,
+        app_client: TestClient,
+        endpoint: _MantleEndpoint,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The capped retry refused again in its stream fails as upstream streams it.
+
+        The Responses request is converted to another upstream API, whose own
+        stream failure would otherwise be a server error.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/routes/_responses_context.py:_open_once
+        """
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> ModelDetails:
+            return make_model_details(model_id)
+
+        monkeypatch.setattr(openai_responses, "validate_model", _validate_model)
+        monkeypatch.setattr(
+            openai_responses, "get_chat_model", mantle_default.ChatModel
+        )
+        endpoint.refuse_in_stream = True
+        endpoint.message = _COMBINED
+        response = app_client.post(
+            "/v1/responses",
+            json={
+                "model": _MANTLE_MODEL,
+                "input": "hello",
+                "max_output_tokens": 8192,
+                "stream": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        events = _sse_events(response.text)
+        assert [event["type"] for event in events] == [
+            "response.created",
+            "response.in_progress",
+            "error",
+            "response.failed",
+        ]
+        assert events[2]["code"] == "context_length_exceeded"
+        assert events[3]["response"]["error"]["code"] == "context_length_exceeded"
+        assert endpoint.requests == 2, "the capped retry, once"
+
+
+def _mantle_events(*events: tuple[str | None, dict[str, Any]]) -> list[SseEvent]:
+    """Serialize scripted upstream events.
+
+    Args:
+        *events: Event names and payloads.
+
+    Returns:
+        The events, as the Mantle transport yields them.
+    """
+    return [(name, to_json_str(payload)) for name, payload in events]
+
+
+def _refusing_stream(api: str, message: str) -> list[SseEvent]:
+    """Script an upstream stream opening, then refusing in an error event.
+
+    Args:
+        api: Upstream Mantle API serving the stream.
+        message: Wording of the refusal.
+
+    Returns:
+        The events, as the Mantle transport yields them.
+    """
+    if api == "responses":
+        # Some streams name their events in the payload only.
+        return _mantle_events(
+            (None, {"type": "response.created", "response": {"error": None}}),
+            (None, {"type": "response.in_progress", "response": {"error": None}}),
+            (None, {"type": "error", "code": "invalid_prompt", "message": message}),
+        )
+    if api == "messages":
+        return _mantle_events(
+            ("message_start", {"type": "message_start", "message": {}}),
+            ("ping", {"type": "ping"}),
+            (
+                "error",
+                {"type": "error", "error": {"type": "api_error", "message": message}},
+            ),
+        )
+    return [
+        (None, _ROLE_CHUNK),
+        *_mantle_events(
+            (None, {"error": {"code": "validation_error", "message": message}})
+        ),
+    ]
+
+
+#: Per upstream API: a stream opening, then refusing in an error event.
+_REFUSING_STREAMS: dict[str, list[SseEvent]] = {
+    api: _refusing_stream(api, _MANTLE_GEMMA) for api in _MANTLE_APIS
+}
+
+#: Per upstream API: a stream opening, its first content event, then one more event.
+_ANSWERING_STREAMS: dict[str, list[SseEvent]] = {
+    "chat_completions": [
+        (None, _ROLE_CHUNK),
+        *_mantle_events(
+            (None, {"choices": [{"index": 0, "delta": {"content": "Hi"}}]}),
+            (None, {"choices": [{"index": 0, "delta": {"content": "!"}}]}),
+        ),
+    ],
+    "responses": _mantle_events(
+        (None, {"type": "response.created", "response": {"error": None}}),
+        (None, {"type": "response.in_progress", "response": {"error": None}}),
+        (None, {"type": "response.output_item.added", "item": {"type": "message"}}),
+        (None, {"type": "response.output_text.delta", "delta": "Hi"}),
+    ),
+    "messages": _mantle_events(
+        ("message_start", {"type": "message_start", "message": {}}),
+        ("ping", {"type": "ping"}),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {}},
+        ),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0}),
+    ),
+}
+
+
+class TestMantleReadAhead:
+    """A Mantle stream is read past its opening events before its status is sent.
+
+    Ref: stdapi/models/chat/_mantle/_default.py:_read_past_preamble
+    """
+
+    @staticmethod
+    def _counted(events: list[SseEvent], reads: list[int]) -> AsyncGenerator[SseEvent]:
+        """Yield *events*, counting each read into *reads*."""
+
+        async def _stream() -> AsyncGenerator[SseEvent]:
+            for index, event in enumerate(events):
+                reads.append(index)
+                yield event
+
+        return _stream()
+
+    @pytest.mark.parametrize("api", list(_REFUSING_STREAMS))
+    async def test_a_refusal_after_the_opening_events_is_reported(
+        self,
+        api: Any,  # noqa: ANN401
+    ) -> None:
+        """The refusal reaches the opener, and the stream still replays whole.
+
+        Ref: stdapi/models/chat/_adapters/_responses_context.py:collect_stream_open_errors
+        """
+        events = _REFUSING_STREAMS[api]
+        with collect_stream_open_errors() as errors:
+            replay = await mantle_default._read_past_preamble(  # noqa: SLF001
+                api, self._counted(events, [])
+            )
+        (error,) = errors
+        assert context_overflow(error) == ContextOverflow(170029, 131072)
+        assert [event async for event in replay] == events
+
+    @pytest.mark.parametrize("api", list(_ANSWERING_STREAMS))
+    async def test_content_stops_the_read_ahead(
+        self,
+        api: Any,  # noqa: ANN401
+    ) -> None:
+        """A stream answering is read up to its first content event, and reports nothing.
+
+        Ref: stdapi/models/chat/_mantle/_default.py:_opens_stream
+        """
+        events = _ANSWERING_STREAMS[api]
+        reads: list[int] = []
+        with collect_stream_open_errors() as errors:
+            replay = await mantle_default._read_past_preamble(  # noqa: SLF001
+                api, self._counted(events, reads)
+            )
+        assert (reads, errors) == (list(range(len(events) - 1)), [])
+        assert [event async for event in replay] == events
+
+    async def test_a_failing_stream_raises_on_replay(self) -> None:
+        """An error reading ahead is reported, and raised after the events read.
+
+        Ref: stdapi/models/chat/_adapters/_stream_open.py:replay_stream
+        """
+        failure = MantleError("interrupted", status=502)
+
+        async def _failing() -> AsyncGenerator[SseEvent]:
+            yield None, _ROLE_CHUNK
+            raise failure
+
+        with collect_stream_open_errors() as errors:
+            replay = await mantle_default._read_past_preamble(  # noqa: SLF001
+                "chat_completions", _failing()
+            )
+        assert errors == [failure]
+        assert await anext(replay) == (None, _ROLE_CHUNK)
+        with pytest.raises(MantleError):
+            await anext(replay)
+
+
+class TestMantleRelayedRefusal:
+    """A refusal relayed as stream events reads as the calling API words it.
+
+    A streamed Responses request keeps its events, as upstream streams them.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+         stdapi/models/chat/_mantle/_default.py:_scrub_error_event
+    """
+
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [
+            (
+                {
+                    "error": {
+                        "code": "invalid_prompt",
+                        "message": _MANTLE_GEMMA,
+                        "param": None,
+                        "type": "invalid_request_error",
+                    },
+                    "type": "error",
+                },
+                {
+                    "error": {
+                        "code": "context_length_exceeded",
+                        "message": (
+                            "Your input exceeds the context window of this model. "
+                            "Please adjust your input and try again."
+                        ),
+                        "param": "input",
+                        "type": "invalid_request_error",
+                    },
+                    "type": "error",
+                },
+            ),
+            (
+                {"type": "error", "code": "invalid_prompt", "message": _MANTLE_GEMMA},
+                {
+                    "type": "error",
+                    "code": "context_length_exceeded",
+                    "message": (
+                        "Your input exceeds the context window of this model. "
+                        "Please adjust your input and try again."
+                    ),
+                },
+            ),
+            (
+                {
+                    "type": "response.failed",
+                    "response": {
+                        "status": "failed",
+                        "error": {"code": "invalid_prompt", "message": _MANTLE_GEMMA},
+                    },
+                },
+                {
+                    "type": "response.failed",
+                    "response": {
+                        "status": "failed",
+                        "error": {
+                            "code": "context_length_exceeded",
+                            "message": (
+                                "Your input exceeds the context window of this "
+                                "model. Please adjust your input and try again."
+                            ),
+                        },
+                    },
+                },
+            ),
+        ],
+        ids=["error", "top-level-error", "response-failed"],
+    )
+    def test_responses_events_carry_upstream_refusal(
+        self, payload: dict[str, Any], expected: dict[str, Any]
+    ) -> None:
+        """Each event keeps its shape, with upstream's code, parameter and words.
+
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+        """
+        with _on_route("/v1/responses", TAG_OPENAI):
+            relayed = mantle_default._scrub_error_event(  # noqa: SLF001
+                to_json_str(payload)
+            )
+        assert loads(relayed) == expected
+
+    def test_a_failed_response_refusal_is_the_api_error(self) -> None:
+        """An unstreamed failed answer refusing the input is the API's ``400``.
+
+        Ref: stdapi/models/chat/_mantle/_default.py:_failed_response_error
+        """
+        raw = {"status": "failed", "error": {"message": _MANTLE_ENGINE}}
+        with _on_route("/anthropic/v1/messages", TAG_ANTHROPIC):
+            error = mantle_default._failed_response_error(raw)  # noqa: SLF001
+        assert isinstance(error, ContextLengthExceededError)
+        assert str(error) == "prompt is too long: 185692 tokens > 131072 maximum"
+        other = mantle_default._failed_response_error(  # noqa: SLF001
+            {"status": "failed", "error": {"message": "The model crashed."}}
+        )
+        assert other.status == 502
+
+
+#: The cheapest Mantle-served chat model, and its context window.
+_MANTLE_LIVE_MODEL = ("google.gemma-4-e2b", 131_072)
+
+
+@pytest.mark.slow
+@pytest.mark.gateway("Only a gateway serves Bedrock Mantle models")
+class TestLiveMantleRefusals:
+    """A prompt over the window, sent to a Mantle-served model.
+
+    Gemma 4 refuses it in its own words, naming itself, on the call or in an
+    error event after the stream opened; refused, it costs nothing.
+
+    Ref: https://developers.openai.com/api/docs/guides/error-codes
+         https://platform.claude.com/docs/en/api/errors
+         stdapi/models/chat/_mantle/_default.py:ChatModel._serve
+    """
+
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_chat_completions(self, openai_client: OpenAI, stream: bool) -> None:
+        """Chat Completions answers ``400 context_length_exceeded`` before any byte.
+
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+        """
+        model, window = _MANTLE_LIVE_MODEL
+        with pytest.raises(BadRequestError) as excinfo:
+            openai_client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": _prompt(window)}],
+                max_completion_tokens=16,
+                stream=stream,
+            )
+        error = excinfo.value
+        assert (error.code, error.param) == ("context_length_exceeded", "messages")
+        assert isinstance(error.body, dict)
+        assert _MESSAGES_SIZED.fullmatch(error.body["message"]), error.body
+
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_anthropic_messages(
+        self, anthropic_client: Anthropic, stream: bool
+    ) -> None:
+        """Anthropic Messages answers ``prompt is too long`` before any byte.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+        """
+        model, window = _MANTLE_LIVE_MODEL
+        with pytest.raises(AnthropicBadRequestError) as excinfo:
+            anthropic_client.messages.create(
+                model=model,
+                max_tokens=16,
+                messages=[{"role": "user", "content": _prompt(window)}],
+                stream=stream,
+            )
+        assert isinstance(excinfo.value.body, dict)
+        assert _PROMPT_SIZED.fullmatch(excinfo.value.body["error"]["message"])
+
+    def test_responses_streamed(self, openai_client: OpenAI) -> None:
+        """A streamed Responses request gets upstream's ``error`` event; the SDK raises it.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+        """
+        model, window = _MANTLE_LIVE_MODEL
+        stream = openai_client.responses.create(
+            model=model, input=_prompt(window), max_output_tokens=16, stream=True
+        )
+        with pytest.raises(APIError) as excinfo:
+            for _ in stream:
+                pass
+        error = excinfo.value
+        assert error.code == "context_length_exceeded"
+        assert str(error) == (
+            "Your input exceeds the context window of this model. Please adjust "
+            "your input and try again."
+        )

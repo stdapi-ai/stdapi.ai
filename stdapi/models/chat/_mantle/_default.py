@@ -18,6 +18,7 @@ from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock_mantle import (
     API_PATHS,
     MantleApiUnsupportedError,
+    MantleError,
     MantleSurfaceUnsupportedError,
     cache_response_surface,
     decode_mantle_response_id,
@@ -40,6 +41,8 @@ from stdapi.models.chat._adapters._anthropic_message import (
     warn_context_management_ignored,
 )
 from stdapi.models.chat._adapters._openai_responses import requests_reasoning_summary
+from stdapi.models.chat._adapters._responses_context import record_stream_open_error
+from stdapi.models.chat._adapters._stream_open import context_refusal, replay_stream
 from stdapi.models.chat._anthropic_claude import (
     _BETA_CONTEXT_MANAGEMENT_2025,
     client_beta_flags,
@@ -47,6 +50,7 @@ from stdapi.models.chat._anthropic_claude import (
 )
 from stdapi.models.chat._mantle import _convert as convert
 from stdapi.monitoring import (
+    context_length_error,
     log_error_details,
     log_request_sse_stream_event,
     log_response_params,
@@ -57,7 +61,7 @@ from stdapi.types.anthropic_messages import Message
 from stdapi.types.openai_chat_completions import ChatCompletion
 from stdapi.types.openai_responses import Response
 from stdapi.usage import record_bedrock_usage, record_web_search_usage
-from stdapi.utils import hide_security_details, to_json_str
+from stdapi.utils import hide_security_details, to_json_str, try_parse_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Mapping
@@ -356,6 +360,11 @@ class ChatModel(ChatModelBase[Any, Any]):
             except MantleApiUnsupportedError:
                 _LEARNED_APIS[self._model_id] = self._supported_apis() - {api}
                 continue
+            except MantleError as error:
+                # A context-window refusal is worded as the calling API words it.
+                if (refused := context_refusal(error)) is not None:
+                    raise refused from error
+                raise
             if api not in self._supported_apis():
                 _LEARNED_APIS[self._model_id] = self._supported_apis() | {api}
             return api, serving_region, result
@@ -399,6 +408,13 @@ class ChatModel(ChatModelBase[Any, Any]):
             )
         if api == "chat_completions":
             convert.rename_reasoning_field(raw, exclude=exclude_reasoning)
+        if (
+            api == "responses"
+            and inbound != "responses"
+            and raw.get("status") == "failed"
+        ):
+            # A converted answer would read as an empty success.
+            raise _failed_response_error(raw)
         if api != inbound:
             raw = convert.convert_response(
                 api, inbound, raw, reasoning_summary=reasoning_summary
@@ -444,6 +460,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         api, serving_region, events = await self._serve(
             inbound, payload, stream=True, region=region
         )
+        events = await _read_past_preamble(api, events)
         relayed = self._relay_stream(
             api,
             inbound,
@@ -848,8 +865,9 @@ class ChatModel(ChatModelBase[Any, Any]):
 def _failed_response_error(raw: dict[str, Any]) -> ApiError:
     """Build the error raised for a synchronous terminal ``failed`` Response.
 
-    The upstream ``error`` message is scrubbed of security details and
-    surfaced as a 502.
+    A context-window refusal is worded as the calling API words it; any other
+    upstream ``error`` message is scrubbed of security details and surfaced as
+    a 502.
 
     Args:
         raw: Upstream Responses-shaped result with ``status == "failed"``.
@@ -861,6 +879,8 @@ def _failed_response_error(raw: dict[str, Any]) -> ApiError:
     message = error.get("message") if isinstance(error, dict) else error
     if not isinstance(message, str) or not message:
         message = "The upstream model response failed."
+    if (refused := context_refusal(MantleError(message, status=400))) is not None:
+        return refused
     return ApiError(hide_security_details(502, message), status=502)
 
 
@@ -895,12 +915,114 @@ def _scrub_error_event(data: str) -> str:
     elif isinstance(error, dict) and error.get("message") is not None:
         message = error["message"]
         # Structured message content is serialized before scrubbing.
-        error["message"] = hide_security_details(
-            502, message if isinstance(message, str) else to_json_str(message)
-        )
+        message = message if isinstance(message, str) else to_json_str(message)
+        if (refused := context_length_error(ApiError(message, status=400))) is None:
+            error["message"] = hide_security_details(502, message)
+        else:
+            _reword_refusal(error, refused, message)
     else:
         return data
     return to_json_str(payload)
+
+
+def _reword_refusal(error: dict[str, Any], refused: ApiError, message: str) -> None:
+    """Word a relayed context-window refusal as the calling API words it.
+
+    Args:
+        error: The relayed error object, rewritten in place.
+        refused: The calling API's refusal.
+        message: The upstream message, logged instead of relayed.
+    """
+    log_error_details(message, status=refused.status)
+    error["message"] = str(refused)
+    for key in ("code", "param"):
+        if key in error:
+            error[key] = getattr(refused, key)
+    # A Responses error event carrying its error at the top level keeps its event type.
+    if error.get("type") not in (None, "error"):
+        error["type"] = "invalid_request_error"
+
+
+async def _read_past_preamble(
+    api: MantleApi, events: AsyncGenerator[SseEvent]
+) -> AsyncGenerator[SseEvent]:
+    """Read a stream's opening events up to the first one with content, and replay them.
+
+    Some upstream models open the stream, then refuse the request in an error
+    event; it is reported to the caller that opened the stream, which can
+    still answer it before the response starts.
+
+    Args:
+        api: Upstream Mantle API serving the stream.
+        events: Upstream SSE event generator.
+
+    Returns:
+        The stream, the events read included, raising any error reading did.
+    """
+    read: list[SseEvent] = []
+    try:
+        async for event, data in events:
+            read.append((event, data))
+            if (refusal := _stream_refusal(event, data)) is not None:
+                record_stream_open_error(refusal)
+                break
+            if not _opens_stream(api, event, data):
+                break
+    except Exception as exc:  # noqa: BLE001 - raised again by the replay
+        record_stream_open_error(exc)
+        return replay_stream(read, events, exc)
+    return replay_stream(read, events)
+
+
+def _stream_refusal(event: str | None, data: str) -> MantleError | None:
+    """Return the refusal an upstream error event carries.
+
+    Args:
+        event: SSE event name, if any.
+        data: Raw SSE data payload.
+
+    Returns:
+        The refusal, or None for any other event.
+    """
+    if event not in (None, "error") or '"error"' not in data:
+        return None
+    message = convert._stream_error_message(data)  # noqa: SLF001
+    return None if message is None else MantleError(message, status=400)
+
+
+def _opens_stream(api: MantleApi, event: str | None, data: str) -> bool:
+    """Whether an upstream event only opens the stream, carrying no content yet.
+
+    Args:
+        api: Upstream Mantle API serving the stream.
+        event: SSE event name, if any.
+        data: Raw SSE data payload.
+
+    Returns:
+        True for a Responses creation, a Messages start or ping, or a Chat
+        Completions chunk whose deltas carry nothing but a role.
+    """
+    chunk = try_parse_json(data)
+    if not isinstance(chunk, dict):
+        return False
+    # Some upstream streams name their events in the payload only.
+    kind = event or chunk.get("type")
+    if api == "responses":
+        return kind in ("response.created", "response.in_progress")
+    if api == "messages":
+        return kind in ("message_start", "ping")
+    choices = chunk.get("choices")
+    return (
+        isinstance(choices, list)
+        and bool(choices)
+        and all(
+            isinstance(choice, dict)
+            and choice.get("finish_reason") is None
+            and isinstance(delta := choice.get("delta") or {}, dict)
+            and not any(value for key, value in delta.items() if key != "role")
+            for choice in choices
+        )
+    )
 
 
 def _include_usage(

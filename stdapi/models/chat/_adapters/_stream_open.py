@@ -64,7 +64,7 @@ async def replay_stream[T](
     Args:
         first: Events already read.
         rest: The stream they were read from.
-        error: The error reading ahead raised, raised here instead.
+        error: The error reading ahead raised, raised here after *first*.
 
     Yields:
         Every event, in order.
@@ -73,10 +73,10 @@ async def replay_stream[T](
         Exception: The error reading ahead raised.
     """
     try:
-        if error is not None:
-            raise error
         for item in first:
             yield item
+        if error is not None:
+            raise error
         async for item in rest:
             yield item
     finally:

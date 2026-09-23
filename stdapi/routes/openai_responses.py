@@ -957,9 +957,7 @@ async def count_input_tokens(
         # Not Mantle-served, so this is always a Converse chat model.
         chat_model=get_chat_model(model_id),  # type: ignore[arg-type]
     )
-    request, input_tokens = await truncating(
-        request, lambda counted, _retryable: count(counted)
-    )
+    request, input_tokens = await truncating(request, count)
     return log_response_params(InputTokenCountResponse(input_tokens=input_tokens))
 
 

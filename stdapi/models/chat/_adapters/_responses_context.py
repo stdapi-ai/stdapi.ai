@@ -40,7 +40,8 @@ _CONTEXT_LENGTH_EXCEEDED: Final = (
 _OVERFLOW_PATTERN: Final = re_compile(
     r"input tokens exceeded|prompt is too long"
     r"|exceeds (?:the )?model's maximum context length"
-    r"|maximum context length is \d+|input is too long|exceeds the context window",
+    r"|maximum context length is \d+|input is too long|exceeds the context window"
+    r"|exceed model maximum|exceeds the max_model_len",
     IGNORECASE,
 )
 
@@ -54,6 +55,8 @@ OUTPUT_BUDGET_TOO_LARGE: Final = (
 _OBSERVED_LIMIT_PATTERNS: Final = (
     re_compile(r"(\d+) tokens > (\d+) maximum"),
     re_compile(r"Input length \((\d+)\) exceeds [^(]*\((\d+)\)"),
+    re_compile(r"prompt tokens \((\d+)\) exceed model maximum \((\d+)\)"),
+    re_compile(r"prompt length (\d+) exceeds the max_model_len (\d+)"),
 )
 
 #: Refusals stating the window in the OpenAI wording.

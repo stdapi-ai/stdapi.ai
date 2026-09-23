@@ -277,7 +277,7 @@ async def summarize(
 
     _, response = await truncating(
         generation,
-        lambda conversation, _retryable: chat_model.create_response(
+        lambda conversation: chat_model.create_response(
             _sent(conversation), response_id, created_at
         ),
     )
@@ -600,7 +600,7 @@ async def _echoed_output_events(
 
 
 async def truncating[RequestT: (ResponseCreateParams, InputTokenCountParams), T](
-    request: RequestT, call: Callable[[RequestT, bool], Awaitable[T]]
+    request: RequestT, call: Callable[[RequestT], Awaitable[T]]
 ) -> tuple[RequestT, T]:
     """Run a model call, dropping the oldest input when it overflows the window.
 
@@ -612,8 +612,7 @@ async def truncating[RequestT: (ResponseCreateParams, InputTokenCountParams), T]
 
     Args:
         request: The request.
-        call: Runs the call on a request; its second argument says whether an
-            overflow may be retried, so a stream need not report it.
+        call: Runs the call on a request.
 
     Returns:
         The request the call succeeded with, and its result.
@@ -628,7 +627,7 @@ async def truncating[RequestT: (ResponseCreateParams, InputTokenCountParams), T]
     while True:
         trims = request.truncation == "auto" and attempt < _MAX_TRUNCATION_RETRIES
         try:
-            return request, await call(request, trims or caps)
+            return request, await call(request)
         except Exception as exc:
             if output_budget_exceeded(exc):
                 # No trimming answers it, and the backend's wording stays internal.
@@ -671,7 +670,6 @@ async def _truncated(
 async def _open_once(
     chat_model: ChatModelBase[Any, Any],
     request: ResponseCreateParams,
-    retryable: bool,  # noqa: FBT001 - the positional contract of `truncating`
     *,
     response_id: str,
     created_at: float,
@@ -682,8 +680,6 @@ async def _open_once(
     Args:
         chat_model: The model.
         request: The request.
-        retryable: Whether an overflow refused on the stream's first event is
-            raised for a retry, instead of being streamed to the client.
         response_id: Identifier of the response.
         created_at: Unix timestamp of the request.
         moderation_builder: Builds the response's ``moderation`` field.
@@ -693,13 +689,13 @@ async def _open_once(
 
     Raises:
         Exception: Whatever the model raised, including an overflow refused
-            on the stream's first event when ``retryable``.
+            on the stream's first event, answered as one refused on the call.
     """
     return await open_peeked(
         chat_model.create_response(
             request, response_id, created_at, moderation_builder=moderation_builder
         ),
-        lambda error: error if retryable and context_overflow(error) else None,
+        lambda error: error if context_overflow(error) else None,
     )
 
 
