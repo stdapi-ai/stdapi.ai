@@ -1,1 +1,1 @@
-{"id":"openai.gpt-6-luna","prices":{"id":"openai.gpt-6-luna","service":"bedrock-runtime","default_tier":"standard","default_routings":["global"],"prices":[]}}
+{"id":"openai.gpt-6-luna","prices":{"id":"openai.gpt-6-luna","service":"bedrock-mantle","default_tier":"standard","default_routings":["us-east-1"],"prices":[]}}
