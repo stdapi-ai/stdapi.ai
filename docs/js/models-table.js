@@ -1135,18 +1135,28 @@
           return "";
         },
         sort: function (model) {
-          return priceFor(model, state.region, price.key);
+          return dimensionPrice(model, price.key).value;
         },
         raw: function (model) {
-          var value = priceFor(model, state.region, price.key);
+          var value = dimensionPrice(model, price.key).value;
           return value === null ? null : value * price.scale;
+        },
+        origin: function (model) {
+          return dimensionPrice(model, price.key).region || "";
         },
         format: function (value) {
           return value === null ? "—" : formatPrice(value / price.scale, price.scale);
         },
         cell: function (model) {
-          var value = priceFor(model, state.region, price.key);
-          return el("td", { class: "models-num", text: formatPrice(value, price.scale) });
+          var found = dimensionPrice(model, price.key);
+          if (found.region) {
+            return el("td", {
+              class: "models-num models-price--elsewhere",
+              text: formatPrice(found.value, price.scale),
+              title: "Not priced in " + state.region + ". Rate in " + found.region + ".",
+            });
+          }
+          return el("td", { class: "models-num", text: formatPrice(found.value, price.scale) });
         },
       });
     });
@@ -1371,9 +1381,10 @@
    * so a token-price column alone reads as "stdapi.ai has no price for this".
    * This one always shows whatever the model is actually billed on.
    */
-  function primaryPrice(model) {
-    var input = priceFor(model, state.region, "input_tokens");
-    var output = priceFor(model, state.region, "output_tokens");
+  function primaryPrice(model, region) {
+    region = region || state.region;
+    var input = priceFor(model, region, "input_tokens");
+    var output = priceFor(model, region, "output_tokens");
     if (input !== null && output !== null) {
       /* Sorted on a blended rate, not on input alone: output tokens usually
          dominate the bill, so ranking by input would put exactly the models
@@ -1385,7 +1396,7 @@
         text: "$" + formatPrice(input, 1e6) + " → $" + formatPrice(output, 1e6) + " /1M",
         title:
           "Input and output tokens per million in " +
-          state.region +
+          region +
           ", sorted on a 3:1 input-to-output blend" +
           routingNote(model),
       };
@@ -1397,18 +1408,18 @@
         unit: "tokens",
         value: only * 1e6,
         text: "$" + formatPrice(only, 1e6) + side,
-        title: "Per million tokens in " + state.region + routingNote(model),
+        title: "Per million tokens in " + region + routingNote(model),
       };
     }
     for (var i = 0; i < PRICE_COLUMNS.length; i += 1) {
       var price = PRICE_COLUMNS[i];
-      var value = priceFor(model, state.region, price.key);
+      var value = priceFor(model, region, price.key);
       if (value !== null) {
         return {
           unit: price.key,
           value: value * price.scale,
           text: "$" + formatPrice(value, price.scale) + price.unit,
-          title: price.label + " in " + state.region + routingNote(model),
+          title: price.label + " in " + region + routingNote(model),
         };
       }
     }
@@ -1503,6 +1514,55 @@
     return "Not priced in " + state.region + ". Priced in " + priced.sort().join(", ") + ".";
   }
 
+  /* The nearest region's rate for a row the selected region does not price —
+     same country, then same geography, then anywhere, the lowest within each:
+     a bare dash reads as "no price at all". */
+  function priceElsewhere(model) {
+    var countries = state.manifest.region_countries || {};
+    var buckets = state.manifest.region_buckets || {};
+    var best = null;
+    pricedRegions(model).sort().forEach(function (region) {
+      var found = primaryPrice(model, region);
+      if (!found) {
+        return;
+      }
+      var distance = countries[region] === countries[state.region] ? 0
+        : buckets[region] === buckets[state.region] ? 1 : 2;
+      if (
+        !best
+        || distance < best.distance
+        || (distance === best.distance && found.value < best.found.value)
+      ) {
+        best = { region: region, found: found, distance: distance };
+      }
+    });
+    return best;
+  }
+
+  /* The Price column's quote: the selected region's rate, else the nearest
+     region's, with that region named. */
+  function quotedPrice(model) {
+    var found = primaryPrice(model);
+    if (found) {
+      return { found: found, region: "" };
+    }
+    var elsewhere = priceElsewhere(model);
+    return elsewhere ? { found: elsewhere.found, region: elsewhere.region } : null;
+  }
+
+  /* One dimension's rate in the selected region, else in the region the Price
+     column falls back to, so every price column quotes the same region. */
+  function dimensionPrice(model, dimension) {
+    var value = priceFor(model, state.region, dimension);
+    if (value !== null || primaryPrice(model)) {
+      return { value: value, region: null };
+    }
+    var elsewhere = priceElsewhere(model);
+    return elsewhere
+      ? { value: priceFor(model, elsewhere.region, dimension), region: elsewhere.region }
+      : { value: null, region: null };
+  }
+
   function primaryPriceColumn() {
     return {
       key: "price:primary",
@@ -1514,8 +1574,12 @@
       betterIsLower: true,
       verdict: ["cheapest", "most expensive"],
       raw: function (model) {
-        var found = primaryPrice(model);
-        return found && found.unit === "tokens" ? found.value : null;
+        var quote = quotedPrice(model);
+        return quote && quote.found.unit === "tokens" ? quote.found.value : null;
+      },
+      origin: function (model) {
+        var quote = quotedPrice(model);
+        return quote ? quote.region : "";
       },
       format: function (value) {
         return value === null ? "—" : "$" + formatPrice(value, 1);
@@ -1524,7 +1588,8 @@
         "What AWS charges for the unit this model is billed on — tokens, images, "
         + "seconds or characters — in the selected region. Token models show input "
         + "then output per million and sort on a 3:1 blend of the two; models "
-        + "billed on another unit sort among themselves.",
+        + "billed on another unit sort among themselves. Where the selected region "
+        + "has no rate, the nearest region's rate is shown greyed, tagged with its region.",
       value: function () {
         return "";
       },
@@ -1532,23 +1597,35 @@
          each unit sorts as its own block rather than interleaving by magnitude
          and putting a per-second service ahead of every token model. */
       sort: function (model) {
-        var found = primaryPrice(model);
-        if (!found) {
+        var quote = quotedPrice(model);
+        if (!quote) {
           return null;
         }
+        var found = quote.found;
         return {
           block: found.unit === "tokens" ? "" : found.unit,
           value: found.value,
         };
       },
       cell: function (model) {
-        var found = primaryPrice(model);
-        if (!found) {
+        var quote = quotedPrice(model);
+        if (!quote) {
           return el("td", { text: "—", title: unpricedHere(model) });
         }
-        var cell = el("td", { class: "models-price", title: found.title });
+        var found = quote.found;
+        var region = quote.region || state.region;
+        var cell = quote.region
+          ? el("td", {
+            class: "models-price models-price--elsewhere",
+            title: unpricedHere(model) + " Showing the nearest, " + region + ".",
+          })
+          : el("td", { class: "models-price", title: found.title });
         cell.appendChild(el("span", { text: found.text }));
-        var cheaper = state.tier === "cheapest" && cheaperTier(model, state.region);
+        if (quote.region) {
+          cell.appendChild(document.createTextNode(" "));
+          cell.appendChild(el("span", { class: "models-badge", text: region }));
+        }
+        var cheaper = state.tier === "cheapest" && cheaperTier(model, region);
         if (cheaper) {
           /* The CSS gap is visual only — a literal space keeps "in" and
              "batch" from reading as one word to a screen reader or a paste. */
@@ -1562,7 +1639,7 @@
           );
         }
         if (model.prompt_caching) {
-          var cacheRate = priceFor(model, state.region, "cache_read_tokens");
+          var cacheRate = priceFor(model, region, "cache_read_tokens");
           cell.appendChild(document.createTextNode(" "));
           cell.appendChild(
             el("span", {
@@ -1572,7 +1649,7 @@
                 cacheRate === null
                   ? "Prompt caching cuts the cost of a repeated prompt prefix."
                   : "Prompt caching cuts the cost of a repeated prompt prefix — cached " +
-                    "tokens are $" + formatPrice(cacheRate, 1e6) + " /1M here.",
+                    "tokens are $" + formatPrice(cacheRate, 1e6) + " /1M in " + region + ".",
             })
           );
         }
@@ -2098,7 +2175,7 @@
       }
     });
     var cheapest = rows.reduce(function (best, model) {
-      var input = priceFor(model, state.region, "input_tokens");
+      var input = dimensionPrice(model, "input_tokens").value;
       return input !== null && (best === null || input < best) ? input : best;
     }, null);
     var tiles = [
@@ -2466,6 +2543,11 @@
     return "";
   }
 
+  function originNote(column, model) {
+    var region = column.origin ? column.origin(model) : "";
+    return region ? " in " + region : "";
+  }
+
   function frontier(points, xColumn, yColumn) {
     var xLower = Boolean(xColumn.betterIsLower);
     var yLower = Boolean(yColumn.betterIsLower);
@@ -2824,17 +2906,20 @@
         dot.setAttribute("data-plot", point.model.id);
         dot.setAttribute("tabindex", "0");
         dot.setAttribute("role", "button");
+        /* A price quoted from another region than the selected one says so. */
+        var xText = xColumn.format(point.x) + originNote(xColumn, point.model);
+        var yText = yColumn.format(point.y) + originNote(yColumn, point.model);
         dot.setAttribute(
           "aria-label",
-          disambiguatedName(point.model) + ", " + xColumn.label + " " + xColumn.format(point.x) +
-            ", " + yColumn.label + " " + yColumn.format(point.y)
+          disambiguatedName(point.model) + ", " + xColumn.label + " " + xText +
+            ", " + yColumn.label + " " + yText
         );
         /* Separate attributes, not a delimited string — a model name can
            itself contain "|", which a split("|") would misparse. */
         dot.dataset.tipName = disambiguatedName(point.model);
         dot.dataset.tipProvider = point.model.provider;
-        dot.dataset.tipX = xColumn.label + ": " + xColumn.format(point.x);
-        dot.dataset.tipY = yColumn.label + ": " + yColumn.format(point.y);
+        dot.dataset.tipX = xColumn.label + ": " + xText;
+        dot.dataset.tipY = yColumn.label + ": " + yText;
         root.appendChild(dot);
       });
 
@@ -3273,8 +3358,8 @@
     if (column.key === "price:primary") {
       var units = new Set(
         models.map(function (model) {
-          var found = primaryPrice(model);
-          return found ? found.unit : null;
+          var quote = quotedPrice(model);
+          return quote ? quote.found.unit : null;
         })
       );
       if (units.size > 1) {

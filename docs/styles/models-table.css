@@ -1184,6 +1184,13 @@ td.models-price .models-badge {
   margin-left: 0.3rem;
 }
 
+/* A rate from another region than the selected one: shown, but set apart. */
+td.models-price--elsewhere > span:first-child,
+td.models-num.models-price--elsewhere {
+  opacity: 0.65;
+  font-style: italic;
+}
+
 .models-logo--service {
   background: none;
   padding: 0;
