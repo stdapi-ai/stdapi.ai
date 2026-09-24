@@ -345,7 +345,7 @@
     "value": "True"
    }
   },
-  "anthropic.claude-haiku-4-5": {
+  "anthropic.claude-haiku-4-5-20251001-v1:0": {
    "context_window": {
     "checked": "2026-08-22",
     "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-4-5.html",
@@ -423,32 +423,12 @@
     "value": "671B"
    }
   },
-  "deepseek.v3-v1:0": {
-   "active_parameters": {
-    "checked": "2026-08-22",
-    "source": "https://huggingface.co/deepseek-ai/DeepSeek-V3/raw/main/README.md",
-    "source_name": "DeepSeek-V3 Hugging Face model card (\"671B total parameters with 37B activated for each token\"; note also states the 685B HF repo size is 671B main + 14B MTP)",
-    "value": "37B"
-   },
-   "parameters": {
-    "checked": "2026-08-22",
-    "source": "https://huggingface.co/deepseek-ai/DeepSeek-V3/raw/main/README.md",
-    "source_name": "DeepSeek-V3 Hugging Face model card (\"671B total parameters with 37B activated for each token\"; note also states the 685B HF repo size is 671B main + 14B MTP)",
-    "value": "671B"
-   }
-  },
   "deepseek.v3.1": {
    "active_parameters": {
     "checked": "2026-08-22",
     "source": "https://huggingface.co/deepseek-ai/DeepSeek-V3.1/raw/main/README.md",
     "source_name": "DeepSeek-V3.1 Hugging Face model card (Model Downloads table: DeepSeek-V3.1 | 671B | 37B | 128K)",
     "value": "37B"
-   },
-   "context_window": {
-    "checked": "2026-08-22",
-    "source": "https://api-docs.deepseek.com/news/news250821/",
-    "source_name": "DeepSeek API Docs \u2014 DeepSeek-V3.1 Release",
-    "value": "128K"
    },
    "family": {
     "checked": "2026-08-22",
@@ -1031,56 +1011,6 @@
     "value": "24B"
    }
   },
-  "moonshot.kimi-k2-thinking": {
-   "active_parameters": {
-    "checked": "2026-08-22",
-    "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
-    "source_name": "Kimi K2 Thinking model card (Hugging Face)",
-    "value": "32B"
-   },
-   "context_window": {
-    "checked": "2026-08-22",
-    "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
-    "source_name": "Hugging Face \u2014 moonshotai/Kimi-K2-Thinking model card",
-    "value": "256K"
-   },
-   "family": {
-    "checked": "2026-08-22",
-    "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
-    "source_name": "Hugging Face \u2014 moonshotai/Kimi-K2-Thinking model card",
-    "value": "Kimi K2"
-   },
-   "max_output_tokens": {
-    "checked": "2026-08-22",
-    "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-thinking.html",
-    "source_name": "AWS Bedrock model card \u2014 Kimi K2 Thinking",
-    "value": "16384"
-   },
-   "open_weights": {
-    "checked": "2026-08-22",
-    "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
-    "source_name": "Hugging Face \u2014 moonshotai/Kimi-K2-Thinking (Modified MIT License, weights published)",
-    "value": "True"
-   },
-   "parameters": {
-    "checked": "2026-08-22",
-    "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
-    "source_name": "Kimi K2 Thinking model card (Hugging Face)",
-    "value": "1T"
-   },
-   "reasoning": {
-    "checked": "2026-08-22",
-    "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
-    "source_name": "Hugging Face \u2014 moonshotai/Kimi-K2-Thinking model card",
-    "value": "True"
-   },
-   "tool_call": {
-    "checked": "2026-08-22",
-    "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
-    "source_name": "Hugging Face \u2014 moonshotai/Kimi-K2-Thinking model card",
-    "value": "True"
-   }
-  },
   "moonshotai.kimi-k2-thinking": {
    "active_parameters": {
     "checked": "2026-08-22",
@@ -1447,20 +1377,6 @@
     "value": "True"
    }
   },
-  "qwen.qwen3-coder-480b-a35b-v1:0": {
-   "active_parameters": {
-    "checked": "2026-08-22",
-    "source": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct",
-    "source_name": "Hugging Face model card (Qwen/Qwen3-Coder-480B-A35B-Instruct): \"Number of Parameters: 480B in total and 35B activated\"",
-    "value": "35B"
-   },
-   "parameters": {
-    "checked": "2026-08-22",
-    "source": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct",
-    "source_name": "Hugging Face model card (Qwen/Qwen3-Coder-480B-A35B-Instruct): \"Number of Parameters: 480B in total and 35B activated\"",
-    "value": "480B"
-   }
-  },
   "qwen.qwen3-coder-next": {
    "active_parameters": {
     "checked": "2026-08-22",
@@ -1472,20 +1388,6 @@
     "checked": "2026-08-22",
     "source": "https://huggingface.co/Qwen/Qwen3-Coder-Next",
     "source_name": "Hugging Face model card (Qwen/Qwen3-Coder-Next): \"Number of Parameters: 80B in total and 3B activated\"",
-    "value": "80B"
-   }
-  },
-  "qwen.qwen3-next-80b-a3b": {
-   "active_parameters": {
-    "checked": "2026-08-22",
-    "source": "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct",
-    "source_name": "Hugging Face model card (Qwen/Qwen3-Next-80B-A3B-Instruct): \"Number of Parameters: 80B in total and 3B activated\" (the Thinking card states the same figures)",
-    "value": "3B"
-   },
-   "parameters": {
-    "checked": "2026-08-22",
-    "source": "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct",
-    "source_name": "Hugging Face model card (Qwen/Qwen3-Next-80B-A3B-Instruct): \"Number of Parameters: 80B in total and 3B activated\" (the Thinking card states the same figures)",
     "value": "80B"
    }
   },
@@ -1537,20 +1439,6 @@
     "source": "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct",
     "source_name": "Qwen3-Next-80B-A3B-Instruct model card (Hugging Face)",
     "value": "True"
-   }
-  },
-  "qwen.qwen3-vl-235b-a22b": {
-   "active_parameters": {
-    "checked": "2026-08-22",
-    "source": "https://arxiv.org/html/2511.21631v2",
-    "source_name": "Qwen3-VL Technical Report (Qwen Team): \"The flagship model, Qwen3-VL-235B-A22B, has 235B total parameters with 22B activated per token.\" (the HF cards for Qwen3-VL-235B-A22B-Instruct/Thinking give no parameter table)",
-    "value": "22B"
-   },
-   "parameters": {
-    "checked": "2026-08-22",
-    "source": "https://arxiv.org/html/2511.21631v2",
-    "source_name": "Qwen3-VL Technical Report (Qwen Team): \"The flagship model, Qwen3-VL-235B-A22B, has 235B total parameters with 22B activated per token.\" (the HF cards for Qwen3-VL-235B-A22B-Instruct/Thinking give no parameter table)",
-    "value": "235B"
    }
   },
   "qwen.qwen3-vl-235b-a22b-instruct": {

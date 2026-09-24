@@ -62,8 +62,8 @@ available from any running instance through
 <tr><td>Titan Multimodal Embeddings G1</td><td><code>amazon.titan-embed-image-v1</code></td><td>Amazon</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>EMBEDDING</td><td>10</td></tr>
 <tr><td>Titan Embeddings G1 - Text</td><td><code>amazon.titan-embed-text-v1</code></td><td>Amazon</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>EMBEDDING</td><td>4</td></tr>
 <tr><td>Titan Text Embeddings V2</td><td><code>amazon.titan-embed-text-v2:0</code></td><td>Amazon</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>EMBEDDING</td><td>19</td></tr>
-<tr><td>Transcribe</td><td><code>amazon.transcribe</code></td><td>Amazon</td><td>AWS Transcribe</td><td>SPEECH</td><td>TEXT</td><td>1</td></tr>
-<tr><td>Transcribe Medical</td><td><code>amazon.transcribe-medical</code></td><td>Amazon</td><td>AWS Transcribe</td><td>SPEECH</td><td>TEXT</td><td>1</td></tr>
+<tr><td>Transcribe</td><td><code>amazon.transcribe</code></td><td>Amazon</td><td>AWS Transcribe</td><td>SPEECH</td><td>TEXT</td><td>19</td></tr>
+<tr><td>Transcribe Medical</td><td><code>amazon.transcribe-medical</code></td><td>Amazon</td><td>AWS Transcribe</td><td>SPEECH</td><td>TEXT</td><td>18</td></tr>
 <tr><td>Claude 3.5 Sonnet</td><td><code>anthropic.claude-3-5-sonnet-20240620-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
 <tr><td>Claude 3.5 Sonnet v2</td><td><code>anthropic.claude-3-5-sonnet-20241022-v2:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
 <tr><td>Claude 3.7 Sonnet</td><td><code>anthropic.claude-3-7-sonnet-20250219-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
@@ -72,8 +72,7 @@ available from any running instance through
 <tr><td>Claude Fable 5</td><td><code>anthropic.claude-fable-5</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Fable 5.1</td><td><code>anthropic.claude-fable-5-1</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Fern TRN2 1024K</td><td><code>anthropic.claude-fern-trn2-1024k</code></td><td>Anthropic</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
-<tr><td>Claude Haiku 4.5</td><td><code>anthropic.claude-haiku-4-5</code></td><td>Anthropic</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>7</td></tr>
-<tr><td>Claude Haiku 4.5</td><td><code>anthropic.claude-haiku-4-5-20251001-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>Claude Haiku 4.5</td><td><code>anthropic.claude-haiku-4-5-20251001-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime, AWS Bedrock Mantle</td><td>IMAGE, TEXT</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Opus 4.1 (legacy)</td><td><code>anthropic.claude-opus-4-1-20250805-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
 <tr><td>Claude Opus 4.5</td><td><code>anthropic.claude-opus-4-5-20251101-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Opus 4.6</td><td><code>anthropic.claude-opus-4-6</code></td><td>Anthropic</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
@@ -91,8 +90,7 @@ available from any running instance through
 <tr><td>Embed v4</td><td><code>cohere.embed-v4:0</code></td><td>Cohere</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>EMBEDDING</td><td>23</td></tr>
 <tr><td>Rerank 3.5</td><td><code>cohere.rerank-v3-5:0</code></td><td>Cohere</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>RERANKING</td><td>5</td></tr>
 <tr><td>DeepSeek-R1</td><td><code>deepseek.r1-v1:0</code></td><td>DeepSeek</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>3</td></tr>
-<tr><td>DeepSeek-V3.1</td><td><code>deepseek.v3-v1:0</code></td><td>DeepSeek</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>8</td></tr>
-<tr><td>V3.1</td><td><code>deepseek.v3.1</code></td><td>DeepSeek</td><td>AWS Bedrock Mantle</td><td>TEXT</td><td>TEXT</td><td>12</td></tr>
+<tr><td>DeepSeek-V3.1</td><td><code>deepseek.v3.1</code></td><td>DeepSeek</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>12</td></tr>
 <tr><td>DeepSeek V3.2</td><td><code>deepseek.v3.2</code></td><td>DeepSeek</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
 <tr><td>Gemma 3 12B IT</td><td><code>google.gemma-3-12b-it</code></td><td>Google</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>10</td></tr>
 <tr><td>Gemma 3 27B PT</td><td><code>google.gemma-3-27b-it</code></td><td>Google</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>10</td></tr>
@@ -125,17 +123,16 @@ available from any running instance through
 <tr><td>Pixtral Large (25.02)</td><td><code>mistral.pixtral-large-2502-v1:0</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>7</td></tr>
 <tr><td>Voxtral Mini 3B 2507</td><td><code>mistral.voxtral-mini-3b-2507</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>SPEECH, TEXT</td><td>TEXT</td><td>10</td></tr>
 <tr><td>Voxtral Small 24B 2507</td><td><code>mistral.voxtral-small-24b-2507</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>SPEECH, TEXT</td><td>TEXT</td><td>10</td></tr>
-<tr><td>Kimi K2 Thinking</td><td><code>moonshot.kimi-k2-thinking</code></td><td>Moonshot AI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>7</td></tr>
-<tr><td>Kimi K2 Thinking</td><td><code>moonshotai.kimi-k2-thinking</code></td><td>Moonshot AI</td><td>AWS Bedrock Mantle</td><td>TEXT</td><td>TEXT</td><td>12</td></tr>
+<tr><td>Kimi K2 Thinking</td><td><code>moonshotai.kimi-k2-thinking</code></td><td>Moonshot AI</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>12</td></tr>
 <tr><td>Kimi K2.5</td><td><code>moonshotai.kimi-k2.5</code></td><td>Moonshot AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>10</td></tr>
 <tr><td>Kimi K3</td><td><code>moonshotai.kimi-k3</code></td><td>Moonshot AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>NVIDIA Nemotron Nano 12B v2 VL BF16</td><td><code>nvidia.nemotron-nano-12b-v2</code></td><td>NVIDIA</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>10</td></tr>
 <tr><td>Nemotron Nano 3 30B</td><td><code>nvidia.nemotron-nano-3-30b</code></td><td>NVIDIA</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
 <tr><td>NVIDIA Nemotron Nano 9B v2</td><td><code>nvidia.nemotron-nano-9b-v2</code></td><td>NVIDIA</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
 <tr><td>NVIDIA Nemotron 3 Super 120B A12B</td><td><code>nvidia.nemotron-super-3-120b</code></td><td>NVIDIA</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>13</td></tr>
-<tr><td>GPT 5.4</td><td><code>openai.gpt-5.4</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
+<tr><td>GPT 5.4</td><td><code>openai.gpt-5.4</code></td><td>OpenAI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>GPT 5.4 (2026-03-05)</td><td><code>openai.gpt-5.4-2026-03-05</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
-<tr><td>GPT 5.5</td><td><code>openai.gpt-5.5</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
+<tr><td>GPT 5.5</td><td><code>openai.gpt-5.5</code></td><td>OpenAI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>GPT 5.5 (2026-04-23)</td><td><code>openai.gpt-5.5-2026-04-23</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
 <tr><td>GPT-5.6 Luna</td><td><code>openai.gpt-5.6-luna</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
 <tr><td>GPT-5.6 Sol</td><td><code>openai.gpt-5.6-sol</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
@@ -149,15 +146,11 @@ available from any running instance through
 <tr><td>GPT OSS Safeguard 20B</td><td><code>openai.gpt-oss-safeguard-20b</code></td><td>OpenAI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
 <tr><td>Qwen3 235B A22B 2507</td><td><code>qwen.qwen3-235b-a22b-2507</code></td><td>Qwen</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
 <tr><td>Qwen3 32B (dense)</td><td><code>qwen.qwen3-32b</code></td><td>Qwen</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
-<tr><td>Qwen3 Coder 30B A3B Instruct</td><td><code>qwen.qwen3-coder-30b-a3b-instruct</code></td><td>Qwen</td><td>AWS Bedrock Mantle</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
-<tr><td>Qwen3-Coder-30B-A3B-Instruct</td><td><code>qwen.qwen3-coder-30b-a3b-v1:0</code></td><td>Qwen</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>13</td></tr>
-<tr><td>Qwen3 Coder 480B A35B Instruct</td><td><code>qwen.qwen3-coder-480b-a35b-instruct</code></td><td>Qwen</td><td>AWS Bedrock Mantle</td><td>TEXT</td><td>TEXT</td><td>12</td></tr>
-<tr><td>Qwen3 Coder 480B A35B Instruct</td><td><code>qwen.qwen3-coder-480b-a35b-v1:0</code></td><td>Qwen</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>8</td></tr>
+<tr><td>Qwen3-Coder-30B-A3B-Instruct</td><td><code>qwen.qwen3-coder-30b-a3b-instruct</code></td><td>Qwen</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
+<tr><td>Qwen3 Coder 480B A35B Instruct</td><td><code>qwen.qwen3-coder-480b-a35b-instruct</code></td><td>Qwen</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>12</td></tr>
 <tr><td>Qwen3 Coder Next</td><td><code>qwen.qwen3-coder-next</code></td><td>Qwen</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>3</td></tr>
-<tr><td>Qwen3 Next 80B A3B</td><td><code>qwen.qwen3-next-80b-a3b</code></td><td>Qwen</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
-<tr><td>Qwen3 Next 80B A3B Instruct</td><td><code>qwen.qwen3-next-80b-a3b-instruct</code></td><td>Qwen</td><td>AWS Bedrock Mantle</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
-<tr><td>Qwen3 VL 235B A22B</td><td><code>qwen.qwen3-vl-235b-a22b</code></td><td>Qwen</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>10</td></tr>
-<tr><td>Qwen3 VL 235B A22B Instruct</td><td><code>qwen.qwen3-vl-235b-a22b-instruct</code></td><td>Qwen</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>15</td></tr>
+<tr><td>Qwen3 Next 80B A3B</td><td><code>qwen.qwen3-next-80b-a3b-instruct</code></td><td>Qwen</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
+<tr><td>Qwen3 VL 235B A22B</td><td><code>qwen.qwen3-vl-235b-a22b-instruct</code></td><td>Qwen</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>IMAGE, TEXT</td><td>TEXT</td><td>15</td></tr>
 <tr><td>Stable Diffusion 3.5 Large</td><td><code>stability.sd3-5-large-v1:0</code></td><td>Stability AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>IMAGE</td><td>1</td></tr>
 <tr><td>Stable Image Conservative Upscale</td><td><code>stability.stable-conservative-upscale-v1:0</code></td><td>Stability AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>IMAGE</td><td>3</td></tr>
 <tr><td>Stable Image Creative Upscale</td><td><code>stability.stable-creative-upscale-v1:0</code></td><td>Stability AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>IMAGE</td><td>3</td></tr>
@@ -222,7 +215,7 @@ reflects the AWS account this snapshot came from — your own
 ## :material-database-outline: Sources, licences and caveats
 
 <!-- catalog:generated -->
-Snapshot taken on **2026-09-23** from a stdapi.ai instance, covering 147 models across 33 AWS regions. 4 model(s) AWS no longer lists are kept, tagged `delisted`. Prices and availability move — before you commit to a number, confirm it against the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) and your own [`search_models`](api_search_models.md).
+Snapshot taken on **2026-09-24** from a stdapi.ai instance, covering 140 models across 33 AWS regions. 4 model(s) AWS no longer lists are kept, tagged `delisted`. Prices and availability move — before you commit to a number, confirm it against the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) and your own [`search_models`](api_search_models.md).
 <!-- /catalog:generated -->
 
 <!-- catalog:sources -->
@@ -230,14 +223,14 @@ Every number on this page comes from one of the sources below, reproduced unmodi
 
 | Source | Licence | Read on | Used here |
 | --- | --- | --- | --- |
-| The gateway's own [`search_models`](api_search_models.md) and [`model_pricing`](api_model_pricing.md) | — | 2026-09-23 | 147 |
-| [Amazon Bedrock `ListFoundationModels`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html), read raw so its undocumented fields survive | — | 2026-09-23 | capabilities, APIs, media types, limits |
+| The gateway's own [`search_models`](api_search_models.md) and [`model_pricing`](api_model_pricing.md) | — | 2026-09-24 | 140 |
+| [Amazon Bedrock `ListFoundationModels`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html), read raw so its undocumented fields survive | — | 2026-09-24 | capabilities, APIs, media types, limits |
 | [LMArena Leaderboard](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-09-22 | 82 of 819 entries |
-| [MTEB — Massive Text Embedding Benchmark](https://github.com/embeddings-benchmark/results) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 2026-09-23 | 5 of 12 entries |
+| [MTEB — Massive Text Embedding Benchmark](https://github.com/embeddings-benchmark/results) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 2026-09-24 | 5 of 12 entries |
 | [Epoch AI — AI Benchmarking Hub](https://epoch.ai/benchmarks/use-this-data) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-09-02 | 66 of 706 entries |
-| [Amazon Bedrock model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html) | [AWS documentation](https://aws.amazon.com/terms/) | 2026-09-23 | 114 of 128 model cards |
-| [models.dev](https://models.dev/) | [MIT](https://github.com/anomalyco/models.dev/blob/dev/LICENSE) | 2026-09-23 | 76 of 177 models |
-| [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) | 2026-09-23 | 2 of 64 entries |
+| [Amazon Bedrock model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html) | [AWS documentation](https://aws.amazon.com/terms/) | 2026-09-24 | 110 of 128 model cards |
+| [models.dev](https://models.dev/) | [MIT](https://github.com/anomalyco/models.dev/blob/dev/LICENSE) | 2026-09-24 | 70 of 179 models |
+| [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) | 2026-09-24 | 2 of 64 entries |
 
 - **LMArena Leaderboard** — Arena Elo ratings by LMArena (Arena Intelligence Inc.), reproduced unmodified under CC BY 4.0. The mapping to Amazon Bedrock model IDs is ours.
 - **MTEB — Massive Text Embedding Benchmark** — Benchmark results from the MTEB results repository, dedicated to the public domain under CC0 1.0. The mapping to Amazon Bedrock model IDs is ours.
