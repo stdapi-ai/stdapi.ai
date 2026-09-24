@@ -99,9 +99,13 @@ def apply(rows: Iterable[ModelRow], overlay: dict[str, dict[str, Any]]) -> Appli
     skipped = 0
     unknown: list[str] = []
     disputed: list[str] = []
-    by_id = {row.id: row for row in rows}
+    by_id = _rows_by_id(rows)
 
-    for model_id, fields in sorted(overlay.items()):
+    # The row's own ID first, so its entry wins over a folded variant's.
+    for model_id, fields in sorted(
+        overlay.items(),
+        key=lambda item: (item[0] in by_id and by_id[item[0]].id != item[0], item[0]),
+    ):
         row = by_id.get(model_id)
         if row is None:
             unknown.append(model_id)
@@ -140,6 +144,23 @@ def apply(rows: Iterable[ModelRow], overlay: dict[str, dict[str, Any]]) -> Appli
         unknown=unknown,
         disputed=disputed,
     )
+
+
+def _rows_by_id(rows: Iterable[ModelRow]) -> dict[str, ModelRow]:
+    """Index rows by their own ID and by every service variant folded into them.
+
+    Args:
+        rows: Rows being assembled.
+
+    Returns:
+        Model ID to the row publishing it.
+    """
+    by_id: dict[str, ModelRow] = {}
+    for row in rows:
+        by_id[row.id] = row
+        for variant in row.variants:
+            by_id.setdefault(variant.id, row)
+    return by_id
 
 
 def _same_figure(name: str, collected: object, curated: object) -> bool:
@@ -192,11 +213,17 @@ def record_provenance(
     """
     provenance: dict[str, dict[str, dict[str, str]]] = {}
     for row in rows:
-        for name, entry in sorted((overlay.get(row.id) or {}).items()):
+        identities = [row.id, *(item.id for item in row.variants if item.id != row.id)]
+        for name, entry in (
+            field
+            for identity in identities
+            for field in sorted((overlay.get(identity) or {}).items())
+        ):
             if name not in ALLOWED_FIELDS or not isinstance(entry, dict):
                 continue
             value = _normalised(name, entry.get("value"))
-            if value is None or getattr(row, name, None) != value:
+            cited = provenance.get(row.id, {})
+            if value is None or name in cited or getattr(row, name, None) != value:
                 continue
             provenance.setdefault(row.id, {})[name] = {
                 "value": str(value),

@@ -326,8 +326,8 @@ def test_an_override_pins_a_match_and_a_rejection(
 def test_a_pin_on_one_twin_governs_every_service_variant() -> None:
     """A rejection pinned on one service-variant twin must be pinned on all of them.
 
-    ``fold_service_variants`` groups Bedrock IDs that differ only by the API
-    version tag (``build._API_VERSION_TAG``) and keeps only the headline
+    ``fold_service_variants`` groups Bedrock IDs whose names match once versions,
+    dates and qualifiers are dropped (``build._comparable_name``) and keeps only the headline
     twin's scores (``_absorb_variant`` never merges ``scores``), so a pin
     that exists on one twin only is invisible whenever a later run makes a
     different twin the headline, or re-matches the twin the fold discarded.
@@ -342,7 +342,7 @@ def test_a_pin_on_one_twin_governs_every_service_variant() -> None:
     for model_id in overrides:
         if model_id.startswith("_"):
             continue
-        family = build._API_VERSION_TAG.sub("", model_id)  # noqa: SLF001
+        family = build._comparable_name(model_id.partition(".")[2])  # noqa: SLF001
         families.setdefault(family, set()).add(model_id)
 
     for family, twins in families.items():
@@ -475,6 +475,32 @@ def test_serving_geographies_separate_where_a_model_runs_from_where_it_is_callab
         ["eu-west-1", "us-east-1", "ap-south-1"],
     )
     assert geographies == ["ap-south-1", "eu", "global"]
+
+
+def test_transcribe_is_listed_wherever_aws_offers_it() -> None:
+    """A bucket-less gateway lists Transcribe in one region; AWS offers it in more.
+
+    Ref: stdapi/models/audio/amazon_transcribe.py:initialize_transcribe_models
+         https://docs.aws.amazon.com/general/latest/gr/transcribe.html
+    """
+    models = [
+        {"id": "amazon.transcribe", "regions": ["af"]},
+        {"id": "amazon.transcribe-medical", "regions": ["af"]},
+        {"id": "amazon.nova", "regions": ["us"]},
+    ]
+    offered: dict[str, set[str] | None] = {
+        "amazon.transcribe": {"eu", "us", "cn-north-1"},
+        "amazon.transcribe-medical": None,
+    }
+    notes = build.widen_to_offered_regions(models, offered, ["af", "eu", "us"])
+    # A region outside the catalogue's partition stays out.
+    assert models[0]["regions"] == ["af", "eu", "us"]
+    # An unreadable Price List keeps what the gateway reported, and says so.
+    assert models[1]["regions"] == ["af"]
+    assert notes == [
+        "amazon.transcribe-medical: AWS availability unread, gateway regions kept"
+    ]
+    assert models[2]["regions"] == ["us"]
 
 
 def test_headline_prices_keep_only_the_plain_standard_rate() -> None:
@@ -1654,6 +1680,47 @@ def test_a_rounded_value_and_an_exact_one_are_recognised_as_one_fact(
     assert enrichment._same_figure(name, collected, curated) is same  # noqa: SLF001
 
 
+def test_a_fact_curated_under_a_folded_id_reaches_the_published_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Folding Kimi K2 Thinking's two IDs must not drop what was curated under either.
+
+    Ref: docs_gen/model_catalog/build.py:fold_service_variants
+    """
+    monkeypatch.setattr(enrichment, "PROVENANCE_PATH", tmp_path / "provenance.json")
+    row = a_row(
+        "moonshotai.kimi-k2-thinking",
+        variants=[
+            ServiceVariant(
+                id="moonshotai.kimi-k2-thinking", service="AWS Bedrock Mantle"
+            ),
+            ServiceVariant(
+                id="moonshot.kimi-k2-thinking", service="AWS Bedrock Runtime"
+            ),
+        ],
+    )
+
+    def cited(value: str) -> dict[str, str]:
+        return {
+            "value": value,
+            "source": "https://example.invalid/",
+            "checked": "2026-09-24",
+        }
+
+    overlay = {
+        "moonshot.kimi-k2-thinking": {
+            "family": cited("Kimi"),
+            "parameters": cited("1T"),
+        },
+        "moonshotai.kimi-k2-thinking": {"family": cited("Kimi K2")},
+    }
+    applied = enrichment.apply([row], overlay)
+    assert not applied.unknown
+    # The row's own ID wins; the folded one fills what it left empty.
+    assert (row.family, row.parameters) == ("Kimi K2", "1T")
+    assert enrichment.record_provenance([row], overlay) == 2
+
+
 def test_a_curated_value_that_really_disagrees_is_reported_not_published() -> None:
     """The automatic source wins, but a cited disagreement must not be silent.
 
@@ -2186,6 +2253,70 @@ def test_one_model_on_two_services_becomes_one_row() -> None:
     # The absorbed ID stays callable, so it has to stay findable.
     assert "openai.gpt-oss-120b-1:0" in folded.aliases
     assert folded.regions == [0, 1, 2]
+
+
+@pytest.mark.parametrize(
+    ("mantle_id", "runtime_id", "runtime_name"),
+    [
+        ("deepseek.v3.1", "deepseek.v3-v1:0", "DeepSeek-V3.1"),
+        (
+            "anthropic.claude-haiku-4-5",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "Claude Haiku 4.5",
+        ),
+        (
+            "moonshotai.kimi-k2-thinking",
+            "moonshot.kimi-k2-thinking",
+            "Kimi K2 Thinking",
+        ),
+        (
+            "qwen.qwen3-coder-30b-a3b-instruct",
+            "qwen.qwen3-coder-30b-a3b-v1:0",
+            "Qwen3 Coder 30B A3B",
+        ),
+    ],
+)
+def test_twins_named_differently_by_each_service_become_one_row(
+    mantle_id: str, runtime_id: str, runtime_name: str
+) -> None:
+    """The two services spell one model with different IDs, as the gateway pairs them.
+
+    Ref: stdapi/models/__init__.py:build_runtime_twins
+    """
+    rows, absorbed, _ = build.fold_service_variants(
+        [
+            _served(mantle_id, "AWS Bedrock Mantle", name="v3.1", regions=[0, 1]),
+            _served(runtime_id, "AWS Bedrock Runtime", name=runtime_name, regions=[0]),
+        ]
+    )
+    assert [row.id for row in rows] == [mantle_id]
+    assert absorbed == {runtime_id}
+    # Bedrock Mantle reports a bare identifier; Runtime's display name is kept.
+    assert rows[0].name == runtime_name
+
+
+def test_a_mantle_model_naming_two_runtime_models_is_not_folded() -> None:
+    """Folding into the wrong one would publish one model's prices as another's.
+
+    Ref: stdapi/models/__init__.py:build_runtime_twins
+    """
+    rows, absorbed, _ = build.fold_service_variants(
+        [
+            _served("anthropic.claude-3-5-sonnet", "AWS Bedrock Mantle"),
+            _served(
+                "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "AWS Bedrock Runtime",
+                name="Claude 3.5 Sonnet",
+            ),
+            _served(
+                "anthropic.claude-3-5-sonnet-20241022-v2:0",
+                "AWS Bedrock Runtime",
+                name="Claude 3.5 Sonnet v2",
+            ),
+        ]
+    )
+    assert len(rows) == 3
+    assert not absorbed
 
 
 def test_two_versions_of_a_model_are_not_one_model() -> None:

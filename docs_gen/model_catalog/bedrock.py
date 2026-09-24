@@ -100,6 +100,38 @@ def commercial_bedrock_regions() -> list[str]:
     )
 
 
+def price_list_regions(service_code: str, operation: str) -> set[str] | None:
+    """Return the regions AWS publishes a price for one service operation in.
+
+    AWS prices an operation only where it offers it, so this is the operation's
+    regional availability, finer than the per-service SSM list.
+
+    Args:
+        service_code: Price List service code.
+        operation: Price List ``operation`` attribute.
+
+    Returns:
+        Region codes, or ``None`` when the Price List could not be read.
+    """
+    session = get_session()
+    client = session.create_client(
+        "pricing", region_name=_INFRASTRUCTURE_REGION, config=_CLIENT_CONFIG
+    )
+    regions: set[str] = set()
+    try:
+        for page in client.get_paginator("get_products").paginate(
+            ServiceCode=service_code,
+            Filters=[{"Type": "TERM_MATCH", "Field": "operation", "Value": operation}],
+        ):
+            for item in page["PriceList"]:
+                attributes = json.loads(item)["product"]["attributes"]
+                if region := attributes.get("regionCode"):
+                    regions.add(str(region))
+    except ClientError, BotoCoreError:
+        return None
+    return regions
+
+
 def list_foundation_models(regions: Iterable[str]) -> list[RegionalModels]:
     """Read the raw ``ListFoundationModels`` response in every region.
 

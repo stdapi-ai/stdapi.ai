@@ -64,6 +64,15 @@ if TYPE_CHECKING:
 #: Characters allowed in the filename of a per-model price document.
 _UNSAFE_IN_SLUG: re.Pattern[str] = re.compile(r"[^A-Za-z0-9._-]")
 
+#: Transcribe model ID to the Price List operation whose regions are its availability.
+_TRANSCRIBE_OPERATIONS: dict[str, str] = {
+    "amazon.transcribe": "TranscribeAudio",
+    "amazon.transcribe-medical": "MedicalTranscribeAudio",
+}
+
+#: Price List service code of Amazon Transcribe.
+_TRANSCRIBE_SERVICE_CODE: str = "transcribe"
+
 #: Every source module the generator reads, keyed by source.
 COLLECTORS: dict[str, Callable[..., SourceResult]] = {
     "lmarena": lmarena.fetch,
@@ -174,6 +183,51 @@ def slug_for(model_id: str) -> str:
         A filename-safe stem.
     """
     return _UNSAFE_IN_SLUG.sub("_", model_id)
+
+
+def transcribe_availability() -> dict[str, set[str] | None]:
+    """Read where AWS offers each Transcribe model, from the Price List.
+
+    Returns:
+        Model ID to its regions, ``None`` where the Price List could not be read.
+    """
+    return {
+        model_id: bedrock.price_list_regions(_TRANSCRIBE_SERVICE_CODE, operation)
+        for model_id, operation in _TRANSCRIBE_OPERATIONS.items()
+    }
+
+
+def widen_to_offered_regions(
+    models: Iterable[dict[str, Any]],
+    offered: dict[str, set[str] | None],
+    regions: Iterable[str],
+) -> list[str]:
+    """Extend each model's regions to every catalogue region AWS offers it in.
+
+    A gateway with no S3 bucket lists Transcribe in its first region only,
+    while a deployment with a bucket per region serves it wherever AWS does.
+
+    Args:
+        models: ``search_models`` records, updated in place.
+        offered: Model ID to the regions AWS offers it in, ``None`` if unknown.
+        regions: Regions the catalogue covers.
+
+    Returns:
+        A note per model whose availability could not be read.
+    """
+    covered = set(regions)
+    notes: list[str] = []
+    for model in models:
+        model_id = str(model["id"])
+        if model_id not in offered:
+            continue
+        available = offered[model_id]
+        if available is None:
+            notes.append(f"{model_id}: AWS availability unread, gateway regions kept")
+            continue
+        served = {str(region) for region in model.get("regions", ())}
+        model["regions"] = sorted(served | (available & covered))
+    return notes
 
 
 def serving_geographies(
@@ -576,6 +630,9 @@ def build(
     price_cards = {str(card["id"]): card for card in instance.prices()}
 
     bedrock_regions = bedrock.commercial_bedrock_regions()
+    report.notes.extend(
+        widen_to_offered_regions(models, transcribe_availability(), bedrock_regions)
+    )
     regional = bedrock.list_foundation_models(bedrock_regions)
     unreachable = {entry.region: entry.error for entry in regional if entry.error}
     bedrock_facts = bedrock.index_by_model(regional)
@@ -895,8 +952,20 @@ def _drop_impossible(rows: Iterable[ModelRow]) -> None:
             row.max_output_tokens = None
 
 
-#: A trailing API-version tag, as Bedrock Runtime appends it to a model ID.
-_API_VERSION_TAG: re.Pattern[str] = re.compile(r"-v?\d+:\d+$")
+#: Service name ``search_models`` reports for Bedrock Runtime.
+_RUNTIME_SERVICE: str = "AWS Bedrock Runtime"
+
+#: Service name ``search_models`` reports for Bedrock Mantle.
+_MANTLE_SERVICE: str = "AWS Bedrock Mantle"
+
+#: Qualifiers, versions and dates two names of one model may differ by.
+_TWIN_QUALIFIERS: re.Pattern[str] = re.compile(
+    r"\([^)]*\)|-instruct\b|-it\b|-v\d+(?::\d+)?$|-\d+:\d+$|-\d{8}(?=-|$)",
+    re.IGNORECASE,
+)
+
+#: Everything a comparable model name drops once its qualifiers are gone.
+_TWIN_SEPARATORS: re.Pattern[str] = re.compile(r"[^a-z0-9]+")
 
 #: Row fields that are the union of what every service variant offers.
 _VARIANT_UNION: tuple[str, ...] = (
@@ -1018,7 +1087,8 @@ def fold_service_variants(
     """Merge the rows that are one model reached through two AWS services.
 
     Amazon serves several models through both Bedrock Runtime and Bedrock
-    Mantle, under IDs differing only by the Runtime API-version tag. They are
+    Mantle, under IDs that differ by versions, dates, qualifiers or provider
+    spelling (``deepseek.v3-v1:0`` and ``deepseek.v3.1``). They are
     one model reached two ways, and listing them twice doubles the row and
     makes the reader compare a model against itself. Their rates are usually
     identical but not always — in ``ap-southeast-2`` Mantle is about 14%
@@ -1032,17 +1102,10 @@ def fold_service_variants(
         The rows with each such pair folded into one, the IDs that were folded
         away, and any notes worth reporting.
     """
-    families: dict[tuple[str, str], list[ModelRow]] = defaultdict(list)
-    for row in rows:
-        families[(row.provider, _API_VERSION_TAG.sub("", row.id))].append(row)
-
     folded: list[ModelRow] = []
     notes: list[str] = []
     absorbed: set[str] = set()
-    for members in families.values():
-        services = {row.service for row in members}
-        if len(members) < 2 or len(services) < 2:
-            continue
+    for members in _twin_families(rows):
         primary = _headline_variant(members)
         for other in members:
             if other is not primary:
@@ -1068,6 +1131,67 @@ def fold_service_variants(
             f"{len(folded)} model(s) folded from two AWS services into one row"
         )
     return [row for row in rows if row.id not in absorbed], absorbed, notes
+
+
+def _comparable_name(value: str) -> str:
+    """Return a model name in the form two catalogues can be compared on.
+
+    Args:
+        value: A model identifier's name part, or a display name.
+
+    Returns:
+        The name without its qualifiers, versions, dates and separators.
+    """
+    previous = ""
+    while previous != value:
+        # Qualifiers stack, as in "-20251001-v1:0".
+        previous = value
+        value = _TWIN_QUALIFIERS.sub("", value).strip("- ")
+    return _TWIN_SEPARATORS.sub("", value.lower())
+
+
+def _twin_families(rows: list[ModelRow]) -> list[list[ModelRow]]:
+    """Group each Bedrock Runtime row with the Bedrock Mantle rows naming its model.
+
+    The gateway's own pairing rule (``stdapi.models.build_runtime_twins``):
+    names match once versions, dates and qualifiers are dropped, and providers
+    are prefix-compatible (``moonshotai`` and ``moonshot``). A Mantle row
+    matching several Runtime rows is left unfolded rather than guessed.
+
+    Args:
+        rows: Every row this run assembled.
+
+    Returns:
+        One list per folded model, its Runtime row first.
+    """
+    runtime: dict[str, list[tuple[str, ModelRow]]] = defaultdict(list)
+    for row in rows:
+        if row.service != _RUNTIME_SERVICE:
+            continue
+        prefix, _, name = row.id.partition(".")
+        provider = _TWIN_SEPARATORS.sub("", prefix.lower())
+        display = _comparable_name(row.name)
+        # A display name repeating its provider ("DeepSeek-V3.1") is also
+        # comparable without it, which is how the identifier names it.
+        for key in {_comparable_name(name), display, display.removeprefix(provider)}:
+            if key:
+                runtime[key].append((provider, row))
+
+    families: dict[str, list[ModelRow]] = {}
+    for row in rows:
+        if row.service != _MANTLE_SERVICE:
+            continue
+        prefix, _, name = row.id.partition(".")
+        provider = _TWIN_SEPARATORS.sub("", prefix.lower())
+        twins = {
+            twin.id: twin
+            for twin_provider, twin in runtime.get(_comparable_name(name), ())
+            if provider.startswith(twin_provider) or twin_provider.startswith(provider)
+        }
+        if len(twins) == 1:
+            (twin,) = twins.values()
+            families.setdefault(twin.id, [twin]).append(row)
+    return list(families.values())
 
 
 def _merge_variant_prices(members: list[ModelRow]) -> list[PriceGroup]:
@@ -1175,9 +1299,9 @@ def _absorb_variant(primary: ModelRow, other: ModelRow) -> None:
     for name in _VARIANT_FACTS:
         if getattr(primary, name) in (None, "", []):
             setattr(primary, name, getattr(other, name))
-    # AWS spells the same model two ways; the prose name reads better than the
-    # bare identifier the OpenAI-compatible surface reports.
-    if (" " in other.name) > (" " in primary.name):
+    # AWS spells the same model two ways; Bedrock Runtime's display name reads
+    # better than the bare identifier Bedrock Mantle reports.
+    if other.service == _RUNTIME_SERVICE:
         primary.name = other.name
     if other.id not in primary.aliases:
         primary.aliases = sorted({*primary.aliases, other.id})
