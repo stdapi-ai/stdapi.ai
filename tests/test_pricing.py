@@ -3596,6 +3596,45 @@ class TestDefaultModelPrices:
         assert price is not None
         assert price.amount == Decimal("0.00000022")
 
+    @pytest.mark.parametrize(
+        ("model_id", "input_rate", "output_rate"),
+        [
+            ("openai.gpt-6-luna", "0.00000011", "0.00000055"),
+            ("openai.gpt-6-sol", "0.0000022", "0.000011"),
+            ("zai.glm-4.6", "0.0000006", "0.0000022"),
+        ],
+    )
+    def test_a_model_aws_has_not_priced_bills_at_its_vendor_rate(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        model_id: str,
+        input_rate: str,
+        output_rate: str,
+    ) -> None:
+        """Bedrock Mantle serves these before AWS publishes a rate; the vendor's stands in.
+
+        OpenAI states Bedrock matches its direct pricing and adds 10% for
+        regional processing; Bedrock bills Z.ai's direct rate for every GLM
+        model it prices in the US. Leaving them unpriced reports their usage
+        as free.
+
+        Ref: stdapi/models/pricing_overrides.py:DEFAULT_MODEL_PRICES
+             https://developers.openai.com/api/docs/models/gpt-6-sol
+             https://docs.z.ai/guides/overview/pricing
+        """
+        index: dict[PriceKey, Price] = {}
+        pricing._apply_default_prices(index)  # noqa: SLF001
+        monkeypatch.setattr(pricing._state, "price_index", index)  # noqa: SLF001
+        for dimension, rate in (
+            (Dimension.INPUT_TOKENS, input_rate),
+            (Dimension.OUTPUT_TOKENS, output_rate),
+        ):
+            price = resolve_price(
+                Service.BEDROCK_MANTLE, model_id, "us-east-1", dimension
+            )
+            assert price is not None, dimension
+            assert price.amount == Decimal(rate), dimension
+
     def test_a_model_with_no_global_rate_falls_back_instead_of_going_unpriced(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -5672,17 +5711,7 @@ async def test_bedrock_model_pricing_coverage() -> None:
 # by removing the entry. Never remove a model's implementation for a pricing
 # gap: keep it in case pricing returns or users retain model access.
 _KNOWN_PRICING_GAPS: Final[frozenset[str]] = frozenset(
-    {
-        "stability.stable-diffusion-xl-v1",
-        # No Price List rows and no pricing-page rate (only GLM 4.7/5 listed).
-        "zai.glm-4.6",
-        # Checked 2026-09-22: no Price List row under any of the three Bedrock
-        # service codes, no model card (model-card-openai-gpt-6-luna.html and
-        # -sol.html redirect to the user guide index) and the pricing page
-        # names both without a rate. Price them from their cards once published.
-        "openai.gpt-6-luna",
-        "openai.gpt-6-sol",
-    }
+    {"stability.stable-diffusion-xl-v1"}
 )
 
 

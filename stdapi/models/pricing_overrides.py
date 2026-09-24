@@ -200,6 +200,29 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_READ_TOKENS: "0.0000011",
         Dimension.OUTPUT_TOKENS: "0.000055",
     },
+    # No Bedrock card yet (verified 2026-09-24): OpenAI's model-page Standard
+    # per-1M rates / 1e6 plus its 10% regional-processing premium, the uplift
+    # AWS's GPT-6 Astra card applies to In-Region. OpenAI states Bedrock
+    # matches its direct pricing.
+    "openai.gpt-6-luna": {
+        Dimension.INPUT_TOKENS: "0.00000011",
+        Dimension.CACHE_WRITE_TOKENS: "0.0000001375",
+        Dimension.CACHE_READ_TOKENS: "0.000000011",
+        Dimension.OUTPUT_TOKENS: "0.00000055",
+    },
+    "openai.gpt-6-sol": {
+        Dimension.INPUT_TOKENS: "0.0000022",
+        Dimension.CACHE_WRITE_TOKENS: "0.00000275",
+        Dimension.CACHE_READ_TOKENS: "0.00000022",
+        Dimension.OUTPUT_TOKENS: "0.000011",
+    },
+    # No card or Price List row (verified 2026-09-24): Z.ai's API per-1M rates
+    # / 1e6. Bedrock bills Z.ai's direct rate for GLM 5, 4.7 and 4.7 Flash in
+    # these regions; it publishes no GLM cache rate.
+    "zai.glm-4.6": {
+        Dimension.INPUT_TOKENS: "0.0000006",
+        Dimension.OUTPUT_TOKENS: "0.0000022",
+    },
 }
 
 #: Global cross-Region rates for the models above whose card publishes one.
@@ -234,6 +257,19 @@ DEFAULT_MODEL_GLOBAL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_READ_TOKENS: "0.000001",
         Dimension.OUTPUT_TOKENS: "0.00005",
     },
+    # OpenAI's model-page Standard rates, which Bedrock's Global rate matches.
+    "openai.gpt-6-luna": {
+        Dimension.INPUT_TOKENS: "0.0000001",
+        Dimension.CACHE_WRITE_TOKENS: "0.000000125",
+        Dimension.CACHE_READ_TOKENS: "0.00000001",
+        Dimension.OUTPUT_TOKENS: "0.0000005",
+    },
+    "openai.gpt-6-sol": {
+        Dimension.INPUT_TOKENS: "0.000002",
+        Dimension.CACHE_WRITE_TOKENS: "0.0000025",
+        Dimension.CACHE_READ_TOKENS: "0.0000002",
+        Dimension.OUTPUT_TOKENS: "0.00001",
+    },
 }
 
 #: Prompt size at which a model leaves its short-context rate, where its own source says.
@@ -251,6 +287,8 @@ MODEL_LONG_CONTEXT_THRESHOLDS: Final[dict[str, int]] = {
     "openai.gpt-5.6-terra": 272_000,
     "openai.gpt-daybreak-blue-5.6-sol": 272_000,
     "openai.gpt-6-astra": 272_000,
+    "openai.gpt-6-luna": 272_000,
+    "openai.gpt-6-sol": 272_000,
 }
 
 #: In-Region rates past MODEL_LONG_CONTEXT_THRESHOLDS, for the cards publishing one.
@@ -302,6 +340,18 @@ DEFAULT_MODEL_LONG_CONTEXT_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_READ_TOKENS: "0.0000022",
         Dimension.OUTPUT_TOKENS: "0.0000825",
     },
+    "openai.gpt-6-luna": {
+        Dimension.INPUT_TOKENS: "0.00000022",
+        Dimension.CACHE_WRITE_TOKENS: "0.000000275",
+        Dimension.CACHE_READ_TOKENS: "0.000000022",
+        Dimension.OUTPUT_TOKENS: "0.000000825",
+    },
+    "openai.gpt-6-sol": {
+        Dimension.INPUT_TOKENS: "0.0000044",
+        Dimension.CACHE_WRITE_TOKENS: "0.0000055",
+        Dimension.CACHE_READ_TOKENS: "0.00000044",
+        Dimension.OUTPUT_TOKENS: "0.0000165",
+    },
 }
 
 #: Global cross-Region rates for the long-context models above whose card publishes one.
@@ -332,5 +382,17 @@ DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES: Final[dict[str, dict[Dimension, str]]]
         Dimension.CACHE_WRITE_TOKENS: "0.000025",
         Dimension.CACHE_READ_TOKENS: "0.000002",
         Dimension.OUTPUT_TOKENS: "0.000075",
+    },
+    "openai.gpt-6-luna": {
+        Dimension.INPUT_TOKENS: "0.0000002",
+        Dimension.CACHE_WRITE_TOKENS: "0.00000025",
+        Dimension.CACHE_READ_TOKENS: "0.00000002",
+        Dimension.OUTPUT_TOKENS: "0.00000075",
+    },
+    "openai.gpt-6-sol": {
+        Dimension.INPUT_TOKENS: "0.000004",
+        Dimension.CACHE_WRITE_TOKENS: "0.000005",
+        Dimension.CACHE_READ_TOKENS: "0.0000004",
+        Dimension.OUTPUT_TOKENS: "0.000015",
     },
 }

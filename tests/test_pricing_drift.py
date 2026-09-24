@@ -17,7 +17,7 @@ operator as fact. It has already happened -- GPT-5.6 Luna shipped at 5x the
 real rate for two releases -- so the tables need a check that reads the vendor
 source and says so.
 
-Two sources, and they are not interchangeable:
+Four sources, and they are not interchangeable:
 
 - **Bedrock model cards** (``docs.aws.amazon.com``) for the OpenAI Mantle
   models. Server-rendered documentation with a labelled ``Pricing`` section and
@@ -29,8 +29,13 @@ Two sources, and they are not interchangeable:
   at all.
 - **The AWS Bedrock pricing page** for the Stability AI image services, whose
   per-generation rates live in one table keyed by display name.
+- **The vendor's own pricing** for a model Bedrock serves before AWS publishes
+  any rate: the OpenAI model page (markdown) for GPT-6 Luna and Sol, whose
+  Standard rate is Bedrock's Global one and whose regional-processing premium
+  gives In-Region, and Z.ai's pricing page for GLM 4.6. The day AWS publishes a
+  card for one, the OpenAI index scan reports it, and the entry moves to it.
 
-Both are HTML, so the detector's first duty is to tell "the price changed" from
+Most are HTML, so the detector's first duty is to tell "the price changed" from
 "I could not read the page". They are different events with different answers,
 and conflating them produces the false alarms that get a detector switched off:
 
@@ -81,13 +86,15 @@ Ref: stdapi/models/pricing_overrides.py:DEFAULT_MODEL_PRICES
      https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html
      https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards-openai.html
      https://aws.amazon.com/bedrock/pricing/
+     https://developers.openai.com/api/docs/pricing
+     https://docs.z.ai/guides/overview/pricing
 """
 
 import asyncio
 import re
 import warnings
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final
@@ -214,6 +221,52 @@ _STABILITY_PAGE_NAMES: Final[dict[str, str]] = {
     "stability.stable-creative-upscale-v1:0": "Stable Image Creative upscale",
     "stability.stable-fast-upscale-v1:0": "Stable Image Fast Upscale",
     "stability.stable-outpaint-v1:0": "Stable Image Outpaint",
+}
+
+#: OpenAI model page per GPT model AWS publishes no card rate for yet.
+_OPENAI_MODEL_PAGES: Final[dict[str, str]] = {
+    "openai.gpt-6-luna": "gpt-6-luna",
+    "openai.gpt-6-sol": "gpt-6-sol",
+}
+
+#: Where an OpenAI model page is served as markdown, given its model name.
+_OPENAI_MODEL_PAGE: Final[str] = (
+    "https://developers.openai.com/api/docs/models/{name}.md"
+)
+
+#: OpenAI model-page metric per billed dimension.
+_OPENAI_PAGE_METRICS: Final[dict[str, Dimension]] = {
+    "input": Dimension.INPUT_TOKENS,
+    "cached input": Dimension.CACHE_READ_TOKENS,
+    "cache writes": Dimension.CACHE_WRITE_TOKENS,
+    "output": Dimension.OUTPUT_TOKENS,
+}
+
+#: The model page's long-context rule: boundary, input/cache and output multipliers.
+_OPENAI_LONG_CONTEXT: Final[re.Pattern[str]] = re.compile(
+    r"more than (\d+)K input tokens are priced at ([\d.]+)x input and cache rates "
+    r"and ([\d.]+)x output",
+    re.IGNORECASE,
+)
+
+#: The model page's regional-processing premium, which Bedrock's In-Region rate carries.
+_OPENAI_REGIONAL_PREMIUM: Final[re.Pattern[str]] = re.compile(
+    r"Regional processing adds a ([\d.]+)% premium", re.IGNORECASE
+)
+
+#: A markdown table row, cells between pipes.
+_MARKDOWN_ROW: Final[re.Pattern[str]] = re.compile(r"^\|(.+)\|\s*$", re.MULTILINE)
+
+#: Z.ai's API pricing page, the rate source for a GLM model AWS has not priced.
+_ZAI_PRICING_PAGE: Final[str] = "https://docs.z.ai/guides/overview/pricing"
+
+#: Z.ai pricing-page row name per GLM model AWS publishes no rate for.
+_ZAI_PAGE_NAMES: Final[dict[str, str]] = {"zai.glm-4.6": "GLM-4.6"}
+
+#: Z.ai pricing-page column per billed dimension; Bedrock prices no GLM cache.
+_ZAI_PAGE_COLUMNS: Final[dict[str, Dimension]] = {
+    "input": Dimension.INPUT_TOKENS,
+    "output": Dimension.OUTPUT_TOKENS,
 }
 
 #: Card links whose model belongs to the family DEFAULT_MODEL_PRICES prices.
@@ -760,17 +813,186 @@ def unpriced_stability_rows(page: str) -> list[Finding]:
 
 
 def unpriced_openai_cards(index: str) -> list[Finding]:
-    """Return a finding per frontier GPT model card no table entry prices."""
+    """Return a finding per frontier GPT model card no table entry is sourced from."""
     known = set(_MODEL_CARD_URLS.values())
+    vendor_priced = {
+        f"model-card-openai-{name.replace('.', '')}"
+        for name in _OPENAI_MODEL_PAGES.values()
+    }
     return [
         Finding(
             Outcome.NEW,
             slug,
-            f"{_card_url(slug)} is a frontier GPT model card, DEFAULT_MODEL_PRICES "
-            f"has no entry",
+            f"{_card_url(slug)} is a frontier GPT model card, "
+            + (
+                "its entry is priced from the OpenAI model page: source it from "
+                "this card instead"
+                if slug in vendor_priced
+                else "DEFAULT_MODEL_PRICES has no entry"
+            ),
         )
         for slug in sorted(set(_OPENAI_CARD_LINK.findall(index)) - known)
     ]
+
+
+def _scaled(
+    rates: Mapping[Dimension, Decimal], factor: Decimal
+) -> dict[Dimension, Decimal]:
+    """Return *rates* multiplied by *factor*."""
+    return {dimension: rate * factor for dimension, rate in rates.items()}
+
+
+def parse_openai_model_page(url: str, page: str) -> CardReadings:
+    """Return the Bedrock rates an OpenAI model page implies, as a card would state them.
+
+    The page's Standard rate is Bedrock's Global rate and its regional-processing
+    premium gives the In-Region one, as AWS's GPT-6 Astra card shows; its
+    long-context rule gives the boundary and both long-context rates.
+
+    Args:
+        url: Where the page was read from, quoted by every finding.
+        page: The model page's markdown.
+
+    Returns:
+        The four rate readings and the context-window boundary.
+
+    Raises:
+        UnreadableSourceError: If the rate table, the long-context rule or the
+            regional premium cannot be read.
+    """
+    standard: dict[Dimension, Decimal] = {}
+    for row in _MARKDOWN_ROW.findall(page):
+        cells = [cell.strip() for cell in row.split("|")]
+        dimension = _OPENAI_PAGE_METRICS.get(cells[0].casefold())
+        if (
+            dimension is None
+            or len(cells) < 3
+            or "1m tokens" not in cells[2].casefold()
+        ):
+            continue
+        if (amount := card_prices.money(cells[1])) is not None:
+            standard[dimension] = amount / 1_000_000
+    long_rule = _OPENAI_LONG_CONTEXT.search(page)
+    premium = _OPENAI_REGIONAL_PREMIUM.search(page)
+    if {Dimension.INPUT_TOKENS, Dimension.OUTPUT_TOKENS} - set(standard):
+        msg = "no Text tokens table with input and output rates"
+        raise UnreadableSourceError(msg)
+    if long_rule is None or premium is None:
+        msg = "no long-context rule or regional-processing premium"
+        raise UnreadableSourceError(msg)
+    boundary, input_factor, output_factor = long_rule.groups()
+    long_rates = {
+        dimension: rate
+        * Decimal(
+            output_factor if dimension is Dimension.OUTPUT_TOKENS else input_factor
+        )
+        for dimension, rate in standard.items()
+    }
+    regional = 1 + Decimal(premium.group(1)) / 100
+    return CardReadings(
+        SourceReading(url, rates=_scaled(standard, regional)),
+        SourceReading(url, rates=standard),
+        SourceReading(url, rates=_scaled(long_rates, regional)),
+        SourceReading(url, rates=long_rates),
+        ThresholdReading(url, tokens=int(boundary) * 1_000),
+    )
+
+
+def _read_openai_model_page(client: httpx.Client, name: str) -> CardReadings:
+    """Fetch an OpenAI model page once, never raising on a source-side problem.
+
+    Returns:
+        Everything the page implies; every reading unreachable when it cannot
+        be read, and withdrawn when OpenAI no longer serves it.
+    """
+    url = _OPENAI_MODEL_PAGE.format(name=name)
+    try:
+        response = client.get(url)
+        if response.status_code == httpx.codes.NOT_FOUND:
+            return _withdrawn_readings(url)
+        response.raise_for_status()
+        return parse_openai_model_page(url, response.text)
+    except (httpx.HTTPError, UnreadableSourceError) as exc:
+        problem = f"{type(exc).__name__}: {exc}"
+        reading = SourceReading(url, problem=problem)
+        return CardReadings(
+            reading, reading, reading, reading, ThresholdReading(url, problem=problem)
+        )
+
+
+def parse_zai_prices(page: str) -> dict[str, dict[Dimension, Decimal]]:
+    """Return the per-token rates Z.ai's pricing page publishes, per model.
+
+    Args:
+        page: The pricing page's HTML.
+
+    Returns:
+        Rates keyed by casefolded model name.
+
+    Raises:
+        UnreadableSourceError: If no table has Model, Input and Output columns.
+    """
+    prices: dict[str, dict[Dimension, Decimal]] = {}
+    for table in _TABLE.findall(page):
+        rows = card_prices.rows(table)
+        header = [cell.casefold() for cell in rows[0]] if rows else []
+        columns = {
+            index: _ZAI_PAGE_COLUMNS[name]
+            for index, name in enumerate(header)
+            if name in _ZAI_PAGE_COLUMNS
+        }
+        if not header or header[0] != "model" or len(columns) != len(_ZAI_PAGE_COLUMNS):
+            continue
+        for row in rows[1:]:
+            rates = {
+                dimension: amount / 1_000_000
+                for index, dimension in columns.items()
+                if index < len(row)
+                and (amount := card_prices.money(row[index])) is not None
+            }
+            if row and len(rates) == len(columns):
+                prices.setdefault(row[0].casefold(), rates)
+    if not prices:
+        msg = "no table with Model, Input and Output columns"
+        raise UnreadableSourceError(msg)
+    return prices
+
+
+def zai_readings(page: str | None, problem: str | None) -> dict[str, CardReadings]:
+    """Return one reading per GLM model from a single fetch of Z.ai's pricing page.
+
+    Args:
+        page: The pricing page's HTML, or None when the fetch failed.
+        problem: Why the fetch failed, or None when it did not.
+
+    Returns:
+        A reading per model in ``_ZAI_PAGE_NAMES``: the In-Region rate only, as
+        Z.ai publishes no Global, long-context or context-window figure.
+    """
+    url = _ZAI_PRICING_PAGE
+    published: dict[str, dict[Dimension, Decimal]] = {}
+    if page is not None:
+        try:
+            published = parse_zai_prices(page)
+        except UnreadableSourceError as exc:
+            problem = str(exc)
+    readings: dict[str, CardReadings] = {}
+    for model_id, name in _ZAI_PAGE_NAMES.items():
+        if problem is not None:
+            reading = SourceReading(url, problem=problem)
+            readings[model_id] = CardReadings(
+                reading,
+                reading,
+                reading,
+                reading,
+                ThresholdReading(url, problem=problem),
+            )
+            continue
+        readings[model_id] = replace(
+            _withdrawn_readings(url),
+            in_region=SourceReading(url, rates=published.get(name.casefold())),
+        )
+    return readings
 
 
 def format_report(
@@ -825,6 +1047,18 @@ def _collect(client: httpx.Client) -> list[Finding]:
     findings: list[Finding] = []
     for model_id, slug in _MODEL_CARD_URLS.items():
         findings.extend(classify_card(model_id, _read_model_card(client, slug)))
+    for model_id, name in _OPENAI_MODEL_PAGES.items():
+        findings.extend(classify_card(model_id, _read_openai_model_page(client, name)))
+    zai_page: str | None = None
+    zai_problem: str | None = None
+    try:
+        response = client.get(_ZAI_PRICING_PAGE)
+        response.raise_for_status()
+        zai_page = response.text
+    except httpx.HTTPError as exc:
+        zai_problem = f"{type(exc).__name__}: {exc}"
+    for model_id, card in zai_readings(zai_page, zai_problem).items():
+        findings.extend(classify_card(model_id, card))
 
     page: str | None = None
     problem: str | None = None
@@ -874,7 +1108,12 @@ def test_default_model_prices_match_their_published_source() -> None:
          https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards-openai.html
          https://aws.amazon.com/bedrock/pricing/
     """
-    priced = {*_MODEL_CARD_URLS, *_STABILITY_PAGE_NAMES}
+    priced = {
+        *_MODEL_CARD_URLS,
+        *_STABILITY_PAGE_NAMES,
+        *_OPENAI_MODEL_PAGES,
+        *_ZAI_PAGE_NAMES,
+    }
     assert priced == set(DEFAULT_MODEL_PRICES), (
         "DEFAULT_MODEL_PRICES gained or lost an entry: give it a source above, "
         "or this detector silently stops covering it"
@@ -888,7 +1127,7 @@ def test_default_model_prices_match_their_published_source() -> None:
         ),
         ("MODEL_LONG_CONTEXT_THRESHOLDS", MODEL_LONG_CONTEXT_THRESHOLDS),
     ):
-        assert set(table) <= set(_MODEL_CARD_URLS), (
+        assert set(table) <= {*_MODEL_CARD_URLS, *_OPENAI_MODEL_PAGES}, (
             f"{name} carries a model with no model card above, "
             f"or this detector silently stops covering it"
         )
@@ -1474,6 +1713,24 @@ def gpt_6_astra_card() -> str:
 
 
 @pytest.fixture(scope="module")
+def gpt_6_sol_page() -> str:
+    """The recorded Pricing section of OpenAI's GPT-6 Sol model page."""
+    return (FIXTURES_DIR / "openai_model_page_gpt_6_sol_pricing.md").read_text()
+
+
+@pytest.fixture(scope="module")
+def gpt_6_luna_page() -> str:
+    """The recorded Pricing section of OpenAI's GPT-6 Luna model page."""
+    return (FIXTURES_DIR / "openai_model_page_gpt_6_luna_pricing.md").read_text()
+
+
+@pytest.fixture(scope="module")
+def zai_glm_table() -> str:
+    """The recorded Z.ai pricing-page table listing GLM-4.6."""
+    return (FIXTURES_DIR / "zai_pricing_glm_4_table.html").read_text()
+
+
+@pytest.fixture(scope="module")
 def kimi_k3_card() -> str:
     """The recorded Pricing section of the Kimi K3 model card."""
     return (FIXTURES_DIR / "model_card_moonshot_ai_kimi_k3_pricing.html").read_text()
@@ -2023,6 +2280,65 @@ class TestGpt56Detection:
             "openai.gpt-5.6-cyber", {Dimension.INPUT_TOKENS: "0.00001375"}, reading
         )
         assert self._outcomes(findings) == {Outcome.MATCH, Outcome.NEW}
+
+
+class TestVendorPageDetection:
+    """Models AWS serves before it publishes a rate are checked against their vendor.
+
+    Ref: https://developers.openai.com/api/docs/models/gpt-6-sol
+         https://docs.z.ai/guides/overview/pricing
+    """
+
+    @pytest.mark.parametrize(
+        ("model_id", "fixture_name"),
+        [
+            ("openai.gpt-6-luna", "gpt_6_luna_page"),
+            ("openai.gpt-6-sol", "gpt_6_sol_page"),
+        ],
+    )
+    def test_every_table_matches_the_openai_model_page(
+        self, request: pytest.FixtureRequest, model_id: str, fixture_name: str
+    ) -> None:
+        """Standard is Global, +10% is In-Region, and the 272K rule gives both long rates."""
+        page: str = request.getfixturevalue(fixture_name)
+        findings = classify_card(model_id, parse_openai_model_page("x", page))
+        assert {finding.outcome for finding in findings} == {Outcome.MATCH}
+        assert any("context window" in finding.model_id for finding in findings)
+        assert any("long context, Global" in finding.model_id for finding in findings)
+
+    def test_a_page_without_its_long_context_rule_is_unreadable(
+        self, gpt_6_sol_page: str
+    ) -> None:
+        """Without the rule the long rates would read as withdrawn, not as unread."""
+        page = gpt_6_sol_page.replace("more than 272K", "over 272K")
+        with pytest.raises(UnreadableSourceError):
+            parse_openai_model_page("x", page)
+
+    def test_glm_matches_the_zai_pricing_page(self, zai_glm_table: str) -> None:
+        """Only the In-Region input and output rates are compared; Z.ai states nothing else."""
+        card = zai_readings(zai_glm_table, None)["zai.glm-4.6"]
+        findings = classify_card("zai.glm-4.6", card)
+        assert [finding.outcome for finding in findings] == [Outcome.MATCH] * 2
+
+    def test_a_zai_row_that_disappears_is_vanished(self, zai_glm_table: str) -> None:
+        """A delisted model keeps its entry; the run says so."""
+        page = zai_glm_table.replace(">GLM-4.6<", ">GLM-4.6-retired<")
+        card = zai_readings(page, None)["zai.glm-4.6"]
+        findings = classify_card("zai.glm-4.6", card)
+        assert [finding.outcome for finding in findings] == [Outcome.VANISHED]
+
+    def test_an_unreadable_zai_page_is_unreachable(self) -> None:
+        """A redesigned page must not read as a delisting."""
+        card = zai_readings("<p>no tables</p>", None)["zai.glm-4.6"]
+        findings = classify_card("zai.glm-4.6", card)
+        assert {finding.outcome for finding in findings} == {Outcome.UNREACHABLE}
+
+    def test_a_published_card_is_flagged_as_the_better_source(self) -> None:
+        """Once AWS publishes the card, the entry must move to it."""
+        index = '<a href="model-card-openai-gpt-6-luna.html">GPT-6 Luna</a>'
+        (finding,) = unpriced_openai_cards(index)
+        assert finding.outcome is Outcome.NEW
+        assert "source it from this card" in finding.detail
 
 
 class TestGlobalDetection:
