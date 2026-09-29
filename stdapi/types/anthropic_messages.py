@@ -3176,6 +3176,16 @@ class ThinkingConfigDisabledParam(BaseModelRequest):
     )
 
 
+class ThinkingConfigBetweenToolsParam(BaseModelRequest):
+    """Between-tools thinking configuration: no up-front thinking."""
+
+    type: Literal["between_tools"] = Field(
+        description="Thinking config type. Always `between_tools`: no thinking before "
+        "the answer, only short progress updates between tool calls. The lowest "
+        "setting of models that cannot disable thinking; others get it disabled."
+    )
+
+
 # Ref: anthropic.types.thinking_config_adaptive_param.ThinkingConfigAdaptiveParam
 class ThinkingConfigAdaptiveParam(BaseModelRequestWithExtra):
     """Adaptive thinking configuration."""
@@ -3192,7 +3202,8 @@ class ThinkingConfigAdaptiveParam(BaseModelRequestWithExtra):
 ThinkingConfigParam = Annotated[
     ThinkingConfigEnabledParam
     | ThinkingConfigDisabledParam
-    | ThinkingConfigAdaptiveParam,
+    | ThinkingConfigAdaptiveParam
+    | ThinkingConfigBetweenToolsParam,
     Field(discriminator="type"),
 ]
 

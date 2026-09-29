@@ -3068,7 +3068,6 @@ class TestServiceTierAndEffortMapping:
         [
             "anthropic.claude-opus-5-5",
             "anthropic.claude-opus-6",
-            "anthropic.claude-sonnet-5-5",
             "anthropic.claude-fable-5",
             "anthropic.claude-mythos-5",
         ],

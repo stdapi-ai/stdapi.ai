@@ -41,6 +41,7 @@ from stdapi.models.chat._anthropic_claude import (
     REASONING_NOT_DISABLED as _REASONING_NOT_DISABLED,
 )
 from stdapi.models.chat.anthropic_claude_5 import (
+    BETWEEN_TOOLS_MATCHER,
     CLAUDE_5_5_MATCHER,
     FORCED_TOOL_CHOICE_REFUSED,
 )
@@ -184,6 +185,9 @@ _BUDGET_THINKING_MATCHER = re_compile(
     r"^anthropic\.claude-(?!(?:opus|sonnet|haiku)-4-(?:[6-9]|\d{2})(?:\D|$))"
     r"(?:3-7-sonnet|(?:opus|sonnet|haiku)-4)"
 )
+
+#: Anthropic ``thinking`` types turning up-front reasoning off.
+_THINKING_OFF_TYPES = frozenset({"disabled", "between_tools"})
 
 #: Anthropic ``tool_choice`` types forcing tool use.
 _FORCED_TOOL_CHOICES = frozenset({"any", "tool"})
@@ -714,11 +718,11 @@ async def messages_payload(
     payload.pop("anthropic_version", None)
     if payload.get("max_tokens") is None:
         payload["max_tokens"] = _DEFAULT_MAX_TOKENS
-    if (payload.get("thinking") or {}).get(
-        "type"
-    ) == "disabled" and _ALWAYS_REASONING_MATCHER.match(model_id):
-        del payload["thinking"]
-        log_error_details(_REASONING_NOT_DISABLED, level="warning")
+    if (payload.get("thinking") or {}).get("type") in _THINKING_OFF_TYPES:
+        if thinking := _thinking_off(model_id):
+            payload["thinking"] = thinking
+        else:
+            del payload["thinking"]
     _refuse_forced_tool_choice(model_id, payload.get("tool_choice"))
     await gather(
         *(
@@ -1584,6 +1588,26 @@ def _response_format_from_text(
             return None
 
 
+def _thinking_off(model: str) -> dict[str, str] | None:
+    """Return the ``thinking`` turning reasoning off on *model*.
+
+    Sonnet 5.5 and later take ``between_tools``, their lowest setting. A model
+    that always reasons cannot be turned off, which is logged as a warning.
+
+    Args:
+        model: Mantle model identifier.
+
+    Returns:
+        The ``thinking`` value, or None when the model must keep its default.
+    """
+    if BETWEEN_TOOLS_MATCHER.match(model):
+        return {"type": "between_tools"}
+    if _ALWAYS_REASONING_MATCHER.match(model):
+        log_error_details(_REASONING_NOT_DISABLED, level="warning")
+        return None
+    return {"type": "disabled"}
+
+
 def _anthropic_reasoning_fields(
     payload: dict[str, Any], model: str, max_tokens: int
 ) -> dict[str, Any]:
@@ -1594,8 +1618,8 @@ def _anthropic_reasoning_fields(
     is ``enabled``. Claude 3.7 to 4.5 then take a thinking budget:
     ``thinking_budget`` as sent, or one derived from the effort. Later
     generations take ``thinking_budget`` as sent, else ``output_config.effort``,
-    else adaptive thinking. Reasoning turned off explicitly is disabled, except
-    on a model that always reasons, where a warning is logged instead.
+    else adaptive thinking. Reasoning turned off explicitly is sent as
+    :func:`_thinking_off` says.
 
     Args:
         payload: Chat Completions request payload.
@@ -1615,11 +1639,10 @@ def _anthropic_reasoning_fields(
         or enable is True
         or thinking == "enabled"
     ):
-        off = effort == "none" or enable is False or thinking == "disabled"
-        if off and _ALWAYS_REASONING_MATCHER.match(model):
-            log_error_details(_REASONING_NOT_DISABLED, level="warning")
-            off = False
-        return {"thinking": {"type": "disabled"}} if off else {}
+        off = (
+            effort == "none" or enable is False or thinking == "disabled"
+        ) and _thinking_off(model)
+        return {"thinking": off} if off else {}
     if budget is None and _BUDGET_THINKING_MATCHER.match(model):
         budget = reasoning_budget(effort, max_tokens)
         if budget is None:
@@ -2314,7 +2337,11 @@ def _request_thinking_summary(
     model = str(messages_request.get("model"))
     if reasoning.get("effort") == "none" and not _ALWAYS_REASONING_MATCHER.match(model):
         return
-    if isinstance(thinking := messages_request.get("thinking"), dict):
+    thinking = messages_request.get("thinking")
+    if isinstance(thinking, dict) and thinking.get("type") == "between_tools":
+        # It takes no display, and returns its progress updates summarized anyway.
+        return
+    if isinstance(thinking, dict):
         thinking["display"] = "summarized"
     elif not _BUDGET_THINKING_MATCHER.match(model):
         messages_request["thinking"] = {"type": "adaptive", "display": "summarized"}

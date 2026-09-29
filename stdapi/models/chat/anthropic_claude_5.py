@@ -19,6 +19,11 @@ CLAUDE_5_5_MATCHER = re_compile(
     r"^anthropic\.claude-(?:opus|sonnet)-(?:5-(?:[5-9]|\d{2})|[6-9]|\d{2})(?:\D|$)"
 )
 
+#: Sonnet 5.5+ versions, whose lowest reasoning setting is ``between_tools``.
+BETWEEN_TOOLS_MATCHER = re_compile(
+    r"^anthropic\.claude-sonnet-(?:5-(?:[5-9]|\d{2})|[6-9]|\d{2})(?:\D|$)"
+)
+
 #: Refusal of a forced tool choice, worded for every API dialect and legacy field.
 FORCED_TOOL_CHOICE_REFUSED = (
     "Forcing tool use (tool_choice or function_call) is not available with "
@@ -34,7 +39,9 @@ class ChatModel(AnthropicClaudeChatModel):
     disabling reasoning is served with the adaptive default instead. Opus 5 and
     Sonnet 5 still accept it. The same versions refuse a tool choice forcing
     tool use, which is rejected before sending with an error naming the way
-    forward. Later versions are assumed to keep both behaviors.
+    forward. Later versions are assumed to keep both behaviors. Sonnet 5.5 can
+    still turn up-front thinking off with ``between_tools``, which reasoning
+    turned off is sent as.
     """
 
     __slots__ = ()
@@ -48,6 +55,11 @@ class ChatModel(AnthropicClaudeChatModel):
     def REASONING_DISABLE_SUPPORTED(self) -> bool:  # type: ignore[override]  # noqa: N802
         """Whether Bedrock accepts an explicitly disabled reasoning configuration."""
         return CLAUDE_5_5_MATCHER.match(self._model_id) is None
+
+    @property
+    def BETWEEN_TOOLS_SUPPORTED(self) -> bool:  # type: ignore[override]  # noqa: N802
+        """Whether reasoning turned off is sent as ``between_tools``."""
+        return BETWEEN_TOOLS_MATCHER.match(self._model_id) is not None
 
     def _req_configure_tools(
         self,

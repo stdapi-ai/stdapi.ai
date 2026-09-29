@@ -598,8 +598,6 @@ class TestReasoningDisabled:
             "anthropic.claude-opus-5-10",
             "anthropic.claude-opus-6",
             "anthropic.claude-opus-10",
-            "anthropic.claude-sonnet-5-5",
-            "anthropic.claude-sonnet-6",
             "anthropic.claude-fable-5",
             "anthropic.claude-fable-5-1",
             "anthropic.claude-fable-6",
@@ -611,7 +609,9 @@ class TestReasoningDisabled:
     def test_disabled_reasoning_is_dropped_when_the_model_always_reasons(
         self, model_id: str, request_log: EventLog
     ) -> None:
-        """Opus and Sonnet 5.5+, Fable and Mythos always reason, so the rejected configuration is dropped with a warning.
+        """Opus 5.5+, Fable and Mythos always reason, so the rejected configuration is dropped with a warning.
+
+        Sonnet 5.5+ is not among them: it is sent ``between_tools`` instead.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
              stdapi/models/chat/anthropic_claude_5.py:ChatModel

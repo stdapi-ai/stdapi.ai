@@ -1,7 +1,8 @@
 """Claude Opus 5.x and Sonnet 5.5 on the chat routes: always-on reasoning, computer use, forced tool choice.
 
-Opus and Sonnet 5.5 always reason (adaptive thinking cannot be disabled) and
-refuse a forced ``tool_choice``, on Bedrock and on the official Anthropic API alike. Bedrock serves
+Opus and Sonnet 5.5 reject a disabled thinking configuration and refuse a forced
+``tool_choice``, on Bedrock and on the official Anthropic API alike. Sonnet 5.5 can
+still turn up-front thinking off with ``between_tools``; Opus 5.5 always reasons. Bedrock serves
 the ``computer_20251124`` tool on Opus 5 and 5.5; the official API serves it on
 Opus 5 only.
 
@@ -104,14 +105,15 @@ def test_disabled_thinking_on_5_5(
 ) -> None:
     """``thinking: {"type": "disabled"}`` on Opus and Sonnet 5.5: a 400 upstream, served by the gateway.
 
-    The official API answers ``invalid_request_error``. The gateway drops the
-    disabled configuration with a warning, as for the other always-reasoning
-    Claude families, and answers with the adaptive default; ``max_tokens`` leaves
-    room for that thinking. The Chat Completions side (``reasoning_effort="none"``)
+    The official API answers ``invalid_request_error``. The gateway serves it:
+    Sonnet 5.5 as ``between_tools``, its lowest setting, and Opus 5.5 with its
+    adaptive default and a warning, as for the other always-reasoning Claude
+    families; ``max_tokens`` leaves room for that thinking. The Chat Completions side (``reasoning_effort="none"``)
     is covered by ``test_reasoning_effort_none_explicit_disable_all_models``.
 
     Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
          stdapi/models/chat/anthropic_claude_5.py:ChatModel.REASONING_DISABLE_SUPPORTED
+         stdapi/models/chat/anthropic_claude_5.py:ChatModel.BETWEEN_TOOLS_SUPPORTED
     """
     if use_official_api:
         with pytest.raises(AnthropicBadRequestError) as excinfo:
@@ -318,3 +320,149 @@ def test_bare_computer_tool_is_served_on_opus_5(openai_client: OpenAI) -> None:
     assert resp.choices[0].finish_reason in {"stop", "length", "tool_calls"}
     assert resp.usage is not None
     assert resp.usage.completion_tokens > 0
+
+
+class TestBetweenToolsThinking:
+    """``thinking: {"type": "between_tools"}``, Sonnet 5.5's lowest thinking setting.
+
+    The installed Anthropic SDK does not know the type yet, so it is sent in
+    ``extra_body``. Sonnet 5.5 is served as sent, on every target; any other model
+    rejects it upstream, where the gateway serves it as reasoning turned off. The
+    OpenAI routes turn reasoning off their own way, which Sonnet 5.5 receives as
+    ``between_tools``.
+
+    Ref: https://platform.claude.com/docs/en/models/sonnet-5-5/whats-new-sonnet-5-5
+         https://platform.claude.com/docs/en/build-with-claude/thinking
+         stdapi/models/chat/_adapters/_anthropic_message.py:extract_reasoning
+    """
+
+    @pytest.mark.expensive
+    def test_sonnet_5_5_calls_its_tool_without_up_front_thinking(
+        self,
+        anthropic_client: Anthropic,
+        use_official_api: bool,
+        is_bedrock_direct: bool,
+    ) -> None:
+        """No up-front thinking: the tool call comes first, and no thinking text is billed before it.
+
+        Ref: https://platform.claude.com/docs/en/api/messages/create
+        """
+        response = anthropic_client.messages.create(
+            model=_anthropic_model_id(
+                _SONNET_5_5,
+                use_official_api=use_official_api,
+                is_bedrock_direct=is_bedrock_direct,
+            ),
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "Weather in Lisbon? Use the tool."}],
+            tools=[_WEATHER_TOOL],
+            extra_body={"thinking": {"type": "between_tools"}},
+        )
+
+        assert response.stop_reason == "tool_use"
+        assert any(block.type == "tool_use" for block in response.content)
+        assert not any(
+            block.type == "thinking" and block.thinking for block in response.content
+        ), "between_tools thinks only between tool calls, not before the first one"
+
+    @pytest.mark.expensive
+    def test_between_tools_and_a_top_effort_is_refused(
+        self,
+        anthropic_client: Anthropic,
+        use_official_api: bool,
+        is_bedrock_direct: bool,
+    ) -> None:
+        """``between_tools`` accepts at most ``high`` effort, as upstream enforces.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/effort
+        """
+        with pytest.raises(AnthropicBadRequestError) as excinfo:
+            anthropic_client.messages.create(
+                model=_anthropic_model_id(
+                    _SONNET_5_5,
+                    use_official_api=use_official_api,
+                    is_bedrock_direct=is_bedrock_direct,
+                ),
+                max_tokens=64,
+                messages=[{"role": "user", "content": "Reply with OK."}],
+                extra_body={
+                    "thinking": {"type": "between_tools"},
+                    "output_config": {"effort": "xhigh"},
+                },
+            )
+
+        assert excinfo.value.status_code == 400
+
+    @pytest.mark.gateway(
+        "The official API rejects between_tools on any model but Sonnet 5.5"
+    )
+    @pytest.mark.expensive
+    @pytest.mark.parametrize(
+        "model", ["anthropic.claude-sonnet-5", "amazon.nova-2-lite-v1:0"]
+    )
+    def test_other_models_are_served_with_reasoning_off(
+        self, anthropic_client: Anthropic, model: str
+    ) -> None:
+        """Sonnet 5 and Nova 2 accept ``disabled``, which the gateway sends them instead.
+
+        Ref: stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_reasoning
+        """
+        response = anthropic_client.messages.create(
+            model=model,
+            max_tokens=64,
+            messages=[{"role": "user", "content": "Reply with OK."}],
+            extra_body={"thinking": {"type": "between_tools"}},
+        )
+
+        assert response.type == "message"
+        assert [block.type for block in response.content] == ["text"]
+
+    @pytest.mark.gateway("Anthropic Claude is not served by the official OpenAI API")
+    @pytest.mark.expensive
+    def test_chat_completions_effort_none_calls_the_tool_first(
+        self, openai_client: OpenAI
+    ) -> None:
+        """``reasoning_effort: "none"`` reaches Sonnet 5.5 as ``between_tools``.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_reasoning
+        """
+        response = openai_client.chat.completions.create(
+            model=_SONNET_5_5,
+            messages=[{"role": "user", "content": "Weather in Lisbon? Use the tool."}],
+            max_completion_tokens=1024,
+            tools=[_CHAT_WEATHER_TOOL],
+            reasoning_effort="none",
+        )
+
+        choice = response.choices[0]
+        assert choice.finish_reason == "tool_calls"
+        assert choice.message.tool_calls
+        assert not (choice.message.model_extra or {}).get("reasoning_content")
+
+    @pytest.mark.gateway("Anthropic Claude is not served by the official OpenAI API")
+    @pytest.mark.expensive
+    def test_responses_effort_none_calls_the_tool_first(
+        self, openai_client: OpenAI
+    ) -> None:
+        """``reasoning.effort: "none"`` reaches Sonnet 5.5 as ``between_tools``.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:extract_reasoning
+        """
+        response = openai_client.responses.create(
+            model=_SONNET_5_5,
+            input="Weather in Lisbon? Use the tool.",
+            max_output_tokens=1024,
+            tools=[
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "parameters": _WEATHER_SCHEMA,
+                    "strict": False,
+                }
+            ],
+            reasoning={"effort": "none"},
+        )
+
+        types = [item.type for item in response.output]
+        assert "function_call" in types
+        assert "reasoning" not in types[: types.index("function_call")]

@@ -354,6 +354,9 @@ class AnthropicClaudeChatModel(_BaseChatModel):
     #: Whether the model accepts an explicitly disabled reasoning configuration.
     REASONING_DISABLE_SUPPORTED: ClassVar[bool] = True
 
+    #: Whether reasoning turned off is sent as ``between_tools``, the model's lowest setting.
+    BETWEEN_TOOLS_SUPPORTED: ClassVar[bool] = False
+
     #: Claude rejects a replayed reasoning block that lost its signature, with or
     #: without extended thinking enabled.
     REASONING_SIGNATURE_REQUIRED: ClassVar[bool] = True
@@ -680,9 +683,10 @@ class AnthropicClaudeChatModel(_BaseChatModel):
 
         When ``budget_tokens`` is explicitly provided (> 0), uses budget-based
         reasoning. Otherwise uses adaptive reasoning with an optional effort level.
-        When ``enabled`` is ``False``, reasoning is explicitly disabled, unless the
-        model rejects that configuration and always reasons in adaptive mode,
-        which then still honours ``display``.
+        When ``enabled`` is ``False``, reasoning is explicitly disabled, or set to
+        ``between_tools``, keeping the requested effort, on a model offering it,
+        unless the model rejects both and always reasons in adaptive mode, which
+        then still honours ``display``.
 
         Args:
             additional_request_fields: Additional request fields dict to update.
@@ -694,6 +698,18 @@ class AnthropicClaudeChatModel(_BaseChatModel):
                 model default when ``None``.
         """
         if not enabled:
+            if self.BETWEEN_TOOLS_SUPPORTED:
+                # between_tools takes no other field; display would be a 400.
+                additional_request_fields["reasoning_config"] = {
+                    "type": "between_tools"
+                }
+                if reasoning_effort and reasoning_effort != "none":
+                    additional_request_fields["output_config"] = {
+                        "effort": self.REASONING_OVERRIDE.get(
+                            reasoning_effort, reasoning_effort
+                        )
+                    }
+                return
             if not self.REASONING_DISABLE_SUPPORTED:
                 log_error_details(REASONING_NOT_DISABLED, level="warning")
                 if display:
