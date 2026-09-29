@@ -30,9 +30,9 @@ Four sources, and they are not interchangeable:
 - **The AWS Bedrock pricing page** for the Stability AI image services, whose
   per-generation rates live in one table keyed by display name.
 - **The vendor's own pricing** for a model Bedrock serves before AWS publishes
-  any rate: the OpenAI model page (markdown) for GPT-6 Luna and Sol, whose
-  Standard rate is Bedrock's Global one and whose regional-processing premium
-  gives In-Region, and Z.ai's pricing page for GLM 4.6. The day AWS publishes a
+  any rate: the OpenAI model page (markdown) for a GPT model with no card yet,
+  whose Standard rate is Bedrock's Global one and whose regional-processing
+  premium gives In-Region, and Z.ai's pricing page for GLM 4.6. The day AWS publishes a
   card for one, the OpenAI index scan reports it, and the entry moves to it.
 
 Most are HTML, so the detector's first duty is to tell "the price changed" from
@@ -145,6 +145,8 @@ _MODEL_CARD_URLS: Final[dict[str, str]] = {
     "openai.gpt-5.6-terra": "model-card-openai-gpt-56-terra",
     "openai.gpt-daybreak-blue-5.6-sol": "model-card-openai-gpt-daybreak-blue-56-sol",
     "openai.gpt-6-astra": "model-card-openai-gpt-6-astra",
+    "openai.gpt-6-luna": "model-card-openai-gpt-6-luna",
+    "openai.gpt-6-sol": "model-card-openai-gpt-6-sol",
 }
 
 #: Where a model card lives, given its slug.
@@ -224,10 +226,7 @@ _STABILITY_PAGE_NAMES: Final[dict[str, str]] = {
 }
 
 #: OpenAI model page per GPT model AWS publishes no card rate for yet.
-_OPENAI_MODEL_PAGES: Final[dict[str, str]] = {
-    "openai.gpt-6-luna": "gpt-6-luna",
-    "openai.gpt-6-sol": "gpt-6-sol",
-}
+_OPENAI_MODEL_PAGES: Final[dict[str, str]] = {}
 
 #: Where an OpenAI model page is served as markdown, given its model name.
 _OPENAI_MODEL_PAGE: Final[str] = (
@@ -1713,6 +1712,18 @@ def gpt_6_astra_card() -> str:
 
 
 @pytest.fixture(scope="module")
+def gpt_6_luna_card() -> str:
+    """The recorded Pricing section of the GPT-6 Luna model card."""
+    return (FIXTURES_DIR / "model_card_openai_gpt_6_luna_pricing.html").read_text()
+
+
+@pytest.fixture(scope="module")
+def gpt_6_sol_card() -> str:
+    """The recorded Pricing section of the GPT-6 Sol model card."""
+    return (FIXTURES_DIR / "model_card_openai_gpt_6_sol_pricing.html").read_text()
+
+
+@pytest.fixture(scope="module")
 def gpt_6_sol_page() -> str:
     """The recorded Pricing section of OpenAI's GPT-6 Sol model page."""
     return (FIXTURES_DIR / "openai_model_page_gpt_6_sol_pricing.md").read_text()
@@ -2192,6 +2203,8 @@ class TestGpt56Detection:
             ("openai.gpt-5.6-sol", "gpt_56_sol_card"),
             ("openai.gpt-daybreak-blue-5.6-sol", "daybreak_blue_card"),
             ("openai.gpt-6-astra", "gpt_6_astra_card"),
+            ("openai.gpt-6-luna", "gpt_6_luna_card"),
+            ("openai.gpt-6-sol", "gpt_6_sol_card"),
         ],
     )
     def test_every_table_matches_a_split_card(
@@ -2333,9 +2346,12 @@ class TestVendorPageDetection:
         findings = classify_card("zai.glm-4.6", card)
         assert {finding.outcome for finding in findings} == {Outcome.UNREACHABLE}
 
-    def test_a_published_card_is_flagged_as_the_better_source(self) -> None:
+    def test_a_published_card_is_flagged_as_the_better_source(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Once AWS publishes the card, the entry must move to it."""
-        index = '<a href="model-card-openai-gpt-6-luna.html">GPT-6 Luna</a>'
+        monkeypatch.setitem(_OPENAI_MODEL_PAGES, "openai.gpt-7", "gpt-7")
+        index = '<a href="model-card-openai-gpt-7.html">GPT-7</a>'
         (finding,) = unpriced_openai_cards(index)
         assert finding.outcome is Outcome.NEW
         assert "source it from this card" in finding.detail

@@ -3423,6 +3423,24 @@ class TestDefaultModelPrices:
                     Dimension.OUTPUT_TOKENS: "0.000055",
                 },
             ),
+            (
+                "openai.gpt-6-luna",
+                {
+                    Dimension.INPUT_TOKENS: "0.00000011",
+                    Dimension.CACHE_WRITE_TOKENS: "0.0000001375",
+                    Dimension.CACHE_READ_TOKENS: "0.000000011",
+                    Dimension.OUTPUT_TOKENS: "0.00000055",
+                },
+            ),
+            (
+                "openai.gpt-6-sol",
+                {
+                    Dimension.INPUT_TOKENS: "0.0000022",
+                    Dimension.CACHE_WRITE_TOKENS: "0.00000275",
+                    Dimension.CACHE_READ_TOKENS: "0.00000022",
+                    Dimension.OUTPUT_TOKENS: "0.000011",
+                },
+            ),
         ],
     )
     def test_openai_mantle_models_price_at_their_model_card_rate(
@@ -3598,11 +3616,7 @@ class TestDefaultModelPrices:
 
     @pytest.mark.parametrize(
         ("model_id", "input_rate", "output_rate"),
-        [
-            ("openai.gpt-6-luna", "0.00000011", "0.00000055"),
-            ("openai.gpt-6-sol", "0.0000022", "0.000011"),
-            ("zai.glm-4.6", "0.0000006", "0.0000022"),
-        ],
+        [("zai.glm-4.6", "0.0000006", "0.0000022")],
     )
     def test_a_model_aws_has_not_priced_bills_at_its_vendor_rate(
         self,
@@ -3611,15 +3625,12 @@ class TestDefaultModelPrices:
         input_rate: str,
         output_rate: str,
     ) -> None:
-        """Bedrock Mantle serves these before AWS publishes a rate; the vendor's stands in.
+        """Bedrock serves these before AWS publishes a rate; the vendor's stands in.
 
-        OpenAI states Bedrock matches its direct pricing and adds 10% for
-        regional processing; Bedrock bills Z.ai's direct rate for every GLM
-        model it prices in the US. Leaving them unpriced reports their usage
-        as free.
+        Bedrock bills Z.ai's direct rate for every GLM model it prices in the
+        US. Leaving them unpriced reports their usage as free.
 
         Ref: stdapi/models/pricing_overrides.py:DEFAULT_MODEL_PRICES
-             https://developers.openai.com/api/docs/models/gpt-6-sol
              https://docs.z.ai/guides/overview/pricing
         """
         index: dict[PriceKey, Price] = {}

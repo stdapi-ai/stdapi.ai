@@ -39,10 +39,10 @@ type Context = Literal["", "long"]
 #: Every serving option, in the order a card lists its rows.
 OPTIONS: Final[tuple[Option, ...]] = ("in_region", "geo", "global")
 
-#: Table row labels naming each option; a card with no Geo row may say "US CRIS".
+#: Table row labels naming each option, spelled differently from card to card.
 _OPTION_ROWS: Final[dict[Option, tuple[str, ...]]] = {
-    "in_region": ("in-region",),
-    "geo": ("geo cris", "us cris"),
+    "in_region": ("in-region", "mantle in-region"),
+    "geo": ("geo cris", "us cris", "us geo cris"),
     "global": ("global cris",),
 }
 

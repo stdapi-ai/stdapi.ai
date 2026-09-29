@@ -202,10 +202,7 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_READ_TOKENS: "0.0000011",
         Dimension.OUTPUT_TOKENS: "0.000055",
     },
-    # No Bedrock card yet (verified 2026-09-24): OpenAI's model-page Standard
-    # per-1M rates / 1e6 plus its 10% regional-processing premium, the uplift
-    # AWS's GPT-6 Astra card applies to In-Region. OpenAI states Bedrock
-    # matches its direct pricing.
+    # Model card (verified 2026-09-29), in all four tables; same layout as Astra.
     "openai.gpt-6-luna": {
         Dimension.INPUT_TOKENS: "0.00000011",
         Dimension.CACHE_WRITE_TOKENS: "0.0000001375",
@@ -259,7 +256,6 @@ DEFAULT_MODEL_GLOBAL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_READ_TOKENS: "0.000001",
         Dimension.OUTPUT_TOKENS: "0.00005",
     },
-    # OpenAI's model-page Standard rates, which Bedrock's Global rate matches.
     "openai.gpt-6-luna": {
         Dimension.INPUT_TOKENS: "0.0000001",
         Dimension.CACHE_WRITE_TOKENS: "0.000000125",
