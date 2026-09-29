@@ -1176,8 +1176,9 @@ class ChatModel(ChatModelBase[Any, Any]):
         """Enforce the model cache-point limits after explicit breakpoints are placed.
 
         Client-provided ``prompt_cache_breakpoint`` marks are unbounded, while
-        Bedrock caps cache points per request and rejects them in tool-call turns
-        on models without tool caching.
+        Bedrock caps cache points per request, rejects one directly after a
+        reasoning block, and rejects them in tool-call turns on models without
+        tool caching.
 
         Args:
             system_blocks: System content blocks list.
@@ -1186,6 +1187,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         """
         if not self.PROMPT_CACHING_SUPPORTED:
             return
+        _openai_common.drop_cache_points_after_reasoning(bedrock_messages)
         if not self.PROMPT_CACHING_TOOL_SUPPORTED:
             _openai_common.drop_tool_turn_cache_points(bedrock_messages)
         _openai_common.cap_cache_points(

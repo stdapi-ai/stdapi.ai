@@ -493,7 +493,7 @@ curl -X POST "$BASE/v1/responses" \
 - `"mode": "explicit"` caches **only** the marked parts: the `prompt_cache_key` heuristics are disabled for that request.
 - `"mode": "implicit"` (default) keeps the `prompt_cache_key` heuristics **and** honors the marked parts.
 - At most 4 cache points are sent per request (Amazon Bedrock limit); the oldest ones are dropped when more are requested.
-- Breakpoints on models without prompt caching support are accepted and ignored, as are breakpoints on tool output items — those never become a cache point, whatever the model.
+- Breakpoints on models without prompt caching support are accepted and ignored, as are breakpoints on tool output items — those never become a cache point, whatever the model — and a cache point that would directly follow a reasoning block, which Amazon Bedrock refuses.
 - `prompt_cache_options` is echoed back on the response object.
 
 !!! note "Model Support"

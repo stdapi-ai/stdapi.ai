@@ -494,6 +494,28 @@ def test_req_limit_cache_points_keeps_tool_turns_when_supported() -> None:
     assert messages[1]["content"] == [{"text": "u"}, _CACHE_POINT]
 
 
+def test_req_limit_cache_points_drops_one_after_a_reasoning_block() -> None:
+    """A turn holding only reasoning loses the cache point appended to it.
+
+    Bedrock refuses a ``cachePoint`` directly after ``reasoningContent``
+    ("Cache point cannot be inserted after reasoning block"), which a client
+    replaying a turn the model cut short after reasoning otherwise triggers.
+    One with text between them is accepted and kept.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
+         stdapi/models/chat/_adapters/_openai_common.py:drop_cache_points_after_reasoning
+    """
+    reasoning = {"reasoningContent": {"reasoningText": {"text": "thinking"}}}
+    messages: list[Any] = [
+        {"role": "user", "content": [{"text": "a"}]},
+        {"role": "assistant", "content": [reasoning, _CACHE_POINT]},
+        {"role": "assistant", "content": [reasoning, {"text": "b"}, _CACHE_POINT]},
+    ]
+    _CachingModel("model")._req_limit_cache_points(None, None, messages)  # noqa: SLF001
+    assert messages[1]["content"] == [reasoning]
+    assert messages[2]["content"] == [reasoning, {"text": "b"}, _CACHE_POINT]
+
+
 def test_req_limit_cache_points_noop_without_prompt_caching() -> None:
     """A model without prompt caching never emits cache points, so nothing is edited.
 

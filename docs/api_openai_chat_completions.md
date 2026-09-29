@@ -291,7 +291,7 @@ Instead of relying on the `prompt_cache_key` section heuristics, mark the exact 
 - `"mode": "explicit"` caches **only** the marked parts: the `prompt_cache_key` heuristics are disabled for that request.
 - `"mode": "implicit"` (default) keeps the `prompt_cache_key` heuristics **and** honors the marked parts.
 - At most 4 cache points are sent per request (Amazon Bedrock limit); the oldest ones are dropped when more are requested.
-- Breakpoints on models without prompt caching support are accepted and ignored, as are breakpoints on tool result messages — those never become a cache point, whatever the model.
+- Breakpoints on models without prompt caching support are accepted and ignored, as are breakpoints on tool result messages — those never become a cache point, whatever the model — and a cache point that would directly follow a reasoning block, which Amazon Bedrock refuses.
 
 **Usage Tracking:**
 

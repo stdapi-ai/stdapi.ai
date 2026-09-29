@@ -267,6 +267,28 @@ def drop_tool_turn_cache_points(bedrock_messages: list[MessageTypeDef]) -> None:
             content[:] = [block for block in content if "cachePoint" not in block]
 
 
+def drop_cache_points_after_reasoning(bedrock_messages: list[MessageTypeDef]) -> None:
+    """Remove cache points directly following a reasoning block.
+
+    Bedrock refuses one there, which a turn holding only reasoning (a model
+    answer cut short, replayed by the client) otherwise gets appended.
+
+    Args:
+        bedrock_messages: Bedrock message list.
+    """
+    for message in bedrock_messages:
+        content: list[Any] = message["content"]  # type: ignore[assignment]
+        content[:] = [
+            block
+            for index, block in enumerate(content)
+            if not (
+                "cachePoint" in block
+                and index
+                and "reasoningContent" in content[index - 1]
+            )
+        ]
+
+
 def parse_prompt_cache_key(
     prompt_cache_key: str | None,
     prompt_cache_options: PromptCacheOptions
