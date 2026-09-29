@@ -45,6 +45,8 @@ MODEL_KEY_OVERRIDES: Final[dict[str, str]] = {
     "qwen.qwen3-coder-480b-a35b-instruct": "qwen3coder480ba35b",
     "qwen.qwen3-next-80b-a3b-instruct": "qwen3next80ba3b",
     "qwen.qwen3-vl-235b-a22b-instruct": "qwen3vl235ba22b",
+    # Price List `model` attribute is the display name "Grok 4.7".
+    "xai.grok-4.7": "grok47",
     # Dated snapshot aliases billed at the bare model's rate.
     "openai.gpt-5.4-2026-03-05": "gpt54",
     "openai.gpt-5.5-2026-04-23": "gpt55",
