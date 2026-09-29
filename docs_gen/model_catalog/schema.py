@@ -162,7 +162,8 @@ class ModelRow(BaseModel):
         reasoning: Whether the model supports explicit reasoning.
         tool_call: Whether the model supports tool calling.
         open_weights: Whether the model's weights are publicly released.
-        licence: The weights licence, when a source classifies it.
+        licence: The weights licence, when a source classifies it, else
+            "Proprietary" for closed weights.
         parameters: Total parameter count, for models that publish one.
         active_parameters: Parameters active per token, for mixture-of-
             experts models, where the total overstates the work done.

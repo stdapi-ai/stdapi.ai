@@ -2606,3 +2606,26 @@ def test_the_committed_catalogue_knows_where_the_gateway_routes(
     assert routed
     # Every routing named must be one the page can actually select.
     assert {model.default_routing for model in catalog.models} <= {"", "global"}
+
+
+def test_a_closed_model_no_leaderboard_lists_is_published_as_proprietary() -> None:
+    """Closed weights default to "Proprietary"; a classified or open model is kept.
+
+    Claude Sonnet 5.5 launched before LMArena, the only licence source, listed it.
+
+    Ref: docs_gen/model_catalog/build.py:_default_closed_licence
+    """
+    rows = [
+        a_row("anthropic.claude-sonnet-5-5", open_weights=False),
+        a_row("meta.llama4-scout-17b-instruct-v1:0", open_weights=True),
+        a_row("amazon.transcribe"),
+        a_row(
+            "mistral.mistral-large-3-675b-instruct",
+            open_weights=False,
+            licence="Apache 2.0",
+        ),
+    ]
+
+    build._default_closed_licence(rows)  # noqa: SLF001
+
+    assert [row.licence for row in rows] == ["Proprietary", "", "", "Apache 2.0"]

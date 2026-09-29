@@ -686,6 +686,7 @@ def build(
         previous, merged, len(models), accept_retirements=accept_retirements
     )
     _drop_impossible(rows)
+    _default_closed_licence(rows)
     unpriced = [row.id for row in rows if not row.price_groups and not row.retired]
     if unpriced:
         # AWS serves a model before its rate reaches the Price List API, so an
@@ -950,6 +951,20 @@ def _drop_impossible(rows: Iterable[ModelRow]) -> None:
         context = parse_tokens(row.context_window)
         if context and row.max_output_tokens and row.max_output_tokens >= context:
             row.max_output_tokens = None
+
+
+def _default_closed_licence(rows: Iterable[ModelRow]) -> None:
+    """Publish a closed-weights model with no classified licence as proprietary.
+
+    Only LMArena classifies licences, and it lists a model weeks after launch,
+    so a new closed model would otherwise publish none at all.
+
+    Args:
+        rows: The published rows, after the merge.
+    """
+    for row in rows:
+        if not row.licence and row.open_weights is False:
+            row.licence = "Proprietary"
 
 
 #: Service name ``search_models`` reports for Bedrock Runtime.
