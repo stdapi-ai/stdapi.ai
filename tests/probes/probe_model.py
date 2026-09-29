@@ -1270,12 +1270,16 @@ async def probe_model(model_id: str, region: str) -> dict[str, Any]:
         baseline_result = await _run_probe(client, invoked, baseline_probe, baseline)
         if _needs_inference_profile(baseline_result):
             # Several families are cross-region only; the catalog id alone is
-            # refused, so the probes run against the profile the gateway uses.
-            invoked = f"{region.split('-', maxsplit=1)[0]}.{model_id}"
-            print(f"  retrying via inference profile {invoked}", file=sys.stderr)  # noqa: T201
-            baseline_result = await _run_probe(
-                client, invoked, baseline_probe, baseline
-            )
+            # refused, so the probes run against the profile the gateway uses:
+            # the geography's, else the global one for a global-only model.
+            for prefix in (region.split("-", maxsplit=1)[0], "global"):
+                invoked = f"{prefix}.{model_id}"
+                print(f"  retrying via inference profile {invoked}", file=sys.stderr)  # noqa: T201
+                baseline_result = await _run_probe(
+                    client, invoked, baseline_probe, baseline
+                )
+                if baseline_result.outcome in {"supported", "accepted"}:
+                    break
         results.append(baseline_result)
         if baseline_result.outcome not in {"supported", "accepted"}:
             return _record(model_id, invoked, region, results)

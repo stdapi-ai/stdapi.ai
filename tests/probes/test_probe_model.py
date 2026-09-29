@@ -397,3 +397,51 @@ class TestReasoningOff:
         block = {"reasoningContent": {"redactedContent": b"x"}}
 
         assert not _reasoning_off(_response(block, {"text": "15"}, outputTokens=59))
+
+
+class TestInferenceProfileRetry:
+    """A cross-region-only model is probed through a profile that serves it.
+
+    Ref: tests/probes/probe_model.py:probe_model
+         https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html
+    """
+
+    async def test_a_global_only_model_falls_back_to_the_global_profile(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Claude Sonnet 5.5: the bare id needs a profile and ``us.`` does not exist."""
+        answers = {
+            "m": "on-demand throughput isn't supported; use an inference profile",
+            "us.m": "The provided model identifier is invalid.",
+        }
+        invoked: list[str] = []
+
+        async def fake_run_probe(
+            _client: object, model: str, probe: Probe, _baseline: object
+        ) -> probe_model.ProbeResult:
+            invoked.append(model)
+            if model in answers:
+                return probe_model.ProbeResult(
+                    probe.name, probe.feature, "rejected", answers[model], {}
+                )
+            return probe_model.ProbeResult(
+                probe.name, probe.feature, "accepted", "", {}
+            )
+
+        class _Session:
+            @asynccontextmanager
+            async def create_client(
+                self, *_args: object, **_kwargs: object
+            ) -> AsyncIterator[None]:
+                yield None
+
+        monkeypatch.setattr(probe_model, "_run_probe", fake_run_probe)
+        monkeypatch.setattr(probe_model, "PROBES", ())
+        monkeypatch.setattr(probe_model, "STREAM_PROBES", ())
+        monkeypatch.setattr("aiobotocore.session.get_session", _Session)
+
+        record = await probe_model.probe_model("m", "us-east-1")
+
+        assert invoked == ["m", "us.m", "global.m"]
+        assert record["invoked_id"] == "global.m"
+        assert [p["outcome"] for p in record["probes"]] == ["accepted"]
