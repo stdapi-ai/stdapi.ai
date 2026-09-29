@@ -79,6 +79,7 @@ CLAUDE_ALL = (
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-sonnet-4-6",
     "anthropic.claude-sonnet-5",
+    "anthropic.claude-sonnet-5-5",
 )
 
 #: A single cheap Claude model for non-parametrized integration tests.
@@ -1639,7 +1640,7 @@ class TestAnthropicClaudeChatCompletions:
         instead of sending a disabled ``reasoning_config``, which Bedrock rejects.
 
         Ref: stdapi/models/chat/anthropic_claude_fable_mythos.py:ChatModel
-             stdapi/models/chat/anthropic_claude_opus_5.py:ChatModel
+             stdapi/models/chat/anthropic_claude_5.py:ChatModel
              https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
         """
         try:

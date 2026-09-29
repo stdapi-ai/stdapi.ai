@@ -1,13 +1,14 @@
-"""Claude Opus 5.x on the chat routes: always-on reasoning, computer use, forced tool choice.
+"""Claude Opus 5.x and Sonnet 5.5 on the chat routes: always-on reasoning, computer use, forced tool choice.
 
-Opus 5.5 always reasons (adaptive thinking cannot be disabled) and refuses a forced
-``tool_choice``, on Bedrock and on the official Anthropic API alike. Bedrock serves
+Opus and Sonnet 5.5 always reason (adaptive thinking cannot be disabled) and
+refuse a forced ``tool_choice``, on Bedrock and on the official Anthropic API alike. Bedrock serves
 the ``computer_20251124`` tool on Opus 5 and 5.5; the official API serves it on
 Opus 5 only.
 
 Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
+     tests/probes/results/anthropic.claude-sonnet-5-5.json
      https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool
-     stdapi/models/chat/anthropic_claude_opus_5.py:ChatModel
+     stdapi/models/chat/anthropic_claude_5.py:ChatModel
 """
 
 import re
@@ -27,6 +28,14 @@ if TYPE_CHECKING:
 
 #: Opus 5.5 model ID on the gateway.
 _OPUS_5_5 = "anthropic.claude-opus-5-5"
+
+#: Sonnet 5.5 model ID on the gateway.
+_SONNET_5_5 = "anthropic.claude-sonnet-5-5"
+
+#: The 5.5 models, which always reason and refuse a forced tool choice.
+_ALWAYS_REASONING = pytest.mark.parametrize(
+    "model", [_OPUS_5_5, _SONNET_5_5], ids=["opus-5-5", "sonnet-5-5"]
+)
 
 #: Opus 5 model ID on the gateway.
 _OPUS_5 = "anthropic.claude-opus-5"
@@ -75,21 +84,25 @@ def _anthropic_model_id(
     return re.sub(r"-v\d+(?::\d+)?$", "", model_id.removeprefix("anthropic."))
 
 
-@pytest.fixture
-def opus_5_5_anthropic_model(use_official_api: bool, is_bedrock_direct: bool) -> str:
-    """Return the Opus 5.5 model ID in the format the Anthropic target expects."""
+@pytest.fixture(params=[_OPUS_5_5, _SONNET_5_5], ids=["opus-5-5", "sonnet-5-5"])
+def always_reasoning_anthropic_model(
+    request: pytest.FixtureRequest, use_official_api: bool, is_bedrock_direct: bool
+) -> str:
+    """Return each 5.5 model ID in the format the Anthropic target expects."""
     return _anthropic_model_id(
-        _OPUS_5_5,
+        request.param,
         use_official_api=use_official_api,
         is_bedrock_direct=is_bedrock_direct,
     )
 
 
 @pytest.mark.expensive
-def test_disabled_thinking_on_opus_5_5(
-    anthropic_client: Anthropic, opus_5_5_anthropic_model: str, use_official_api: bool
+def test_disabled_thinking_on_5_5(
+    anthropic_client: Anthropic,
+    always_reasoning_anthropic_model: str,
+    use_official_api: bool,
 ) -> None:
-    """``thinking: {"type": "disabled"}`` on Opus 5.5: a 400 upstream, served by the gateway.
+    """``thinking: {"type": "disabled"}`` on Opus and Sonnet 5.5: a 400 upstream, served by the gateway.
 
     The official API answers ``invalid_request_error``. The gateway drops the
     disabled configuration with a warning, as for the other always-reasoning
@@ -98,12 +111,12 @@ def test_disabled_thinking_on_opus_5_5(
     is covered by ``test_reasoning_effort_none_explicit_disable_all_models``.
 
     Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
-         stdapi/models/chat/anthropic_claude_opus_5.py:ChatModel.REASONING_DISABLE_SUPPORTED
+         stdapi/models/chat/anthropic_claude_5.py:ChatModel.REASONING_DISABLE_SUPPORTED
     """
     if use_official_api:
         with pytest.raises(AnthropicBadRequestError) as excinfo:
             anthropic_client.messages.create(
-                model=opus_5_5_anthropic_model,
+                model=always_reasoning_anthropic_model,
                 max_tokens=4096,
                 messages=[{"role": "user", "content": "Reply with OK."}],
                 thinking={"type": "disabled"},
@@ -115,7 +128,7 @@ def test_disabled_thinking_on_opus_5_5(
         return
 
     response = anthropic_client.messages.create(
-        model=opus_5_5_anthropic_model,
+        model=always_reasoning_anthropic_model,
         max_tokens=4096,
         messages=[{"role": "user", "content": "Reply with OK."}],
         thinking={"type": "disabled"},
@@ -126,7 +139,7 @@ def test_disabled_thinking_on_opus_5_5(
 
 
 class TestForcedToolChoiceRejected:
-    """A forced ``tool_choice`` on Opus 5.5 is refused with a clean 400.
+    """A forced ``tool_choice`` on Opus and Sonnet 5.5 is refused with a clean 400.
 
     Forcing a tool is the request itself, so it is not silently downgraded to
     ``auto``: the client gets an ``invalid_request_error`` naming ``tool_choice``,
@@ -135,7 +148,7 @@ class TestForcedToolChoiceRejected:
     inference and bills nothing, hence no ``expensive`` marker.
 
     Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use#forcing-tool-use
-         stdapi/models/chat/anthropic_claude_opus_5.py:ChatModel._req_configure_tools
+         stdapi/models/chat/anthropic_claude_5.py:ChatModel._req_configure_tools
     """
 
     @pytest.mark.parametrize(
@@ -146,7 +159,7 @@ class TestForcedToolChoiceRejected:
     def test_messages_route(
         self,
         anthropic_client: Anthropic,
-        opus_5_5_anthropic_model: str,
+        always_reasoning_anthropic_model: str,
         tool_choice: ToolChoiceParam,
     ) -> None:
         """``tool_choice`` ``any`` and ``tool`` are rejected on the Messages route.
@@ -155,7 +168,7 @@ class TestForcedToolChoiceRejected:
         """
         with pytest.raises(AnthropicBadRequestError) as excinfo:
             anthropic_client.messages.create(
-                model=opus_5_5_anthropic_model,
+                model=always_reasoning_anthropic_model,
                 max_tokens=64,
                 messages=[{"role": "user", "content": "Weather in Lisbon?"}],
                 tools=[_WEATHER_TOOL],
@@ -169,13 +182,17 @@ class TestForcedToolChoiceRejected:
         assert "tool_choice" in body["error"]["message"]
 
     @pytest.mark.gateway("Anthropic Claude is not served by the official OpenAI API")
+    @_ALWAYS_REASONING
     @pytest.mark.parametrize(
         "tool_choice",
         ["required", {"type": "function", "function": {"name": "get_weather"}}],
         ids=["required", "function"],
     )
     def test_chat_completions_route(
-        self, openai_client: OpenAI, tool_choice: ChatCompletionToolChoiceOptionParam
+        self,
+        openai_client: OpenAI,
+        model: str,
+        tool_choice: ChatCompletionToolChoiceOptionParam,
     ) -> None:
         """``tool_choice`` ``required`` and a named function are rejected on Chat Completions.
 
@@ -183,7 +200,7 @@ class TestForcedToolChoiceRejected:
         """
         with pytest.raises(BadRequestError) as excinfo:
             openai_client.chat.completions.create(
-                model=_OPUS_5_5,
+                model=model,
                 messages=[{"role": "user", "content": "Weather in Lisbon?"}],
                 max_completion_tokens=64,
                 tools=[_CHAT_WEATHER_TOOL],
@@ -196,14 +213,15 @@ class TestForcedToolChoiceRejected:
         assert '"any"' not in excinfo.value.message, "no Anthropic wording"
 
     @pytest.mark.gateway("Anthropic Claude is not served by the official OpenAI API")
-    def test_responses_route(self, openai_client: OpenAI) -> None:
+    @_ALWAYS_REASONING
+    def test_responses_route(self, openai_client: OpenAI, model: str) -> None:
         """``tool_choice: "required"`` is rejected on the Responses route.
 
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
         """
         with pytest.raises(BadRequestError) as excinfo:
             openai_client.responses.create(
-                model=_OPUS_5_5,
+                model=model,
                 input="Weather in Lisbon?",
                 max_output_tokens=64,
                 tools=[

@@ -625,7 +625,7 @@ class TestDisplayPlumbing:
         Disabling is dropped with a warning; the requested display is kept, and
         without one the model default is left alone.
 
-        Ref: stdapi/models/chat/anthropic_claude_opus_5.py:ChatModel.REASONING_DISABLE_SUPPORTED
+        Ref: stdapi/models/chat/anthropic_claude_5.py:ChatModel.REASONING_DISABLE_SUPPORTED
         """
         fields: JsonMapping = {}
         _claude("anthropic.claude-opus-5-5")._req_configure_reasoning(  # noqa: SLF001

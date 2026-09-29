@@ -40,12 +40,12 @@ from stdapi.models.chat._adapters._openai_responses import COMPACTION_CONTENT_PR
 from stdapi.models.chat._anthropic_claude import (
     REASONING_NOT_DISABLED as _REASONING_NOT_DISABLED,
 )
+from stdapi.models.chat.anthropic_claude_5 import (
+    CLAUDE_5_5_MATCHER,
+    FORCED_TOOL_CHOICE_REFUSED,
+)
 from stdapi.models.chat.anthropic_claude_37_to_45 import reasoning_budget
 from stdapi.models.chat.anthropic_claude_fable_mythos import FABLE_MYTHOS_MATCHER
-from stdapi.models.chat.anthropic_claude_opus_5 import (
-    FORCED_TOOL_CHOICE_REFUSED,
-    OPUS_5_5_MATCHER,
-)
 from stdapi.monitoring import log_error_details
 from stdapi.types.anthropic_messages import (
     Base64ImageSource,
@@ -190,7 +190,7 @@ _FORCED_TOOL_CHOICES = frozenset({"any", "tool"})
 
 #: Claude models that always reason, as the runtime model classes match them.
 _ALWAYS_REASONING_MATCHER = re_compile(
-    f"{OPUS_5_5_MATCHER.pattern}|{FABLE_MYTHOS_MATCHER.pattern}"
+    f"{CLAUDE_5_5_MATCHER.pattern}|{FABLE_MYTHOS_MATCHER.pattern}"
 )
 
 #: Anthropic server tool and toolset type prefixes (no Chat Completions equivalent).
@@ -1697,12 +1697,12 @@ def _refuse_forced_tool_choice(model: str, choice: object) -> None:
         choice: Anthropic ``tool_choice`` value, if any.
 
     Raises:
-        ApiError: When *choice* forces tool use on Claude Opus 5.5 or later.
+        ApiError: When *choice* forces tool use on Claude Opus or Sonnet 5.5 or later.
     """
     if (
         isinstance(choice, dict)
         and choice.get("type") in _FORCED_TOOL_CHOICES
-        and OPUS_5_5_MATCHER.match(model)
+        and CLAUDE_5_5_MATCHER.match(model)
     ):
         raise ApiError(FORCED_TOOL_CHOICE_REFUSED)
 

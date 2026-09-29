@@ -20,8 +20,8 @@ from stdapi.models.chat import get_chat_model
 from stdapi.models.chat._adapters._anthropic_message import count_tokens_via_bedrock
 from stdapi.models.chat._anthropic_claude import _STUB_INPUT_SCHEMAS
 from stdapi.models.chat._default import ChatModel
+from stdapi.models.chat.anthropic_claude_5 import FORCED_TOOL_CHOICE_REFUSED
 from stdapi.models.chat.anthropic_claude_37_to_45 import _REASONING_BUDGET_MINIMAL
-from stdapi.models.chat.anthropic_claude_opus_5 import FORCED_TOOL_CHOICE_REFUSED
 from stdapi.monitoring import REQUEST
 from stdapi.types.anthropic_messages import (
     CacheControlEphemeralParam,
@@ -175,14 +175,14 @@ def test_opus_5_computer_tool_carries_its_versioned_beta_flag(model_id: str) -> 
 
 
 class TestForcedToolChoice:
-    """Opus 5.5 and later refuse a forced tool choice before the request is sent.
+    """Opus and Sonnet 5.5 and later refuse a forced tool choice before the request is sent.
 
     Bedrock and the official API reject ``any``/``tool`` on these models with a
     message in Anthropic terms; the gateway answers every route, and the legacy
     ``function_call`` field, with one message naming ``auto`` as the way forward.
 
     Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use#forcing-tool-use
-         stdapi/models/chat/anthropic_claude_opus_5.py:ChatModel._req_configure_tools
+         stdapi/models/chat/anthropic_claude_5.py:ChatModel._req_configure_tools
     """
 
     @staticmethod
@@ -207,7 +207,13 @@ class TestForcedToolChoice:
         return tool_config
 
     @pytest.mark.parametrize(
-        "model_id", ["anthropic.claude-opus-5-5", "anthropic.claude-opus-6"]
+        "model_id",
+        [
+            "anthropic.claude-opus-5-5",
+            "anthropic.claude-opus-6",
+            "anthropic.claude-sonnet-5-5",
+            "anthropic.claude-sonnet-6",
+        ],
     )
     @pytest.mark.parametrize(
         "choice", [{"any": {}}, {"tool": {"name": "get_weather"}}], ids=["any", "tool"]
@@ -226,6 +232,7 @@ class TestForcedToolChoice:
             ("anthropic.claude-opus-5-5", {"auto": {}}),
             ("anthropic.claude-opus-5", {"any": {}}),
             ("anthropic.claude-opus-5", {"tool": {"name": "get_weather"}}),
+            ("anthropic.claude-sonnet-5", {"any": {}}),
         ],
     )
     def test_other_choices_are_forwarded(
@@ -568,7 +575,6 @@ class TestReasoningDisabled:
             "anthropic.claude-opus-5-20260115-v1:0",
             "anthropic.claude-opus-5-1",
             "anthropic.claude-sonnet-5",
-            "anthropic.claude-sonnet-6",
         ],
     )
     def test_disabled_reasoning_is_forwarded_when_supported(
@@ -576,7 +582,7 @@ class TestReasoningDisabled:
     ) -> None:
         """Models accepting a disabled configuration receive it.
 
-        Opus 5 and its dated variants keep it: only Opus 5.5 and later always reason.
+        Opus 5, Sonnet 5 and their dated variants keep it: only 5.5 and later always reason.
         """
         fields: JsonMapping = {}
 
@@ -592,6 +598,8 @@ class TestReasoningDisabled:
             "anthropic.claude-opus-5-10",
             "anthropic.claude-opus-6",
             "anthropic.claude-opus-10",
+            "anthropic.claude-sonnet-5-5",
+            "anthropic.claude-sonnet-6",
             "anthropic.claude-fable-5",
             "anthropic.claude-fable-5-1",
             "anthropic.claude-fable-6",
@@ -603,10 +611,10 @@ class TestReasoningDisabled:
     def test_disabled_reasoning_is_dropped_when_the_model_always_reasons(
         self, model_id: str, request_log: EventLog
     ) -> None:
-        """Opus 5.5+, Fable and Mythos always reason, so the rejected configuration is dropped with a warning.
+        """Opus and Sonnet 5.5+, Fable and Mythos always reason, so the rejected configuration is dropped with a warning.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html
-             stdapi/models/chat/anthropic_claude_opus_5.py:ChatModel
+             stdapi/models/chat/anthropic_claude_5.py:ChatModel
         """
         fields: JsonMapping = {}
 
@@ -1379,6 +1387,7 @@ class TestSystemMessageAsMessages:
             "anthropic.claude-opus-4-10",
             "anthropic.claude-opus-5",
             "anthropic.claude-sonnet-5",
+            "anthropic.claude-sonnet-5-5",
             "anthropic.claude-haiku-5",
             "anthropic.claude-opus-6",
             "anthropic.claude-fable-5",

@@ -80,7 +80,7 @@ from stdapi.models.chat._mantle.openai_gpt6 import ChatModel as Gpt6ChatModel
 from stdapi.models.chat._mantle.openai_gpt_oss import ChatModel as GptOssChatModel
 from stdapi.models.chat._mantle.qwen_vl import ChatModel as QwenVisionChatModel
 from stdapi.models.chat._mantle.xai_grok import ChatModel as GrokChatModel
-from stdapi.models.chat.anthropic_claude_opus_5 import FORCED_TOOL_CHOICE_REFUSED
+from stdapi.models.chat.anthropic_claude_5 import FORCED_TOOL_CHOICE_REFUSED
 from stdapi.models.chat.openai_gpt import ChatModel as OpenAiGptChatModel
 from stdapi.monitoring import REQUEST, REQUEST_ID, EventLog
 from stdapi.pricing import Service
@@ -3068,6 +3068,7 @@ class TestServiceTierAndEffortMapping:
         [
             "anthropic.claude-opus-5-5",
             "anthropic.claude-opus-6",
+            "anthropic.claude-sonnet-5-5",
             "anthropic.claude-fable-5",
             "anthropic.claude-mythos-5",
         ],
@@ -3104,6 +3105,8 @@ class TestServiceTierAndEffortMapping:
             "anthropic.claude-opus-5-5",
             "anthropic.claude-opus-6",
             "anthropic.claude-sonnet-5",
+            "anthropic.claude-sonnet-5-5",
+            "anthropic.claude-sonnet-6",
             "anthropic.claude-haiku-4-5",
             "anthropic.claude-fable-5",
             "anthropic.claude-mythos-5",
@@ -3186,7 +3189,7 @@ class TestServiceTierAndEffortMapping:
         """Opus 5.5 refuses a forced ``tool_choice`` before it reaches Mantle.
 
         Ref: stdapi/models/chat/_mantle/_convert.py:_refuse_forced_tool_choice
-             stdapi/models/chat/anthropic_claude_opus_5.py:FORCED_TOOL_CHOICE_REFUSED
+             stdapi/models/chat/anthropic_claude_5.py:FORCED_TOOL_CHOICE_REFUSED
         """
         request = MessageCreateParams.model_validate(
             {
@@ -3209,7 +3212,9 @@ class TestServiceTierAndEffortMapping:
         [
             ("anthropic.claude-opus-5-5", True),
             ("anthropic.claude-opus-6", True),
+            ("anthropic.claude-sonnet-5-5", True),
             ("anthropic.claude-opus-5", False),
+            ("anthropic.claude-sonnet-5", False),
         ],
     )
     @pytest.mark.parametrize(
@@ -3220,7 +3225,7 @@ class TestServiceTierAndEffortMapping:
     def test_forced_tool_choice_refused_on_conversion(
         self, model: str, refused: bool, tool_choice: object
     ) -> None:
-        """A forced choice converted from Chat Completions or Responses is refused on Opus 5.5+.
+        """A forced choice converted from Chat Completions or Responses is refused on Opus and Sonnet 5.5+.
 
         Ref: stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
         """

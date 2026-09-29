@@ -1,4 +1,4 @@
-"""Anthropic Claude Opus 5 and later chat model implementation."""
+"""Anthropic Claude Opus 5, Sonnet 5.5 and later chat model implementation."""
 
 from re import compile as re_compile
 from typing import TYPE_CHECKING, ClassVar
@@ -14,9 +14,9 @@ if TYPE_CHECKING:
 
     from stdapi.types import JsonMapping
 
-#: Opus 5.5+ versions, which always reason and refuse a forced tool choice.
-OPUS_5_5_MATCHER = re_compile(
-    r"^anthropic\.claude-opus-(?:5-(?:[5-9]|\d{2})|[6-9]|\d{2})(?:\D|$)"
+#: Opus and Sonnet 5.5+ versions, which always reason and refuse a forced tool choice.
+CLAUDE_5_5_MATCHER = re_compile(
+    r"^anthropic\.claude-(?:opus|sonnet)-(?:5-(?:[5-9]|\d{2})|[6-9]|\d{2})(?:\D|$)"
 )
 
 #: Refusal of a forced tool choice, worded for every API dialect and legacy field.
@@ -27,25 +27,27 @@ FORCED_TOOL_CHOICE_REFUSED = (
 
 
 class ChatModel(AnthropicClaudeChatModel):
-    """Anthropic Claude Opus 5 and later chat model implementation.
+    """Anthropic Claude Opus 5, Sonnet 5.5 and later chat model implementation.
 
-    From Opus 5.5 on, adaptive thinking is always on: Bedrock rejects an
-    explicitly disabled reasoning configuration, so a request disabling
-    reasoning is served with the adaptive default instead. Opus 5 still accepts
-    it. The same versions refuse a tool choice forcing tool use, which is
-    rejected before sending with an error naming the way forward. Later
-    versions are assumed to keep both behaviors.
+    From Opus and Sonnet 5.5 on, adaptive thinking is always on: Bedrock
+    rejects an explicitly disabled reasoning configuration, so a request
+    disabling reasoning is served with the adaptive default instead. Opus 5 and
+    Sonnet 5 still accept it. The same versions refuse a tool choice forcing
+    tool use, which is rejected before sending with an error naming the way
+    forward. Later versions are assumed to keep both behaviors.
     """
 
     __slots__ = ()
 
-    MATCHER = re_compile(r"^anthropic\.claude-opus-(?:[5-9]|\d\d)")
+    MATCHER = re_compile(
+        rf"^anthropic\.claude-opus-(?:[5-9]|\d\d)|{CLAUDE_5_5_MATCHER.pattern}"
+    )
     SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED: ClassVar[bool] = True
 
     @property
     def REASONING_DISABLE_SUPPORTED(self) -> bool:  # type: ignore[override]  # noqa: N802
         """Whether Bedrock accepts an explicitly disabled reasoning configuration."""
-        return OPUS_5_5_MATCHER.match(self._model_id) is None
+        return CLAUDE_5_5_MATCHER.match(self._model_id) is None
 
     def _req_configure_tools(
         self,
@@ -54,7 +56,7 @@ class ChatModel(AnthropicClaudeChatModel):
         server_tools: list[JsonMapping],
         bedrock_messages: list[MessageTypeDef] | None = None,
     ) -> None:
-        """Refuse a forced tool choice on Opus 5.5+, then configure Claude tools.
+        """Refuse a forced tool choice on Opus/Sonnet 5.5+, then configure Claude tools.
 
         Args:
             tool_config: Bedrock tool configuration after system tool promotion.
@@ -69,7 +71,7 @@ class ChatModel(AnthropicClaudeChatModel):
         if (
             choice
             and ("any" in choice or "tool" in choice)
-            and OPUS_5_5_MATCHER.match(self._model_id)
+            and CLAUDE_5_5_MATCHER.match(self._model_id)
         ):
             raise ApiError(FORCED_TOOL_CHOICE_REFUSED)
         super()._req_configure_tools(
