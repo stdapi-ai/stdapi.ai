@@ -214,6 +214,11 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "epoch/aider_polyglot_external/anthropic.claude-sonnet-5-5": {
+  "candidates": "cdfcc6a7bfcd7bd3",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/aider_polyglot_external/cohere.embed-english-v3": {
   "candidates": "15963d126da34710",
   "match": null,
@@ -684,6 +689,11 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "epoch/aider_polyglot_external/xai.grok-4.7": {
+  "candidates": "b2a84728694582ce",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/aider_polyglot_external/zai.glm-4.6": {
   "candidates": "d739bc607742a0c7",
   "match": null,
@@ -870,6 +880,11 @@
   "reason": "Matches the base model name and version exactly; only the context window size differs, which does not constitute a different model."
  },
  "epoch/frontiermath/anthropic.claude-sonnet-5": {
+  "candidates": "a4ea460bff1635fd",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "epoch/frontiermath/anthropic.claude-sonnet-5-5": {
   "candidates": "a4ea460bff1635fd",
   "match": null,
   "reason": "the model was not recognised on this board"
@@ -1369,6 +1384,11 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "epoch/frontiermath/xai.grok-4.7": {
+  "candidates": "7e85a9bb2413c9fc",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/frontiermath/zai.glm-4.6": {
   "candidates": "e3b0c44298fc1c14",
   "match": null,
@@ -1528,6 +1548,11 @@
   "candidates": "5246ad590458dd7b",
   "match": "claude-opus-5",
   "reason": "Exact match of base model name without size or variant suffixes"
+ },
+ "epoch/gpqa_diamond/anthropic.claude-sonnet-5-5": {
+  "candidates": "5246ad590458dd7b",
+  "match": null,
+  "reason": "the model was not recognised on this board"
  },
  "epoch/gpqa_diamond/cohere.embed-english-v3": {
   "candidates": "e3b0c44298fc1c14",
@@ -1909,6 +1934,11 @@
   "match": null,
   "reason": "no rule match and no plausible candidate"
  },
+ "epoch/gpqa_diamond/xai.grok-4.7": {
+  "candidates": "70b14a7e7dc43231",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/gpqa_diamond/zai.glm-4.6": {
   "candidates": "81bca57c6af2fd5a",
   "match": null,
@@ -2120,6 +2150,11 @@
   "reason": "Same model family and version, same vendor, no size or generation differences."
  },
  "epoch/math_level_5/anthropic.claude-sonnet-5": {
+  "candidates": "26ecddc950e37f9c",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "epoch/math_level_5/anthropic.claude-sonnet-5-5": {
   "candidates": "26ecddc950e37f9c",
   "match": null,
   "reason": "the model was not recognised on this board"
@@ -2564,6 +2599,11 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "epoch/math_level_5/xai.grok-4.7": {
+  "candidates": "3ae74c0d0eaa4a6d",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/math_level_5/zai.glm-4.6": {
   "candidates": "e3b0c44298fc1c14",
   "match": null,
@@ -2766,6 +2806,11 @@
  },
  "epoch/simpleqa_verified/anthropic.claude-sonnet-4-6": {
   "candidates": "e3026a5a57a50f5f",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "epoch/simpleqa_verified/anthropic.claude-sonnet-5-5": {
+  "candidates": "dc72961e5751574c",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -3229,6 +3274,11 @@
   "match": null,
   "reason": "no rule match and no plausible candidate"
  },
+ "epoch/simpleqa_verified/xai.grok-4.7": {
+  "candidates": "2e8c0461849d6a85",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/simpleqa_verified/zai.glm-4.6": {
   "candidates": "e3b0c44298fc1c14",
   "match": null,
@@ -3435,6 +3485,11 @@
   "reason": "the model was not recognised on this board"
  },
  "epoch/swe_bench_verified/anthropic.claude-sonnet-5": {
+  "candidates": "601a6e776997862a",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "epoch/swe_bench_verified/anthropic.claude-sonnet-5-5": {
   "candidates": "601a6e776997862a",
   "match": null,
   "reason": "the model was not recognised on this board"
@@ -5429,6 +5484,11 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "lmarena/search/anthropic.claude-sonnet-5-5": {
+  "candidates": "34791d55967ae694",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "lmarena/search/cohere.embed-english-v3": {
   "candidates": "e3b0c44298fc1c14",
   "match": null,
@@ -5909,6 +5969,11 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "lmarena/search/xai.grok-4.7": {
+  "candidates": "73dc122a0d959de2",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "lmarena/search/zai.glm-4.6": {
   "candidates": "e3b0c44298fc1c14",
   "match": null,
@@ -6005,7 +6070,7 @@
   "reason": "the model was not recognised on this board"
  },
  "lmarena/text/anthropic.claude-haiku-4-5": {
-  "candidates": "0771b69431a08dae",
+  "candidates": "b50374bcd61d3ca3",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -6013,6 +6078,11 @@
   "candidates": "0771b69431a08dae",
   "match": "claude-opus-5-high",
   "reason": "Matches core model name 'claude-opus-5' with only variation in context window size"
+ },
+ "lmarena/text/anthropic.claude-sonnet-5-5": {
+  "candidates": "b50374bcd61d3ca3",
+  "match": null,
+  "reason": "the model was not recognised on this board"
  },
  "lmarena/text/cohere.embed-english-v3": {
   "candidates": "b0b67c235fa6e2cf",
@@ -6125,14 +6195,14 @@
   "reason": "the model was not recognised on this board"
  },
  "lmarena/text/openai.gpt-5.4-2026-03-05": {
-  "candidates": "47e2e83c3d098395",
+  "candidates": "ac45ccc9928052c0",
   "match": "gpt-5.4",
-  "reason": "Exact match of model name without any variation in size, generation, or vendor."
+  "reason": "Exact match of model version and vendor"
  },
  "lmarena/text/openai.gpt-5.5-2026-04-23": {
-  "candidates": "47e2e83c3d098395",
+  "candidates": "ac45ccc9928052c0",
   "match": "gpt-5.5",
-  "reason": "Exact match of model name without any variations in size, generation, or vendor."
+  "reason": "Exact match of model name without any variation in size, generation, or vendor."
  },
  "lmarena/text/openai.gpt-6-luna": {
   "candidates": "47e2e83c3d098395",
@@ -6145,12 +6215,12 @@
   "reason": "the model was not recognised on this board"
  },
  "lmarena/text/openai.gpt-oss-safeguard-120b": {
-  "candidates": "47e2e83c3d098395",
+  "candidates": "ac45ccc9928052c0",
   "match": null,
   "reason": "the two directions disagreed"
  },
  "lmarena/text/openai.gpt-oss-safeguard-20b": {
-  "candidates": "47e2e83c3d098395",
+  "candidates": "ac45ccc9928052c0",
   "match": null,
   "reason": "the two directions disagreed"
  },
@@ -7630,32 +7700,37 @@
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/anthropic.claude-haiku-4-5": {
-  "candidates": "5335b44925e86e3e",
+  "candidates": "caeabbe7ae22e1d2",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/anthropic.claude-haiku-4-5-20251001-v1:0": {
-  "candidates": "5335b44925e86e3e",
+  "candidates": "caeabbe7ae22e1d2",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/anthropic.claude-opus-4-1-20250805-v1:0": {
-  "candidates": "5335b44925e86e3e",
+  "candidates": "caeabbe7ae22e1d2",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/anthropic.claude-opus-4-5-20251101-v1:0": {
-  "candidates": "5335b44925e86e3e",
+  "candidates": "caeabbe7ae22e1d2",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/anthropic.claude-opus-5-5": {
-  "candidates": "5335b44925e86e3e",
+  "candidates": "caeabbe7ae22e1d2",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/anthropic.claude-sonnet-4-5-20250929-v1:0": {
-  "candidates": "5335b44925e86e3e",
+  "candidates": "caeabbe7ae22e1d2",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "lmarena/vision/anthropic.claude-sonnet-5-5": {
+  "candidates": "caeabbe7ae22e1d2",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -7700,17 +7775,17 @@
   "reason": "no rule match and no plausible candidate"
  },
  "lmarena/vision/google.gemma-3-12b-it": {
-  "candidates": "0cf0aecf6e84849c",
+  "candidates": "69a0e0758b7ff7aa",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/google.gemma-3-4b-it": {
-  "candidates": "0cf0aecf6e84849c",
+  "candidates": "69a0e0758b7ff7aa",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/google.gemma-4-e2b": {
-  "candidates": "0cf0aecf6e84849c",
+  "candidates": "69a0e0758b7ff7aa",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -7921,6 +7996,11 @@
  },
  "lmarena/vision/xai.grok-4.6": {
   "candidates": "d5a481bfe03f7b77",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "lmarena/vision/xai.grok-4.7": {
+  "candidates": "a32f0e461ba34a05",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
