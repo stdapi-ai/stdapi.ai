@@ -32,6 +32,7 @@ from stdapi.pricing import (
     KNOWLEDGE_BASE_MODEL,
     TRANSCRIBE_STREAMING_SPEC,
     WEB_SEARCH_MODEL,
+    ContextLength,
     Dimension,
     Price,
     PriceKey,
@@ -1973,6 +1974,62 @@ class TestLongContextAxis:
         )
         assert results[standard_key].amount == Decimal("0.003") / 1000
         assert results[long_key].amount == Decimal("0.006") / 1000
+
+    def test_marketplace_long_ctx_rows_do_not_collide_with_standard_rows(self) -> None:
+        """A Marketplace "long_ctx" row indexes as long context, beside the short one.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
+        """
+        results: dict[PriceKey, Price] = {}
+        claims: dict[PriceKey, str] = {}
+        diagnostics: list[str] = []
+        for usagetype, price in (
+            ("USW2-MP:USW2_input_tokens_global_standard-Units", "10.00"),
+            ("USW2-MP:USW2_input_tokens_long_ctx_global_standard-Units", "20.00"),
+            ("USW2-MP:USW2_cache_write_tokens_30m_standard-Units", "13.75"),
+            ("USW2-MP:USW2_cache_write_tokens_30m_long_ctx_standard-Units", "27.50"),
+        ):
+            item = _price_item(
+                {
+                    "regionCode": "us-west-2",
+                    "usagetype": usagetype,
+                    "servicename": "OpenAI GPT-6 Astra (Amazon Bedrock Edition)",
+                },
+                unit="Units",
+                price=price,
+            )
+            _ingest_price_list_item(
+                json.dumps(item),
+                Service.BEDROCK,
+                "us-west-2",
+                "USD",
+                results,
+                claims,
+                diagnostics,
+            )
+        assert diagnostics == []
+        model = normalize_model_key("OpenAI GPT-6 Astra")
+
+        def rate(
+            dimension: Dimension, routing: Routing, context: ContextLength
+        ) -> Decimal:
+            key = PriceKey(
+                Service.BEDROCK,
+                model,
+                "us-west-2",
+                dimension,
+                "standard",
+                "",
+                routing,
+                "",
+                context,
+            )
+            return results[key].amount * 1_000_000
+
+        assert rate(Dimension.INPUT_TOKENS, "global", "") == Decimal("10.00")
+        assert rate(Dimension.INPUT_TOKENS, "global", "long") == Decimal("20.00")
+        assert rate(Dimension.CACHE_WRITE_TOKENS, "", "") == Decimal("13.75")
+        assert rate(Dimension.CACHE_WRITE_TOKENS, "", "long") == Decimal("27.50")
 
     def test_long_context_cache_read_row_does_not_collide_with_standard_row(
         self,

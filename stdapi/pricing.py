@@ -1342,8 +1342,9 @@ def _bedrock_api_service(our_service: Service, usagetype: str) -> Service:
 def _price_context(usagetype: str) -> ContextLength:
     """Resolve the context-length bucket from a usagetype.
 
-    The >200K-prompt rate is signaled by a "long-context" usagetype segment
-    on every affected dimension, including the prompt-cache ones.
+    The long-prompt rate is signaled by a "long-context" (native) or "long_ctx"
+    (Marketplace) usagetype segment on every affected dimension, including the
+    prompt-cache ones.
 
     Args:
         usagetype: The usagetype attribute (native or Marketplace).
@@ -1351,7 +1352,8 @@ def _price_context(usagetype: str) -> ContextLength:
     Returns:
         "long" or "" (standard).
     """
-    return "long" if "longcontext" in _normalize_usagetype(usagetype) else ""
+    normalized = _normalize_usagetype(usagetype)
+    return "long" if "longcontext" in normalized or "longctx" in normalized else ""
 
 
 def _native_routing(
