@@ -62,7 +62,7 @@ curl -X POST "$BASE/v1/messages" \
 | Files API (`file_id`)                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Reference uploaded files in document/image sources — see [Files API](api_anthropic_files.md) |
 | **Tool Calling**                      |                                          |                                                                                              |
 | Tool use (`tools`)                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Full Anthropic-compatible schema                                                             |
-| Tool choice (`auto`, `any`, `tool`)   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Control tool selection behavior; Claude Opus 5.5 and later refuse `any` and `tool` with `400` |
+| Tool choice (`auto`, `any`, `tool`)   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Control tool selection behavior; Claude Opus and Sonnet 5.5 and later refuse `any` and `tool` with `400` |
 | Tool choice `none`                    |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Withdraws every declared tool; a conversation already containing a `tool_use` block keeps the tools that block names callable, and the model may call one again |
 | Changing `tools` between turns        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | The tools declared on a turn are the only ones the model may call, whatever the replayed history names |
 | Parallel tool calls                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Multiple tools in one turn                                                                   |
@@ -733,7 +733,7 @@ On models whose reasoning depth is an effort level rather than a token budget (A
 !!! note "A small `max_tokens` turns reasoning off on Converse-served Claude 3.7–4.5"
     Thinking tokens are spent out of the output limit, and Converse takes no budget below 1,024 tokens nor one that is not smaller than `max_tokens`. An effort level asked for alongside a `max_tokens` of 1,024 or less therefore leaves no budget to derive, and the request is served **without** reasoning rather than refused — a warning is logged. Raise `max_tokens` above 1,024 to get reasoning back.
 
-!!! note "Disabled Thinking Not Honored on Claude Opus 5.5+, Fable, Mythos, OpenAI GPT-6 Astra and gpt-oss"
+!!! note "Disabled Thinking Not Honored on Claude Opus and Sonnet 5.5+, Fable, Mythos, OpenAI GPT-6 Astra and gpt-oss"
     These models always reason. The request is accepted and a warning is recorded in the request log, but the disabled configuration is dropped and the model's default reasoning is used (adaptive mode on Claude): the response may still carry thinking blocks, and their output tokens are still billed. Use `output_config.effort` to lower the depth instead.
 
 **Response with Thinking:**
