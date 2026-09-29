@@ -703,22 +703,22 @@ class AnthropicClaudeChatModel(_BaseChatModel):
                 additional_request_fields["reasoning_config"] = {
                     "type": "between_tools"
                 }
-                if reasoning_effort and reasoning_effort != "none":
-                    additional_request_fields["output_config"] = {
-                        "effort": self.REASONING_OVERRIDE.get(
-                            reasoning_effort, reasoning_effort
-                        )
-                    }
-                return
-            if not self.REASONING_DISABLE_SUPPORTED:
+            elif not self.REASONING_DISABLE_SUPPORTED:
                 log_error_details(REASONING_NOT_DISABLED, level="warning")
                 if display:
                     additional_request_fields["reasoning_config"] = {
                         "type": "adaptive",
                         "display": display,
                     }
-                return
-            additional_request_fields["reasoning_config"] = {"type": "disabled"}
+            else:
+                additional_request_fields["reasoning_config"] = {"type": "disabled"}
+            # With thinking off, the effort still sets how much the answer spends.
+            if reasoning_effort and reasoning_effort != "none":
+                additional_request_fields["output_config"] = {
+                    "effort": self.REASONING_OVERRIDE.get(
+                        reasoning_effort, reasoning_effort
+                    )
+                }
             return
         reasoning_config: JsonMapping = (
             {"type": "enabled", "budget_tokens": budget_tokens}

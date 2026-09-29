@@ -191,11 +191,10 @@ class TestEveryRouteTurnsSonnet55Off:
         assert fields == {"reasoning_config": {"type": "between_tools"}}
         assert request_log["level"] == "info"
 
-    def test_messages_keeps_an_effort_with_between_tools(self) -> None:
-        """An effort alone turns reasoning on; with ``between_tools`` it rides along."""
-        reasoning = _messages(
-            {"type": "between_tools"}, output_config={"effort": "low"}
-        )
+    @pytest.mark.parametrize("thinking", ["between_tools", "disabled"])
+    def test_messages_keeps_an_effort_with_thinking_off(self, thinking: str) -> None:
+        """An effort alone turns reasoning on; with thinking off it rides along."""
+        reasoning = _messages({"type": thinking}, output_config={"effort": "low"})
         assert reasoning is not None
         assert reasoning["enabled"] is False
         fields: JsonMapping = {}
@@ -246,6 +245,37 @@ class TestRuntimeMapping:
         assert fields == expected
         assert not _claude(model_id).BETWEEN_TOOLS_SUPPORTED
 
+    def test_disabled_wins_over_an_effort(self) -> None:
+        """``disabled`` with an effort turns thinking off and keeps the effort, as upstream."""
+        reasoning = _messages({"type": "disabled"}, output_config={"effort": "high"})
+        assert reasoning is not None
+        fields: JsonMapping = {}
+
+        _claude(_SONNET_5)._req_configure_reasoning(  # noqa: SLF001
+            fields, **reasoning
+        )
+
+        assert fields == {
+            "reasoning_config": {"type": "disabled"},
+            "output_config": {"effort": "high"},
+        }
+
+    def test_an_always_reasoning_model_keeps_the_effort(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """Opus 5.5 cannot turn thinking off, but the effort still reaches it.
+
+        Ref: stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_reasoning
+        """
+        reasoning = _messages({"type": "disabled"}, output_config={"effort": "low"})
+        assert reasoning is not None
+        fields: JsonMapping = {}
+
+        _claude(_OPUS_5_5)._req_configure_reasoning(fields, **reasoning)  # noqa: SLF001
+
+        assert fields == {"output_config": {"effort": "low"}}
+        assert request_log["level"] == "warning"
+
 
 class TestNoSideEffectOnOtherModels:
     """``between_tools`` on the Messages route is exactly ``disabled`` elsewhere.
@@ -271,9 +301,9 @@ class TestNoSideEffectOnOtherModels:
     def test_between_tools_sends_what_disabled_sends(
         self, model_id: str, request_log: dict[str, Any]
     ) -> None:
-        """Even with an effort, which alongside ``disabled`` would turn reasoning on."""
+        """Even with an effort, as ``disabled`` with an effort does."""
         between = _messages({"type": "between_tools"}, output_config={"effort": "low"})
-        disabled = _messages({"type": "disabled"})
+        disabled = _messages({"type": "disabled"}, output_config={"effort": "low"})
         assert between is not None
         assert disabled is not None
         model = cast("ChatModel", get_chat_model(model_id, allow_mantle=False))

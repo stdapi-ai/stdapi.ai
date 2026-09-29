@@ -1222,21 +1222,14 @@ def extract_reasoning(
         request.output_config is None or request.output_config.effort is None
     ):
         return None
-    between_tools = (
-        request.thinking is not None and request.thinking.type == "between_tools"
-    )
     return {
-        # between_tools turns up-front thinking off whatever the effort says.
-        "enabled": not between_tools
-        and (
-            (
-                request.thinking is not None
-                and request.thinking.type in ("enabled", "adaptive")
-            )
-            or (
-                request.output_config is not None
-                and request.output_config.effort is not None
-            )
+        # An effort alone turns thinking on; disabled and between_tools turn it
+        # off whatever the effort says.
+        "enabled": (
+            request.thinking.type in ("enabled", "adaptive")
+            if request.thinking is not None
+            else request.output_config is not None
+            and request.output_config.effort is not None
         ),
         "reasoning_effort": (
             request.output_config.effort if request.output_config is not None else None

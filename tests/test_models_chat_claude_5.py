@@ -393,6 +393,40 @@ class TestBetweenToolsThinking:
 
         assert excinfo.value.status_code == 400
 
+    @pytest.mark.expensive
+    def test_disabled_beside_an_effort_answers_without_thinking(
+        self,
+        anthropic_client: Anthropic,
+        use_official_api: bool,
+        is_bedrock_direct: bool,
+    ) -> None:
+        """An explicit ``disabled`` wins over ``output_config.effort``, as upstream.
+
+        An effort alone turns thinking on; beside ``disabled`` it only sets how
+        much the model spends on its answer.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/effort
+             stdapi/models/chat/_adapters/_anthropic_message.py:extract_reasoning
+        """
+        response = anthropic_client.messages.create(
+            model=_anthropic_model_id(
+                "anthropic.claude-sonnet-5",
+                use_official_api=use_official_api,
+                is_bedrock_direct=is_bedrock_direct,
+            ),
+            max_tokens=1024,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "How many primes are below 60? Answer with the number only.",
+                }
+            ],
+            thinking={"type": "disabled"},
+            extra_body={"output_config": {"effort": "low"}},
+        )
+
+        assert [block.type for block in response.content] == ["text"]
+
     @pytest.mark.gateway(
         "The official API rejects between_tools on any model but Sonnet 5.5"
     )

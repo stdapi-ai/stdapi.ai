@@ -724,7 +724,7 @@ curl -X POST "$BASE/v1/messages" \
   }'
 ```
 
-`thinking` accepts `{"type": "enabled", "budget_tokens": <n>}` (the budget must be less than `max_tokens`), `{"type": "disabled"}`, `{"type": "adaptive"}`, or `{"type": "between_tools"}`. Alternatively, control reasoning depth with `output_config.effort` (`low`, `medium`, `high`, `xhigh`, `max`).
+`thinking` accepts `{"type": "enabled", "budget_tokens": <n>}` (the budget must be less than `max_tokens`), `{"type": "disabled"}`, `{"type": "adaptive"}`, or `{"type": "between_tools"}`. Alternatively, control reasoning depth with `output_config.effort` (`low`, `medium`, `high`, `xhigh`, `max`). An effort alone turns thinking on; beside `disabled` or `between_tools`, thinking stays off and the effort only sets how much the answer spends.
 
 !!! tip "Turning Thinking Off on Claude Sonnet 5.5"
     Claude Sonnet 5.5 rejects `disabled`; its lowest setting is `between_tools`: no thinking before the answer, only short progress updates between tool calls, returned as summarized `thinking` blocks and billed as output tokens. It takes no other field, and an effort above `high` returns a `400`. The gateway sends thinking turned off to Sonnet 5.5 and later as `between_tools`, whichever route asked for it: `disabled` here, `reasoning_effort: "none"` or `enable_thinking: false` on Chat Completions, `reasoning.effort: "none"` on Responses, `think: false` on Ollama. On any other model, where upstream returns a `400`, `between_tools` is served as thinking turned off.
@@ -737,7 +737,7 @@ On models whose reasoning depth is an effort level rather than a token budget (A
     Thinking tokens are spent out of the output limit, and Converse takes no budget below 1,024 tokens nor one that is not smaller than `max_tokens`. An effort level asked for alongside a `max_tokens` of 1,024 or less therefore leaves no budget to derive, and the request is served **without** reasoning rather than refused — a warning is logged. Raise `max_tokens` above 1,024 to get reasoning back.
 
 !!! note "Disabled Thinking Not Honored on Claude Opus 5.5+, Fable, Mythos, OpenAI GPT-6 Astra and gpt-oss"
-    These models always reason. The request is accepted and a warning is recorded in the request log, but the disabled configuration is dropped and the model's default reasoning is used (adaptive mode on Claude): the response may still carry thinking blocks, and their output tokens are still billed. Use `output_config.effort` to lower the depth instead.
+    These models always reason. The request is accepted and a warning is recorded in the request log, but the disabled configuration is dropped and the model's default reasoning is used (adaptive mode on Claude): the response may still carry thinking blocks, and their output tokens are still billed. An `output_config.effort` sent alongside still applies, so use it to lower the depth.
 
 **Response with Thinking:**
 
