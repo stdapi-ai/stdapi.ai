@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
     from stdapi.types import JsonMapping
 
-#: Opus and Sonnet 5.5+ versions, which always reason and refuse a forced tool choice.
+#: Opus and Sonnet 5.5+ versions, which reject disabled reasoning and a forced tool choice.
 CLAUDE_5_5_MATCHER = re_compile(
     r"^anthropic\.claude-(?:opus|sonnet)-(?:5-(?:[5-9]|\d{2})|[6-9]|\d{2})(?:\D|$)"
 )
@@ -34,14 +34,13 @@ FORCED_TOOL_CHOICE_REFUSED = (
 class ChatModel(AnthropicClaudeChatModel):
     """Anthropic Claude Opus 5, Sonnet 5.5 and later chat model implementation.
 
-    From Opus and Sonnet 5.5 on, adaptive thinking is always on: Bedrock
-    rejects an explicitly disabled reasoning configuration, so a request
-    disabling reasoning is served with the adaptive default instead. Opus 5 and
-    Sonnet 5 still accept it. The same versions refuse a tool choice forcing
-    tool use, which is rejected before sending with an error naming the way
-    forward. Later versions are assumed to keep both behaviors. Sonnet 5.5 can
-    still turn up-front thinking off with ``between_tools``, which reasoning
-    turned off is sent as.
+    From Opus and Sonnet 5.5 on, Bedrock rejects an explicitly disabled
+    reasoning configuration: reasoning turned off is sent to Sonnet 5.5 as
+    ``between_tools``, its lowest setting, and Opus 5.5, which always reasons,
+    is served with the adaptive default instead. Opus 5 and Sonnet 5 still
+    accept it. The same versions refuse a tool choice forcing tool use, which is
+    rejected before sending with an error naming the way forward. Later
+    versions are assumed to keep these behaviors.
     """
 
     __slots__ = ()

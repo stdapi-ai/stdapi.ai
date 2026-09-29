@@ -192,7 +192,7 @@ _THINKING_OFF_TYPES = frozenset({"disabled", "between_tools"})
 #: Anthropic ``tool_choice`` types forcing tool use.
 _FORCED_TOOL_CHOICES = frozenset({"any", "tool"})
 
-#: Claude models that always reason, as the runtime model classes match them.
+#: Claude models that reject disabled reasoning, as the runtime model classes match them.
 _ALWAYS_REASONING_MATCHER = re_compile(
     f"{CLAUDE_5_5_MATCHER.pattern}|{FABLE_MYTHOS_MATCHER.pattern}"
 )
@@ -689,8 +689,8 @@ async def messages_payload(
     references) are inlined as base64 sources, inline ``system``-role
     messages are folded into the ``system`` field, the
     ``anthropic_version`` body field is dropped (Mantle takes the version as
-    an HTTP header), and a disabled ``thinking`` is dropped with a warning on
-    the models that always reason.
+    an HTTP header), and a ``thinking`` turned off (``disabled`` or
+    ``between_tools``) is sent as :func:`_thinking_off` maps it for the model.
 
     Args:
         request: Anthropic-format message creation request.
