@@ -78,6 +78,35 @@ _LABEL_VALUE: re.Pattern[str] = re.compile(
 #: that means the parser stopped finding the label, not that AWS wrote less.
 _CONTEXT_WINDOW_FLOOR: int = 50
 
+#: Cards a run must still read their APIs from; 127 of 132 marked them as of 2026-09.
+_CAPABILITIES_FLOOR: int = 50
+
+#: A card's API column names, and the catalogue APIs each one stands for.
+_CARD_APIS: dict[str, tuple[str, ...]] = {
+    "Responses": ("OpenAI Responses",),
+    "Chat Completions": ("OpenAI Chat Completions",),
+    "Converse": ("Converse", "ConverseStream"),
+    "Invoke": ("InvokeModel", "InvokeModelStream"),
+}
+
+#: API column names a card prints that the catalogue has no API for.
+_UNLISTED_CARD_APIS: frozenset[str] = frozenset({"Messages"})
+
+#: One HTML table.
+_TABLE: re.Pattern[str] = re.compile(r"<table\b.*?</table>", re.DOTALL)
+
+#: One table row.
+_ROW: re.Pattern[str] = re.compile(r"<tr\b.*?</tr>", re.DOTALL)
+
+#: One table cell, header or data.
+_CELL: re.Pattern[str] = re.compile(r"<t[dh]\b.*?</t[dh]>", re.DOTALL)
+
+#: The supported ("yes") or not-supported ("no") icon a card marks an item with.
+_ICON: re.Pattern[str] = re.compile(r"<img\b[^>]*\bicon-(yes|no)\.png[^>]*>")
+
+#: A feature line stating prompt caching, e.g. "Explicit Prompt Caching".
+_CACHING: re.Pattern[str] = re.compile(r"\bprompt caching\b", re.IGNORECASE)
+
 #: Values that mean "not applicable" rather than a fact.
 _ABSENT: frozenset[str] = frozenset({"n/a", "na", "none", "-", "—", ""})
 
@@ -118,6 +147,101 @@ def _lines(body: str) -> list[str]:
         for line in html.unescape(_TAG.sub("\n", body)).splitlines()
         if line.strip()
     ]
+
+
+def _marked_items(cell: str) -> list[tuple[bool | None, str]]:
+    """Split one table cell into the items its icons mark.
+
+    Args:
+        cell: The cell's HTML.
+
+    Returns:
+        Each item's mark (``None`` for text before the first icon) and its text.
+    """
+    parts = _ICON.split(cell)
+    items: list[tuple[bool | None, str]] = [(None, parts[0])]
+    items.extend(
+        (mark == "yes", text)
+        for mark, text in zip(parts[1::2], parts[2::2], strict=True)
+    )
+    return [
+        (mark, " ".join(html.unescape(_TAG.sub(" ", text)).split()))
+        for mark, text in items
+    ]
+
+
+def parse_capabilities(body: str) -> dict[str, Any]:
+    """Read the APIs and the prompt caching a model card marks supported.
+
+    Cards print APIs in two layouts: one table per endpoint, with the API names
+    as headers and an icon under each; or an icon beside each API name. Either
+    way an API counts as supported when any endpoint supports it.
+
+    Args:
+        body: The card page's HTML.
+
+    Returns:
+        ``apis``, card API name to whether it is supported, and
+        ``prompt_caching``, when the card states them.
+    """
+    apis: dict[str, bool] = {}
+    caching: list[bool] = []
+    known = _CARD_APIS.keys() | _UNLISTED_CARD_APIS
+    for table in _TABLE.findall(body):
+        rows = [
+            [_marked_items(cell) for cell in _CELL.findall(row)]
+            for row in _ROW.findall(table)
+        ]
+        headers = (
+            [" ".join(item[1] for item in cell).strip() for cell in rows[0]]
+            if rows
+            else []
+        )
+        per_column = len(rows) == 2 and headers and set(headers) <= known
+        for index, row in enumerate(rows):
+            for column, cell in enumerate(row):
+                for mark, text in cell:
+                    if mark is None:
+                        continue
+                    name = headers[column] if per_column and index == 1 else text
+                    if name in known:
+                        apis[name] = apis.get(name, False) or mark
+                    elif _CACHING.search(text):
+                        caching.append(mark)
+    stated: dict[str, Any] = {}
+    # A table marking every API unsupported is about an API it does not list,
+    # such as bidirectional streaming or asynchronous invocation.
+    if any(apis.values()):
+        stated["apis"] = apis
+    if caching:
+        stated["prompt_caching"] = any(caching)
+    return stated
+
+
+def apply_card_apis(listed: Iterable[str], card: Mapping[str, bool]) -> list[str]:
+    """Correct the APIs Amazon Bedrock lists for a model with what its card states.
+
+    The card's Converse and Invoke columns do not tell a call from its streamed
+    form, so they only remove an API or add the plain call where the listing
+    has neither form; the OpenAI columns name one API each and are taken as is.
+
+    Args:
+        listed: The APIs ``ListFoundationModels`` reports.
+        card: Card API name to whether the card marks it supported.
+
+    Returns:
+        The corrected APIs, sorted.
+    """
+    apis = set(listed)
+    for name, supported in card.items():
+        labels = _CARD_APIS.get(name, ())
+        if not labels:
+            continue
+        if not supported:
+            apis.difference_update(labels)
+        elif not apis.intersection(labels):
+            apis.add(labels[0])
+    return sorted(apis)
 
 
 def _card_pages() -> list[str]:
@@ -167,6 +291,8 @@ def _read_card(page: str) -> dict[str, Any]:
         "ids": sorted(set(_MODEL_ID.findall(body))),
         "facts": facts,
     }
+    if capabilities := parse_capabilities(body):
+        card["capabilities"] = capabilities
     if model_card_prices.has_price_table(body):
         try:
             card["prices"] = model_card_prices.prices_to_json(
@@ -184,22 +310,36 @@ def _collect() -> list[dict[str, Any]]:
         One entry per card that stated anything.
 
     Raises:
-        RuntimeError: Too few cards yielded a context window, meaning the user
-            guide's layout changed under the parser rather than AWS writing less.
+        RuntimeError: Too few cards yielded a context window or their APIs,
+            meaning the user guide's layout changed under the parser rather than
+            AWS writing less.
     """
     cards = [card for card in map_concurrent(_read_card, _card_pages()) if card]
-    found = sum(1 for card in cards if card.get("facts", {}).get("context_window"))
-    if found < _CONTEXT_WINDOW_FLOOR:
-        msg = (
-            f"only {found} of {len(cards)} model cards state a context window, "
-            f"under the floor of {_CONTEXT_WINDOW_FLOOR}; the user guide's layout "
-            "likely changed"
-        )
-        raise RuntimeError(msg)
+    for stated, found, floor in (
+        (
+            "a context window",
+            sum(1 for card in cards if card.get("facts", {}).get("context_window")),
+            _CONTEXT_WINDOW_FLOOR,
+        ),
+        (
+            "their APIs",
+            sum(1 for card in cards if "apis" in card.get("capabilities", {})),
+            _CAPABILITIES_FLOOR,
+        ),
+    ):
+        if found < floor:
+            msg = (
+                f"only {found} of {len(cards)} model cards state {stated}, under "
+                f"the floor of {floor}; the user guide's layout likely changed"
+            )
+            raise RuntimeError(msg)
     return [
         card
         for card in cards
-        if card.get("facts") or "prices" in card or "price_problem" in card
+        if card.get("facts")
+        or "capabilities" in card
+        or "prices" in card
+        or "price_problem" in card
     ]
 
 
@@ -355,6 +495,9 @@ def _snapshot_cards(*, refresh: bool) -> list[dict[str, Any]]:
     """
     raw = snapshot("aws_model_cards", _collect, refresh=refresh)
     assert isinstance(raw, list)  # noqa: S101 -- snapshot round-trips its own JSON
+    # A snapshot taken before the cards were read for their APIs carries none.
+    if not refresh and not any("capabilities" in card for card in raw):
+        return _snapshot_cards(refresh=True)
     return raw
 
 
@@ -374,7 +517,8 @@ def fetch(
     facts: dict[str, dict[str, Any]] = {}
     problems: dict[str, list[str]] = defaultdict(list)
 
-    for card in _snapshot_cards(refresh=refresh):
+    cards = _snapshot_cards(refresh=refresh)
+    for card in cards:
         stated = card.get("facts") or {}
         matched, problem = _claimed(card, catalogue)
         if problem:
@@ -392,12 +536,16 @@ def fetch(
             "knowledge_cutoff": _date(stated.get("knowledge_cutoff", "")),
             "start_of_life": _date(stated.get("launch_date", "")),
             "end_of_life": _date(stated.get("eol_date", "")),
+            "card_apis": card.get("capabilities", {}).get("apis"),
+            "prompt_caching": card.get("capabilities", {}).get("prompt_caching"),
         }
         usable = {key: value for key, value in contributed.items() if value is not None}
         for model_id in matched:
             facts.setdefault(model_id, {}).update(usable)
 
     notes = []
+    if not any("capabilities" in card for card in cards):
+        notes.append("no model card states its APIs, so none corrects the listing")
     if unmatched := problems["unmatched"]:
         notes.append(
             f"{len(unmatched)} model card(s) describe no model this gateway serves"

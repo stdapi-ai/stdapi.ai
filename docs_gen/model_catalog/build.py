@@ -667,7 +667,12 @@ def build(
         rows.append(row)
 
     rows, absorbed, fold_notes = fold_service_variants(rows)
-    report.notes.extend(f"service variants: {note}" for note in fold_notes)
+    report.notes.extend(
+        [
+            *(f"service variants: {note}" for note in fold_notes),
+            *apply_card_capabilities(rows, card_facts),
+        ]
+    )
     apply_stated_facts(rows, card_facts, published_facts)
     # Last, so that a card can only ever fill a date Amazon Bedrock left unsaid.
     apply_card_lifecycle_fallback(rows, card_facts)
@@ -1043,6 +1048,10 @@ _VARIANT_EITHER: tuple[str, ...] = (
 )
 
 
+#: Card facts that correct the Bedrock listing rather than fill a gap in it.
+_CARD_CAPABILITIES: tuple[str, ...] = ("card_apis", "prompt_caching")
+
+
 def _stated_facts(
     models: list[dict[str, Any]], report: BuildReport, *, refresh: bool
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -1374,11 +1383,62 @@ def _model_wide(stated: dict[str, Any]) -> dict[str, Any]:
     Returns:
         The same facts without the lifecycle dates, which
         :func:`apply_card_lifecycle_fallback` resolves against Amazon Bedrock's
-        own answer instead.
+        own answer instead, and without the card's corrections, which
+        :func:`apply_card_capabilities` applies.
     """
     return {
-        name: value for name, value in stated.items() if name not in _LIFECYCLE_FIELDS
+        name: value
+        for name, value in stated.items()
+        if name not in _LIFECYCLE_FIELDS and name not in _CARD_CAPABILITIES
     }
+
+
+def apply_card_capabilities(
+    rows: Iterable[ModelRow], card_facts: dict[str, dict[str, Any]]
+) -> list[str]:
+    """Publish the APIs and prompt caching a model card states over the listing.
+
+    ``ListFoundationModels`` reports APIs and caching some models do not have,
+    or omits ones they do; the model's own card is the authority for both. A
+    folded row takes the card of the first of its IDs that has one.
+
+    Args:
+        rows: The rows the catalogue will publish, after folding.
+        card_facts: Model ID to the facts its AWS model card states.
+
+    Returns:
+        One note per row the cards corrected, for the run report.
+    """
+    notes = []
+    for row in rows:
+        stated = next(
+            (
+                card_facts[identity]
+                for identity in (row.id, *(item.id for item in row.variants))
+                if any(
+                    name in card_facts.get(identity, {}) for name in _CARD_CAPABILITIES
+                )
+            ),
+            {},
+        )
+        changes = []
+        if "card_apis" in stated:
+            apis = aws_model_cards.apply_card_apis(row.apis, stated["card_apis"])
+            # An emptied list would be refilled from the previous run's.
+            if not apis:
+                apis = row.apis
+            if added := sorted(set(apis) - set(row.apis)):
+                changes.append(f"+{', '.join(added)}")
+            if removed := sorted(set(row.apis) - set(apis)):
+                changes.append(f"-{', '.join(removed)}")
+            row.apis = apis
+        caching = stated.get("prompt_caching")
+        if caching is not None and caching != row.prompt_caching:
+            changes.append(f"prompt caching {row.prompt_caching} -> {caching}")
+            row.prompt_caching = caching
+        if changes:
+            notes.append(f"model card corrects {row.id}: {'; '.join(changes)}")
+    return notes
 
 
 def apply_card_lifecycle_fallback(

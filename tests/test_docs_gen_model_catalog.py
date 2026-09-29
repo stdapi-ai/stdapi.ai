@@ -1200,6 +1200,7 @@ def test_a_card_is_only_joined_to_a_model_the_catalogue_has(
             "page": "model-card-stranger.html",
             "ids": ["other.stranger-v1:0"],
             "facts": {"context_window": "1M tokens"},
+            "capabilities": {"apis": {"Converse": True}},
         },
     ]
     monkeypatch.setattr(
@@ -2629,3 +2630,200 @@ def test_a_closed_model_no_leaderboard_lists_is_published_as_proprietary() -> No
     build._default_closed_licence(rows)  # noqa: SLF001
 
     assert [row.licence for row in rows] == ["Proprietary", "", "", "Apache 2.0"]
+
+
+#: Recorded excerpts of model cards, one per layout the API tables come in.
+_CARD_FIXTURES: Path = REPO_ROOT / "tests" / "fixtures" / "model_cards"
+
+
+@pytest.mark.parametrize(
+    ("fixture", "expected"),
+    [
+        (
+            "openai_gpt_6_astra.html",
+            {
+                "apis": {
+                    "Messages": False,
+                    "Responses": True,
+                    "Chat Completions": True,
+                    "Converse": True,
+                    "Invoke": False,
+                },
+                "prompt_caching": True,
+            },
+        ),
+        (
+            "amazon_nova_2_lite.html",
+            {
+                "apis": {
+                    "Responses": False,
+                    "Chat Completions": False,
+                    "Invoke": True,
+                    "Converse": True,
+                }
+            },
+        ),
+        ("amazon_nova_2_sonic.html", {}),
+    ],
+)
+def test_a_card_states_the_apis_and_prompt_caching_it_marks(
+    fixture: str, expected: dict[str, Any]
+) -> None:
+    """Both API table layouts are read; a table marking nothing supported is not.
+
+    Astra prints one table per endpoint and marks caching on Mantle only; Nova 2
+    Lite marks each API beside its name; Nova 2 Sonic's bidirectional API is in
+    no column, so every column reads unsupported.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-lite.html
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-sonic.html
+    """
+    body = (_CARD_FIXTURES / fixture).read_text()
+    assert aws_model_cards.parse_capabilities(body) == expected
+
+
+@pytest.mark.parametrize(
+    ("listed", "card", "expected"),
+    [
+        (
+            ["Converse", "ConverseStream", "InvokeModel", "InvokeModelStream"],
+            {"Responses": True, "Converse": True, "Invoke": False},
+            ["Converse", "ConverseStream", "OpenAI Responses"],
+        ),
+        (["InvokeModel"], {"Invoke": True}, ["InvokeModel"]),
+        (["StartAsyncInvoke"], {"Converse": True}, ["Converse", "StartAsyncInvoke"]),
+        (
+            ["OpenAI Chat Completions", "OpenAI Responses"],
+            {"Chat Completions": True, "Responses": False, "Messages": True},
+            ["OpenAI Chat Completions"],
+        ),
+    ],
+)
+def test_a_card_corrects_the_listed_apis(
+    listed: list[str], card: dict[str, bool], expected: list[str]
+) -> None:
+    """Card columns remove what they deny and add a plain call the listing lacks.
+
+    A streamed form is never added, since a column does not say whether one exists.
+
+    Ref: docs_gen/model_catalog/sources/aws_model_cards.py:apply_card_apis
+    """
+    assert aws_model_cards.apply_card_apis(listed, card) == expected
+
+
+def test_the_published_row_agrees_with_its_models_card(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A folded row takes its card's APIs and caching over the Bedrock listing.
+
+    Ref: https://github.com/stdapi-ai/stdapi.ai/issues/303
+    """
+    cards = [
+        {
+            "page": "model-card-openai-gpt-6-astra.html",
+            "ids": ["openai.gpt-6-astra"],
+            "facts": {},
+            "capabilities": aws_model_cards.parse_capabilities(
+                (_CARD_FIXTURES / "openai_gpt_6_astra.html").read_text()
+            ),
+        }
+    ]
+    monkeypatch.setattr(
+        "docs_gen.model_catalog.sources.aws_model_cards.snapshot",
+        lambda *_args, **_kwargs: cards,
+    )
+    card_facts, _notes = aws_model_cards.fetch(["openai.gpt-6-astra"])
+    listed = ["Converse", "ConverseStream", "InvokeModel", "InvokeModelStream"]
+    rows = [
+        a_row(
+            "openai.gpt-6-astra-mantle",
+            apis=[*listed, "OpenAI Chat Completions", "OpenAI Responses"],
+            prompt_caching=False,
+            variants=[
+                ServiceVariant(
+                    id="openai.gpt-6-astra-mantle", service="AWS Bedrock Mantle"
+                ),
+                ServiceVariant(id="openai.gpt-6-astra", service="AWS Bedrock Runtime"),
+            ],
+        ),
+        a_row("amazon.nova-2-lite-v1:0", apis=listed, prompt_caching=True),
+    ]
+
+    notes = build.apply_card_capabilities(rows, card_facts)
+    build.apply_stated_facts(rows, card_facts, {})
+
+    assert rows[0].apis == [
+        "Converse",
+        "ConverseStream",
+        "OpenAI Chat Completions",
+        "OpenAI Responses",
+    ]
+    assert rows[0].prompt_caching is True
+    assert (rows[1].apis, rows[1].prompt_caching) == (listed, True)
+    assert notes == [
+        (
+            "model card corrects openai.gpt-6-astra-mantle: "
+            "-InvokeModel, InvokeModelStream; prompt caching False -> True"
+        )
+    ]
+
+
+def test_a_snapshot_taken_before_apis_were_read_is_refreshed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A same-day snapshot without APIs would otherwise correct nothing, silently.
+
+    Ref: docs_gen/model_catalog/sources/aws_model_cards.py:_snapshot_cards
+    """
+    card = {"page": "model-card-known.html", "ids": ["acme.known-v1:0"], "facts": {}}
+    refreshed = {**card, "capabilities": {"apis": {"Invoke": False, "Converse": True}}}
+    calls: list[bool] = []
+
+    def serve(*_args: object, refresh: bool = False, **_kwargs: object) -> object:
+        calls.append(refresh)
+        return [refreshed if refresh else card]
+
+    monkeypatch.setattr(
+        "docs_gen.model_catalog.sources.aws_model_cards.snapshot", serve
+    )
+    facts, notes = aws_model_cards.fetch(["acme.known-v1:0"])
+
+    assert calls == [False, True]
+    assert facts["acme.known-v1:0"]["card_apis"] == {"Invoke": False, "Converse": True}
+    assert notes == []
+
+
+def test_no_card_stating_apis_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When even a fresh read carries no APIs, the report says nothing was corrected.
+
+    Ref: docs_gen/model_catalog/sources/aws_model_cards.py:fetch
+    """
+    card = {"page": "model-card-known.html", "ids": ["acme.known-v1:0"], "facts": {}}
+    monkeypatch.setattr(
+        "docs_gen.model_catalog.sources.aws_model_cards.snapshot",
+        lambda *_args, **_kwargs: [card],
+    )
+    _facts, notes = aws_model_cards.fetch(["acme.known-v1:0"])
+    assert notes == ["no model card states its APIs, so none corrects the listing"]
+
+
+def test_a_card_denying_every_listed_api_leaves_the_listing() -> None:
+    """An emptied list would be refilled from the previous run, reversing the card.
+
+    Mythos 5's card marks only the Messages API, which the catalogue does not list.
+
+    Ref: docs_gen/model_catalog/build.py:apply_card_capabilities
+    """
+    listed = ["Converse", "ConverseStream"]
+    rows = [a_row("anthropic.claude-mythos-5", apis=listed)]
+    card_facts = {
+        "anthropic.claude-mythos-5": {
+            "card_apis": {"Messages": True, "Converse": False, "Invoke": False}
+        }
+    }
+
+    notes = build.apply_card_capabilities(rows, card_facts)
+
+    assert rows[0].apis == listed
+    assert notes == []
