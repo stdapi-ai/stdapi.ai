@@ -10,13 +10,13 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 ## :material-tag-multiple: Version Index { #recent-releases }
 
-**Latest: [v1.19.0](#v1190-long-conversations-reasoning-control-medical-transcription) — released 2026-09-23.**
+**Latest: [v1.19.1](#v1190-long-conversations-reasoning-control-medical-transcription-with-v1191-maintenance-update) — not yet released.**
 
 Every release, newest first. Each entry in the [Release History](#release-history) below opens with a five-bullet summary.
 
 | Version | Date | Theme | Release notes |
 |---|---|---|---|
-| **v1.19.0** | 2026-09-23 | Long conversations, token counting on every model, reasoning control, medical transcription | [Read](#v1190-long-conversations-reasoning-control-medical-transcription) |
+| **v1.19.0** (and v1.19.1) | 2026-09-23 (not yet released) | Long conversations, token counting on every model, reasoning control, medical transcription | [Read](#v1190-long-conversations-reasoning-control-medical-transcription-with-v1191-maintenance-update) |
 | **v1.18.0** | 2026-09-19 | Vendor parity across every mirrored API, tenant key rotation, per-tenant rate limits, realtime tools | [Read](#v1180-vendor-parity-tenant-key-rotation-rate-limits) |
 | **v1.17.0** | 2026-09-08 | Your own model endpoints, the Ollama dialect, per-tenant keys, usage and cost from the API, WebRTC | [Read](#v1170-your-own-models-your-own-tenants-your-own-spend) |
 | **v1.16.0** (and v1.16.1) | 2026-08-21 (2026-08-25) | Conversations, batches, vector stores, realtime speech and per-user identity | [Read](#v1160-conversations-batches-vector-stores-realtime-speech-per-user-identity-with-v1161-maintenance-update) |
@@ -47,7 +47,7 @@ Pending features and current deployment state are tracked on the [GitHub Project
 
 ## :material-history: Release History
 
-### v1.19.0 – 2026-09-23 – Long Conversations, Reasoning Control & Medical Transcription { #v1190-long-conversations-reasoning-control-medical-transcription }
+### v1.19.0 – 2026-09-23 – Long Conversations, Reasoning Control & Medical Transcription (with v1.19.1 maintenance update, not yet released) { #v1190-long-conversations-reasoning-control-medical-transcription-with-v1191-maintenance-update }
 
 !!! abstract "At a glance"
     - **Long conversations keep going.** The [Responses API](api_openai_responses.md#context-window-management) serves `truncation: "auto"`, `context_management` compaction and the `compaction_trigger` item, where all three answered `400` or were dropped. On [Anthropic Messages](api_anthropic_messages.md#context-editing), Claude clears old tool results and thinking blocks through `context_management` and reports what it cleared.
@@ -128,6 +128,18 @@ This release is about what happens when a conversation gets long. An agent sessi
 - **A context-window overflow no longer leaks the backend's error text**, which on some models named an internal service and a request identifier, and a streamed one is no longer reported as a retryable `server_error`.
 - **A failed Responses request on a Bedrock Mantle model converted to that API** is refused, where it was answered as an empty success.
 
+
+#### Fixes & Maintenance (v1.19.1)
+
+- **Claude Sonnet 5.5 is served without errors.** Turning reasoning off or forcing a tool surfaced a raw `400` from Amazon Bedrock. Thinking turned off on any route (`reasoning_effort: "none"`, `enable_thinking: false`, `reasoning.effort: "none"`, `thinking: {"type": "disabled"}`, `think: false`) now reaches it as `between_tools`, its lowest setting, and a forced tool choice is refused with a message naming `auto`, as on Opus 5.5. See [Turning Thinking Off on Claude Sonnet 5.5](api_anthropic_messages.md#extended-thinking).
+- **Anthropic Messages accepts `thinking: {"type": "between_tools"}`**, as Anthropic does, on message creation and token counting.
+- **`thinking: {"type": "disabled"}` beside an `output_config.effort` turns thinking off and keeps the effort**, as upstream does. Claude reasoned at that effort instead, and was billed for it.
+- **Grok 4.7 calls are priced**, at Global $2.00 / $6.00 per million input / output tokens. Every call was reported as free.
+- **GPT-6 Astra short prompts are costed at the short-context rate.** The Price List rows AWS now publishes for it were read as one tier, so a short prompt could be costed at the long-context rate, up to twice as high.
+- **GPT-6 Luna, GPT-6 Sol and GLM 4.6 are priced**, at the rates on their AWS model cards (GPT-6) and on Z.ai's pricing page (GLM 4.6). Every call was reported as free.
+- **The Terraform module grants the server the KMS permission its DynamoDB table needs.** Since module 1.17.0, a deployment where the module created the table refused every table read and write, so tenant API keys, per-tenant rate limits and the shared model cache were unavailable. Update the module to apply it.
+- **A conversation replaying a turn that ended after reasoning is answered**, where automatic prompt caching made Amazon Bedrock refuse it with a `400`; Codex on Nova 2 Lite could not recover from a cut-short answer.
+- **The [Models](models.md) page** lists Claude Sonnet 5.5 and Grok 4.7, names each model once where it is served by two AWS services, quotes the nearest region's rate where the selected region has none, lists Amazon Transcribe in every region that offers it, shows closed models' licence as proprietary, and takes each model's APIs and prompt caching from its AWS model card.
 ---
 
 ### v1.18.0 – 2026-09-19 – Vendor Parity, Tenant Key Rotation & Rate Limits { #v1180-vendor-parity-tenant-key-rotation-rate-limits }
