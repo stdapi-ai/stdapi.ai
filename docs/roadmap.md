@@ -10,13 +10,13 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 ## :material-tag-multiple: Version Index { #recent-releases }
 
-**Latest: [v1.19.1](#v1190-long-conversations-reasoning-control-medical-transcription-with-v1191-maintenance-update) — not yet released.**
+**Latest: [v1.19.1](#v1190-long-conversations-reasoning-control-medical-transcription-with-v1191-maintenance-update) — released 2026-09-29.**
 
 Every release, newest first. Each entry in the [Release History](#release-history) below opens with a five-bullet summary.
 
 | Version | Date | Theme | Release notes |
 |---|---|---|---|
-| **v1.19.0** (and v1.19.1) | 2026-09-23 (not yet released) | Long conversations, token counting on every model, reasoning control, medical transcription | [Read](#v1190-long-conversations-reasoning-control-medical-transcription-with-v1191-maintenance-update) |
+| **v1.19.0** (and v1.19.1) | 2026-09-23 (2026-09-29) | Long conversations, token counting on every model, reasoning control, medical transcription | [Read](#v1190-long-conversations-reasoning-control-medical-transcription-with-v1191-maintenance-update) |
 | **v1.18.0** | 2026-09-19 | Vendor parity across every mirrored API, tenant key rotation, per-tenant rate limits, realtime tools | [Read](#v1180-vendor-parity-tenant-key-rotation-rate-limits) |
 | **v1.17.0** | 2026-09-08 | Your own model endpoints, the Ollama dialect, per-tenant keys, usage and cost from the API, WebRTC | [Read](#v1170-your-own-models-your-own-tenants-your-own-spend) |
 | **v1.16.0** (and v1.16.1) | 2026-08-21 (2026-08-25) | Conversations, batches, vector stores, realtime speech and per-user identity | [Read](#v1160-conversations-batches-vector-stores-realtime-speech-per-user-identity-with-v1161-maintenance-update) |
@@ -47,7 +47,7 @@ Pending features and current deployment state are tracked on the [GitHub Project
 
 ## :material-history: Release History
 
-### v1.19.0 – 2026-09-23 – Long Conversations, Reasoning Control & Medical Transcription (with v1.19.1 maintenance update, not yet released) { #v1190-long-conversations-reasoning-control-medical-transcription-with-v1191-maintenance-update }
+### v1.19.0 – 2026-09-23 – Long Conversations, Reasoning Control & Medical Transcription (with v1.19.1 maintenance update, 2026-09-29) { #v1190-long-conversations-reasoning-control-medical-transcription-with-v1191-maintenance-update }
 
 !!! abstract "At a glance"
     - **Long conversations keep going.** The [Responses API](api_openai_responses.md#context-window-management) serves `truncation: "auto"`, `context_management` compaction and the `compaction_trigger` item, where all three answered `400` or were dropped. On [Anthropic Messages](api_anthropic_messages.md#context-editing), Claude clears old tool results and thinking blocks through `context_management` and reports what it cleared.
