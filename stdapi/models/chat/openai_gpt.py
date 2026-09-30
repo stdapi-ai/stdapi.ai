@@ -5,16 +5,18 @@ from re import compile as re_compile
 from stdapi.models.chat._adapters._common import NoServerTools
 from stdapi.models.chat._reasoning_effort import ReasoningEffortChatModel
 
-#: GPT Astra models, with or without a ``daybreak-<edition>-`` qualifier, which reject effort ``none``.
-ALWAYS_REASONING_MATCHER = re_compile(r"^openai\.gpt-(?:daybreak-\w+-)?[\d.]+-astra")
+#: GPT models rejecting effort ``none``: every Astra, and every version from GPT-6.1 on (assumed past it).
+ALWAYS_REASONING_MATCHER = re_compile(
+    r"^openai\.gpt-(?:daybreak-\w+-)?(?:[\d.]+-astra|6\.[1-9]|[7-9]|[1-9]\d)"
+)
 
 
 class ChatModel(ReasoningEffortChatModel):
     """OpenAI GPT-specific chat model implementation.
 
-    Reasoning is set by ``additionalModelRequestFields.reasoning.effort``: probed
-    on GPT-5.6 and GPT-6, it takes ``none`` through ``max`` (``low`` through
-    ``max`` on GPT-6 Astra) and rejects ``minimal``, and the flat
+    Reasoning is set by ``additionalModelRequestFields.reasoning.effort``, which
+    takes ``none`` through ``max`` (``low`` through ``max`` on the models
+    ``ALWAYS_REASONING_MATCHER`` names) and rejects ``minimal``; the flat
     ``reasoning_effort`` and ``thinking`` fields are rejected as unknown
     parameters.
 

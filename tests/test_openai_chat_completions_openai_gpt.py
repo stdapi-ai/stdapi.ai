@@ -29,6 +29,7 @@ from stdapi.models.chat._mantle import get_mantle_chat_model
 from stdapi.models.chat._mantle._default import ChatModel as MantleChatModel
 from stdapi.models.chat._mantle._openai_gpt import OpenAIGptChatModel
 from stdapi.models.chat._reasoning_effort import ReasoningEffortChatModel
+from stdapi.models.chat.openai_gpt import ALWAYS_REASONING_MATCHER
 from stdapi.models.chat.openai_gpt import ChatModel as GptChatModel
 from stdapi.models.chat.openai_gpt_oss import ChatModel as GptOssChatModel
 from stdapi.types.anthropic_messages import MessageCreateParams
@@ -48,8 +49,11 @@ _GPT6_LUNA = "openai.gpt-6-luna"
 #: GPT-6 Sol, which the test deployment does not prefer on Mantle: served by Converse.
 _GPT6_SOL = "openai.gpt-6-sol"
 
-#: GPT-6 Astra, the one GPT model that cannot stop reasoning.
+#: GPT-6 Astra, which cannot stop reasoning.
 _GPT6_ASTRA = "openai.gpt-6-astra"
+
+#: GPT-6.1 Sol, the first non-Astra GPT model that cannot stop reasoning.
+_GPT61_SOL = "openai.gpt-6.1-sol"
 
 #: A Daybreak edition of Astra, which shares its effort range (assumed, unprobed).
 _DAYBREAK_ASTRA = "openai.gpt-daybreak-blue-6-astra"
@@ -181,19 +185,45 @@ class TestGptReasoningFields:
         ["openai.gpt-5.6-luna", _GPT6_SOL, "openai.gpt-daybreak-blue-5.6-sol"],
     )
     def test_other_gpt_models_can_disable_reasoning(self, model_id: str) -> None:
-        """Only Astra withholds ``none``; the other GPT models all accept it.
+        """GPT models before 6.1 other than Astra all accept ``none``.
 
         Ref: tests/probes/results/openai.gpt-6-sol.json
         """
         assert GptChatModel(model_id).REASONING_DISABLE_SUPPORTED
 
-    @pytest.mark.parametrize("model_id", [_GPT6_ASTRA, _DAYBREAK_ASTRA])
-    def test_every_astra_edition_withholds_none(self, model_id: str) -> None:
-        """The Daybreak qualifier does not hide an Astra from the gate.
+    @pytest.mark.parametrize(
+        "model_id",
+        [_GPT6_ASTRA, _DAYBREAK_ASTRA, "openai.gpt-6-astra-minor", _GPT61_SOL],
+    )
+    def test_models_rejecting_none_withhold_it(self, model_id: str) -> None:
+        """Every Astra edition and GPT-6.1 Sol reject ``none`` on both endpoints.
+
+        Probed: ``Unsupported value: 'none' is not supported with the
+        'us.openai.gpt-6.1-sol' model. Supported values are: 'low', 'medium',
+        'high', 'xhigh', and 'max'.`` Mantle answers the same for GPT-6.1 Sol
+        and GPT-6 Astra Minor (probed 2026-09-30).
+
+        Ref: tests/probes/results/openai.gpt-6.1-sol.json
+             stdapi/models/chat/openai_gpt.py:ALWAYS_REASONING_MATCHER
+        """
+        assert not GptChatModel(model_id).REASONING_DISABLE_SUPPORTED
+
+    @pytest.mark.parametrize(
+        "model_id", ["openai.gpt-6.2-luna", "openai.gpt-7-sol", "openai.gpt-10"]
+    )
+    def test_later_versions_are_assumed_to_withhold_none(self, model_id: str) -> None:
+        """An unprobed later version is served at its default rather than refused.
 
         Ref: stdapi/models/chat/openai_gpt.py:ALWAYS_REASONING_MATCHER
         """
         assert not GptChatModel(model_id).REASONING_DISABLE_SUPPORTED
+
+    def test_gpt_oss_is_not_matched_as_a_version(self) -> None:
+        """``gpt-oss`` is a separate family, not a GPT version from 6.1 on.
+
+        Ref: stdapi/models/chat/openai_gpt.py:ALWAYS_REASONING_MATCHER
+        """
+        assert ALWAYS_REASONING_MATCHER.match("openai.gpt-oss-120b-1:0") is None
 
     async def test_anthropic_thinking_disabled(self) -> None:
         """Disabling thinking on the Messages route sends ``none``.
@@ -514,14 +544,20 @@ class TestMantleEffort:
 
         assert sent["reasoning"] == {"effort": "low", "summary": "auto"}
 
-    @pytest.mark.parametrize("model_id", [_GPT6_ASTRA, _DAYBREAK_ASTRA])
+    @pytest.mark.parametrize(
+        "model_id",
+        [_GPT6_ASTRA, _DAYBREAK_ASTRA, "openai.gpt-6-astra-minor", _GPT61_SOL],
+    )
     async def test_astra_none_keeps_the_default(
         self,
         monkeypatch: pytest.MonkeyPatch,
         model_id: str,
         request_log: dict[str, Any],
     ) -> None:
-        """Astra is never sent ``none``: the model's default level is used, with a warning."""
+        """A model rejecting ``none`` is never sent it: its default level is used, with a warning.
+
+        Ref: tests/probes/results/openai.gpt-6.1-sol.json
+        """
         sent = await self._served_payload(
             monkeypatch, model_id, "chat_completions", {"reasoning_effort": "none"}
         )

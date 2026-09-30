@@ -736,7 +736,7 @@ On models whose reasoning depth is an effort level rather than a token budget (A
 !!! note "A small `max_tokens` turns reasoning off on Converse-served Claude 3.7–4.5"
     Thinking tokens are spent out of the output limit, and Converse takes no budget below 1,024 tokens nor one that is not smaller than `max_tokens`. An effort level asked for alongside a `max_tokens` of 1,024 or less therefore leaves no budget to derive, and the request is served **without** reasoning rather than refused — a warning is logged. Raise `max_tokens` above 1,024 to get reasoning back.
 
-!!! note "Disabled Thinking Not Honored on Claude Opus 5.5+, Fable, Mythos, OpenAI GPT-6 Astra and gpt-oss"
+!!! note "Disabled Thinking Not Honored on Claude Opus 5.5+, Fable, Mythos, OpenAI GPT-6 Astra, GPT-6.1+ and gpt-oss"
     These models always reason. The request is accepted and a warning is recorded in the request log, but the disabled configuration is dropped and the model's default reasoning is used (adaptive mode on Claude): the response may still carry thinking blocks, and their output tokens are still billed. An `output_config.effort` sent alongside still applies, so use it to lower the depth.
 
 **Response with Thinking:**

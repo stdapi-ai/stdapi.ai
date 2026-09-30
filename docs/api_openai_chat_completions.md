@@ -562,7 +562,7 @@ Use the `reasoning_effort` parameter with predefined effort levels. This format 
 
 **Available Levels:**
 
-- `none` - Disable reasoning (sent as `between_tools`, their lowest setting, to Claude Sonnet 5.5 and later; accepted but not honored on Claude Opus 5.5 and later, Fable and Mythos, which always reason: the model's default adaptive mode is used, the response still carries reasoning content and its output tokens are still billed; the same applies to OpenAI GPT-6 Astra, which reasons at its default level, and to gpt-oss, except on [Bedrock Mantle](#bedrock-mantle), where gpt-oss receives `none` as sent)
+- `none` - Disable reasoning (sent as `between_tools`, their lowest setting, to Claude Sonnet 5.5 and later; accepted but not honored on Claude Opus 5.5 and later, Fable and Mythos, which always reason: the model's default adaptive mode is used, the response still carries reasoning content and its output tokens are still billed; the same applies to OpenAI GPT-6 Astra and GPT-6.1 and later, which reason at their default level, and to gpt-oss, except on [Bedrock Mantle](#bedrock-mantle), where gpt-oss receives `none` as sent)
 - `minimal` - Quick responses with minimal reasoning (sent as `low` to the models without a minimal level: OpenAI GPT-5.x and GPT-6 wherever they are served, and gpt-oss and Moonshot Kimi outside Bedrock Mantle)
 - `low` - Light reasoning for straightforward tasks
 - `medium` - Balanced reasoning for most use cases
