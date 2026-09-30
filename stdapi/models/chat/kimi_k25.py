@@ -24,7 +24,7 @@ _REASONING_OVERRIDE: dict[Effort | None, KimiReasoning] = {
 
 
 class ChatModel(_BaseChatModel):
-    """Moonshot Kimi K2 generation chat model implementation (K2 Thinking, K2.5).
+    """Moonshot Kimi K2 generation chat model implementation.
 
     Configures reasoning through the K2 generation's
     ``additionalModelRequestFields.thinking`` and ``.reasoning_effort``; Kimi K3

@@ -1,9 +1,4 @@
-"""Amazon Titan embedding models.
-
-- amazon.titan-embed-image-v1
-- amazon.titan-embed-text-v1
-- amazon.titan-embed-text-v2:0
-"""
+"""Amazon Titan embedding models (e.g. ``amazon.titan-embed-text-v2:0``)."""
 
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 

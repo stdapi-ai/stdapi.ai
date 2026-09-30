@@ -64,7 +64,6 @@ class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
 
     __slots__ = ()
 
-    #: Replayed reasoning content must carry the signature the model issued with it.
     #: When True, a replayed reasoning block that has no signature is dropped.
     REASONING_SIGNATURE_REQUIRED: ClassVar[bool] = False
 
@@ -154,10 +153,12 @@ class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         """
 
 
-# Chat Model Registry
+#: Chat model registry: (matcher, class) pairs sorted by specificity.
 _CHAT_MODEL_REGISTRY: list[
     tuple[str | Pattern[str], type[ChatModelBase[Any, Any]]]
 ] = []
+
+#: Chat model instance cache.
 _CHAT_MODEL_CACHE: dict[str, ChatModelBase[Any, Any]] = {}
 
 

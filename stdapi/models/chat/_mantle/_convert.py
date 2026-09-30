@@ -2178,8 +2178,8 @@ def sanitize_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Strip JSON Schema keywords that Mantle upstream models cannot handle.
 
     Some open-weight tool templates silently emit an empty generation when a
-    tool schema contains rarely-supported keywords (observed live with
-    ``propertyNames`` on Gemma). The keywords are removed recursively.
+    tool schema contains rarely-supported keywords (e.g. ``propertyNames`` on
+    Gemma). The keywords are removed recursively.
 
     Args:
         schema: Tool input JSON schema (mutated in place).

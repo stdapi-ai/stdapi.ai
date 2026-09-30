@@ -155,9 +155,7 @@ class ChatModel(ChatModelBase[Any, Any]):
     #: System prompt supported.
     SYSTEM_PROMPT_SUPPORTED: ClassVar[bool] = True
 
-    #: System-role messages in the messages list are forwarded to Bedrock as-is
-    #: (mid-conversation system instructions, Claude Opus 4.8+).
-    #: When False (default), they are extracted and merged into the system prompt field.
+    #: When True, mid-conversation system messages are forwarded as-is, else merged into the system prompt.
     SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED: ClassVar[bool] = False
 
     #: ``toolAddition``/``toolRemoval`` blocks announce a mid-conversation tool-set change; no model accepts them yet, so this stays off until one does.

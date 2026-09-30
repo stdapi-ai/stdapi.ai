@@ -1,8 +1,4 @@
-"""Stability AI search recolor model.
-
-Supported Models:
-- stability.stable-image-search-recolor-v1:* (recolor objects by search)
-"""
+"""Stability AI search recolor model."""
 
 from re import compile as compile_regex
 from typing import TYPE_CHECKING

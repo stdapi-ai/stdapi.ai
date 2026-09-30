@@ -181,10 +181,15 @@ _SUPPORTED_SPEECH_MODELS: set[str] = {
     f"{_PREFIX}generative",
 }
 
+#: Voice description by voice ID, across regions.
 _VOICES_DESCRIPTIONS: dict[VoiceIdType, str] = {}
+#: Voice IDs by gender.
 _VOICES_BY_GENDERS: dict[GenderType, set[VoiceIdType]] = {}
+#: Voice IDs by language code.
 _VOICES_BY_LANGUAGE: dict[LanguageCodeType, set[VoiceIdType]] = {}
+#: Voice IDs by engine.
 _VOICES_BY_ENGINE: dict[EngineType, set[VoiceIdType]] = {}
+#: Canonical voice ID by lowercased name.
 _VOICES_BY_NAME_LOWER: dict[str, VoiceIdType] = {}
 
 #: Voices per engine and region, in candidate priority order (non-empty only).
@@ -909,8 +914,8 @@ async def _synthesize_streamed_text(
     """Synthesize text incrementally, as a job where no stream can be opened.
 
     The fallback covers a deployment whose permissions or region do not offer
-    the operation: the request is then served the way it was before it existed,
-    and only a deployment that cannot run a job either sees the failure.
+    the operation: the request is served as a job, and only a deployment that
+    cannot run a job either sees the failure.
 
     Args:
         request: Synthesis request, as built for a single call.

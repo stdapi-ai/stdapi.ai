@@ -16,9 +16,9 @@ if TYPE_CHECKING:
 class OpenAIGptChatModel(MantleChatModel):
     """OpenAI GPT model on Mantle, with its reasoning effort fitted to what it accepts.
 
-    Probed on Mantle (GPT-5.6 Luna, GPT-6 Luna and Astra): ``minimal`` is
-    rejected on both APIs, so it is sent as ``low``; GPT-6 Astra also rejects
-    ``none``, so a request disabling reasoning there is served at its default.
+    ``minimal`` is rejected on both APIs, so it is sent as ``low``; a model
+    ``ALWAYS_REASONING_MATCHER`` names also rejects ``none``, so a request
+    disabling reasoning there is served at its default.
     """
 
     __slots__ = ()

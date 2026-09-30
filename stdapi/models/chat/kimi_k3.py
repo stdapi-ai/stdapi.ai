@@ -8,7 +8,7 @@ from stdapi.models.chat._reasoning_effort import ReasoningEffortChatModel
 class ChatModel(ReasoningEffortChatModel):
     """Moonshot Kimi K3 and later chat model implementation.
 
-    Probed on Converse: the model reasons by default, and only
+    The model reasons by default, and only
     ``additionalModelRequestFields.reasoning.effort`` changes that, ``none``
     returning no reasoning at all. The Kimi K2 ``thinking`` toggle and flat
     ``reasoning_effort`` are accepted and silently ignored, so they are not sent.

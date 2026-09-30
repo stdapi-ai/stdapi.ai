@@ -1,8 +1,7 @@
 """Open-weight model families on Amazon Bedrock Mantle (Chat Completions only).
 
 Covers the long tail of open-weight providers whose models answer only the
-Chat Completions API on the legacy ``/v1`` surface (Gemma 3, Qwen, GLM,
-Mistral, DeepSeek, MiniMax, Kimi, Nemotron, Palmyra, ...).
+Chat Completions API on the legacy ``/v1`` surface (e.g. Qwen, GLM, Mistral).
 """
 
 from re import Pattern

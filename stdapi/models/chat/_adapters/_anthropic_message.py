@@ -736,9 +736,9 @@ def _prepare_messages_and_system(
     Args:
         messages: Input message list, possibly containing system-role entries.
             System-role messages are mid-conversation system instructions valid
-            only after the first user turn (Claude 4.8+).
+            only after the first user turn.
         system: Top-level system field value.
-        system_message_as_messages: When True (Claude 4.8+), forward system-role
+        system_message_as_messages: When True, forward system-role
             messages the model accepts natively, that is the historical
             ``user -> system -> assistant`` ones.  Any other system-role message
             is extracted and its content merged into the system field, which is
@@ -1996,9 +1996,9 @@ def _process_content_block_delta(
             return [delta_event]
         return []
     # Empty delta: stay suppressed (or start suppression). The block is only
-    # truly discarded if contentBlockStop arrives while still deferred (Nova-style
-    # preamble). Non-empty arrivals in the same block (DeepSeek V3, Gemma) are
-    # handled below by falling through to synthesize the start event.
+    # truly discarded if contentBlockStop arrives while still deferred (empty
+    # preamble). Non-empty arrivals in the same block are handled below by
+    # falling through to synthesize the start event.
     if delta == {"text": ""}:
         state.current_suppressed = True
         return []
@@ -2114,10 +2114,9 @@ async def _process_stream_events(
     Two situations cause a Bedrock block to be dropped entirely:
 
     1. *Empty text preamble* — a block whose first delta is ``{"text": ""}``
-       (Nova sends one for block 0, with no ``contentBlockStart``) is discarded
-       when no non-empty delta follows before ``contentBlockStop``.  DeepSeek V3
-       and Gemma send the same empty first delta but do follow it with real
-       content, so their block is surfaced on that first non-empty delta.
+       (sent for block 0 with no ``contentBlockStart``) is discarded when no
+       non-empty delta follows before ``contentBlockStop``; if one does follow,
+       the block is surfaced on that first non-empty delta.
     2. *forced_tool filter* — when a single tool is forced, ``toolUse`` blocks
        for other tools are suppressed.
 

@@ -1,9 +1,4 @@
-"""Cohere embedding models.
-
-- cohere.embed-english-v3
-- cohere.embed-multilingual-v3
-- cohere.embed-v4:0
-"""
+"""Cohere embedding models (e.g. ``cohere.embed-v4:0``)."""
 
 from asyncio import gather
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict

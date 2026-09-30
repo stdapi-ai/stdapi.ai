@@ -1,8 +1,4 @@
-"""Stability AI remove background model.
-
-Supported Models:
-- stability.stable-image-remove-background-v1:* (automatic background removal)
-"""
+"""Stability AI remove background model."""
 
 from re import compile as compile_regex
 from typing import TYPE_CHECKING

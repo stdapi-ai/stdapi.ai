@@ -67,7 +67,7 @@ class PriceRow(BaseModel):
             latency-optimized price variant.
         spec: Media bucket (e.g. image "resolution:quality"), when applicable.
         context: "long" for the prompt rate past the model's own short-context
-            boundary, 200K tokens for most and 272K for the GPT-5.6 family.
+            boundary, 200K tokens for most and 272K for some families.
         unit_price: Exact plain-decimal price per ONE billed unit.
         currency: ISO currency code of the price.
     """

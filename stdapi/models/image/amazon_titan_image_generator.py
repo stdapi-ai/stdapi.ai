@@ -1,8 +1,4 @@
-"""Amazon Titan Image Generator models.
-
-- amazon.titan-image-generator-v1
-- amazon.titan-image-generator-v2:0
-"""
+"""Amazon Titan Image Generator models."""
 
 from secrets import randbelow
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict

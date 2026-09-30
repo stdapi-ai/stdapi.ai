@@ -1,9 +1,4 @@
-"""Stability AI "Stable Image" models.
-
-Supported Models:
-- stability.stable-image-core-v1
-- stability.stable-image-ultra-v1
-"""
+"""Stability AI "Stable Image" models."""
 
 from re import compile as compile_regex
 from typing import ClassVar

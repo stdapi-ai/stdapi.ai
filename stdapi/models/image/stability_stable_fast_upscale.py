@@ -1,8 +1,4 @@
-"""Stability AI fast upscale model.
-
-Supported Models:
-- stability.stable-fast-upscale-v1:* (fast 4x upscaling)
-"""
+"""Stability AI fast upscale model."""
 
 from re import compile as compile_regex
 from typing import TYPE_CHECKING

@@ -575,7 +575,7 @@ class RealtimeModel(RealtimeModelBase[Any, Any]):
 
     __slots__ = ()
 
-    # A string, not a pattern: a pattern would lose these routes to the chat family.
+    #: A string, not a pattern: a pattern would lose these routes to the chat family.
     MATCHER = "amazon.nova-2-sonic"
 
     INPUT_SAMPLE_RATES: ClassVar[frozenset[int]] = _SAMPLE_RATES

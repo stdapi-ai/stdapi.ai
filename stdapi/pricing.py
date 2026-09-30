@@ -1112,8 +1112,7 @@ def _marketplace_dimension_tier_ttl(
 def _marketplace_routing(usagetype: str) -> Routing:
     """Resolve the serving profile ("latency", "global" or "") from a Marketplace usagetype.
 
-    Global routing is paradoxically cheaper than plain (~$3.00/M vs $3.30/M
-    for Claude Sonnet 4.5); "_LatencyOptimized" is pricier than both.
+    Global routing can be cheaper than plain; "_LatencyOptimized" is pricier than both.
     """
     normalized = _normalize_usagetype(usagetype)
     if "latencyoptimized" in normalized:
@@ -1563,7 +1562,7 @@ def _ingest_native_item(
     if not (terms := item.get("terms", {}).get("OnDemand", {})):
         return
 
-    # A TTL with no bucket of its own (Kimi K3's 30m write) keys undifferentiated.
+    # A TTL with no bucket of its own (e.g. a 30m write) keys undifferentiated.
     cache_ttl: CacheTtlBucket = (
         "1h"
         if dimension == Dimension.CACHE_WRITE_TOKENS
@@ -1617,7 +1616,7 @@ def _catalog_regions() -> set[str]:
 def _apply_mantle_fallback(index: dict[PriceKey, Price]) -> None:
     """Copy a model's Mantle rows onto bedrock-runtime when it has no runtime row.
 
-    AWS publishes some runtime-served models (Kimi K3) under "mantle"
+    AWS publishes some runtime-served models under "mantle"
     usagetypes only, while their card and pricing page quote one rate set
     with no split by invocation API. Without the copy a runtime call to one
     resolves no price at all. A model with any runtime row keeps its own.

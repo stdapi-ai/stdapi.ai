@@ -1,8 +1,4 @@
-"""Stability AI inpaint model.
-
-Supported Models:
-- stability.stable-image-inpaint-v1:* (mask-based inpainting)
-"""
+"""Stability AI inpaint model."""
 
 from re import compile as compile_regex
 from typing import TYPE_CHECKING

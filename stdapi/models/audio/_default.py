@@ -306,7 +306,7 @@ class AudioModel(AudioModelBase[Any, Any]):
                 {
                     "role": "user",
                     # The audio block must precede the text prompt: speech
-                    # models (e.g. Voxtral) ignore audio placed after the text.
+                    # models ignore audio placed after the text.
                     "content": [
                         await self._audio_content_block(audio_content),
                         {

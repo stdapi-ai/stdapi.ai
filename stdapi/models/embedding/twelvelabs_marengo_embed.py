@@ -1,8 +1,4 @@
-"""TwelveLabs Marengo embedding models.
-
-- twelvelabs.marengo-embed-2-7-v1:0
-- twelvelabs.marengo-embed-3-0-v1:0
-"""
+"""TwelveLabs Marengo embedding models (e.g. ``twelvelabs.marengo-embed-3-0-v1:0``)."""
 
 from math import ceil
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict

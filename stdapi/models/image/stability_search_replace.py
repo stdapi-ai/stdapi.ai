@@ -1,8 +1,4 @@
-"""Stability AI search replace model.
-
-Supported Models:
-- stability.stable-image-search-replace-v1:* (replace objects by search)
-"""
+"""Stability AI search replace model."""
 
 from re import compile as compile_regex
 from typing import TYPE_CHECKING

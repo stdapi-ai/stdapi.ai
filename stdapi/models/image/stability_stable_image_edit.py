@@ -1,13 +1,6 @@
 """Stability AI simple edit models with identical logic.
 
 These models share the same implementation: validate quality/mask, build request with prompt+image.
-
-Supported Models:
-- stability.stable-image-control-*-v1:* (sketch-to-image, structure-preserving)
-- stability.stable-image-style-guide-v1:* (extract and apply style)
-- stability.stable-outpaint-v1:* (extend image beyond borders)
-- stability.stable-creative-upscale-v1:* (prompt-guided creative upscaling)
-- stability.stable-conservative-upscale-v1:* (detail-preserving upscaling)
 """
 
 from re import compile as compile_regex

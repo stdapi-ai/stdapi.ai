@@ -18,10 +18,6 @@ from stdapi.models.image import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable
 
-# ============================================================================
-# Common Constants
-# ============================================================================
-
 #: Aspect ratios supported by text-to-image and image-to-image models.
 AspectRatio = Literal["16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21"]
 
@@ -37,10 +33,6 @@ ASPECT_RATIOS: dict[float, AspectRatio] = {
     9 / 16: "9:16",
     9 / 21: "9:21",
 }
-
-# ============================================================================
-# TypedDict Definitions (Request/Response Types)
-# ============================================================================
 
 
 class TextToImageRequest(TypedDict):
@@ -175,7 +167,7 @@ class StyleTransferRequest(TypedDict):
     fidelity: NotRequired[float]
 
 
-# Union type for all request types
+#: Union of all Stability request types.
 Request = (
     TextToImageRequest
     | FastUpscaleRequest
@@ -198,11 +190,6 @@ class Response(TypedDict):
     images: list[str]
     seeds: list[int]
     finish_reasons: list[str | None]
-
-
-# ============================================================================
-# Base Job Class
-# ============================================================================
 
 
 class StabilityImageGenerationJobBase(

@@ -1,8 +1,4 @@
-"""Stability AI style transfer model.
-
-Supported Models:
-- stability.stable-style-transfer-v1:* (transfer style between images)
-"""
+"""Stability AI style transfer model."""
 
 from re import compile as compile_regex
 from typing import TYPE_CHECKING

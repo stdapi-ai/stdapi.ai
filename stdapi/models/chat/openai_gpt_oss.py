@@ -28,8 +28,8 @@ _REASONING_OVERRIDE: dict[Effort | None, GptOssReasoning] = {
 class ChatModel(_GptChatModel):
     """OpenAI gpt-oss-specific chat model implementation.
 
-    Probed on Converse, gpt-oss ignores the ``reasoning.effort`` object the GPT
-    models take and honours the flat ``reasoning_effort`` instead, at ``low``,
+    gpt-oss ignores the ``reasoning.effort`` object the GPT models take and
+    honours the flat ``reasoning_effort`` instead, at ``low``,
     ``medium`` or ``high``. It always reasons: ``none`` is rejected, so a request
     disabling reasoning is served at the model's default.
     """

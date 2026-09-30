@@ -2259,11 +2259,11 @@ def _pin_tenant_billable_service(
     Marketplace or SageMaker AI endpoint is this deployment's own provisioned
     resource: a tenant-signed request can pay for none of them, so serving one
     there would land the spend on the operator's bill. A Mantle-served model
-    that also exists on bedrock-runtime (the GPT-5.6 family by default) is
-    pinned to its runtime twin, where the tenant's credential signs and pays;
-    the two catalogues may name that twin identically, so the pin can leave the
-    identifier untouched and swap the entry alone -- which is why the chat
-    class is picked from the same rule (:func:`~stdapi.models.chat.serves_via_mantle`).
+    that also exists on bedrock-runtime is pinned to its runtime twin, where
+    the tenant's credential signs and pays; the two catalogues may name that
+    twin identically, so the pin can leave the identifier untouched and swap
+    the entry alone -- which is why the chat class is picked from the same
+    rule (:func:`~stdapi.models.chat.serves_via_mantle`).
     A model with no runtime home is refused with the reason. A reranking model
     is refused too: its per-query-billed invocations run through a service the
     tenant's credential never signs, so serving one would silently bill the
@@ -2449,12 +2449,11 @@ async def _get_provisioned_models(
 
     A denial never fails the region. Provisioned throughput is offered in a
     subset of regions, and where it is not, the control plane refuses the call
-    with a bare ``AccessDeniedException`` — worded "Your account is not
-    authorized to invoke this API operation." as of 2026-08-31, having been
-    worded differently before. Matching that prose is what once cost a whole
-    region its catalogue, so any denial is tolerated here and recorded in
-    *denied_regions* instead: it can only cost the models that are exclusively
-    provisioned in this region, where failing costs every model in it.
+    with a bare ``AccessDeniedException`` whose wording is not stable.
+    Matching that prose would cost a whole region its catalogue, so any denial
+    is tolerated here and recorded in *denied_regions* instead: it can only
+    cost the models that are exclusively provisioned in this region, where
+    failing costs every model in it.
 
     Args:
         bedrock_client: Bedrock control-plane client for the region.
@@ -2843,7 +2842,7 @@ def _merge_mantle_models(
     """Merge previously-collected Mantle models into *all_models*.
 
     bedrock-runtime keeps priority for dual-homed models unless the model is
-    preferred on Mantle -- which the GPT-5.6 family is by default. A displaced
+    preferred on Mantle (``aws_bedrock_mantle_preferred_models``). A displaced
     model keeps the display name its bedrock-runtime listing gave it, derived
     here rather than declared: the Mantle catalog carries no human-readable
     name, so the model would otherwise be published under its raw identifier.

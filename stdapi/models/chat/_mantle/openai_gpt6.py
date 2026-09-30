@@ -14,10 +14,9 @@ class ChatModel(OpenAIGptChatModel):
     """OpenAI GPT-6 chat model (e.g. ``openai.gpt-6-luna``), and later versions.
 
     Unlike GPT-5, these answer both Chat Completions and Responses on the
-    ``/openai/v1`` surface: GPT-6 Luna and Sol served both in ``us-east-1``
-    (probed 2026-09-22), and the GPT-6 Astra card lists both. The models are
-    dual-homed and served by Mantle by default wherever a configured Mantle
-    Region lists them, which is far fewer Regions than bedrock-runtime.
+    ``/openai/v1`` surface. The models are dual-homed and served by Mantle by
+    default wherever a configured Mantle Region lists them, which is far fewer
+    Regions than bedrock-runtime.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
     """

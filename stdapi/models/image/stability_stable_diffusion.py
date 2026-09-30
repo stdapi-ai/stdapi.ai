@@ -1,8 +1,4 @@
-"""Stability AI "Stable diffusion" models.
-
-Supported Models:
-- stability.sd3-5-large-v1
-"""
+"""Stability AI "Stable diffusion" models."""
 
 from typing import TYPE_CHECKING
 

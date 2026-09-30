@@ -1,7 +1,4 @@
-"""Amazon Nova Canvas image generation models.
-
-- amazon.nova-canvas-v1:0
-"""
+"""Amazon Nova Canvas image generation models."""
 
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 

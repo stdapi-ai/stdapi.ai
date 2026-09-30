@@ -490,8 +490,8 @@ async def _scan_region_jobs(
 async def _listing_details(job: VideoJob) -> VideoListing | None:
     """Resolve a job's duration and size from its resource tags.
 
-    Falls back to the model defaults when the tags are absent (jobs started
-    by older server versions), and drops the job when its model is unknown.
+    Falls back to the model defaults when the tags are absent, and drops the
+    job when its model is unknown.
 
     Args:
         job: The video generation job.

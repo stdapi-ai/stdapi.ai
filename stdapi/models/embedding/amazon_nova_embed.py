@@ -1,7 +1,4 @@
-"""Amazon Nova multimodal embedding model.
-
-- amazon.nova-2-multimodal-embeddings-v1:0
-"""
+"""Amazon Nova multimodal embedding model (e.g. ``amazon.nova-2-multimodal-embeddings-v1:0``)."""
 
 from asyncio import gather
 from math import ceil

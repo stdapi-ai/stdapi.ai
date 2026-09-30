@@ -4,8 +4,7 @@ from re import compile as re_compile
 
 from stdapi.models.chat._anthropic_claude import AnthropicClaudeChatModel
 
-#: Claude 4.8+/5+ families accepting native mid-conversation system messages (live-verified
-#: on 4.8/opus-5/sonnet-5; newer versions assumed to keep the capability).
+#: Claude Opus/Sonnet/Haiku 4.8+ and 5+, which accept native mid-conversation system messages.
 _SYSTEM_MESSAGE_AS_MESSAGES_MATCHER = re_compile(
     r"^anthropic\.claude-(?:opus|sonnet|haiku)-(?:4-(?:[89]|\d{2})|[5-9]|\d{2})(?:\D|$)"
 )

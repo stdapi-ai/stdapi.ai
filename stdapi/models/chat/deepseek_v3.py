@@ -9,9 +9,10 @@ if TYPE_CHECKING:
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_messages import ThinkingDisplay
 
+#: Reasoning effort values Deepseek accepts.
 DeepseekReasoning = Literal["low", "medium", "high"]
 
-#: OpenAI to Deepseek override
+#: Mapping of OpenAI effort levels to the values Deepseek accepts.
 _REASONING_OVERRIDE: dict[Effort | None, DeepseekReasoning] = {
     "minimal": "low",
     "low": "low",

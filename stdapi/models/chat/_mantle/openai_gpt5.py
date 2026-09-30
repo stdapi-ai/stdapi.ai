@@ -15,10 +15,9 @@ class ChatModel(OpenAIGptChatModel):
 
     Includes the enrollment-gated Daybreak variants, ``openai.gpt-5.6-cyber``
     (Daybreak Red) and ``openai.gpt-daybreak-blue-5.6-sol`` (Daybreak Blue).
-    Their model cards give them the same endpoint, Responses-only API, routing
-    surface and text+image input as the other GPT-5.6 variants; everything
-    below that — reasoning shape, parameter handling — is **assumed** identical
-    and unprobed, since the models answer only to enrolled accounts.
+    They share the endpoint, Responses-only API, routing surface and text+image
+    input of the other GPT-5 variants; reasoning shape and parameter handling
+    are assumed identical, as the models answer only to enrolled accounts.
 
     GPT-6 and later answer Chat Completions too, and have their own class.
 

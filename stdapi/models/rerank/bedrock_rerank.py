@@ -65,8 +65,7 @@ def _document_source(document: str | JsonMapping) -> RerankSourceTypeDef:
     """Build the Bedrock inline document source for one rerank document.
 
     Plain strings, and single-key ``{"text": ...}`` objects, use the
-    ``textDocument`` fast path (identical wire encoding to before this
-    document type was widened). Any other object uses ``jsonDocument`` so
+    ``textDocument`` fast path. Any other object uses ``jsonDocument`` so
     Bedrock can natively rerank on its structured fields.
 
     Args:

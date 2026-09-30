@@ -357,8 +357,7 @@ class AnthropicClaudeChatModel(_BaseChatModel):
     #: Whether reasoning turned off is sent as ``between_tools``, the model's lowest setting.
     BETWEEN_TOOLS_SUPPORTED: ClassVar[bool] = False
 
-    #: Claude rejects a replayed reasoning block that lost its signature, with or
-    #: without extended thinking enabled.
+    #: Claude rejects a replayed reasoning block without its signature, thinking enabled or not.
     REASONING_SIGNATURE_REQUIRED: ClassVar[bool] = True
 
     def _req_extract_server_tools(

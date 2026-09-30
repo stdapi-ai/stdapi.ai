@@ -95,7 +95,7 @@ async def _detect_toxicity(
         """Start the toxicity detection call on one region's client."""
         return client.detect_toxic_content(
             TextSegments=[{"Text": segment} for segment in segments],
-            # DetectToxicContent's runtime enum accepts only "en" (live-verified).
+            # DetectToxicContent's runtime enum accepts only "en".
             LanguageCode=_TOXICITY_LANGUAGE,  # type: ignore[arg-type]
         )
 

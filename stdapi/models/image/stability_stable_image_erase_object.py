@@ -1,8 +1,4 @@
-"""Stability AI erase model.
-
-Supported Models:
-- stability.stable-image-erase-object-v1:* (remove objects with mask)
-"""
+"""Stability AI erase model."""
 
 from re import compile as compile_regex
 from typing import TYPE_CHECKING
