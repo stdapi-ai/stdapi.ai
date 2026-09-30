@@ -388,6 +388,7 @@ class TestImagesEditsBasic:
         assert exc_info.value.type == "invalid_request_error"
         assert '"mask" parameter is not supported' in str(exc_info.value)
 
+    @pytest.mark.skip(reason="Amazon Nova Canvas is deprecated")
     @pytest.mark.gateway(
         "Amazon Nova Canvas is not available on the official OpenAI API"
     )
@@ -400,8 +401,8 @@ class TestImagesEditsBasic:
         its ``referenceImage``, so the parameter is mandatory for that task type
         even though it is optional for the endpoint.
 
-        Nova Canvas is the only backend offering VIRTUAL_TRY_ON and it is legacy,
-        so pinning a legacy model here is deliberate (#93).
+        Nova Canvas is the only backend offering VIRTUAL_TRY_ON; skipped since it
+        reached end of life on 2026-09-30 (#93).
 
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
              stdapi/models/image/amazon_nova_canvas.py:_get_request_virtual_try_on
