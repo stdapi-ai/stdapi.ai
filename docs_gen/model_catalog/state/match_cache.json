@@ -484,12 +484,22 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "epoch/aider_polyglot_external/openai.gpt-6-astra-minor": {
+  "candidates": "bf67b661cc584983",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/aider_polyglot_external/openai.gpt-6-luna": {
   "candidates": "bf67b661cc584983",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/aider_polyglot_external/openai.gpt-6-sol": {
+  "candidates": "bf67b661cc584983",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "epoch/aider_polyglot_external/openai.gpt-6.1-sol": {
   "candidates": "bf67b661cc584983",
   "match": null,
   "reason": "the model was not recognised on this board"
@@ -1159,12 +1169,22 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "epoch/frontiermath/openai.gpt-6-astra-minor": {
+  "candidates": "ba2f16fb378edf40",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/frontiermath/openai.gpt-6-luna": {
   "candidates": "ba2f16fb378edf40",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/frontiermath/openai.gpt-6-sol": {
+  "candidates": "ba2f16fb378edf40",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "epoch/frontiermath/openai.gpt-6.1-sol": {
   "candidates": "ba2f16fb378edf40",
   "match": null,
   "reason": "the model was not recognised on this board"
@@ -1530,7 +1550,7 @@
   "reason": "no rule match and no plausible candidate"
  },
  "epoch/gpqa_diamond/anthropic.claude-fable-5-1": {
-  "candidates": "5246ad590458dd7b",
+  "candidates": "8a6dca936582f8af",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -1540,9 +1560,9 @@
   "reason": "the model was not recognised on this board"
  },
  "epoch/gpqa_diamond/anthropic.claude-haiku-4-5": {
-  "candidates": "5246ad590458dd7b",
+  "candidates": "8a6dca936582f8af",
   "match": "claude-haiku-4-5-20251001",
-  "reason": "Exact match of model series and version, ignoring potential variations in context length or date suffix which do not change core model identity."
+  "reason": "Exact match in model family and version, ignoring potential context window differences"
  },
  "epoch/gpqa_diamond/anthropic.claude-opus-5-5": {
   "candidates": "5246ad590458dd7b",
@@ -1739,12 +1759,22 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "epoch/gpqa_diamond/openai.gpt-6-astra-minor": {
+  "candidates": "20602c3c56b58003",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/gpqa_diamond/openai.gpt-6-luna": {
   "candidates": "20602c3c56b58003",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/gpqa_diamond/openai.gpt-6-sol": {
+  "candidates": "20602c3c56b58003",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "epoch/gpqa_diamond/openai.gpt-6.1-sol": {
   "candidates": "20602c3c56b58003",
   "match": null,
   "reason": "the model was not recognised on this board"
@@ -2374,12 +2404,22 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "epoch/math_level_5/openai.gpt-6-astra-minor": {
+  "candidates": "fee2c4e6c5cc3855",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/math_level_5/openai.gpt-6-luna": {
   "candidates": "fee2c4e6c5cc3855",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/math_level_5/openai.gpt-6-sol": {
+  "candidates": "fee2c4e6c5cc3855",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "epoch/math_level_5/openai.gpt-6.1-sol": {
   "candidates": "fee2c4e6c5cc3855",
   "match": null,
   "reason": "the model was not recognised on this board"
@@ -2745,27 +2785,27 @@
   "reason": "no rule match and no plausible candidate"
  },
  "epoch/simpleqa_verified/anthropic.claude-3-5-sonnet-20240620-v1:0": {
-  "candidates": "dc72961e5751574c",
+  "candidates": "7a5207bceb0f1772",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/anthropic.claude-3-5-sonnet-20241022-v2:0": {
-  "candidates": "dc72961e5751574c",
+  "candidates": "7a5207bceb0f1772",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/anthropic.claude-3-7-sonnet-20250219-v1:0": {
-  "candidates": "dc72961e5751574c",
+  "candidates": "7a5207bceb0f1772",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/anthropic.claude-3-haiku-20240307-v1:0": {
-  "candidates": "dc72961e5751574c",
+  "candidates": "7a5207bceb0f1772",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/anthropic.claude-3-sonnet-20240229-v1:0": {
-  "candidates": "dc72961e5751574c",
+  "candidates": "7a5207bceb0f1772",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -2775,9 +2815,9 @@
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/anthropic.claude-haiku-4-5": {
-  "candidates": "dc72961e5751574c",
-  "match": null,
-  "reason": "the two directions disagreed"
+  "candidates": "7a5207bceb0f1772",
+  "match": "claude-haiku-4-5-20251001",
+  "reason": "Same base model identifier with version timestamp; no size or variant differences."
  },
  "epoch/simpleqa_verified/anthropic.claude-haiku-4-5-20251001-v1:0": {
   "candidates": "e3026a5a57a50f5f",
@@ -2785,7 +2825,7 @@
   "reason": "Matches core model version and provider; only differs in context length which is an implementation detail"
  },
  "epoch/simpleqa_verified/anthropic.claude-opus-4-1-20250805-v1:0": {
-  "candidates": "dc72961e5751574c",
+  "candidates": "7a5207bceb0f1772",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -2800,7 +2840,7 @@
   "reason": "Matches core model family 'claude-opus-5' and version '5' with only variation in context length ('max'), which is a valid instance of the same model family."
  },
  "epoch/simpleqa_verified/anthropic.claude-sonnet-4-20250514-v1:0": {
-  "candidates": "dc72961e5751574c",
+  "candidates": "7a5207bceb0f1772",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -3059,12 +3099,22 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "epoch/simpleqa_verified/openai.gpt-6-astra-minor": {
+  "candidates": "40655cef6a816b81",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/simpleqa_verified/openai.gpt-6-luna": {
   "candidates": "40655cef6a816b81",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/simpleqa_verified/openai.gpt-6-sol": {
+  "candidates": "40655cef6a816b81",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "epoch/simpleqa_verified/openai.gpt-6.1-sol": {
   "candidates": "40655cef6a816b81",
   "match": null,
   "reason": "the model was not recognised on this board"
@@ -3759,12 +3809,22 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "epoch/swe_bench_verified/openai.gpt-6-astra-minor": {
+  "candidates": "132bfff0576d9710",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "epoch/swe_bench_verified/openai.gpt-6-luna": {
   "candidates": "132bfff0576d9710",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "epoch/swe_bench_verified/openai.gpt-6-sol": {
+  "candidates": "132bfff0576d9710",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "epoch/swe_bench_verified/openai.gpt-6.1-sol": {
   "candidates": "132bfff0576d9710",
   "match": null,
   "reason": "the model was not recognised on this board"
@@ -5749,12 +5809,22 @@
   "match": null,
   "reason": "the model was not recognised on this board"
  },
+ "lmarena/search/openai.gpt-6-astra-minor": {
+  "candidates": "18591e9da85bac24",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "lmarena/search/openai.gpt-6-luna": {
   "candidates": "18591e9da85bac24",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/search/openai.gpt-6-sol": {
+  "candidates": "18591e9da85bac24",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "lmarena/search/openai.gpt-6.1-sol": {
   "candidates": "18591e9da85bac24",
   "match": null,
   "reason": "the model was not recognised on this board"
@@ -6204,6 +6274,11 @@
   "match": "gpt-5.5",
   "reason": "Exact match of model name without any variation in size, generation, or vendor."
  },
+ "lmarena/text/openai.gpt-6-astra-minor": {
+  "candidates": "ac45ccc9928052c0",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "lmarena/text/openai.gpt-6-luna": {
   "candidates": "47e2e83c3d098395",
   "match": null,
@@ -6211,6 +6286,11 @@
  },
  "lmarena/text/openai.gpt-6-sol": {
   "candidates": "47e2e83c3d098395",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "lmarena/text/openai.gpt-6.1-sol": {
+  "candidates": "ac45ccc9928052c0",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -7874,12 +7954,22 @@
   "match": "gpt-5.5",
   "reason": "The Bedrock model ID openai.gpt-5.5-2026-04-23 corresponds directly to the leaderboard entry gpt-5.5, as it shares the same base model version without any variant modifiers."
  },
+ "lmarena/vision/openai.gpt-6-astra-minor": {
+  "candidates": "35a24cf757dbc33e",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
  "lmarena/vision/openai.gpt-6-luna": {
   "candidates": "35a24cf757dbc33e",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/openai.gpt-6-sol": {
+  "candidates": "35a24cf757dbc33e",
+  "match": null,
+  "reason": "the model was not recognised on this board"
+ },
+ "lmarena/vision/openai.gpt-6.1-sol": {
   "candidates": "35a24cf757dbc33e",
   "match": null,
   "reason": "the model was not recognised on this board"

@@ -138,9 +138,11 @@ available from any running instance through
 <tr><td>GPT-5.6 Luna</td><td><code>openai.gpt-5.6-luna</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
 <tr><td>GPT-5.6 Sol</td><td><code>openai.gpt-5.6-sol</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
 <tr><td>GPT-5.6 Terra</td><td><code>openai.gpt-5.6-terra</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
-<tr><td>GPT-6 Astra</td><td><code>openai.gpt-6-astra</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
+<tr><td>GPT-6 Astra</td><td><code>openai.gpt-6-astra</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
+<tr><td>GPT 6 Astra Minor</td><td><code>openai.gpt-6-astra-minor</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
 <tr><td>GPT-6 Luna</td><td><code>openai.gpt-6-luna</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
 <tr><td>GPT-6 Sol</td><td><code>openai.gpt-6-sol</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
+<tr><td>GPT-6.1 Sol</td><td><code>openai.gpt-6.1-sol</code></td><td>OpenAI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>GPT OSS 120B</td><td><code>openai.gpt-oss-120b</code></td><td>OpenAI</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
 <tr><td>GPT OSS 20B</td><td><code>openai.gpt-oss-20b</code></td><td>OpenAI</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
 <tr><td>GPT OSS Safeguard 120B</td><td><code>openai.gpt-oss-safeguard-120b</code></td><td>OpenAI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
@@ -217,7 +219,7 @@ reflects the AWS account this snapshot came from — your own
 ## :material-database-outline: Sources, licences and caveats
 
 <!-- catalog:generated -->
-Snapshot taken on **2026-09-29** from a stdapi.ai instance, covering 142 models across 33 AWS regions. 4 model(s) AWS no longer lists are kept, tagged `delisted`. Prices and availability move — before you commit to a number, confirm it against the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) and your own [`search_models`](api_search_models.md).
+Snapshot taken on **2026-09-30** from a stdapi.ai instance, covering 144 models across 33 AWS regions. 7 model(s) AWS no longer lists are kept, tagged `delisted`. Prices and availability move — before you commit to a number, confirm it against the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) and your own [`search_models`](api_search_models.md).
 <!-- /catalog:generated -->
 
 <!-- catalog:sources -->
@@ -225,14 +227,14 @@ Every number on this page comes from one of the sources below, reproduced unmodi
 
 | Source | Licence | Read on | Used here |
 | --- | --- | --- | --- |
-| The gateway's own [`search_models`](api_search_models.md) and [`model_pricing`](api_model_pricing.md) | — | 2026-09-29 | 142 |
-| [Amazon Bedrock `ListFoundationModels`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html), read raw so its undocumented fields survive | — | 2026-09-29 | capabilities, APIs, media types, limits |
+| The gateway's own [`search_models`](api_search_models.md) and [`model_pricing`](api_model_pricing.md) | — | 2026-09-30 | 144 |
+| [Amazon Bedrock `ListFoundationModels`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html), read raw so its undocumented fields survive | — | 2026-09-30 | capabilities, APIs, media types, limits |
 | [LMArena Leaderboard](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-09-28 | 87 of 831 entries |
-| [MTEB — Massive Text Embedding Benchmark](https://github.com/embeddings-benchmark/results) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 2026-09-29 | 5 of 12 entries |
-| [Epoch AI — AI Benchmarking Hub](https://epoch.ai/benchmarks/use-this-data) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-09-02 | 66 of 706 entries |
-| [Amazon Bedrock model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html) | [AWS documentation](https://aws.amazon.com/terms/) | 2026-09-29 | 114 of 132 model cards |
-| [models.dev](https://models.dev/) | [MIT](https://github.com/anomalyco/models.dev/blob/dev/LICENSE) | 2026-09-29 | 71 of 180 models |
-| [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) | 2026-09-29 | 2 of 69 entries |
+| [MTEB — Massive Text Embedding Benchmark](https://github.com/embeddings-benchmark/results) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 2026-09-30 | 5 of 12 entries |
+| [Epoch AI — AI Benchmarking Hub](https://epoch.ai/benchmarks/use-this-data) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-09-29 | 68 of 710 entries |
+| [Amazon Bedrock model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html) | [AWS documentation](https://aws.amazon.com/terms/) | 2026-09-30 | 113 of 133 model cards |
+| [models.dev](https://models.dev/) | [MIT](https://github.com/anomalyco/models.dev/blob/dev/LICENSE) | 2026-09-30 | 72 of 183 models |
+| [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) | 2026-09-30 | 2 of 69 entries |
 
 - **LMArena Leaderboard** — Arena Elo ratings by LMArena (Arena Intelligence Inc.), reproduced unmodified under CC BY 4.0. The mapping to Amazon Bedrock model IDs is ours.
 - **MTEB — Massive Text Embedding Benchmark** — Benchmark results from the MTEB results repository, dedicated to the public domain under CC0 1.0. The mapping to Amazon Bedrock model IDs is ours.
