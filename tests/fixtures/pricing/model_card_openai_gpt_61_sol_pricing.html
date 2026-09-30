@@ -1,0 +1,63 @@
+<h2 id="model-card-openai-gpt-6-1-sol-pricing">Pricing</h2>
+  <p>All prices are in USD per 1 million tokens for the Standard tier. Global base rates match <a href="https://developers.openai.com/api/docs/pricing" rel="noopener noreferrer" target="_blank"><span>OpenAI first-party Standard pricing</span><awsui-icon class="awsdocs-link-icon" name="external"></awsui-icon></a>.</p>
+  <p>Commercial In-Region and US geographic cross-Region inference (US CRIS) prices include a 10% premium over the global base rates. You do not need to add this premium.</p>
+  <p>The global base rate is a pricing reference and does not imply availability of a global inference profile. Explicit prompt caching is not supported for this Bedrock model; the cache pricing dimensions do not change that feature support.</p>
+  <p>Long-context rates apply to the full request when input exceeds 272,000 tokens.</p>
+  <p><em>Priority and Flex tiers are not supported for this model.</em></p>
+   
+   <h3 id="model-card-openai-gpt-6-1-sol-pricing-short">Commercial Regions — short context (272K input tokens or fewer)</h3>
+   <div class="table-container"><div class="table-contents"><table id="w636aac11c28c10c11c13b3"><thead>
+      <tr>
+       <th><b>Inference option</b></th><th><b>Input</b></th><th><b>Input — cache write</b></th><th><b>Input — cache read</b></th><th><b>Output</b></th></tr>
+     </thead>
+      <tr>
+       <td tabindex="-1">Regional (Mantle in IAD)</td>
+       <td tabindex="-1">$2.20</td>
+       <td tabindex="-1">$2.75</td>
+       <td tabindex="-1">$0.11</td>
+       <td tabindex="-1">$11.00</td>
+      </tr>
+      <tr>
+       <td tabindex="-1">US CRIS (bedrock-runtime)</td>
+       <td tabindex="-1">$2.20</td>
+       <td tabindex="-1">$2.75</td>
+       <td tabindex="-1">$0.11</td>
+       <td tabindex="-1">$11.00</td>
+      </tr>
+      <tr>
+       <td tabindex="-1">Global base rate (OpenAI first-party)</td>
+       <td tabindex="-1">$2.00</td>
+       <td tabindex="-1">$2.50</td>
+       <td tabindex="-1">$0.10</td>
+       <td tabindex="-1">$10.00</td>
+      </tr>
+     </table></div></div>
+   
+   
+   <h3 id="model-card-openai-gpt-6-1-sol-pricing-long">Commercial Regions — long context (more than 272K input tokens)</h3>
+   <div class="table-container"><div class="table-contents"><table id="w636aac11c28c10c11c15b3"><thead>
+      <tr>
+       <th><b>Inference option</b></th><th><b>Input</b></th><th><b>Input — cache write</b></th><th><b>Input — cache read</b></th><th><b>Output</b></th></tr>
+     </thead>
+      <tr>
+       <td tabindex="-1">Regional (Mantle in IAD)</td>
+       <td tabindex="-1">$4.40</td>
+       <td tabindex="-1">$5.50</td>
+       <td tabindex="-1">$0.22</td>
+       <td tabindex="-1">$16.50</td>
+      </tr>
+      <tr>
+       <td tabindex="-1">US CRIS (bedrock-runtime)</td>
+       <td tabindex="-1">$4.40</td>
+       <td tabindex="-1">$5.50</td>
+       <td tabindex="-1">$0.22</td>
+       <td tabindex="-1">$16.50</td>
+      </tr>
+      <tr>
+       <td tabindex="-1">Global base rate (OpenAI first-party)</td>
+       <td tabindex="-1">$4.00</td>
+       <td tabindex="-1">$5.00</td>
+       <td tabindex="-1">$0.20</td>
+       <td tabindex="-1">$15.00</td>
+      </tr>
+     </table></div></div>

@@ -41,10 +41,18 @@ OPTIONS: Final[tuple[Option, ...]] = ("in_region", "geo", "global")
 
 #: Table row labels naming each option, spelled differently from card to card.
 _OPTION_ROWS: Final[dict[Option, tuple[str, ...]]] = {
-    "in_region": ("in-region", "mantle in-region"),
+    "in_region": ("in-region", "mantle in-region", "regional"),
     "geo": ("geo cris", "us cris", "us geo cris"),
-    "global": ("global cris",),
+    "global": ("global cris", "global base rate"),
 }
+
+#: A row label's trailing qualifier, e.g. "Geo CRIS (US)", ignored when matching it.
+_ROW_QUALIFIER: Final[re.Pattern[str]] = re.compile(r"\s*\([^)]*\)$")
+
+#: Caption first words naming a service tier other than Standard, whose tables are skipped.
+_NON_STANDARD_TIERS: Final[frozenset[str]] = frozenset(
+    {"ultrafast", "priority", "flex", "batch", "reserved"}
+)
 
 #: Availability-table column header naming each option.
 _OPTION_COLUMNS: Final[dict[str, Option]] = {
@@ -350,7 +358,8 @@ def _tier_table(section: str, context: Context) -> str | None:
 
     Only an absent caption or one naming the short context window prices the
     short tier; only one naming the long window prices the long tier, which
-    most cards do not carry at all.
+    most cards do not carry at all. A table captioned with a service tier other
+    than Standard ("Ultrafast — ...") prices that tier, not these.
 
     Args:
         section: The commercial Pricing block.
@@ -368,7 +377,11 @@ def _tier_table(section: str, context: Context) -> str | None:
         table
         for caption, table in _captioned_tables(section)
         if (caption is None and not context)
-        or (caption is not None and fragment in caption.casefold())
+        or (
+            caption is not None
+            and fragment in caption.casefold()
+            and caption.casefold().split(maxsplit=1)[0] not in _NON_STANDARD_TIERS
+        )
     ]
     if context:
         if len(candidates) > 1:
@@ -430,7 +443,7 @@ def option_rates(
             row
             for label in labels
             for row in table_rows[1:]
-            if row and row[0].casefold() == label
+            if row and _ROW_QUALIFIER.sub("", row[0].casefold()) == label
         ),
         None,
     )

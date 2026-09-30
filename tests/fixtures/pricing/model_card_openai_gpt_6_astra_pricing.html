@@ -1,10 +1,10 @@
 <h2 id="model-card-openai-gpt-6-astra-pricing">Pricing</h2>
-  <p>All prices are in USD per 1 million tokens for the Standard tier.</p>
-  <p>Commercial In-Region prices include a 10% fee over OpenAI rates. You do not need to add this fee.</p>
+  <p>All prices are in USD per 1 million tokens. The following tables list Standard and Ultrafast prices.</p>
+  <p>Commercial In-Region and Geo CRIS prices include a 10% premium over the corresponding OpenAI rates for the same service tier. You do not need to add this premium.</p>
   <p><em>Priority and Flex tiers are not supported for this model.</em></p>
    
-   <h3 id="model-card-openai-gpt-6-astra-pricing-commercial-short">Commercial Regions — short context (272K input tokens or fewer)</h3>
-   <div class="table-container"><div class="table-contents"><table id="w626aac11c28b8c10b9b3"><thead>
+   <h3 id="model-card-openai-gpt-6-astra-pricing-commercial-short">Standard — Commercial Regions, short context (272K input tokens or fewer)</h3>
+   <div class="table-container"><div class="table-contents"><table id="w636aac11c28b8c10b9b3"><thead>
      <tr>
       <th><b>Inference option</b></th>
       <th><b>Input</b></th>
@@ -19,8 +19,8 @@
     </table></div></div>
    
    
-   <h3 id="model-card-openai-gpt-6-astra-pricing-commercial-long">Commercial Regions — long context (more than 272K input tokens)</h3>
-   <div class="table-container"><div class="table-contents"><table id="w626aac11c28b8c10c11b3"><thead>
+   <h3 id="model-card-openai-gpt-6-astra-pricing-commercial-long">Standard — Commercial Regions, long context (more than 272K input tokens)</h3>
+   <div class="table-container"><div class="table-contents"><table id="w636aac11c28b8c10c11b3"><thead>
      <tr>
       <th><b>Inference option</b></th>
       <th><b>Input</b></th>
@@ -32,4 +32,38 @@
      <tr><td tabindex="-1">In-Region</td><td tabindex="-1">$22.00</td><td tabindex="-1">$27.50</td><td tabindex="-1">$2.20</td><td tabindex="-1">$82.50</td></tr>
      <tr><td tabindex="-1">Geo CRIS</td><td tabindex="-1">$22.00</td><td tabindex="-1">$27.50</td><td tabindex="-1">$2.20</td><td tabindex="-1">$82.50</td></tr>
      <tr><td tabindex="-1">Global CRIS</td><td tabindex="-1">$20.00</td><td tabindex="-1">$25.00</td><td tabindex="-1">$2.00</td><td tabindex="-1">$75.00</td></tr>
+    </table></div></div>
+   
+  <p>Ultrafast prices are six times the corresponding Standard prices. Ultrafast is available only through <code class="code">bedrock-mantle</code> in <code class="code">us-east-1</code> and US CRIS on <code class="code">bedrock-runtime</code>. Short-context prices apply to requests with at most 272,000 input tokens. When input exceeds this threshold, long-context prices apply to the entire request.</p>
+  <p>The Global CRIS rates below are included as a pricing reference. The supported Ultrafast routes are regional Mantle in <code class="code">us-east-1</code> and US CRIS on <code class="code">bedrock-runtime</code>.</p>
+   
+   <h3 id="model-card-openai-gpt-6-astra-pricing-ultrafast-short">Ultrafast — Commercial Regions, short context (272K input tokens or fewer)</h3>
+   <div class="table-container"><div class="table-contents"><table id="w636aac11c28b8c10c17b3"><thead>
+     <tr>
+      <th><b>Inference option</b></th>
+      <th><b>Input</b></th>
+      <th><b>Input — 30m cache write</b></th>
+      <th><b>Input — cache read</b></th>
+      <th><b>Output</b></th>
+     </tr>
+    </thead>
+     <tr><td tabindex="-1">In-Region (us-east-1)</td><td tabindex="-1">$66.00</td><td tabindex="-1">$82.50</td><td tabindex="-1">$6.60</td><td tabindex="-1">$330.00</td></tr>
+     <tr><td tabindex="-1">Geo CRIS (US)</td><td tabindex="-1">$66.00</td><td tabindex="-1">$82.50</td><td tabindex="-1">$6.60</td><td tabindex="-1">$330.00</td></tr>
+     <tr><td tabindex="-1">Global CRIS (pricing reference)</td><td tabindex="-1">$60.00</td><td tabindex="-1">$75.00</td><td tabindex="-1">$6.00</td><td tabindex="-1">$300.00</td></tr>
+    </table></div></div>
+   
+   
+   <h3 id="model-card-openai-gpt-6-astra-pricing-ultrafast-long">Ultrafast — Commercial Regions, long context (more than 272K input tokens)</h3>
+   <div class="table-container"><div class="table-contents"><table id="w636aac11c28b8c10c19b3"><thead>
+     <tr>
+      <th><b>Inference option</b></th>
+      <th><b>Input</b></th>
+      <th><b>Input — 30m cache write</b></th>
+      <th><b>Input — cache read</b></th>
+      <th><b>Output</b></th>
+     </tr>
+    </thead>
+     <tr><td tabindex="-1">In-Region (us-east-1)</td><td tabindex="-1">$132.00</td><td tabindex="-1">$165.00</td><td tabindex="-1">$13.20</td><td tabindex="-1">$495.00</td></tr>
+     <tr><td tabindex="-1">Geo CRIS (US)</td><td tabindex="-1">$132.00</td><td tabindex="-1">$165.00</td><td tabindex="-1">$13.20</td><td tabindex="-1">$495.00</td></tr>
+     <tr><td tabindex="-1">Global CRIS (pricing reference)</td><td tabindex="-1">$120.00</td><td tabindex="-1">$150.00</td><td tabindex="-1">$12.00</td><td tabindex="-1">$450.00</td></tr>
     </table></div></div>

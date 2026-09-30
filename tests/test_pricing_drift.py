@@ -147,6 +147,7 @@ _MODEL_CARD_URLS: Final[dict[str, str]] = {
     "openai.gpt-6-astra": "model-card-openai-gpt-6-astra",
     "openai.gpt-6-luna": "model-card-openai-gpt-6-luna",
     "openai.gpt-6-sol": "model-card-openai-gpt-6-sol",
+    "openai.gpt-6.1-sol": "model-card-openai-gpt-6-1-sol",
 }
 
 #: Where a model card lives, given its slug.
@@ -1724,6 +1725,12 @@ def gpt_6_sol_card() -> str:
 
 
 @pytest.fixture(scope="module")
+def gpt_61_sol_card() -> str:
+    """The recorded Pricing section of the GPT-6.1 Sol model card."""
+    return (FIXTURES_DIR / "model_card_openai_gpt_61_sol_pricing.html").read_text()
+
+
+@pytest.fixture(scope="module")
 def gpt_6_sol_page() -> str:
     """The recorded Pricing section of OpenAI's GPT-6 Sol model page."""
     return (FIXTURES_DIR / "openai_model_page_gpt_6_sol_pricing.md").read_text()
@@ -1977,6 +1984,43 @@ class TestModelCardParsing:
         assert rates is not None
         assert rates[Dimension.INPUT_TOKENS] == Decimal("0.000009")
 
+    def test_a_non_standard_tier_table_is_not_read_as_the_standard_rate(
+        self, gpt_6_astra_card: str
+    ) -> None:
+        """GPT-6 Astra's Ultrafast tables, 6x the Standard rate, are skipped.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
+        """
+        assert "Ultrafast" in gpt_6_astra_card
+        rates = parse_model_card(gpt_6_astra_card)
+        assert rates is not None
+        assert rates[Dimension.INPUT_TOKENS] == Decimal("0.000011")
+        long_rates = parse_model_card_global(gpt_6_astra_card, "long")
+        assert long_rates is not None
+        assert long_rates[Dimension.OUTPUT_TOKENS] == Decimal("0.000075")
+
+    def test_an_unknown_tier_table_is_unreadable(self, gpt_6_astra_card: str) -> None:
+        """A tier the parser does not know is a second short table, not a guess."""
+        card = gpt_6_astra_card.replace("Ultrafast —", "Turbo —")
+        with pytest.raises(UnreadableSourceError, match="found 2"):
+            parse_model_card(card)
+
+    def test_qualified_row_labels_are_read(self, gpt_61_sol_card: str) -> None:
+        """GPT-6.1 Sol labels its rows "Regional (Mantle in IAD)" and "Global base rate".
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html
+        """
+        assert parse_model_card(gpt_61_sol_card) == {
+            Dimension.INPUT_TOKENS: Decimal("0.0000022"),
+            Dimension.CACHE_WRITE_TOKENS: Decimal("0.00000275"),
+            Dimension.CACHE_READ_TOKENS: Decimal("0.00000011"),
+            Dimension.OUTPUT_TOKENS: Decimal("0.000011"),
+        }
+        global_rates = parse_model_card_global(gpt_61_sol_card)
+        assert global_rates is not None
+        assert global_rates[Dimension.INPUT_TOKENS] == Decimal("0.000002")
+        assert parse_context_window(gpt_61_sol_card) == 272_000
+
     def test_the_user_guide_soft_404_reads_as_a_withdrawn_card(self) -> None:
         """The 200-with-a-stub answer for an unknown page means the card is gone.
 
@@ -2205,6 +2249,7 @@ class TestGpt56Detection:
             ("openai.gpt-6-astra", "gpt_6_astra_card"),
             ("openai.gpt-6-luna", "gpt_6_luna_card"),
             ("openai.gpt-6-sol", "gpt_6_sol_card"),
+            ("openai.gpt-6.1-sol", "gpt_61_sol_card"),
         ],
     )
     def test_every_table_matches_a_split_card(

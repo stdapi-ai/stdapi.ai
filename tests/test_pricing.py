@@ -3498,6 +3498,15 @@ class TestDefaultModelPrices:
                     Dimension.OUTPUT_TOKENS: "0.000011",
                 },
             ),
+            (
+                "openai.gpt-6.1-sol",
+                {
+                    Dimension.INPUT_TOKENS: "0.0000022",
+                    Dimension.CACHE_WRITE_TOKENS: "0.00000275",
+                    Dimension.CACHE_READ_TOKENS: "0.00000011",
+                    Dimension.OUTPUT_TOKENS: "0.000011",
+                },
+            ),
         ],
     )
     def test_openai_mantle_models_price_at_their_model_card_rate(
@@ -5778,8 +5787,10 @@ async def test_bedrock_model_pricing_coverage() -> None:
 # figures (the Image Services page rates ship as DEFAULT_MODEL_PRICES). Re-check
 # by removing the entry. Never remove a model's implementation for a pricing
 # gap: keep it in case pricing returns or users retain model access.
+# GPT-6 Astra Minor: Mantle lists and serves it in us-east-1 with no model card,
+# Price List row or OpenAI price (verified 2026-09-30).
 _KNOWN_PRICING_GAPS: Final[frozenset[str]] = frozenset(
-    {"stability.stable-diffusion-xl-v1"}
+    {"stability.stable-diffusion-xl-v1", "openai.gpt-6-astra-minor"}
 )
 
 
