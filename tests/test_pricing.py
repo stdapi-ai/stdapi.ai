@@ -22,7 +22,7 @@ import pytest
 from botocore.exceptions import BotoCoreError, ClientError
 from botocore.session import Session
 
-from stdapi import models, pricing
+from stdapi import models, monitoring, pricing
 from stdapi.aws import AWSConnectionManager, get_client
 from stdapi.config import SETTINGS
 from stdapi.models.deprecation import DEPRECATED_MODELS
@@ -5371,11 +5371,7 @@ class TestStartPriceCatalogBackgroundLoad:
     @pytest.fixture
     def events(self, monkeypatch: pytest.MonkeyPatch) -> list[EventLog]:
         """Capture the background events written by the load task."""
-        from stdapi import monitoring  # noqa: PLC0415
-
         written: list[EventLog] = []
-        # Works only because _log_price_catalog_event imports write_log_event at
-        # call time (circular-import workaround); an import move fails loudly here.
         monkeypatch.setattr(monitoring, "write_log_event", written.append)
         return written
 

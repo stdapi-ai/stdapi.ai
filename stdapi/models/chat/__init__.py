@@ -23,6 +23,10 @@ from stdapi.models import (
 )
 from stdapi.monitoring import REQUEST, tenant_aws_credential
 
+# Lazy: these modules import this package.
+lazy from stdapi.models.chat._mantle import get_mantle_chat_model
+lazy from stdapi.models.chat._sagemaker import get_sagemaker_chat_model
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from re import Pattern
@@ -241,14 +245,8 @@ def get_chat_model(
         LookupError: If no registered chat model matches ``model_id``.
     """
     if is_sagemaker_endpoint(model_id):
-        # Imported here: the module subclasses the Mantle chat model.
-        from stdapi.models.chat._sagemaker import get_sagemaker_chat_model  # noqa: PLC0415 -- lazy import, subclasses the Mantle chat model
-
         return get_sagemaker_chat_model(model_id)
     if allow_mantle and serves_via_mantle(model_id):
-        # Imported here: the _mantle package subclasses ChatModelBase.
-        from stdapi.models.chat._mantle import get_mantle_chat_model  # noqa: PLC0415
-
         return get_mantle_chat_model(model_id)
     if is_marketplace_endpoint(model_id):
         # An endpoint ARN the caller wrote is never a catalogue key, so memoizing

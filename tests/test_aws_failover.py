@@ -555,7 +555,7 @@ class TestFailoverWarningLog:
         where the request-log context var is unset.
         """
         _patch_get_client(monkeypatch)
-        monkeypatch.setattr(stdapi.monitoring, "REQUEST_LOG", ContextVar("request_log"))
+        monkeypatch.setattr(stdapi.aws, "REQUEST_LOG", ContextVar("request_log"))
         result, region = await call_with_region_failover(
             "comprehend", ["us-east-1", "eu-west-1"], self._failing_then_serving_call
         )

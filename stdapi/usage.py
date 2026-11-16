@@ -39,6 +39,9 @@ from stdapi.pricing import (
 )
 from stdapi.utils import stdout_write
 
+# Lazy: stdapi.monitoring imports this module.
+lazy from stdapi.monitoring import PRINCIPAL, REQUEST_LOG, TENANT
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping
 
@@ -903,9 +906,6 @@ def record_bedrock_usage(
     state = get_model_state(model)
     image_spec = IMAGE_SPEC.get("") if output_images else ""
     if billed_externally is None:
-        # Imported here: stdapi.monitoring imports this module (import cycle).
-        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
-
         # Marked tenant-billed only when this request's invocations were
         # actually signed with the tenant's session -- the request-log marker
         # is written at signing time. A bedrock-runtime record of a call that
@@ -1150,8 +1150,6 @@ def _caller_dimensions() -> dict[str, str]:
     """
     if not SETTINGS.usage_api:
         return {}
-    # Imported here: stdapi.monitoring imports this module (import cycle).
-    from stdapi.monitoring import PRINCIPAL, TENANT  # noqa: PLC0415
 
     fields: dict[str, str] = {}
     if (tenant := TENANT.get()) is not None:

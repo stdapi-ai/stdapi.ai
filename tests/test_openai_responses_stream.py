@@ -35,7 +35,6 @@ from stdapi import monitoring
 from stdapi.aws_bedrock import GUARDRAIL_TRACE_VAR
 from stdapi.cleanup import CLEANUPS
 from stdapi.models import ModelBase
-from stdapi.models import chat as models_chat
 from stdapi.models.chat._adapters import _openai_chat_completion as chat_adapter
 from stdapi.models.chat._adapters import _openai_responses as responses_adapter
 from stdapi.models.chat._adapters._openai_common import extract_stream_usage
@@ -2420,7 +2419,7 @@ def _stub_streamed_file_search(
     monkeypatch.setattr(responses_adapter, "read_store", _read_store)
     monkeypatch.setattr(responses_adapter, "search", _search)
     monkeypatch.setattr(responses_adapter, "touch_store", _touch_store)
-    monkeypatch.setattr(models_chat, "get_chat_model", lambda _model_id: grounded)
+    monkeypatch.setattr(responses_adapter, "get_chat_model", lambda _model_id: grounded)
     return grounded
 
 
@@ -2602,7 +2601,7 @@ class TestFileSearchStreamEvents:
         """
         _stub_streamed_file_search(monkeypatch, [])
         searching = _StubSearchingModel()
-        monkeypatch.setattr(models_chat, "get_chat_model", lambda _id: searching)
+        monkeypatch.setattr(responses_adapter, "get_chat_model", lambda _id: searching)
 
         events = await _collect(
             format_stream(

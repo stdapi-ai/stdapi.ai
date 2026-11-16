@@ -37,6 +37,11 @@ from stdapi.aws_http import SseEvent, iter_sse, new_http_session, presigned_bear
 from stdapi.config import SETTINGS
 from stdapi.utils import to_json_bytes, to_json_str
 
+# Lazy: imported modules (stdapi.aws, stdapi.aws_bedrock, stdapi.monitoring) import this one.
+lazy from stdapi.aws import verify_user_role_identity
+lazy from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, GUARDRAIL_REQUEST_OVERRIDE_VAR
+lazy from stdapi.monitoring import log_error_details
+
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Iterator, Sequence
 
@@ -363,10 +368,6 @@ def refuse_unappliable_guardrail() -> None:
     Raises:
         ApiError: When a guardrail applies to this request.
     """
-    # Imported here: stdapi.aws imports this module, so stdapi.aws_bedrock
-    # cannot be reached from its top level.
-    from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, GUARDRAIL_REQUEST_OVERRIDE_VAR  # noqa: PLC0415 -- circular import
-
     if GUARDRAIL_CONFIG_VAR.get(None) is None:
         return
     msg = (
@@ -394,10 +395,6 @@ def refuse_unattributable_invocation() -> None:
     Raises:
         ApiError: When the request identifies no end user and one is required.
     """
-    # Imported here: stdapi.aws imports this module, so it cannot be reached
-    # from its top level.
-    from stdapi.aws import verify_user_role_identity  # noqa: PLC0415
-
     verify_user_role_identity()
 
 
@@ -441,8 +438,6 @@ def _map_error(status: int, body: str, region: RegionName) -> MantleError:
         # failing for up to _TOKEN_TTL seconds. The upstream message may
         # disclose IAM ARNs/permissions, so log it and forward a generic one.
         _TOKENS.pop(region, None)
-        # Imported here: stdapi.monitoring transitively imports this module.
-        from stdapi.monitoring import log_error_details  # noqa: PLC0415
 
         log_error_details(message, level="warning")
         # 503 feature_unavailable, as every other backend answers a denial of
@@ -504,17 +499,11 @@ async def _request(
             },
         )
     except SocketTimeoutError as error:
-        # Imported here: stdapi.monitoring transitively imports this module.
-        from stdapi.monitoring import log_error_details  # noqa: PLC0415
-
         log_error_details(f"Timed out reading the Bedrock Mantle response in {region}.")
         # No failover: the invocation reached Mantle and is billed regardless.
         msg = "The service is temporarily unavailable. Retry the request."
         raise MantleError(msg, status=503) from error
     except (AiohttpClientError, TimeoutError) as error:
-        # Imported here: stdapi.monitoring transitively imports this module.
-        from stdapi.monitoring import log_error_details  # noqa: PLC0415
-
         log_error_details(f"Unable to reach the Bedrock Mantle endpoint in {region}.")
         msg = "The service is temporarily unavailable. Retry the request."
         raise MantleError(msg, status=503, failover=True) from error

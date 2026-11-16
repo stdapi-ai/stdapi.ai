@@ -35,6 +35,9 @@ from stdapi.types.openai_realtime import (
     SessionConfig,
 )
 
+# Lazy: optional extra, loaded only when the feature is used.
+lazy from stdapi.realtime_webrtc import hangup_call, open_call
+
 register_route_capability(
     "openai_realtime",
     f"{SETTINGS.openai_routes_prefix}/v1/realtime",
@@ -367,8 +370,6 @@ async def create_realtime_call(
     _require_webrtc()
     offer, config = await _call_request_body(request, session, locked=locked)
     log_request_params({"model": model or config.model})
-    # Imported lazily: the webrtc extra is only present when the setting proved it.
-    from stdapi.realtime_webrtc import open_call  # noqa: PLC0415
 
     call_id, answer = await open_call(request, model, config, offer, locked=locked)
     return Response(
@@ -416,8 +417,6 @@ async def hangup_realtime_call(
             is held by this instance.
     """
     _require_webrtc()
-    # Imported lazily: the webrtc extra is only present when the setting proved it.
-    from stdapi.realtime_webrtc import hangup_call  # noqa: PLC0415
 
     hangup_call(call_id)
     return Response(status_code=200)

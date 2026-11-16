@@ -33,6 +33,17 @@ from stdapi.aws_bedrock_mantle import mantle_http_session
 from stdapi.aws_sagemaker import sagemaker_http_session
 from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
 
+# Lazy: stdapi.monitoring imports this module.
+lazy from stdapi.monitoring import (
+    REQUEST_LOG,
+    TENANT,
+    add_server_warning,
+    log_error_details,
+    record_aws_api_call,
+    resolve_request_identity,
+    tenant_aws_credential,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
     from types import TracebackType
@@ -191,8 +202,6 @@ def _record_after_call(
         }
     if not (request_id := _aws_request_id(parsed)):
         return
-    # Imported here: stdapi.monitoring transitively imports this module.
-    from stdapi.monitoring import record_aws_api_call  # noqa: PLC0415
 
     record_aws_api_call(
         model.service_model.service_id.hyphenize(),
@@ -218,7 +227,6 @@ def _record_after_call_error(
     response = getattr(exception, "response", None)
     if not isinstance(response, dict) or not (request_id := _aws_request_id(response)):
         return
-    from stdapi.monitoring import record_aws_api_call  # noqa: PLC0415
 
     _, service, operation = event_name.split(".", 2)
     record_aws_api_call(
@@ -590,8 +598,6 @@ async def call_with_region_failover[ResultT](
             if not is_failover_error(exception):
                 raise
             await _cleanup_failed_region(service, region, on_failed_region)
-            # Imported here: stdapi.monitoring transitively imports this module.
-            from stdapi.monitoring import REQUEST_LOG, log_error_details  # noqa: PLC0415 -- circular import
 
             if REQUEST_LOG.get(None) is not None:
                 log_error_details(
@@ -681,8 +687,6 @@ def signed_as_end_user(operation_name: str) -> bool:
         or operation_name not in USER_ROLE_OPERATIONS
     ):
         return False
-    # Imported here: stdapi.monitoring transitively imports this module.
-    from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
 
     log = REQUEST_LOG.get(None)
     return log is not None and bool(log.get("aws_role_session_name"))
@@ -873,7 +877,6 @@ async def user_role_credentials(identity: str) -> _UserRoleCredentials:
     except (BotoCoreError, ClientError, RuntimeError) as exception:
         # Dropped so the next request retries with a session of its own.
         _USER_ROLE_CACHE.pop(session_name, None)
-        from stdapi.monitoring import REQUEST_LOG, log_error_details  # noqa: PLC0415
 
         if REQUEST_LOG.get(None) is not None:
             log_error_details(
@@ -905,8 +908,6 @@ async def request_user_role_credentials() -> _UserRoleCredentials | None:
     """
     if SETTINGS.aws_bedrock_user_role_arn is None:
         return None
-    # Imported here: stdapi.monitoring transitively imports this module.
-    from stdapi.monitoring import REQUEST_LOG, resolve_request_identity  # noqa: PLC0415
 
     try:
         identity = resolve_request_identity()
@@ -944,8 +945,6 @@ def verify_user_role_identity() -> None:
         or not SETTINGS.aws_bedrock_user_role_require_identity
     ):
         return
-    # Imported here: stdapi.monitoring transitively imports this module.
-    from stdapi.monitoring import resolve_request_identity  # noqa: PLC0415
 
     try:
         identity = resolve_request_identity()
@@ -978,8 +977,6 @@ def verify_bidi_user_role_policy(service: str) -> None:
     """
     if service != _BIDI_MODEL_SERVICE:
         return
-    # Imported here: stdapi.monitoring transitively imports this module.
-    from stdapi.monitoring import tenant_aws_credential  # noqa: PLC0415
 
     if tenant_aws_credential() is not None:
         raise ApiError(TENANT_REALTIME_MESSAGE, status=400)
@@ -1157,7 +1154,6 @@ async def tenant_role_credentials(
     except (BotoCoreError, ClientError, RuntimeError) as exception:
         # Dropped so the next request retries with a session of its own.
         _TENANT_ROLE_CACHE.pop(session_key, None)
-        from stdapi.monitoring import REQUEST_LOG, log_error_details  # noqa: PLC0415
 
         # Only the codes AWS returns for the registration itself are the
         # tenant's fault. A throttled or unreachable AWS STS, and this
@@ -1215,8 +1211,6 @@ def signed_as_tenant(operation_name: str) -> bool:
         or operation_name not in USER_ROLE_OPERATIONS
     ):
         return False
-    # Imported here: stdapi.monitoring transitively imports this module.
-    from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
 
     log = REQUEST_LOG.get(None)
     return log is not None and bool(log.get("aws_tenant_key_id"))
@@ -1237,9 +1231,6 @@ async def request_signing_credentials() -> AioDeferredRefreshableCredentials | N
         ApiError: The applicable session could not be opened, or the request
             identifies no end user where the configuration requires one.
     """
-    # Imported here: stdapi.monitoring transitively imports this module.
-    from stdapi.monitoring import REQUEST_LOG, TENANT, tenant_aws_credential  # noqa: PLC0415 -- circular import
-
     if (tenant := TENANT.get()) is not None and (
         credential := tenant_aws_credential()
     ) is not None:
@@ -1310,7 +1301,6 @@ async def verify_user_role_access(start_event: EventLog) -> None:
     """
     if SETTINGS.aws_bedrock_user_role_arn is None:
         return
-    from stdapi.monitoring import add_server_warning  # noqa: PLC0415
 
     session_name, tag_value = user_role_session_identity(_USER_ROLE_CHECK_IDENTITY)
     failure: Exception | None = None

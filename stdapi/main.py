@@ -129,6 +129,9 @@ from stdapi.vector_stores.jobs import (
 )
 from stdapi.vector_stores.knowledge_base import verify_knowledge_bases
 
+# Lazy: optional extra, loaded only when the feature is used.
+lazy from stdapi.realtime_webrtc import drain_realtime_calls
+
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
     from typing import Any
@@ -159,8 +162,6 @@ async def _drain_realtime_calls(timeout: float) -> int:  # noqa: ASYNC109 -- sha
     """
     if not SETTINGS.realtime_webrtc_enabled:
         return 0
-    # Imported lazily: the webrtc extra is only present when the setting proved it.
-    from stdapi.realtime_webrtc import drain_realtime_calls  # noqa: PLC0415
 
     return await drain_realtime_calls(timeout)
 

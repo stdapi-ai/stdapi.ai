@@ -37,6 +37,7 @@ sweeping AWS Bedrock exactly as a deployment without the table does.
 
 from __future__ import annotations
 
+from compression.zstd import ZstdDecompressor, ZstdError, compress
 from enum import StrEnum
 from hashlib import sha256
 from secrets import token_hex
@@ -276,9 +277,6 @@ async def _read_shards(  # noqa: PLR0911 - one arm per way a shard set is unusab
         The decoded list, or None when the pieces are incomplete, do not add up
         to what the manifest describes, or cannot be decoded.
     """
-    # Imported here: compression is needed only by a deployment that shares.
-    from compression.zstd import ZstdDecompressor, ZstdError  # noqa: PLC0415
-
     try:
         shards = await query_partition(
             partition,
@@ -358,9 +356,6 @@ async def publish_catalog(
         created_at: When the sweep that produced it finished, epoch seconds.
         start_event: Startup event log to record warnings on, if any.
     """
-    # Imported here: compression is needed only by a deployment that shares.
-    from compression.zstd import compress  # noqa: PLC0415
-
     blob = compress(to_json_bytes(payload), level=_COMPRESSION_LEVEL)
     shards = [blob[at : at + _SHARD_BYTES] for at in range(0, len(blob), _SHARD_BYTES)]
     if len(shards) > _MAX_SHARDS:

@@ -164,6 +164,9 @@ from stdapi.utils import b64encode as b64encode_async
 from stdapi.utils import hide_security_details, json_sse, to_json_str, try_parse_json
 from stdapi.vector_stores import parse_store_id, read_store, search, touch_store
 
+# Lazy: imported modules (stdapi.models.chat) import this one.
+lazy from stdapi.models.chat import get_chat_model
+
 if TYPE_CHECKING:
     from collections.abc import (
         AsyncIterable,
@@ -1159,9 +1162,6 @@ async def _continue_after_file_search(
     Returns:
         The model's response to the retrieved passages.
     """
-    # Local: `stdapi.models.chat` imports this module through its model classes.
-    from stdapi.models.chat import get_chat_model  # noqa: PLC0415
-
     follow_up = request.model_copy(update={"input": items, "stream": False})
     response = await get_chat_model(model_id).create_response(
         follow_up, response_id, created_at

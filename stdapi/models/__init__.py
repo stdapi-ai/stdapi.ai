@@ -118,6 +118,13 @@ from stdapi.utils import (
     webuuid,
 )
 
+# Lazy: these modules import this package.
+lazy from stdapi.models.marketplace_endpoints import (
+    collect_marketplace_endpoint_models,
+    merge_marketplace_endpoint_models,
+)
+lazy from stdapi.models.sagemaker_endpoints import merge_sagemaker_endpoint_models
+
 if TYPE_CHECKING:
     from asyncio import Task
     from collections.abc import (
@@ -3069,12 +3076,6 @@ async def _collect_all_models(
         all_models = await _check_candidates(candidates, unavailable_models)
         invalid_arn_mappings = _apply_user_profiles(all_models)
         if SETTINGS.aws_bedrock_marketplace_endpoints_enabled:
-            # Imported here: the module imports this one for its catalogue types.
-            from stdapi.models.marketplace_endpoints import (  # noqa: PLC0415
-                collect_marketplace_endpoint_models,
-                merge_marketplace_endpoint_models,
-            )
-
             merge_marketplace_endpoint_models(
                 all_models,
                 await collect_marketplace_endpoint_models(
@@ -3084,11 +3085,6 @@ async def _collect_all_models(
         if mantle_task is not None:
             _merge_mantle_models(all_models, await mantle_task)
         if SETTINGS.aws_sagemaker_endpoints:
-            # Imported here: the module imports this one for its catalogue types.
-            from stdapi.models.sagemaker_endpoints import (  # noqa: PLC0415
-                merge_sagemaker_endpoint_models,
-            )
-
             # After the Mantle merge: a declared ID colliding with a Mantle
             # model is reported and ignored like any other, where merging first
             # would let the Mantle entry take the catalogue slot of an endpoint

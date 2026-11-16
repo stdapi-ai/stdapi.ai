@@ -87,6 +87,9 @@ from stdapi.vector_stores.registry import (
     external_stores,
 )
 
+# Lazy: imported modules (stdapi.vector_stores.jobs) import this one.
+lazy from stdapi.vector_stores.jobs import enqueue_indexing
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Sequence
 
@@ -850,9 +853,6 @@ async def _hand_over_indexing(
         file_ids: The files to index, in order.
         batch_id: The batch the files belong to, or ``""``.
     """
-    # Imported here: the queue's handlers call back into this module.
-    from stdapi.vector_stores.jobs import enqueue_indexing  # noqa: PLC0415
-
     if not await enqueue_indexing(store_id, file_ids, batch_id):
         start_indexing(store_id, file_ids, batch_id)
 

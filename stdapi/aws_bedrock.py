@@ -24,6 +24,9 @@ from stdapi.types import JsonMapping
 from stdapi.usage import record_guardrail_policy_usage
 from stdapi.utils import validation_error_handler
 
+# Lazy: stdapi.monitoring imports this module.
+lazy from stdapi.monitoring import context_length_error, log_error_details
+
 if TYPE_CHECKING:
     from collections.abc import Generator, Mapping, Sequence
 
@@ -611,9 +614,6 @@ def resolve_guardrail_model(model: str | None) -> tuple[str, str]:
     configured = GUARDRAIL_CONFIG_VAR.get(None)
     if model is None or _is_default_guardrail_model(model):
         if configured is None:
-            # Imported here because stdapi.monitoring imports this module.
-            from stdapi.monitoring import log_error_details  # noqa: PLC0415
-
             log_error_details(
                 "No moderation guardrail is configured "
                 "(aws_bedrock_guardrail_identifier): 'moderation' rejected.",
@@ -1087,9 +1087,6 @@ def handle_bedrock_client_error() -> Generator[None]:
     try:
         yield
     except ClientError as error:
-        # Imported here: stdapi.monitoring imports stdapi.aws_bedrock (import cycle).
-        from stdapi.monitoring import context_length_error, log_error_details  # noqa: PLC0415 -- circular import
-
         error_message = error.response["Error"]["Message"]
         match error.response["Error"]["Code"]:
             case "ValidationException" if "Invalid S3 credentials" in error_message:

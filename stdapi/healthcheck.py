@@ -9,14 +9,14 @@ loopback request.
 from os import getenv
 from socket import create_connection
 
+# Lazy: only a set TRUSTED_HOSTS needs json.
+lazy import json
+
 
 def resolve_host() -> str:
     """Return a ``Host`` header the server's ``TRUSTED_HOSTS`` check accepts."""
     if not (setting := getenv("TRUSTED_HOSTS", "").strip()):
         return "localhost"
-
-    # Unset by default, so json stays off the common path.
-    import json  # noqa: PLC0415
 
     try:
         parsed = json.loads(setting)

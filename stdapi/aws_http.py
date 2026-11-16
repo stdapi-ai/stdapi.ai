@@ -26,6 +26,9 @@ from stdapi import server
 from stdapi.api_errors import ApiError
 from stdapi.config import AWS_SESSION, SETTINGS
 
+# Lazy: stdapi.monitoring imports this module.
+lazy from stdapi.monitoring import log_error_details
+
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
@@ -57,9 +60,6 @@ def _no_credentials_error(feature: str) -> ApiError:
     Returns:
         The error to raise.
     """
-    # Imported here: stdapi.monitoring imports this module transitively.
-    from stdapi.monitoring import log_error_details  # noqa: PLC0415
-
     log_error_details(
         f"No AWS credentials available to authenticate with {feature}: the "
         "server's credential chain resolved nothing.",

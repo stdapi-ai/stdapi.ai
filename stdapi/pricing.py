@@ -41,8 +41,14 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 from botocore.exceptions import BotoCoreError, ClientError
 from pydantic_core import from_json
 
+from stdapi import server
 from stdapi.aws import get_client
 from stdapi.config import AWS_REGION, SETTINGS
+
+# Lazy: stdapi.metering and stdapi.monitoring import this module. The module
+# itself is bound, so a test patching stdapi.monitoring reaches this one.
+lazy from stdapi import monitoring
+lazy from stdapi.metering import SERVER_FULL_VERSION
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -2405,12 +2411,7 @@ def _log_price_catalog_event(
         start_ns: ``perf_counter_ns()`` timestamp when the attempt started,
             or None to omit ``execution_time_ms`` (no load attempt timed).
     """
-    # Imported here: stdapi.monitoring transitively imports this module.
-    from stdapi import server  # noqa: PLC0415
-    from stdapi.metering import SERVER_FULL_VERSION  # noqa: PLC0415
-    from stdapi.monitoring import EventLog, write_log_event  # noqa: PLC0415
-
-    event = EventLog(
+    event = monitoring.EventLog(
         type="background",
         level=level,
         date=SETTINGS.now(),
@@ -2423,4 +2424,4 @@ def _log_price_catalog_event(
     if diagnostics:
         # list() copy: mypy needs a fresh list[JsonValue] (list is invariant).
         event["error_detail"] = list(diagnostics)
-    write_log_event(event)
+    monitoring.write_log_event(event)

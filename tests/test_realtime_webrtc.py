@@ -75,6 +75,7 @@ from stdapi.realtime_webrtc import (
     hangup_call,
     open_call,
 )
+from stdapi.routes import openai_realtime
 from stdapi.types.openai_realtime import (
     AudioConfig,
     AudioInputConfig,
@@ -1095,8 +1096,6 @@ def stub_open_call(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     Returns:
         The record of the one call the stub answered.
     """
-    import stdapi.realtime_webrtc  # noqa: PLC0415
-
     record: dict[str, Any] = {}
 
     async def _open_call(
@@ -1120,7 +1119,7 @@ def stub_open_call(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         )
         return "rtc_stub", "v=0\r\nfake-answer"
 
-    monkeypatch.setattr(stdapi.realtime_webrtc, "open_call", _open_call)
+    monkeypatch.setattr(openai_realtime, "open_call", _open_call)
     return record
 
 
@@ -1650,10 +1649,8 @@ class TestCallControlRoutes:
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Hangup reaches the registry and answers an empty 200."""
-        import stdapi.realtime_webrtc  # noqa: PLC0415
-
         ended: list[str] = []
-        monkeypatch.setattr(stdapi.realtime_webrtc, "hangup_call", ended.append)
+        monkeypatch.setattr(openai_realtime, "hangup_call", ended.append)
         response = app_client.post("/v1/realtime/calls/rtc_stub/hangup")
         assert response.status_code == 200
         assert ended == ["rtc_stub"]

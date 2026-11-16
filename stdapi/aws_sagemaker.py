@@ -38,6 +38,9 @@ from stdapi.aws_http import iter_sse, new_http_session, presigned_bearer_token
 from stdapi.config import AWS_SESSION, SETTINGS
 from stdapi.utils import to_json_bytes
 
+# Lazy: stdapi.monitoring imports this module.
+lazy from stdapi.monitoring import log_error_details
+
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
@@ -420,9 +423,6 @@ def _front_door_error(status: int, detail: str) -> SageMakerError:
     Returns:
         The mapped error, ready to raise.
     """
-    # Imported here: stdapi.monitoring transitively imports this module.
-    from stdapi.monitoring import log_error_details  # noqa: PLC0415
-
     log_error_details(
         f"The Amazon SageMaker AI endpoint refused the invocation with HTTP "
         f"{status}: {detail or '(no message)'}",
@@ -466,16 +466,10 @@ async def _request(
             },
         )
     except SocketTimeoutError as error:
-        # Imported here: stdapi.monitoring transitively imports this module.
-        from stdapi.monitoring import log_error_details  # noqa: PLC0415
-
         log_error_details(f"Timed out reading the model response in {region}.")
         msg = "The service is temporarily unavailable. Retry the request."
         raise SageMakerError(msg, status=503) from error
     except (AiohttpClientError, TimeoutError) as error:
-        # Imported here: stdapi.monitoring transitively imports this module.
-        from stdapi.monitoring import log_error_details  # noqa: PLC0415
-
         log_error_details(f"Unable to reach the model endpoint in {region}.")
         msg = "The service is temporarily unavailable. Retry the request."
         raise SageMakerError(msg, status=503) from error
@@ -591,9 +585,6 @@ def _warm_up_timeout_error(
     Returns:
         The error to raise, its real cause already logged for the operator.
     """
-    # Imported here: stdapi.monitoring transitively imports this module.
-    from stdapi.monitoring import log_error_details  # noqa: PLC0415
-
     target = f"'{endpoint}'" + (
         f" (inference component '{inference_component}')" if inference_component else ""
     )

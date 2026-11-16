@@ -44,6 +44,16 @@ from stdapi.utils import (
     webuuid,
 )
 
+# Lazy: imported modules (stdapi.api_providers.anthropic, stdapi.models.chat._adapters._responses_context, stdapi.tenant_rate_limits) import this one.
+lazy from stdapi.api_providers.anthropic import TAG_ANTHROPIC
+lazy from stdapi.models.chat._adapters._responses_context import (
+    OUTPUT_BUDGET_TOO_LARGE,
+    ContextLengthExceededError,
+    context_overflow,
+    output_budget_exceeded,
+)
+lazy from stdapi.tenant_rate_limits import debit_tenant_tokens
+
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator, Iterable, Mapping
     from contextvars import Token
@@ -403,9 +413,6 @@ def _finalize_usage(log: EventLog) -> None:
         # later stream finalize can't re-log the same records: tasks spawned
         # before a stream's log scope keep recording into this same dict.
         if (records := USAGE.get(None)) is not None:
-            # Imported here: that module imports this one (import cycle).
-            from stdapi.tenant_rate_limits import debit_tenant_tokens  # noqa: PLC0415
-
             # Before the drain empties the mapping.
             debit_tenant_tokens(records.values())
             records.clear()
@@ -1157,15 +1164,6 @@ def context_length_error(exc: BaseException) -> ApiError | None:
         when the output tokens requested alone fill the window, or None when the
         exception is not a context-window refusal, or already that error.
     """
-    # Imported here: the model packages import this module.
-    from stdapi.api_providers.anthropic import TAG_ANTHROPIC  # noqa: PLC0415
-    from stdapi.models.chat._adapters._responses_context import (  # noqa: PLC0415
-        OUTPUT_BUDGET_TOO_LARGE,
-        ContextLengthExceededError,
-        context_overflow,
-        output_budget_exceeded,
-    )
-
     if isinstance(exc, ContextLengthExceededError):
         return None
     if output_budget_exceeded(exc):
@@ -1242,11 +1240,6 @@ def _legacy_completion_refusal(overflow: ContextOverflow) -> ApiError:
     Returns:
         The error.
     """
-    # Imported here: the model packages import this module.
-    from stdapi.models.chat._adapters._responses_context import (  # noqa: PLC0415
-        ContextLengthExceededError,
-    )
-
     observed, limit, output = overflow.observed, overflow.limit, overflow.output
     if observed is not None and limit is not None and output is not None:
         message = _PROMPT_AND_COMPLETION_TOO_LONG.format(

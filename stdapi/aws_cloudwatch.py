@@ -13,6 +13,9 @@ from stdapi.api_errors import ApiError, feature_unavailable_guard
 from stdapi.aws import get_client
 from stdapi.config import AWS_REGION, SETTINGS
 
+# Lazy: stdapi.monitoring imports this module.
+lazy from stdapi.monitoring import add_server_warning
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
 
@@ -61,9 +64,6 @@ def add_usage_api_warnings(start_event: EventLog) -> None:
     Args:
         start_event: The startup log event to add the warnings to.
     """
-    # Imported here: stdapi.monitoring pulls in this module's neighbours.
-    from stdapi.monitoring import add_server_warning  # noqa: PLC0415
-
     if not SETTINGS.cost_tracking:
         add_server_warning(
             start_event,

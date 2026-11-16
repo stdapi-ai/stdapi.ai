@@ -81,6 +81,9 @@ from stdapi.types.openai_realtime import (
 from stdapi.usage import record_bedrock_usage
 from stdapi.utils import b64decode, b64encode, to_json_bytes, to_json_str, webuuid
 
+# Lazy: optional extra, loaded only when the feature is used.
+lazy from stdapi.realtime_webrtc import serve_sideband
+
 if TYPE_CHECKING:
     from asyncio import Task
     from collections.abc import Iterator, Mapping
@@ -2627,8 +2630,6 @@ async def _open_sideband(websocket: WebSocket, call_id: str) -> None:
             "no call to attach to. Contact the administrator."
         )
         raise ApiError(message, status=404)
-    # Imported lazily: the webrtc extra is only present when the setting proved it.
-    from stdapi.realtime_webrtc import serve_sideband  # noqa: PLC0415
 
     await serve_sideband(websocket, call_id)
 

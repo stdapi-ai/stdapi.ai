@@ -14,6 +14,9 @@ from stdapi.types import (
     JsonMapping,
 )
 
+# Lazy: stdapi.monitoring imports this module.
+lazy from stdapi.monitoring import log_error_details
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -2492,8 +2495,6 @@ class ContextManagementResponse(BaseModelResponse):
             else:
                 known.append(edit)
         if unknown:
-            from stdapi.monitoring import log_error_details  # noqa: PLC0415
-
             log_error_details(
                 "Dropped context_management applied edits of an unknown type: "
                 + ", ".join(unknown),

@@ -7,6 +7,9 @@ from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import filter_extra_model_parameters
 from stdapi.config import SETTINGS
 
+# Lazy: stdapi.monitoring imports this module.
+lazy from stdapi.monitoring import log_error_details
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -57,9 +60,6 @@ class NoServerTools:
         Raises:
             ApiError: Always.
         """
-        # Imported here: stdapi.monitoring imports this package (import cycle).
-        from stdapi.monitoring import log_error_details  # noqa: PLC0415
-
         log_error_details(
             f"Server tool '{tool_type}' refused: {self.operator_detail}",
             level="warning",
