@@ -520,7 +520,7 @@ async def _iter_jsonl(stream: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
                 yield line
             start = end + 1
         del buffer[:start]
-    if line := bytes(buffer).strip():
+    if line := buffer.take_bytes().strip():
         yield line
 
 

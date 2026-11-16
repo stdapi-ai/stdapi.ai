@@ -1078,7 +1078,7 @@ async def _get_or_generate_audio(
             else audio_params.format,
         ):
             buf.extend(chunk)
-        audio_content = bytes(buf)
+        audio_content = buf.take_bytes()
     return ChatCompletionAudio(
         id=f"audio-{completion_id}-{index}",
         data=await b64encode(audio_content),

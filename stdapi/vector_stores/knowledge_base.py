@@ -1386,7 +1386,7 @@ async def _document(pending: PendingFile, accepted: frozenset[str]) -> dict[str,
                 f"indexing ({_MAX_DOCUMENT_BYTES} bytes)."
             )
             raise ApiError(msg)
-    content = _inline_content(bytes(body), media_type, accepted)
+    content = _inline_content(body.take_bytes(), media_type, accepted)
     attributes = [
         {"key": key, "value": _to_attribute(value)}
         for key, value in pending.attributes.items()

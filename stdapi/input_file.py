@@ -984,7 +984,7 @@ class _HttpSource(_FileSource):
             chunks += chunk
             if len(chunks) > cap:
                 raise _size_limit_error(cap)
-        return bytes(chunks)
+        return chunks.take_bytes()
 
     async def _stream_capped(self, resp: ClientResponse) -> AsyncIterator[bytes]:
         """Yield the response body in chunks, enforcing the configured size limit.

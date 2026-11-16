@@ -1026,10 +1026,9 @@ async def buffered_chunks(
     async for chunk in chunks:
         buf += chunk
         if len(buf) >= chunk_size:
-            yield bytes(buf)
-            buf = bytearray()
+            yield buf.take_bytes()
     if buf:
-        yield bytes(buf)
+        yield buf.take_bytes()
 
 
 async def chain_async_iterators[T](*iterators: AsyncIterator[T]) -> AsyncIterator[T]:
