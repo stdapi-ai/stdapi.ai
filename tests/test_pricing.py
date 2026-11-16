@@ -5789,8 +5789,16 @@ async def test_bedrock_model_pricing_coverage() -> None:
 # gap: keep it in case pricing returns or users retain model access.
 # GPT-6 Astra Minor: Mantle lists and serves it in us-east-1 with no model card,
 # Price List row or OpenAI price (verified 2026-09-30).
+# Claude Mulberry TRN2 208K: Mantle lists it as available in ap-south-1 only,
+# with no ListFoundationModels entry, inference profile, model card found by
+# the provider index pages, or Price List row under any Bedrock service code
+# (verified 2026-11-16).
 _KNOWN_PRICING_GAPS: Final[frozenset[str]] = frozenset(
-    {"stability.stable-diffusion-xl-v1", "openai.gpt-6-astra-minor"}
+    {
+        "stability.stable-diffusion-xl-v1",
+        "openai.gpt-6-astra-minor",
+        "anthropic.claude-mulberry-trn2-208k-20251001",
+    }
 )
 
 
