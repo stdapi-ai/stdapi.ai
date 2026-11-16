@@ -113,6 +113,9 @@ _CELL: Final[re.Pattern[str]] = re.compile(r"<t[hd][^>]*>(.*?)</t[hd]>", re.DOTA
 #: A cell stating a USD amount.
 _MONEY: Final[re.Pattern[str]] = re.compile(r"^\$([0-9]+(?:\.[0-9]+)?)$")
 
+#: Cell texts a card writes where a rate does not apply: a published absence.
+_NO_RATE_CELLS: Final[frozenset[str]] = frozenset({"", "\u2014", "\u2013", "-"})
+
 #: A page title, which the user guide's not-found stub lacks.
 _H1: Final[re.Pattern[str]] = re.compile(r"<h1[\s>]")
 
@@ -435,7 +438,10 @@ def option_rates(
 
     Raises:
         UnreadableSourceError: If the row is present but states no rate, which
-            reads as changed columns rather than as a withdrawn rate.
+            reads as changed columns rather than as a withdrawn rate; if a priced
+            column's cell is neither an amount nor a dash (a footnoted amount
+            would otherwise read as a withdrawn rate); or if two columns price
+            the same dimension.
     """
     labels = _OPTION_ROWS[option]
     labelled = next(
@@ -449,12 +455,22 @@ def option_rates(
     )
     if labelled is None:
         return None
-    rates = {
-        dimension: amount / _PER_MILLION
-        for header, cell in zip(table_rows[0], labelled, strict=False)
-        if (dimension := _card_dimension(header)) is not None
-        and (amount := money(cell)) is not None
-    }
+    rates: dict[str, Decimal] = {}
+    priced: set[str] = set()
+    for header, cell in zip(table_rows[0], labelled, strict=False):
+        dimension = _card_dimension(header)
+        if dimension is None:
+            continue
+        if dimension in priced:
+            msg = f"two columns of the {labelled[0]} row price {dimension}"
+            raise UnreadableSourceError(msg)
+        priced.add(dimension)
+        amount = money(cell)
+        if amount is not None:
+            rates[dimension] = amount / _PER_MILLION
+        elif cell not in _NO_RATE_CELLS:
+            msg = f"the {labelled[0]} row's {header!r} cell {cell!r} is not a rate"
+            raise UnreadableSourceError(msg)
     if not rates:
         msg = f"the {labelled[0]} row states no rate"
         raise UnreadableSourceError(msg)

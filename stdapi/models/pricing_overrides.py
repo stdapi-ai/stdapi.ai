@@ -243,10 +243,19 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
     },
     # No card or Price List row (verified 2026-09-24): Z.ai's API per-1M rates
     # / 1e6. Bedrock bills Z.ai's direct rate for GLM 5, 4.7 and 4.7 Flash in
-    # these regions; it publishes no GLM cache rate.
+    # these regions; it publishes no cache rate for them.
     "zai.glm-4.6": {
         Dimension.INPUT_TOKENS: "0.0000006",
         Dimension.OUTPUT_TOKENS: "0.0000022",
+    },
+    # Bedrock pricing page "GLM 5.3" panel (verified 2026-11-16), its "US CRIS"
+    # row: no Price List row, a card without rates, no In-Region option, and a
+    # 30-minute cache write.
+    "zai.glm-5.3": {
+        Dimension.INPUT_TOKENS: "0.000001848",
+        Dimension.CACHE_WRITE_TOKENS: "0.00000231",
+        Dimension.CACHE_READ_TOKENS: "0.0000003432",
+        Dimension.OUTPUT_TOKENS: "0.000005808",
     },
 }
 
@@ -314,6 +323,14 @@ DEFAULT_MODEL_GLOBAL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_WRITE_TOKENS: "0.00000125",
         Dimension.CACHE_READ_TOKENS: "0.00000005",
         Dimension.OUTPUT_TOKENS: "0.000005",
+    },
+    # Bedrock pricing page "GLM 5.3" panel (verified 2026-11-16), its "Global
+    # CRIS" row.
+    "zai.glm-5.3": {
+        Dimension.INPUT_TOKENS: "0.00000168",
+        Dimension.CACHE_WRITE_TOKENS: "0.0000021",
+        Dimension.CACHE_READ_TOKENS: "0.000000312",
+        Dimension.OUTPUT_TOKENS: "0.00000528",
     },
 }
 

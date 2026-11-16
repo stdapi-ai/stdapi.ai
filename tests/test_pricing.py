@@ -3661,6 +3661,70 @@ class TestDefaultModelPrices:
             is None
         )
 
+    @pytest.mark.parametrize(
+        ("routing", "rates"),
+        [
+            pytest.param(
+                "",
+                {
+                    Dimension.INPUT_TOKENS: "0.000001848",
+                    Dimension.CACHE_WRITE_TOKENS: "0.00000231",
+                    Dimension.CACHE_READ_TOKENS: "0.0000003432",
+                    Dimension.OUTPUT_TOKENS: "0.000005808",
+                },
+                id="us_profile",
+            ),
+            pytest.param(
+                "global",
+                {
+                    Dimension.INPUT_TOKENS: "0.00000168",
+                    Dimension.CACHE_WRITE_TOKENS: "0.0000021",
+                    Dimension.CACHE_READ_TOKENS: "0.000000312",
+                    Dimension.OUTPUT_TOKENS: "0.00000528",
+                },
+                id="global_profile",
+            ),
+        ],
+    )
+    def test_glm_53_bills_its_pricing_page_rates_from_every_commercial_region(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        routing: Routing,
+        rates: dict[Dimension, str],
+    ) -> None:
+        """GLM 5.3 prices every token kind it bills, cache included, wherever it is called.
+
+        Its access is restricted, so no live call can check it: the pricing
+        page's US CRIS and Global CRIS rows are its only source, and its
+        ``global.`` profile serves every commercial Region. The Priority tier
+        bills the page's +75%.
+
+        Ref: stdapi/models/pricing_overrides.py:DEFAULT_MODEL_PRICES
+             https://aws.amazon.com/bedrock/pricing/
+        """
+        regions = set(Session().get_available_regions("bedrock"))
+        index: dict[PriceKey, Price] = {}
+        pricing._apply_default_prices(index)  # noqa: SLF001 -- the catalog load steps, without AWS
+        pricing._apply_regional_fallback(index, regions)  # noqa: SLF001 -- the catalog load steps, without AWS
+        monkeypatch.setattr(pricing._state, "price_index", index)  # noqa: SLF001 -- installs the built index
+        for region in regions:
+            for dimension, rate in rates.items():
+                for tier, ratio in (("standard", "1"), ("priority", "1.75")):
+                    price = resolve_price(
+                        Service.BEDROCK,
+                        "zai.glm-5.3",
+                        region,
+                        dimension,
+                        tier=tier,
+                        routing=routing,
+                    )
+                    assert price is not None, (region, dimension, tier)
+                    assert price.amount == Decimal(rate) * Decimal(ratio), (
+                        region,
+                        dimension,
+                        tier,
+                    )
+
     def test_an_in_region_call_still_prices_at_the_in_region_rate(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -28,7 +28,10 @@ Four sources, and they are not interchangeable:
   table prices ``DEFAULT_MODEL_GLOBAL_PRICES``, and most cards carry no such row
   at all.
 - **The AWS Bedrock pricing page** for the Stability AI image services, whose
-  per-generation rates live in one table keyed by display name.
+  per-generation rates live in one table keyed by display name, and for a
+  model whose only per-1M-token table is a tab panel there (GLM 5.3): its
+  ``US CRIS`` row prices ``DEFAULT_MODEL_PRICES`` and its ``Global CRIS`` row
+  ``DEFAULT_MODEL_GLOBAL_PRICES``.
 - **The vendor's own pricing** for a model Bedrock serves before AWS publishes
   any rate: the OpenAI model page (markdown) for a GPT model with no card yet,
   whose Standard rate is Bedrock's Global one and whose regional-processing
@@ -97,6 +100,7 @@ from collections import defaultdict
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import StrEnum
+from html import unescape
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -284,6 +288,29 @@ _PER_GENERATION_NOTE: Final[str] = "price per generation"
 
 #: A table on the Bedrock pricing page.
 _TABLE: Final[re.Pattern[str]] = re.compile(r"<table.*?</table>", re.DOTALL)
+
+#: Pricing-page tab name per model priced from its per-1M-token panel.
+_PRICING_PAGE_TOKEN_MODELS: Final[dict[str, str]] = {"zai.glm-5.3": "GLM 5.3"}
+
+#: A tab panel's name on the Bedrock pricing page; the panel is the next list item.
+_PANEL_TRIGGER: Final[re.Pattern[str]] = re.compile(
+    r"<li[^>]*\blb-tabs-accordion-trigger\b[^>]*>(.*?)</li>", re.DOTALL
+)
+
+#: A list item's opening or closing tag, counted to find where a panel closes.
+_LIST_ITEM_TAG: Final[re.Pattern[str]] = re.compile(r"<(/?)li\b[^>]*>")
+
+#: Header of the first column of a per-1M-token panel table.
+_INFERENCE_OPTION_HEADING: Final[str] = "inference option"
+
+#: The tier a panel must state; another one invalidates a direct comparison.
+_STANDARD_TIER_NOTE: Final[str] = "pricing shown is for the standard tier"
+
+#: An HTML tag, stripped to read a panel's visible text.
+_HTML_TAG: Final[re.Pattern[str]] = re.compile(r"<[^>]+>")
+
+#: The pricing page writes a space between the dollar sign and the amount.
+_DOLLAR_SPACE: Final[re.Pattern[str]] = re.compile(r"^\$\s+")
 
 
 class PriceSourceWarning(UserWarning):
@@ -814,6 +841,166 @@ def unpriced_stability_rows(page: str) -> list[Finding]:
     ]
 
 
+def _visible_text(fragment: str) -> str:
+    """Return *fragment*'s visible text, unescaped and whitespace-collapsed."""
+    return " ".join(unescape(_HTML_TAG.sub(" ", fragment)).split())
+
+
+def _panel_body(page: str, start: int) -> str | None:
+    """Return the content of the list item opening after *start*, to its own close.
+
+    Args:
+        page: The pricing page's HTML.
+        start: Where the panel's name item ends.
+
+    Returns:
+        The panel's HTML, or None when its list closes before a panel opens.
+    """
+    tags = _LIST_ITEM_TAG.finditer(page, start)
+    first = next(tags, None)
+    if first is None or first.group(1) or "</ul>" in page[start : first.start()]:
+        return None
+    depth = 1
+    for tag in tags:
+        depth += -1 if tag.group(1) else 1
+        if not depth:
+            return page[first.end() : tag.start()]
+    return None
+
+
+def _token_tables(panel: str) -> list[list[list[str]]]:
+    """Return the rows of each per-1M-token table *panel* carries.
+
+    Args:
+        panel: A tab panel's HTML.
+
+    Returns:
+        Each "Inference option" table's rows, header first, with the dollar
+        amounts in the model cards' spelling.
+    """
+    return [
+        [[_DOLLAR_SPACE.sub("$", cell) for cell in row] for row in rows]
+        for table in _TABLE.findall(panel)
+        if (rows := card_prices.rows(table))
+        and rows[0]
+        and rows[0][0].casefold() == _INFERENCE_OPTION_HEADING
+    ]
+
+
+def _token_panels(page: str) -> dict[str, list[str]]:
+    """Return every pricing-page tab panel carrying a per-1M-token table.
+
+    Args:
+        page: The pricing page's HTML.
+
+    Returns:
+        Each such panel's HTML, per casefolded panel name.
+    """
+    panels: dict[str, list[str]] = defaultdict(list)
+    for trigger in _PANEL_TRIGGER.finditer(page):
+        body = _panel_body(page, trigger.end())
+        if body is not None and _token_tables(body):
+            panels[_visible_text(trigger.group(1)).casefold()].append(body)
+    return panels
+
+
+def parse_pricing_page_token_rates(
+    panels: Mapping[str, list[str]], name: str
+) -> tuple[dict[str, Decimal], dict[str, Decimal] | None] | None:
+    """Return the per-token rates the pricing page's tab panel *name* publishes.
+
+    Args:
+        panels: The page's token panels, as :func:`_token_panels` returns them.
+        name: The panel's name, as the page displays it.
+
+    Returns:
+        The regional rate (the In-Region row, else the Geo CRIS row) and the
+        Global CRIS rate, None for a panel with no Global row, both keyed by
+        dimension value; None when the page has no panel of that name -- a
+        published absence.
+
+    Raises:
+        UnreadableSourceError: If the panel appears several times, carries
+            several token tables, states no Standard tier or no per-1M-token
+            unit, has no regional row, or a row cannot be read.
+    """
+    bodies = panels.get(name.casefold())
+    if bodies is None:
+        return None
+    if len(bodies) != 1:
+        msg = f"the {name} panel appears {len(bodies)} times"
+        raise UnreadableSourceError(msg)
+    (body,) = bodies
+    tables = _token_tables(body)
+    if len(tables) != 1:
+        msg = f"the {name} panel carries {len(tables)} token tables"
+        raise UnreadableSourceError(msg)
+    notes = _visible_text(body).casefold()
+    if _STANDARD_TIER_NOTE not in notes:
+        msg = f"the {name} panel no longer states the Standard tier"
+        raise UnreadableSourceError(msg)
+    if PER_MILLION_NOTE not in notes:
+        msg = f"the {name} panel no longer states {PER_MILLION_NOTE!r}"
+        raise UnreadableSourceError(msg)
+    (rows,) = tables
+    regional = card_prices.option_rates(rows, "in_region")
+    if regional is None:
+        regional = card_prices.option_rates(rows, "geo")
+    if regional is None:
+        msg = f"the {name} panel has no In-Region or Geo CRIS row"
+        raise UnreadableSourceError(msg)
+    return regional, card_prices.option_rates(rows, "global")
+
+
+def pricing_page_token_readings(
+    page: str | None, problem: str | None
+) -> dict[str, CardReadings]:
+    """Return one reading per model priced from the pricing page's token panels.
+
+    A page carrying no token panel at all reports every model unreachable; a
+    panel that cannot be read reports its own model only.
+
+    Args:
+        page: The pricing page's HTML, or None when the fetch failed.
+        problem: Why the fetch failed, or None when it did not.
+
+    Returns:
+        A reading per model in ``_PRICING_PAGE_TOKEN_MODELS``: its regional and
+        Global rates, as the page publishes no long-context or context-window
+        figure.
+    """
+    url = _BEDROCK_PRICING_PAGE
+    panels = _token_panels(page) if page is not None and problem is None else {}
+    if problem is None and not panels:
+        problem = "no tab panel carries an 'Inference option' token table"
+    readings: dict[str, CardReadings] = {}
+    for model_id, name in _PRICING_PAGE_TOKEN_MODELS.items():
+        model_problem = problem
+        published = None
+        if model_problem is None:
+            try:
+                published = parse_pricing_page_token_rates(panels, name)
+            except UnreadableSourceError as exc:
+                model_problem = str(exc)
+        if model_problem is not None:
+            reading = SourceReading(url, problem=model_problem)
+            readings[model_id] = CardReadings(
+                reading,
+                reading,
+                reading,
+                reading,
+                ThresholdReading(url, problem=model_problem),
+            )
+            continue
+        regional, cross_region = published or (None, None)
+        readings[model_id] = replace(
+            _withdrawn_readings(url),
+            in_region=SourceReading(url, rates=_dimensions(regional)),
+            cross_region=SourceReading(url, rates=_dimensions(cross_region)),
+        )
+    return readings
+
+
 def unpriced_openai_cards(index: str) -> list[Finding]:
     """Return a finding per frontier GPT model card no table entry is sourced from."""
     known = set(_MODEL_CARD_URLS.values())
@@ -1072,6 +1259,8 @@ def _collect(client: httpx.Client) -> list[Finding]:
         problem = f"{type(exc).__name__}: {exc}"
     for model_id, reading in stability_readings(page, problem).items():
         findings.extend(classify(model_id, DEFAULT_MODEL_PRICES[model_id], reading))
+    for model_id, card in pricing_page_token_readings(page, problem).items():
+        findings.extend(classify_card(model_id, card))
     if page is not None:
         findings.extend(unpriced_stability_rows(page))
 
@@ -1113,6 +1302,7 @@ def test_default_model_prices_match_their_published_source() -> None:
     priced = {
         *_MODEL_CARD_URLS,
         *_STABILITY_PAGE_NAMES,
+        *_PRICING_PAGE_TOKEN_MODELS,
         *_OPENAI_MODEL_PAGES,
         *_ZAI_PAGE_NAMES,
     }
@@ -1129,8 +1319,12 @@ def test_default_model_prices_match_their_published_source() -> None:
         ),
         ("MODEL_LONG_CONTEXT_THRESHOLDS", MODEL_LONG_CONTEXT_THRESHOLDS),
     ):
-        assert set(table) <= {*_MODEL_CARD_URLS, *_OPENAI_MODEL_PAGES}, (
-            f"{name} carries a model with no model card above, "
+        assert set(table) <= {
+            *_MODEL_CARD_URLS,
+            *_OPENAI_MODEL_PAGES,
+            *_PRICING_PAGE_TOKEN_MODELS,
+        }, (
+            f"{name} carries a model with no per-1M-token source above, "
             f"or this detector silently stops covering it"
         )
     assert set(DEFAULT_MODEL_LONG_CONTEXT_PRICES) <= set(
@@ -1762,6 +1956,18 @@ def stability_table() -> str:
     return (FIXTURES_DIR / "bedrock_pricing_page_stability_table.html").read_text()
 
 
+@pytest.fixture(scope="module")
+def token_panels() -> str:
+    """Recorded Bedrock pricing page excerpts around the GLM 5.3 token panel.
+
+    The GLM 4.7 Flash and GLM 5.3 tab panels, verbatim, with GLM 5.3 moved last
+    in its list, followed by the Kimi K3.1 Pro panel's body outside any list:
+    another model's token table, which a reader overrunning the last panel
+    would attribute to GLM 5.3.
+    """
+    return (FIXTURES_DIR / "bedrock_pricing_page_token_panels.html").read_text()
+
+
 class TestModelCardParsing:
     """The model card parser reads the commercial short-context In-Region rates.
 
@@ -1889,7 +2095,7 @@ class TestModelCardParsing:
             '<td tabindex="-1">n/a</td><td tabindex="-1">n/a</td>'
             '<td tabindex="-1">n/a</td></tr>',
         )
-        with pytest.raises(UnreadableSourceError, match="Global CRIS row states"):
+        with pytest.raises(UnreadableSourceError, match="Global CRIS row"):
             parse_model_card_global(card)
 
     def test_an_ambiguous_section_is_unreadable_for_the_global_rate_too(
@@ -1908,6 +2114,23 @@ class TestModelCardParsing:
         rates = parse_model_card(card)
         assert rates is not None
         assert Dimension.CACHE_WRITE_TOKENS not in rates
+
+    def test_a_cell_that_is_neither_a_rate_nor_a_dash_is_unreadable(
+        self, gpt_56_cyber_card: str
+    ) -> None:
+        """A footnoted amount is not dropped as a withdrawn rate, which never fails."""
+        card = gpt_56_cyber_card.replace(">$17.1875<", ">$17.1875*<")
+        with pytest.raises(UnreadableSourceError, match=r"\$17\.1875\*"):
+            parse_model_card(card)
+
+    def test_two_columns_pricing_one_dimension_are_unreadable(self) -> None:
+        """A second cache write column must not silently replace the first."""
+        rows = [
+            ["Inference option", "Input", "Cache write - 5m", "Cache write - 1h"],
+            ["Global CRIS", "$1.00", "$1.25", "$2.00"],
+        ]
+        with pytest.raises(UnreadableSourceError, match="cache_write_tokens"):
+            card_prices.option_rates(rows, "global")
 
     def test_an_ambiguous_pricing_section_is_unreadable(
         self, daybreak_blue_card: str
@@ -2204,6 +2427,121 @@ class TestStabilityPageParsing:
         page = stability_table.replace("Price per generation for each model", "Price")
         with pytest.raises(UnreadableSourceError, match="per generation"):
             parse_stability_prices(page)
+
+
+class TestPricingPageTokenDetection:
+    """The pricing page's per-model token tables, proved on GLM 5.3.
+
+    GLM 5.3 has no Price List row and a model card without a rate table, so the
+    page's tab panel is its only rate source: its ``US CRIS`` row prices
+    ``DEFAULT_MODEL_PRICES`` and its ``Global CRIS`` row
+    ``DEFAULT_MODEL_GLOBAL_PRICES``.
+
+    Ref: stdapi/models/pricing_overrides.py:DEFAULT_MODEL_PRICES
+         stdapi/models/pricing_overrides.py:DEFAULT_MODEL_GLOBAL_PRICES
+         https://aws.amazon.com/bedrock/pricing/
+    """
+
+    MODEL_ID: Final[str] = "zai.glm-5.3"
+
+    @staticmethod
+    def _glm_53_card(page: str) -> CardReadings:
+        """Return what *page* publishes for GLM 5.3."""
+        return pricing_page_token_readings(page, None)["zai.glm-5.3"]
+
+    @staticmethod
+    def _glm_53_panel(page: str) -> str:
+        """Return the GLM 5.3 trigger and panel, the fixture's last list item pair."""
+        start = page.rindex('<li class="lb-tabs-accordion-trigger')
+        return page[start : page.index("</ul>", start)]
+
+    def test_the_shipped_tables_match_the_panel(self, token_panels: str) -> None:
+        """Both rows' four rates, cache read and write included, match the entries.
+
+        The panel is the last of its list and another model's token table
+        follows the list, so this also proves a panel ends where it closes.
+        """
+        findings = classify_card(self.MODEL_ID, self._glm_53_card(token_panels))
+        assert len(findings) == 8
+        assert {finding.outcome for finding in findings} == {Outcome.MATCH}
+
+    def test_the_last_panel_ends_where_it_closes(self, token_panels: str) -> None:
+        """The table after the list is no panel's; GLM 4.7 Flash prices per region."""
+        panels = _token_panels(token_panels)
+        assert set(panels) == {"glm 5.3"}
+        (body,) = panels["glm 5.3"]
+        assert "IN CRIS" not in body
+
+    def test_the_geo_row_prices_the_regional_table(self, token_panels: str) -> None:
+        """With no In-Region row, the US CRIS row is the regional rate."""
+        assert self._glm_53_card(token_panels).in_region.rates == {
+            Dimension.INPUT_TOKENS: Decimal("0.000001848"),
+            Dimension.OUTPUT_TOKENS: Decimal("0.000005808"),
+            Dimension.CACHE_READ_TOKENS: Decimal("0.0000003432"),
+            Dimension.CACHE_WRITE_TOKENS: Decimal("0.00000231"),
+        }
+
+    def test_a_wrong_expected_value_is_reported_as_drift(
+        self, token_panels: str
+    ) -> None:
+        """A Global cache read rate copied into the regional table is a drift naming both."""
+        drifted = {
+            **DEFAULT_MODEL_PRICES[self.MODEL_ID],
+            Dimension.CACHE_READ_TOKENS: "0.000000312",
+        }
+        findings = classify(
+            self.MODEL_ID, drifted, self._glm_53_card(token_panels).in_region
+        )
+
+        drift = [f for f in findings if f.outcome is Outcome.DRIFT]
+        assert len(drift) == 1
+        assert drift[0].detail == (
+            f"cache_read_tokens: table has 0.000000312, {_BEDROCK_PRICING_PAGE} "
+            f"publishes 0.0000003432"
+        )
+
+    def test_a_panel_that_disappears_is_vanished(self, token_panels: str) -> None:
+        """A delisted model keeps both entries; the run says so for each."""
+        page = token_panels.replace("GLM 5.3", "GLM 5.3 retired")
+        findings = classify_card(self.MODEL_ID, self._glm_53_card(page))
+        assert [finding.outcome for finding in findings] == [Outcome.VANISHED] * 2
+
+    def test_a_page_without_token_panels_is_unreachable(self) -> None:
+        """A redesigned page must not read as a delisting."""
+        findings = classify_card(self.MODEL_ID, self._glm_53_card("<p>no tables</p>"))
+        assert {finding.outcome for finding in findings} == {Outcome.UNREACHABLE}
+
+    def test_a_changed_tier_note_is_unreadable(self, token_panels: str) -> None:
+        """A table no longer stating the Standard tier must not price Standard calls."""
+        page = token_panels.replace("for the Standard tier", "for the Priority tier", 1)
+        with pytest.raises(UnreadableSourceError, match="Standard tier"):
+            parse_pricing_page_token_rates(_token_panels(page), "GLM 5.3")
+        findings = classify_card(self.MODEL_ID, self._glm_53_card(page))
+        assert {finding.outcome for finding in findings} == {Outcome.UNREACHABLE}
+
+    def test_another_panels_tier_note_does_not_concern_this_one(
+        self, token_panels: str
+    ) -> None:
+        """A non-Standard panel for another model leaves GLM 5.3 compared."""
+        other = (
+            self._glm_53_panel(token_panels)
+            .replace("GLM 5.3", "GLM 9")
+            .replace("for the Standard tier", "for the Priority tier")
+        )
+        page = f'{token_panels}<ul class="lb-tabs-content">{other}</ul>'
+        findings = classify_card(self.MODEL_ID, self._glm_53_card(page))
+        assert {finding.outcome for finding in findings} == {Outcome.MATCH}
+
+    def test_a_footnoted_rate_is_unreadable(self, token_panels: str) -> None:
+        """A rate cell carrying a footnote mark is not read as a withdrawn rate.
+
+        This page marks cells with ``*`` footnotes; dropping such a cell would
+        report the rate as vanished, which never fails the lane.
+        """
+        page = token_panels.replace("$ 1.848<", "$ 1.848*<")
+        findings = classify_card(self.MODEL_ID, self._glm_53_card(page))
+        assert {finding.outcome for finding in findings} == {Outcome.UNREACHABLE}
+        assert "1.848*" in findings[0].detail
 
 
 class TestGpt56Detection:
