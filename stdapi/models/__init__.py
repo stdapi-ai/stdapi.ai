@@ -75,6 +75,7 @@ from stdapi.input_file import (
     resolve_all_bedrock_content_blocks,
 )
 from stdapi.models import _shared_cache
+from stdapi.models._stop_sequences import StreamCut, truncate_response_text
 from stdapi.models.capabilities import ROUTE_CAPABILITIES, Capability
 from stdapi.models.deprecation import DEPRECATED_MODELS
 from stdapi.models.pricing_overrides import (
@@ -1306,7 +1307,8 @@ class ModelBase[RequestT, ResponseT]:
             single_region: Selects the botocore client (see :func:`bedrock_client`).
 
         Returns:
-            Bedrock Converse response.
+            Bedrock Converse response, its text cut right after the first of
+            the request's stop sequences it holds.
         """
         # Fan-out callers (e.g. n > 1 choices) reuse one request dict across
         # concurrent calls: a per-call copy keeps its mutation isolated.
@@ -1324,9 +1326,13 @@ class ModelBase[RequestT, ResponseT]:
             response = await bedrock_client(
                 region, single_region=single_region
             ).converse(**request)
+        # Counted before the cut: AWS bills grounding calls the cut drops.
+        grounding_requests = _count_grounding_tool_uses(response)
+        if stop_sequences := request.get("inferenceConfig", {}).get("stopSequences"):
+            truncate_response_text(response, stop_sequences)
         self._record_converse_usage(
             response,
-            grounding_requests=_count_grounding_tool_uses(response),
+            grounding_requests=grounding_requests,
             region=region,
             requested_tier=request.get("serviceTier", {}).get("type"),
             routing=_request_routing(
@@ -1352,7 +1358,8 @@ class ModelBase[RequestT, ResponseT]:
             single_region: Selects the botocore client (see :func:`bedrock_client`).
 
         Returns:
-            Bedrock ConverseStream response containing the event stream.
+            Bedrock ConverseStream response containing the event stream, its
+            text cut right after the first of the request's stop sequences.
         """
         # Fan-out callers (e.g. n > 1 choices) reuse one request dict across
         # concurrent calls: a per-call copy keeps its mutation isolated.
@@ -1363,6 +1370,7 @@ class ModelBase[RequestT, ResponseT]:
                 region, single_region=single_region
             ).converse_stream(**request)
 
+        stop_sequences = request.get("inferenceConfig", {}).get("stopSequences")
         response["stream"] = self._capture_stream_usage(  # type: ignore[typeddict-item]
             response["stream"],
             region=region,
@@ -1370,6 +1378,7 @@ class ModelBase[RequestT, ResponseT]:
             routing=_request_routing(
                 request["modelId"], request.get("performanceConfig", {}).get("latency")
             ),
+            keep=StreamCut(stop_sequences).keep if stop_sequences else None,
         )
         return response
 
@@ -1429,6 +1438,7 @@ class ModelBase[RequestT, ResponseT]:
         region: str = "",
         requested_tier: ServiceTierTypeType | None = None,
         routing: Routing | None = None,
+        keep: Callable[[ConverseStreamOutputTypeDef], bool] | None = None,
     ) -> AsyncGenerator[ConverseStreamOutputTypeDef]:
         """Yield ConverseStream events, recording billed usage from metadata events.
 
@@ -1449,9 +1459,12 @@ class ModelBase[RequestT, ResponseT]:
             requested_tier: The request's tier, used when the metadata event
                 doesn't report the tier that actually served the call.
             routing: Serving profile of the call.
+            keep: Returns whether an event reaches the consumer, and may edit
+                it; every event does when ``None``. Usage is read from every
+                event, and the drain counts every event, kept or not.
 
         Yields:
-            Unmodified stream events.
+            The stream events *keep* lets through.
         """
         grounding_requests = 0
         stream_iter = aiter(stream)
@@ -1464,7 +1477,8 @@ class ModelBase[RequestT, ResponseT]:
                     requested_tier=requested_tier,
                     routing=routing,
                 )
-                yield event
+                if keep is None or keep(event):
+                    yield event
         except GeneratorExit, CancelledError:
             for _ in range(_DISCONNECT_DRAIN_MAX_EVENTS):
                 try:
@@ -1526,7 +1540,8 @@ class ModelBase[RequestT, ResponseT]:
             request: Bedrock Converse request payload (without ``modelId``).
 
         Returns:
-            Bedrock Converse response.
+            Bedrock Converse response, its text cut right after the first of
+            the request's stop sequences it holds.
         """
         candidates = await self._converse_candidate_regions()
         response = await route_and_execute(
@@ -1552,7 +1567,8 @@ class ModelBase[RequestT, ResponseT]:
             request: Bedrock Converse request payload (without ``modelId``).
 
         Returns:
-            Bedrock ConverseStream response containing the event stream.
+            Bedrock ConverseStream response containing the event stream, its
+            text cut right after the first of the request's stop sequences.
         """
         candidates = await self._converse_candidate_regions()
         return await route_and_execute(

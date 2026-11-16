@@ -135,6 +135,7 @@ def _assert_halted_on_stop(
 
     Ref: https://developers.openai.com/api/reference/resources/chat.md
          stdapi/models/chat/_adapters/_openai_chat_completion.py:translate_request
+         stdapi/models/_stop_sequences.py
     """
     assert content, "a run halted by a stop sequence still returns the text before it"
     if not retained:
@@ -3268,34 +3269,42 @@ class TestChatCompletions:
         sequence is applied to the generated text and not to a chunk boundary.
         ``finish_reason`` proves nothing on its own: it reads ``"stop"`` for a
         natural stop too, and the 200-token budget is far above what this answer
-        needs, so ``"length"`` could not appear either way.
+        needs, so ``"length"`` could not appear either way. The second request
+        puts two sequences a few tokens apart, which Amazon Nova Micro streams
+        in one chunk and cuts after the last of them.
 
         Ref: https://developers.openai.com/api/reference/resources/chat.md
              stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
+             stdapi/models/_stop_sequences.py:StreamCut
         """
-        response = openai_client.chat.completions.create(
-            model=chat_legacy_model,
-            messages=[
-                {"role": "user", "content": "Count: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10"}
-            ],
-            stop=["5"],
-            stream=True,
-            max_completion_tokens=200,
-        )
+        for prompt, stops in (
+            ("Count: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10", ("5",)),
+            (
+                "Repeat exactly, nothing else: red, blue, green, yellow",
+                ("green", "yellow"),
+            ),
+        ):
+            response = openai_client.chat.completions.create(
+                model=chat_legacy_model,
+                messages=[{"role": "user", "content": prompt}],
+                stop=list(stops),
+                stream=True,
+                max_completion_tokens=200,
+            )
 
-        finish_reason = None
-        content = ""
-        for chunk in response:
-            if isinstance(chunk, str) and chunk == "[DONE]":
-                break
-            if not chunk.choices:
-                continue
-            content += chunk.choices[0].delta.content or ""
-            if chunk.choices[0].finish_reason is not None:
-                finish_reason = chunk.choices[0].finish_reason
+            finish_reason = None
+            content = ""
+            for chunk in response:
+                if isinstance(chunk, str) and chunk == "[DONE]":
+                    break
+                if not chunk.choices:
+                    continue
+                content += chunk.choices[0].delta.content or ""
+                if chunk.choices[0].finish_reason is not None:
+                    finish_reason = chunk.choices[0].finish_reason
 
-        assert finish_reason == "stop"
-        _assert_halted_on_stop(content, ("5",), retained=not use_official_api)
+            assert finish_reason == "stop"
+            _assert_halted_on_stop(content, stops, retained=not use_official_api)
 
     def test_user_parameter_accepted(
         self, openai_client: OpenAI, chat_model: str, use_official_api: bool

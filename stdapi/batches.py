@@ -54,6 +54,7 @@ from stdapi.models import (
     runtime_twin,
     validate_model,
 )
+from stdapi.models._stop_sequences import truncate_response_text
 from stdapi.models.chat import get_chat_model, serves_via_mantle
 from stdapi.models.chat._adapters import _anthropic_message as anthropic_adapter
 from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapter
@@ -2095,6 +2096,32 @@ def _record_error(line: JsonMapping) -> tuple[str, str] | None:
     )
 
 
+def _chat_output(line: JsonMapping) -> ConverseResponseTypeDef:
+    """Return a successful chat result line's Converse response.
+
+    A result line echoes the record's request as ``modelInput``, the only
+    place its ``stopSequences`` are still known here.
+
+    Args:
+        line: One decoded result line.
+
+    Returns:
+        The response without its null-valued keys, cut right after the first
+        of the request's stop sequences its text holds.
+    """
+    output: ConverseResponseTypeDef = _strip_nulls(line.get("modelOutput") or {})
+    model_input = line.get("modelInput")
+    config = (
+        model_input.get("inferenceConfig") if isinstance(model_input, dict) else None
+    )
+    listed = config.get("stopSequences") if isinstance(config, dict) else None
+    if isinstance(listed, list) and (
+        stops := [stop for stop in listed if isinstance(stop, str) and stop]
+    ):
+        truncate_response_text(output, stops)
+    return output
+
+
 async def _to_completion(
     line: JsonMapping, model_id: str, custom_id: str, created: int
 ) -> JsonMapping:
@@ -2109,7 +2136,7 @@ async def _to_completion(
     Returns:
         The chat completion, as a JSON mapping.
     """
-    output: ConverseResponseTypeDef = _strip_nulls(line.get("modelOutput") or {})
+    output = _chat_output(line)
     completion = await openai_adapter.format_response(
         f"chatcmpl-{custom_id}",
         created,
@@ -2151,7 +2178,7 @@ async def _to_message(line: JsonMapping, model: str, custom_id: str) -> JsonMapp
     Returns:
         The message, as a JSON mapping.
     """
-    output: ConverseResponseTypeDef = _strip_nulls(line.get("modelOutput") or {})
+    output = _chat_output(line)
     message = await anthropic_adapter.format_response(
         output.get("output", {}).get("message", {}).get("content", []),
         output.get("stopReason"),

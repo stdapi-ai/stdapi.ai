@@ -1562,6 +1562,44 @@ class TestOpenAIBatchLifecycle:
         assert first["error"] is None
         assert first["response"]["body"]["choices"][0]["message"]["content"] == "answer"
 
+    def test_a_result_ends_at_the_first_stop_sequence_of_its_request(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A batched answer is cut at its request's first stop sequence, as a live one is.
+
+        Each result line echoes its record's request as `modelInput`, which is
+        where the stop sequences are read back from.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
+             tests/probes/results/bedrock.batch-embeddings.json
+             stdapi/batches.py:_chat_output
+        """
+        s3, bedrock = _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        batch_id = _create(app_client, file_id)["id"]
+        bedrock.finish(succeeded=100)
+        _batches.write_job_output(
+            s3,
+            bedrock,
+            [
+                {
+                    "recordId": f"req-{index}",
+                    "modelInput": {
+                        "inferenceConfig": {"stopSequences": ["green", "yellow"]}
+                    },
+                    "modelOutput": converse_output("red, blue, green, yellow"),
+                }
+                for index in range(100)
+            ],
+            {"inputTokenCount": 500, "outputTokenCount": 300},
+        )
+        body = app_client.get(f"/v1/batches/{batch_id}").json()
+        lines = _batches.read_result_file(s3, body["output_file_id"])
+        assert {
+            line["response"]["body"]["choices"][0]["message"]["content"]
+            for line in lines
+        } == {"red, blue, green"}
+
     def _completed_batch(
         self,
         app_client: TestClient,

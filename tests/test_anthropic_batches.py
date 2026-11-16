@@ -422,6 +422,46 @@ class TestMessageBatchLifecycle:
         assert len(usages) == 100
         assert {usage["service_tier"] for usage in usages} == {"batch"}
 
+    def test_a_result_ends_at_the_first_stop_sequence_of_its_request(
+        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A batched Message is cut at its request's first stop sequence, as a live one is.
+
+        Each result line echoes its record's request as `modelInput`, which is
+        where the stop sequences are read back from.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+             tests/probes/results/bedrock.batch-embeddings.json
+             stdapi/batches.py:_chat_output
+        """
+        from pydantic_core import from_json  # noqa: PLC0415 -- imported locally like in the other result tests here
+
+        s3, bedrock = _batches.install(monkeypatch)
+        batch_id = _create(anthropic_app_client, _requests(100))["id"]
+        bedrock.finish(succeeded=100)
+        _batches.write_job_output(
+            s3,
+            bedrock,
+            [
+                {
+                    "recordId": f"req-{index}",
+                    "modelInput": {
+                        "inferenceConfig": {"stopSequences": ["green", "yellow"]}
+                    },
+                    "modelOutput": converse_output("red, blue, green, yellow"),
+                }
+                for index in range(100)
+            ],
+            {"inputTokenCount": 500, "outputTokenCount": 300},
+        )
+
+        results = anthropic_app_client.get(f"{_PATH}/{batch_id}/results")
+        texts = {
+            from_json(raw)["result"]["message"]["content"][0]["text"]
+            for raw in results.content.splitlines()
+        }
+        assert texts == {"red, blue, green"}
+
     def test_results_are_not_available_before_the_end(
         self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
