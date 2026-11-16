@@ -13,7 +13,9 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai
 
 from __future__ import annotations
 
+import json
 import time
+from re import compile as re_compile
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -45,6 +47,20 @@ _REASONING_PROMPT = (
     "How many positive integers below 200 are divisible by 3 or 5 but not by 7? "
     "Answer with the number only."
 )
+
+#: Closed object schema the structured-output tests request.
+_PLACE_SCHEMA = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
+    "required": ["city", "country"],
+    "additionalProperties": False,
+}
+
+#: Prompt answered with ``_PLACE_SCHEMA``.
+_PLACE_PROMPT = "Give the capital of France as JSON."
+
+#: Schema names OpenAI-shaped backends accept: letters, digits, ``_`` and ``-``, 64 at most.
+_SCHEMA_NAME_PATTERN = re_compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 def _cacheable_prefix() -> str:
@@ -178,6 +194,75 @@ class TestRequestShape:
         payload, _ = await KimiK3ChatModel(KIMI_K3).build_message_request(request)
 
         assert "cachePoint" not in str(payload)
+
+    async def test_an_anthropic_json_schema_is_sent_with_a_name(self) -> None:
+        """``output_config.format`` reaches the model with the schema name it requires.
+
+        The Anthropic format has no name, and Kimi rejects a schema without one
+        (``Missing required parameter: 'text.format.name'``).
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+             stdapi/models/chat/_adapters/_anthropic_message.py:_build_output_config
+        """
+        request = MessageCreateParams.model_validate(
+            {
+                "model": KIMI_K3,
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "Name a city."}],
+                "output_config": {
+                    "format": {"type": "json_schema", "schema": _PLACE_SCHEMA}
+                },
+            }
+        )
+
+        payload, _ = await KimiK3ChatModel(KIMI_K3).build_message_request(request)
+
+        json_schema = payload["outputConfig"]["textFormat"]["structure"]["jsonSchema"]
+        assert _SCHEMA_NAME_PATTERN.fullmatch(json_schema.get("name", ""))
+
+
+@pytest.mark.gateway("Kimi K3 is not served by the official APIs")
+@pytest.mark.parametrize("model", KIMI_K3_MODELS)
+class TestAnthropicStructuredOutput:
+    """``output_config.format`` constrains the reply on Anthropic Messages.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+         stdapi/models/chat/_adapters/_anthropic_message.py:_build_output_config
+    """
+
+    @staticmethod
+    def _assert_place(text: str) -> None:
+        """Assert the reply is exactly the requested object."""
+        place = json.loads(text)
+        assert set(place) == {"city", "country"}
+        assert all(isinstance(value, str) and value for value in place.values())
+
+    def test_json_schema(self, model: str, anthropic_client: Anthropic) -> None:
+        """A non-streamed reply parses as the requested schema."""
+        response = anthropic_client.messages.create(
+            model=model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": _PLACE_PROMPT}],
+            output_config={"format": {"type": "json_schema", "schema": _PLACE_SCHEMA}},
+        )
+
+        text = next(block.text for block in response.content if block.type == "text")
+        self._assert_place(text)
+
+    def test_json_schema_streamed(
+        self, model: str, anthropic_client: Anthropic
+    ) -> None:
+        """A streamed reply assembles into the requested schema."""
+        with anthropic_client.messages.stream(
+            model=model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": _PLACE_PROMPT}],
+            output_config={"format": {"type": "json_schema", "schema": _PLACE_SCHEMA}},
+        ) as stream:
+            response = stream.get_final_message()
+
+        text = next(block.text for block in response.content if block.type == "text")
+        self._assert_place(text)
 
 
 @pytest.mark.gateway("Kimi K3 is not served by the official APIs")

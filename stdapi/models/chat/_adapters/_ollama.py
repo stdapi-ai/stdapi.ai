@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic_core import from_json
 
 from stdapi.config import SETTINGS
+from stdapi.models.chat._adapters._common import SCHEMA_NAME
 from stdapi.types.ollama import (
     ChatRequest,
     ChatResponse,
@@ -80,9 +81,6 @@ _DONE_REASON_BY_FINISH_REASON: dict[str, str] = {
     "function_call": "stop",
     "content_filter": "stop",
 }
-
-#: Name given to the schema wrapper Ollama's bare ``format`` object lacks.
-_SCHEMA_NAME: str = "response"
 
 #: Fallback for an upstream error event whose payload is not an object.
 _STREAM_FAILED: str = "The request could not be completed. Retry the request."
@@ -379,7 +377,7 @@ def _apply_options(
         # Ollama sends a bare schema; the name and wrapper are ours to supply.
         params["response_format"] = ResponseFormatJSONSchema(
             json_schema=JSONSchema(
-                name=_SCHEMA_NAME,
+                name=SCHEMA_NAME,
                 schema=_closed_objects(request_format),  # type: ignore[arg-type]
             )
         )

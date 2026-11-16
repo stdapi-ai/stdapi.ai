@@ -1029,7 +1029,8 @@ def _build_output_config(
             return {
                 "schema": schema
                 if isinstance(schema, str)
-                else to_json(schema).decode()
+                else to_json(schema).decode(),
+                "name": _common.SCHEMA_NAME,
             }
         case _:  # pragma: no cover
             return None

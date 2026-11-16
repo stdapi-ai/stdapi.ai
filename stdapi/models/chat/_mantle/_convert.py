@@ -34,6 +34,7 @@ from stdapi.aws_bedrock_mantle import MantleError, decode_mantle_response_id
 from stdapi.input_file import FileIdInputFile, InputFile, prefetch_all_content_types
 from stdapi.models.chat._adapters._common import (
     EXTERNAL_WEB_ACCESS_PARAM,
+    SCHEMA_NAME,
     resolve_external_web_access,
 )
 from stdapi.models.chat._adapters._openai_responses import COMPACTION_CONTENT_PREFIX
@@ -1364,7 +1365,7 @@ def _text_format_from_response_format(
             schema = (response_format or {}).get("json_schema") or {}
             text_format: dict[str, Any] = {
                 "type": "json_schema",
-                "name": schema.get("name") or "response",
+                "name": schema.get("name") or SCHEMA_NAME,
                 "schema": schema.get("schema") or {},
             }
             text_format.update(_optional_fields(schema, ("strict", "description")))
@@ -1579,7 +1580,7 @@ def _response_format_from_text(
             return {"type": "json_object"}
         case "json_schema":
             schema: dict[str, Any] = {
-                "name": text_format.get("name") or "response",
+                "name": text_format.get("name") or SCHEMA_NAME,
                 "schema": text_format.get("schema") or {},
             }
             schema.update(_optional_fields(text_format, ("strict", "description")))
@@ -2020,7 +2021,7 @@ def _chat_fields_from_output_config(output_config: dict[str, Any]) -> dict[str, 
         fields["response_format"] = {
             "type": "json_schema",
             "json_schema": {
-                "name": "response",
+                "name": SCHEMA_NAME,
                 "schema": output_format.get("schema") or {},
             },
         }

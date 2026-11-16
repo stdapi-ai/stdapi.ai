@@ -21,6 +21,9 @@ if TYPE_CHECKING:
 #: Extra model parameter choosing whether a request's searches may reach the external web.
 EXTERNAL_WEB_ACCESS_PARAM = "external_web_access"
 
+#: Name given to a JSON schema whose client format carries none, which some models require.
+SCHEMA_NAME = "response"
+
 
 @final
 @dataclass(frozen=True, slots=True)
