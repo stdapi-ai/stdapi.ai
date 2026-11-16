@@ -1370,7 +1370,8 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         default=None,
         ge=0,
         description="Sampling temperature. Higher values increase randomness, lower values increase determinism. "
-        "Use `top_p` or `temperature`, not both. Only supported on some models.",
+        "Use `top_p` or `temperature`, not both. Only supported on some models; accepted and ignored on "
+        "some models with fixed sampling.",
     )
     tool_choice: ChatCompletionToolChoiceOptionParam | None = Field(
         default=None,
@@ -1392,7 +1393,7 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         validation_alias=AliasChoices("top_p", "topP"),
         ge=0,
         description="Nucleus sampling: considers tokens comprising top_p probability mass. Use `temperature` or `top_p`, not both. "
-        "Only supported on some models.",
+        "Only supported on some models; accepted and ignored on some models with fixed sampling.",
     )
     user: str | None = Field(
         default=None,

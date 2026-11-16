@@ -16,6 +16,8 @@ import pytest
 
 from stdapi.models.chat._adapters import _openai_responses as responses_adapter
 from stdapi.models.chat._reasoning_effort import ReasoningEffortChatModel
+from stdapi.models.chat.kimi_k3 import ChatModel as KimiK3ChatModel
+from stdapi.models.chat.openai_gpt import ChatModel as OpenAIGPTChatModel
 from stdapi.types.anthropic_messages import MessageCreateParams
 from stdapi.types.openai_chat_completions import CompletionCreateParams
 from stdapi.types.openai_responses import ResponseCreateParams
@@ -260,3 +262,131 @@ class TestEveryDialectReachesTheEffort:
         _model()._req_configure_reasoning(fields, **params)  # noqa: SLF001
 
         assert fields == {"reasoning": {"effort": expected}}
+
+
+class TestFixedSampling:
+    """``temperature`` and ``top_p`` are dropped where the model refuses them.
+
+    Kimi K3 and GPT-6 refuse both with ``400`` (``tests/probes/results/``,
+    ``temperature`` and ``top_p`` probes); the parameters only tune sampling, so
+    they are accepted and ignored, while ``stop`` still reaches the model.
+
+    Ref: stdapi/models/chat/_reasoning_effort.py:ReasoningEffortChatModel._prepare_converse_request
+    """
+
+    @pytest.mark.parametrize(
+        ("model_class", "model_id"),
+        [
+            (KimiK3ChatModel, "moonshotai.kimi-k3"),
+            (KimiK3ChatModel, "moonshotai.kimi-k3.1"),
+            (OpenAIGPTChatModel, "openai.gpt-6-luna"),
+            (OpenAIGPTChatModel, "openai.gpt-6-astra"),
+            (OpenAIGPTChatModel, "openai.gpt-6.1-sol"),
+            (OpenAIGPTChatModel, "openai.gpt-7"),
+        ],
+    )
+    async def test_sampling_is_dropped_and_stop_is_kept(
+        self,
+        model_class: type[ReasoningEffortChatModel],
+        model_id: str,
+        request_log: dict[str, Any],
+    ) -> None:
+        """The request goes out without both, and one warning names them."""
+        request = CompletionCreateParams.model_validate(
+            {
+                "model": model_id,
+                "messages": _messages(),
+                "temperature": 0.2,
+                "top_p": 0.9,
+                "stop": ["END"],
+            }
+        )
+
+        payload, _, _ = await model_class(model_id).build_completion_request(request)
+
+        assert payload["inferenceConfig"].get("stopSequences") == ["END"]
+        assert "temperature" not in payload["inferenceConfig"]
+        assert "topP" not in payload["inferenceConfig"]
+        warnings = [
+            detail
+            for detail in request_log.get("error_detail") or ()
+            if "temperature" in str(detail)
+        ]
+        assert len(warnings) == 1
+        assert "top_p" in str(warnings[0])
+        assert request_log["level"] == "warning"
+
+    async def test_anthropic_sampling_is_dropped(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """The Anthropic dialect's ``temperature`` and ``top_p`` are dropped too.
+
+        Ref: https://docs.claude.com/en/api/messages
+        """
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "moonshotai.kimi-k3.1",
+                "max_tokens": 1024,
+                "messages": _messages(),
+                "temperature": 0.2,
+                "top_p": 0.9,
+                "stop_sequences": ["END"],
+            }
+        )
+
+        payload, _ = await KimiK3ChatModel(
+            "moonshotai.kimi-k3.1"
+        ).build_message_request(request)
+
+        assert payload["inferenceConfig"] == {
+            "maxTokens": 1024,
+            "stopSequences": ["END"],
+        }
+        assert request_log["level"] == "warning"
+
+    async def test_only_the_parameter_sent_is_named(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """A request with ``top_p`` alone is warned about ``top_p`` alone."""
+        request = CompletionCreateParams.model_validate(
+            {"model": "moonshotai.kimi-k3", "messages": _messages(), "top_p": 0.9}
+        )
+
+        await KimiK3ChatModel("moonshotai.kimi-k3").build_completion_request(request)
+
+        (warning,) = request_log["error_detail"]
+        assert "top_p" in str(warning)
+        assert "temperature" not in str(warning)
+
+    @pytest.mark.parametrize(
+        ("model_class", "model_id"),
+        [
+            (ReasoningEffortChatModel, "openai.gpt-6-luna"),
+            (OpenAIGPTChatModel, "openai.gpt-5.6-sol"),
+        ],
+    )
+    async def test_a_model_without_the_flag_keeps_sampling(
+        self,
+        model_class: type[ReasoningEffortChatModel],
+        model_id: str,
+        request_log: dict[str, Any],
+    ) -> None:
+        """Sampling is forwarded where no refusal was recorded, with no warning.
+
+        GPT-5.6 is served by both endpoints and reaches this class wherever it
+        is not routed to Bedrock Mantle.
+        """
+        request = CompletionCreateParams.model_validate(
+            {
+                "model": model_id,
+                "messages": _messages(),
+                "temperature": 0.2,
+                "top_p": 0.9,
+            }
+        )
+
+        payload, _, _ = await model_class(model_id).build_completion_request(request)
+
+        assert payload["inferenceConfig"]["temperature"] == pytest.approx(0.2)
+        assert payload["inferenceConfig"]["topP"] == pytest.approx(0.9)
+        assert not request_log.get("error_detail")

@@ -10,6 +10,11 @@ ALWAYS_REASONING_MATCHER = re_compile(
     r"^openai\.gpt-(?:daybreak-\w+-)?(?:[\d.]+-astra|6\.[1-9]|[7-9]|[1-9]\d)"
 )
 
+#: GPT-6 and every later version, with or without a ``daybreak-<edition>-`` qualifier.
+GPT_6_AND_LATER_MATCHER = re_compile(
+    r"^openai\.gpt-(?:daybreak-\w+-)?(?:[6-9]|[1-9]\d)"
+)
+
 
 class ChatModel(ReasoningEffortChatModel):
     """OpenAI GPT-specific chat model implementation.
@@ -18,7 +23,7 @@ class ChatModel(ReasoningEffortChatModel):
     takes ``none`` through ``max`` (``low`` through ``max`` on the models
     ``ALWAYS_REASONING_MATCHER`` names) and rejects ``minimal``; the flat
     ``reasoning_effort`` and ``thinking`` fields are rejected as unknown
-    parameters.
+    parameters. GPT-6 and later refuse ``temperature`` and ``top_p``.
 
     Amazon Bedrock serves the OpenAI server tools (web search, code interpreter)
     on the Bedrock Mantle endpoint only: on ``bedrock-runtime`` the Responses API
@@ -55,3 +60,8 @@ class ChatModel(ReasoningEffortChatModel):
     def REASONING_DISABLE_SUPPORTED(self) -> bool:  # type: ignore[override]  # noqa: N802
         """Whether the model accepts ``reasoning.effort: "none"``."""
         return ALWAYS_REASONING_MATCHER.match(self._model_id) is None
+
+    @property
+    def SAMPLING_SUPPORTED(self) -> bool:  # type: ignore[override]  # noqa: N802 -- a per-model capability flag, read as the class variable it overrides
+        """Whether the model accepts ``temperature`` and ``topP``."""
+        return GPT_6_AND_LATER_MATCHER.match(self._model_id) is None

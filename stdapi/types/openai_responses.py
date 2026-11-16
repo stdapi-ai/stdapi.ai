@@ -4671,7 +4671,11 @@ class ResponseCreateParams(BaseModelRequestWithExtra):
         description="Streaming options. Accepted for compatibility and ignored.",
     )
     temperature: float | None = Field(
-        default=None, ge=0, le=2, description="Sampling temperature (0-2)."
+        default=None,
+        ge=0,
+        le=2,
+        description="Sampling temperature (0-2). Accepted and ignored on some "
+        "models with fixed sampling.",
     )
     text: ResponseTextConfig | None = Field(
         default=None, description="Text response config."
@@ -4684,7 +4688,11 @@ class ResponseCreateParams(BaseModelRequestWithExtra):
         default=None, ge=0, le=20, description="Top logprobs count (0-20)."
     )
     top_p: float | None = Field(
-        default=None, ge=0, le=1, description="Nucleus sampling parameter."
+        default=None,
+        ge=0,
+        le=1,
+        description="Nucleus sampling parameter. Accepted and ignored on some "
+        "models with fixed sampling.",
     )
     truncation: Literal["auto", "disabled"] | None = Field(
         default=None,

@@ -3000,7 +3000,8 @@ class MessageCreateParams(BaseModelRequestWithExtra):
         le=1.0,
         description="Randomness of the response, 0.0-1.0 (default 1.0). Lower "
         "values suit analytical/multiple-choice tasks, higher values suit "
-        "creative tasks. Not fully deterministic even at 0.0.",
+        "creative tasks. Not fully deterministic even at 0.0. Accepted and "
+        "ignored on some models with fixed sampling.",
     )
     thinking: ThinkingConfigParam | None = Field(
         default=None,
@@ -3038,7 +3039,8 @@ class MessageCreateParams(BaseModelRequestWithExtra):
         le=1.0,
         description="Nucleus sampling: cuts off the cumulative token probability "
         "distribution at `top_p`. Use either `temperature` or `top_p`, not both. "
-        "Advanced use only; prefer `temperature`.",
+        "Advanced use only; prefer `temperature`. Accepted and ignored on "
+        "some models with fixed sampling.",
     )
 
     container: ContainerParams | str | None = Field(

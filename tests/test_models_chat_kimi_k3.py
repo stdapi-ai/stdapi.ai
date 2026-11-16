@@ -36,8 +36,11 @@ if TYPE_CHECKING:
 #: Kimi K3, served through its cross-region inference profiles only.
 KIMI_K3 = "moonshotai.kimi-k3"
 
+#: Kimi K3.1, served through its cross-region inference profiles only.
+KIMI_K3_1 = "moonshotai.kimi-k3.1"
+
 #: Every served Kimi K3 generation, swept by the live tests.
-KIMI_K3_MODELS = (KIMI_K3, "moonshotai.kimi-k3.1")
+KIMI_K3_MODELS = (KIMI_K3, KIMI_K3_1)
 
 #: Seconds between two calls sharing a prefix, so the first call's cache entry lands.
 _CACHE_SETTLE_SECONDS = 3
@@ -263,6 +266,63 @@ class TestAnthropicStructuredOutput:
 
         text = next(block.text for block in response.content if block.type == "text")
         self._assert_place(text)
+
+
+@pytest.mark.gateway("Kimi K3 is not served by the official APIs")
+class TestSamplingAccepted:
+    """``temperature`` and ``top_p``, which the model refuses, are accepted and ignored.
+
+    Ref: tests/probes/results/moonshotai.kimi-k3.1.json
+         stdapi/models/chat/_reasoning_effort.py:ReasoningEffortChatModel._prepare_converse_request
+    """
+
+    def test_chat_completions(self, openai_client: OpenAI) -> None:
+        """Chat Completions answers a request carrying both.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+        """
+        response = openai_client.chat.completions.create(
+            model=KIMI_K3_1,
+            messages=[{"role": "user", "content": "Reply with OK."}],
+            temperature=0.2,
+            top_p=0.9,
+            reasoning_effort="none",
+            max_completion_tokens=64,
+        )
+
+        assert response.choices[0].message.content
+
+    def test_responses(self, openai_client: OpenAI) -> None:
+        """Responses answers a request carrying both.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+        """
+        response = openai_client.responses.create(
+            model=KIMI_K3_1,
+            input="Reply with OK.",
+            temperature=0.2,
+            top_p=0.9,
+            reasoning={"effort": "none"},
+            max_output_tokens=64,
+            store=False,
+        )
+
+        assert response.output_text
+
+    def test_anthropic_messages(self, anthropic_client: Anthropic) -> None:
+        """The current SDK no longer takes the sampling arguments, so they go on the wire.
+
+        Ref: https://docs.claude.com/en/api/messages
+        """
+        response = anthropic_client.messages.create(
+            model=KIMI_K3_1,
+            messages=[{"role": "user", "content": "Reply with OK."}],
+            thinking={"type": "disabled"},
+            max_tokens=64,
+            extra_body={"temperature": 0.2, "top_p": 0.9},
+        )
+
+        assert any(block.type == "text" and block.text for block in response.content)
 
 
 @pytest.mark.gateway("Kimi K3 is not served by the official APIs")

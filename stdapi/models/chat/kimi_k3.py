@@ -12,6 +12,7 @@ class ChatModel(ReasoningEffortChatModel):
     ``additionalModelRequestFields.reasoning.effort`` changes that, ``none``
     returning no reasoning at all. The Kimi K2 ``thinking`` toggle and flat
     ``reasoning_effort`` are accepted and silently ignored, so they are not sent.
+    Sampling is fixed: ``temperature`` and ``top_p`` are refused.
 
     Prompt caching is automatic: every ``cachePoint`` is rejected, while a
     repeated prefix is read back from the cache and reported as cache read
@@ -21,6 +22,8 @@ class ChatModel(ReasoningEffortChatModel):
     """
 
     __slots__ = ()
+
+    SAMPLING_SUPPORTED = False
 
     #: Kimi K3 and later under either Bedrock provider prefix, disjoint from the Kimi K2 matcher.
     MATCHER = re_compile(r"^moonshot(?:ai)?\.kimi-k(?:[3-9]|[1-9]\d)")

@@ -1,12 +1,13 @@
 """OpenAI GPT-6 and later models on Amazon Bedrock Mantle."""
 
-from re import Pattern
-from re import compile as re_compile
 from typing import TYPE_CHECKING, ClassVar
 
 from stdapi.models.chat._mantle._openai_gpt import OpenAIGptChatModel
+from stdapi.models.chat.openai_gpt import GPT_6_AND_LATER_MATCHER
 
 if TYPE_CHECKING:
+    from re import Pattern
+
     from stdapi.aws_bedrock_mantle import MantleApi, Surface
 
 
@@ -23,10 +24,7 @@ class ChatModel(OpenAIGptChatModel):
 
     __slots__ = ()
 
-    #: Matches GPT-6 and every later version, with or without a ``daybreak-<edition>-`` qualifier.
-    MATCHER: ClassVar[Pattern[str]] = re_compile(
-        r"^openai\.gpt-(?:daybreak-\w+-)?(?:[6-9]|[1-9]\d)"
-    )
+    MATCHER: ClassVar[Pattern[str]] = GPT_6_AND_LATER_MATCHER
 
     #: GPT-6 models answer both OpenAI APIs.
     NATIVE_APIS: ClassVar[frozenset[MantleApi]] = frozenset(
