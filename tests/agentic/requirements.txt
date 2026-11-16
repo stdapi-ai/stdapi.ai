@@ -43,7 +43,7 @@ agno
 # llama-index-llms-openai is deliberately NOT here while every release of it
 # caps `openai<3`: openai-agents and pydantic-ai-slim[openai] require `openai>=3`,
 # so uv walks it back to 0.1.x, whose llama-index-core 0.10 is built on
-# pydantic.v1, which cannot import on Python 3.14 -- and a floor instead walks
+# pydantic.v1, which cannot import on Python 3.14 and later -- and a floor instead walks
 # those two clients back. tests/agentic/test_llama_index.py runs under its own
 # overlay until the cap lifts, then its line returns here:
 #   uv run --with llama-index-llms-openai pytest tests/agentic/test_llama_index.py --agentic

@@ -330,11 +330,15 @@ Without the overlay, those modules are dropped from collection and the header
 names them rather than letting the run look complete. `mypy` needs the overlay too,
 which is why CI's type-checking step uses it.
 
+**The overlay cannot currently install on Python 3.15.** `pipecat-ai` needs
+`onnxruntime` and `livekit-agents` needs `livekit-blingfire`, and neither publishes
+cp315 wheels yet. Until they do, the agentic lane and CI's overlay `mypy` step fail.
+
 **LlamaIndex cannot share that resolution yet.** Every `llama-index-llms-openai`
 release caps `openai<3`, while `openai-agents` and `pydantic-ai-slim[openai]`
 require `openai>=3`. Listed together, uv walks LlamaIndex back to `0.1.x`, whose
 `llama-index-core` 0.10 is built on `pydantic.v1` and fails to import on Python
-3.14; a version floor walks those two clients back instead. `test_llama_index.py`
+3.14 and later; a version floor walks those two clients back instead. `test_llama_index.py`
 therefore runs alone, under its own overlay, and the full lane's header says so
 with the command. Its line returns to `requirements.txt` once the cap lifts.
 
