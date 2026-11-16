@@ -14,8 +14,8 @@ class ChatModel(ReasoningEffortChatModel):
     ``reasoning_effort`` are accepted and silently ignored, so they are not sent.
 
     Prompt caching is automatic: every ``cachePoint`` is rejected, while a
-    repeated prefix is read back from the cache and reported as cache read and
-    write tokens, so no cache point is ever sent.
+    repeated prefix is read back from the cache and reported as cache read
+    tokens, so no cache point is ever sent.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3.html
     """

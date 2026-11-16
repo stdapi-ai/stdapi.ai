@@ -4,7 +4,7 @@ Probed on Converse (``tests/probes/results/moonshotai.kimi-k3.json``): the model
 reasons by default and only ``additionalModelRequestFields.reasoning.effort``
 changes that (``none`` returns no reasoning); the Kimi K2 ``thinking`` toggle is
 accepted and ignored. Every ``cachePoint`` is rejected, while a repeated prefix
-is cached automatically and reported as cache read and write tokens.
+is cached automatically and reported as cache read tokens.
 
 Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3.html
      tests/probes/results/moonshotai.kimi-k3.json
@@ -34,7 +34,10 @@ if TYPE_CHECKING:
 #: Kimi K3, served through its cross-region inference profiles only.
 KIMI_K3 = "moonshotai.kimi-k3"
 
-#: Seconds between two calls sharing a prefix, so the first call's cache write lands.
+#: Every served Kimi K3 generation, swept by the live tests.
+KIMI_K3_MODELS = (KIMI_K3, "moonshotai.kimi-k3.1")
+
+#: Seconds between two calls sharing a prefix, so the first call's cache entry lands.
 _CACHE_SETTLE_SECONDS = 3
 
 #: Prompt that needs several steps, so the model has a reason to reason.
@@ -65,6 +68,7 @@ class TestMatcher:
         "model_id",
         [
             KIMI_K3,
+            "moonshotai.kimi-k3.1",
             "moonshot.kimi-k3-thinking",
             "moonshotai.kimi-k4",
             "moonshotai.kimi-k10",
@@ -177,6 +181,7 @@ class TestRequestShape:
 
 
 @pytest.mark.gateway("Kimi K3 is not served by the official APIs")
+@pytest.mark.parametrize("model", KIMI_K3_MODELS)
 class TestReasoningEffort:
     """The requested effort reaches Kimi K3.
 
@@ -184,7 +189,7 @@ class TestReasoningEffort:
     """
 
     def test_reasoning_effort_none_returns_no_reasoning(
-        self, openai_client: OpenAI
+        self, model: str, openai_client: OpenAI
     ) -> None:
         """``none`` answers without reasoning, where ``low`` still reasons.
 
@@ -196,7 +201,7 @@ class TestReasoningEffort:
         """
         answers = {
             effort: openai_client.chat.completions.create(
-                model=KIMI_K3,
+                model=model,
                 messages=[{"role": "user", "content": _REASONING_PROMPT}],
                 reasoning_effort=effort,
                 max_completion_tokens=1024,
@@ -212,11 +217,14 @@ class TestReasoningEffort:
 
 
 @pytest.mark.gateway("Kimi K3 is not served by the official APIs")
+@pytest.mark.parametrize("model", KIMI_K3_MODELS)
 @pytest.mark.usefixtures("local_test_client")
 class TestAutomaticPromptCaching:
     """A repeated prefix is reported as cached on every dialect, and billed as such.
 
-    The request carries no cache control at all: Kimi K3 caches on its own.
+    The request carries no cache control at all: Kimi K3 caches on its own. The
+    first call's prefix is reported as plain input, not as a cache write, so
+    only the read is asserted.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
          stdapi/models/__init__.py:ModelBase._record_converse_usage
@@ -224,14 +232,14 @@ class TestAutomaticPromptCaching:
 
     @staticmethod
     def _assert_billed(stdout: str) -> None:
-        """Assert the two calls logged a cache write, then a cache read."""
+        """Assert the fresh prefix logged no cache read, and its repeat did."""
         entries = logged_usage_entries(stdout, service="bedrock-runtime")
         assert len(entries) == 2, entries
-        assert entries[0].get("cache_write_tokens", 0) > 0
+        assert entries[0].get("cached_tokens", 0) == 0
         assert entries[1].get("cached_tokens", 0) > 0
 
     def test_chat_completions_reports_cached_tokens(
-        self, openai_client: OpenAI, capfd: pytest.CaptureFixture[str]
+        self, model: str, openai_client: OpenAI, capfd: pytest.CaptureFixture[str]
     ) -> None:
         """The second call reports ``prompt_tokens_details.cached_tokens``.
 
@@ -242,7 +250,7 @@ class TestAutomaticPromptCaching:
         usages = []
         for _ in range(2):
             response = openai_client.chat.completions.create(
-                model=KIMI_K3,
+                model=model,
                 messages=[
                     {"role": "system", "content": prefix},
                     {"role": "user", "content": "Reply with OK."},
@@ -260,7 +268,7 @@ class TestAutomaticPromptCaching:
         self._assert_billed(capfd.readouterr().out)
 
     def test_responses_reports_cached_tokens(
-        self, openai_client: OpenAI, capfd: pytest.CaptureFixture[str]
+        self, model: str, openai_client: OpenAI, capfd: pytest.CaptureFixture[str]
     ) -> None:
         """The second call reports ``input_tokens_details.cached_tokens``.
 
@@ -271,7 +279,7 @@ class TestAutomaticPromptCaching:
         usages = []
         for _ in range(2):
             response = openai_client.responses.create(
-                model=KIMI_K3,
+                model=model,
                 instructions=prefix,
                 input="Reply with OK.",
                 reasoning={"effort": "none"},
@@ -286,10 +294,10 @@ class TestAutomaticPromptCaching:
         assert usages[1].input_tokens >= cached  # type: ignore[union-attr]
         self._assert_billed(capfd.readouterr().out)
 
-    def test_anthropic_messages_reports_cache_read_and_creation(
-        self, anthropic_client: Anthropic, capfd: pytest.CaptureFixture[str]
+    def test_anthropic_messages_reports_cache_read(
+        self, model: str, anthropic_client: Anthropic, capfd: pytest.CaptureFixture[str]
     ) -> None:
-        """The first call reports a cache creation, the second a cache read.
+        """The second call reports ``cache_read_input_tokens``, the first none.
 
         Ref: https://docs.claude.com/en/api/messages
         """
@@ -298,7 +306,7 @@ class TestAutomaticPromptCaching:
         usages = []
         for _ in range(2):
             response = anthropic_client.messages.create(
-                model=KIMI_K3,
+                model=model,
                 system=prefix,
                 messages=[{"role": "user", "content": "Reply with OK."}],
                 thinking={"type": "disabled"},
@@ -307,13 +315,14 @@ class TestAutomaticPromptCaching:
             usages.append(response.usage)
             time.sleep(_CACHE_SETTLE_SECONDS)
 
-        assert (usages[0].cache_creation_input_tokens or 0) > 1024
+        assert not usages[0].cache_read_input_tokens
         assert (usages[1].cache_read_input_tokens or 0) > 1024
         self._assert_billed(capfd.readouterr().out)
 
 
 @pytest.mark.expensive
 @pytest.mark.gateway("Kimi K3 is not served by the official APIs")
+@pytest.mark.parametrize("model", KIMI_K3_MODELS)
 class TestReasoningReplay:
     """A follow-up turn replaying the model's own reasoning is served.
 
@@ -325,7 +334,7 @@ class TestReasoningReplay:
     """
 
     def test_chat_completions_replays_reasoning_content(
-        self, openai_client: OpenAI
+        self, model: str, openai_client: OpenAI
     ) -> None:
         """An assistant turn carrying ``reasoning_content`` is accepted on the next call.
 
@@ -334,7 +343,7 @@ class TestReasoningReplay:
         messages: list[Any] = [{"role": "user", "content": _REASONING_PROMPT}]
         first = (
             openai_client.chat.completions.create(
-                model=KIMI_K3,
+                model=model,
                 messages=messages,
                 reasoning_effort="low",
                 max_completion_tokens=4096,
@@ -354,7 +363,7 @@ class TestReasoningReplay:
             {"role": "user", "content": "Double it. Answer with the number only."},
         ]
         second = openai_client.chat.completions.create(
-            model=KIMI_K3,
+            model=model,
             messages=messages,
             reasoning_effort="low",
             max_completion_tokens=4096,
@@ -363,7 +372,7 @@ class TestReasoningReplay:
         assert second.choices[0].message.content
 
     def test_anthropic_messages_replays_thinking(
-        self, anthropic_client: Anthropic
+        self, model: str, anthropic_client: Anthropic
     ) -> None:
         """An assistant turn carrying the model's ``thinking`` block is accepted.
 
@@ -371,7 +380,7 @@ class TestReasoningReplay:
         """
         messages: list[Any] = [{"role": "user", "content": _REASONING_PROMPT}]
         first = anthropic_client.messages.create(
-            model=KIMI_K3,
+            model=model,
             messages=messages,
             output_config={"effort": "low"},
             max_tokens=4096,
@@ -383,7 +392,7 @@ class TestReasoningReplay:
             {"role": "user", "content": "Double it. Answer with the number only."},
         ]
         second = anthropic_client.messages.create(
-            model=KIMI_K3,
+            model=model,
             messages=messages,
             output_config={"effort": "low"},
             max_tokens=4096,
@@ -391,13 +400,15 @@ class TestReasoningReplay:
 
         assert any(block.type == "text" and block.text for block in second.content)
 
-    def test_responses_replays_reasoning_items(self, openai_client: OpenAI) -> None:
+    def test_responses_replays_reasoning_items(
+        self, model: str, openai_client: OpenAI
+    ) -> None:
         """The previous output, reasoning item included, is accepted as input.
 
         Ref: https://developers.openai.com/api/docs/guides/reasoning
         """
         first = openai_client.responses.create(
-            model=KIMI_K3,
+            model=model,
             input=_REASONING_PROMPT,
             reasoning={"effort": "low"},
             max_output_tokens=4096,
@@ -411,7 +422,7 @@ class TestReasoningReplay:
         ]
 
         second = openai_client.responses.create(
-            model=KIMI_K3,
+            model=model,
             input=replay,
             reasoning={"effort": "low"},
             max_output_tokens=4096,
