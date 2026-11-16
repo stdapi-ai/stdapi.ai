@@ -135,8 +135,9 @@ _FETCH_TIMEOUT: Final[float] = 30.0
 #: Identifies these requests to the vendor's CDN.
 _USER_AGENT: Final[str] = "stdapi.ai-tests price-drift detector"
 
-#: Bedrock model card per OpenAI Mantle model, the sole AWS source for its rates.
+#: Bedrock model card per hand-copied model, the sole AWS source for its rates.
 _MODEL_CARD_URLS: Final[dict[str, str]] = {
+    "moonshotai.kimi-k3.1": "model-card-moonshot-ai-kimi-k3-1-highspeed",
     "openai.gpt-5.4": "model-card-openai-gpt-54",
     "openai.gpt-5.5": "model-card-openai-gpt-55",
     "openai.gpt-5.6-cyber": "model-card-openai-gpt-56-cyber",
@@ -148,6 +149,7 @@ _MODEL_CARD_URLS: Final[dict[str, str]] = {
     "openai.gpt-6-luna": "model-card-openai-gpt-6-luna",
     "openai.gpt-6-sol": "model-card-openai-gpt-6-sol",
     "openai.gpt-6.1-sol": "model-card-openai-gpt-6-1-sol",
+    "openai.gpt-6.1-terra": "model-card-openai-gpt-6-1-terra",
 }
 
 #: Where a model card lives, given its slug.

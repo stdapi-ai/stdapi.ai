@@ -148,6 +148,15 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
     "stability.stable-creative-upscale-v1:0": {Dimension.OUTPUT_IMAGES: "0.60"},
     "stability.stable-fast-upscale-v1:0": {Dimension.OUTPUT_IMAGES: "0.03"},
     "stability.stable-outpaint-v1:0": {Dimension.OUTPUT_IMAGES: "0.06"},
+    # "Kimi K3.1 Pro - Highspeed" model card (verified 2026-11-16), its "US CRIS"
+    # and "IN CRIS" row: no Price List row, no In-Region option, one table for
+    # the whole 1M window.
+    "moonshotai.kimi-k3.1": {
+        Dimension.INPUT_TOKENS: "0.0000044",
+        Dimension.CACHE_WRITE_TOKENS: "0.0000055",
+        Dimension.CACHE_READ_TOKENS: "0.00000022",
+        Dimension.OUTPUT_TOKENS: "0.000022",
+    },
     # OpenAI frontier models: model-card In-Region per-1M rates / 1e6 (verified
     # 2026-09-22), absent from the Price List API outside GovCloud. These are
     # the 272K short-context tier; the long one is priced below.
@@ -223,6 +232,14 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_READ_TOKENS: "0.00000011",
         Dimension.OUTPUT_TOKENS: "0.000011",
     },
+    # Model card (verified 2026-11-16), in all four tables: half GPT-6.1 Sol's
+    # input and output rate.
+    "openai.gpt-6.1-terra": {
+        Dimension.INPUT_TOKENS: "0.0000011",
+        Dimension.CACHE_WRITE_TOKENS: "0.000001375",
+        Dimension.CACHE_READ_TOKENS: "0.000000055",
+        Dimension.OUTPUT_TOKENS: "0.0000055",
+    },
     # No card or Price List row (verified 2026-09-24): Z.ai's API per-1M rates
     # / 1e6. Bedrock bills Z.ai's direct rate for GLM 5, 4.7 and 4.7 Flash in
     # these regions; it publishes no GLM cache rate.
@@ -240,6 +257,13 @@ DEFAULT_MODEL_GLOBAL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
     # so its calls stay on the In-Region rates above. A model absent here
     # publishes no Global rate and keeps them too, resolve_price relaxing the
     # routing axis rather than leaving the call unpriced.
+    # Kimi K3.1 card's "Global CRIS" row (verified 2026-11-16).
+    "moonshotai.kimi-k3.1": {
+        Dimension.INPUT_TOKENS: "0.000004",
+        Dimension.CACHE_WRITE_TOKENS: "0.000005",
+        Dimension.CACHE_READ_TOKENS: "0.0000002",
+        Dimension.OUTPUT_TOKENS: "0.00002",
+    },
     "openai.gpt-5.6-luna": {
         Dimension.INPUT_TOKENS: "0.0000002",
         Dimension.CACHE_WRITE_TOKENS: "0.00000025",
@@ -284,6 +308,12 @@ DEFAULT_MODEL_GLOBAL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_READ_TOKENS: "0.0000001",
         Dimension.OUTPUT_TOKENS: "0.00001",
     },
+    "openai.gpt-6.1-terra": {
+        Dimension.INPUT_TOKENS: "0.000001",
+        Dimension.CACHE_WRITE_TOKENS: "0.00000125",
+        Dimension.CACHE_READ_TOKENS: "0.00000005",
+        Dimension.OUTPUT_TOKENS: "0.000005",
+    },
 }
 
 #: Prompt size at which a model leaves its short-context rate, where its own source says.
@@ -304,6 +334,7 @@ MODEL_LONG_CONTEXT_THRESHOLDS: Final[dict[str, int]] = {
     "openai.gpt-6-luna": 272_000,
     "openai.gpt-6-sol": 272_000,
     "openai.gpt-6.1-sol": 272_000,
+    "openai.gpt-6.1-terra": 272_000,
 }
 
 #: In-Region rates past MODEL_LONG_CONTEXT_THRESHOLDS, for the cards publishing one.
@@ -373,6 +404,12 @@ DEFAULT_MODEL_LONG_CONTEXT_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_READ_TOKENS: "0.00000022",
         Dimension.OUTPUT_TOKENS: "0.0000165",
     },
+    "openai.gpt-6.1-terra": {
+        Dimension.INPUT_TOKENS: "0.0000022",
+        Dimension.CACHE_WRITE_TOKENS: "0.00000275",
+        Dimension.CACHE_READ_TOKENS: "0.00000011",
+        Dimension.OUTPUT_TOKENS: "0.00000825",
+    },
 }
 
 #: Global cross-Region rates for the long-context models above whose card publishes one.
@@ -421,5 +458,11 @@ DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES: Final[dict[str, dict[Dimension, str]]]
         Dimension.CACHE_WRITE_TOKENS: "0.000005",
         Dimension.CACHE_READ_TOKENS: "0.0000002",
         Dimension.OUTPUT_TOKENS: "0.000015",
+    },
+    "openai.gpt-6.1-terra": {
+        Dimension.INPUT_TOKENS: "0.000002",
+        Dimension.CACHE_WRITE_TOKENS: "0.0000025",
+        Dimension.CACHE_READ_TOKENS: "0.0000001",
+        Dimension.OUTPUT_TOKENS: "0.0000075",
     },
 }
