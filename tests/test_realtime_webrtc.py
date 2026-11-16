@@ -461,12 +461,19 @@ class _Client:
         return self.pc.localDescription.sdp
 
     async def connect(self, answer_sdp: str) -> None:
-        """Apply the answer and wait for the event channel to open."""
+        """Apply the answer and wait for the event channel to open.
+
+        Raises:
+            TimeoutError: When the channel is not open within a negotiation step.
+        """
         await self.pc.setRemoteDescription(
             RTCSessionDescription(sdp=answer_sdp, type="answer")
         )
-        while self.channel.readyState != "open":  # noqa: ASYNC110 - readyState has no waiter
-            await asyncio.sleep(0.01)
+        # aioice never offers a loopback address, so on a host whose only
+        # interface is loopback (a bare network namespace) ICE cannot connect.
+        async with asyncio.timeout(_STEP_TIMEOUT):
+            while self.channel.readyState != "open":  # noqa: ASYNC110 -- readyState has no waiter
+                await asyncio.sleep(0.01)
 
     async def next_event(
         self, kind: str, seconds: float = _STEP_TIMEOUT
