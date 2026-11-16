@@ -58,6 +58,7 @@ MODEL_KEY_OVERRIDES: Final[dict[str, str]] = {
     "cohere.command-r-v1:0": "coherecommandr",
     "cohere.command-r-plus-v1:0": "coherecommandr+",
     "twelvelabs.pegasus-1-2-v1:0": "twelvelabspegasus12",
+    "twelvelabs.pegasus-1-5-v1:0": "twelvelabspegasus15",
     "twelvelabs.marengo-embed-3-0-v1:0": "twelvelabsmarengoembed30",
     "twelvelabs.marengo-embed-2-7-v1:0": "twelvelabsmarengoembed27",
     "google.gemma-3-12b-it": "gemma312b",
