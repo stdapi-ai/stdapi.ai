@@ -86,7 +86,9 @@ if TYPE_CHECKING:
 _PREFIX = "amazon.polly-"
 
 #: Polly output format name if different from the response format name
-_FORMAT: dict[str, OutputFormatType] = {"ogg": "ogg_vorbis", "opus": "ogg_opus"}
+_FORMAT: frozendict[str, OutputFormatType] = frozendict(
+    {"ogg": "ogg_vorbis", "opus": "ogg_opus"}
+)
 
 #: Formats to encode from PCM using ffmpeg (Not supported by Polly natively)
 _FORMAT_ENCODE = {"wav", "flac", "aac"}

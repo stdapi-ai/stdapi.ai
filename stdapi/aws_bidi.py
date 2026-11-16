@@ -52,14 +52,18 @@ if TYPE_CHECKING:
     from types_aiobotocore_bedrock.literals import RegionName
 
 #: Services offering a bidirectional operation, with their generated client and config.
-_BIDI_SERVICES: Final = {
-    "polly": (AsyncPollyClient, PollyConfig),
-    "bedrock-runtime": (AsyncBedrockRuntimeClient, BedrockRuntimeConfig),
-    "transcribe": (AsyncTranscribeStreamingClient, TranscribeStreamingConfig),
-}
+_BIDI_SERVICES: Final = frozendict(
+    {
+        "polly": (AsyncPollyClient, PollyConfig),
+        "bedrock-runtime": (AsyncBedrockRuntimeClient, BedrockRuntimeConfig),
+        "transcribe": (AsyncTranscribeStreamingClient, TranscribeStreamingConfig),
+    }
+)
 
 #: Endpoint prefix of a bidirectional operation served apart from its own service.
-_BIDI_ENDPOINT_PREFIX: Final[dict[str, str]] = {"transcribe": "transcribestreaming"}
+_BIDI_ENDPOINT_PREFIX: Final[frozendict[str, str]] = frozendict(
+    {"transcribe": "transcribestreaming"}
+)
 
 #: Endpoint resolver, for an operation botocore hosts no client for.
 _ENDPOINT_RESOLVER = AWS_SESSION.get_component("endpoint_resolver")
@@ -80,24 +84,28 @@ _CLOSE_TASKS: Final[set[Task[None]]] = set()
 _OPEN_TASKS: Final[set[Task[Any]]] = set()
 
 #: Statuses of modeled stream errors that ``AWS_ERROR_MAP`` does not name.
-_STREAM_ERROR_STATUS: Final[dict[str, int]] = {
-    "ConflictException": 409,
-    "LexiconNotFoundException": 404,
-    "ModelErrorException": 502,
-    "ModelNotReadyException": 429,
-    "ModelStreamErrorException": 502,
-    "ModelTimeoutException": 503,
-}
+_STREAM_ERROR_STATUS: Final[frozendict[str, int]] = frozendict(
+    {
+        "ConflictException": 409,
+        "LexiconNotFoundException": 404,
+        "ModelErrorException": 502,
+        "ModelNotReadyException": 429,
+        "ModelStreamErrorException": 502,
+        "ModelTimeoutException": 503,
+    }
+)
 
 #: Client-facing message per status class; SDK error text is never forwarded.
-_ERROR_MESSAGES: Final[dict[int, str]] = {
-    400: "The request was rejected as invalid. Check the request parameters and retry.",
-    401: "Unauthorized",
-    403: "Forbidden",
-    404: "The requested resource does not exist.",
-    409: "The request conflicts with the current state of the session.",
-    429: "Rate limit reached. Retry the request later.",
-}
+_ERROR_MESSAGES: Final[frozendict[int, str]] = frozendict(
+    {
+        400: "The request was rejected as invalid. Check the request parameters and retry.",
+        401: "Unauthorized",
+        403: "Forbidden",
+        404: "The requested resource does not exist.",
+        409: "The request conflicts with the current state of the session.",
+        429: "Rate limit reached. Retry the request later.",
+    }
+)
 
 #: Message for any server-side or transport failure of a stream.
 _SERVER_ERROR_MESSAGE: Final = "The request could not be completed. Retry the request."
@@ -109,20 +117,22 @@ _DENIED_STATUSES: Final = frozenset({401, 403})
 _UNMODELED_ERROR_ID: Final = re_compile(r" - id: [\w.]+#(\w+)")
 
 #: Feature name and stream permission per service, for a refused credential.
-_BIDI_UNAVAILABLE: Final[dict[str, tuple[str, str]]] = {
-    "bedrock-runtime": (
-        "Live conversation",
-        "bedrock:InvokeModelWithBidirectionalStream",
-    ),
-    "polly": ("Streaming speech synthesis", "polly:StartSpeechSynthesisStream"),
-    "transcribe": (
-        "Live transcription",
-        (
-            "transcribe:StartStreamTranscription (transcribe:StartMedicalStreamTranscription"
-            " for medical transcription), in a region offering it"
+_BIDI_UNAVAILABLE: Final[frozendict[str, tuple[str, str]]] = frozendict(
+    {
+        "bedrock-runtime": (
+            "Live conversation",
+            "bedrock:InvokeModelWithBidirectionalStream",
         ),
-    ),
-}
+        "polly": ("Streaming speech synthesis", "polly:StartSpeechSynthesisStream"),
+        "transcribe": (
+            "Live transcription",
+            (
+                "transcribe:StartStreamTranscription (transcribe:StartMedicalStreamTranscription"
+                " for medical transcription), in a region offering it"
+            ),
+        ),
+    }
+)
 
 
 class _BidiTransport(AWSCRTHTTPClient):

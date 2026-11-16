@@ -157,11 +157,13 @@ _SESSION_ADAPTER: TypeAdapter[SessionConfig] = TypeAdapter(SessionConfig)
 _MAX_OFFER_BYTES = 64 * 1024
 
 #: What the SIP-only call-control verbs answer, per verb.
-_SIP_ONLY_VERBS: dict[str, str] = {
-    "accept": "answers an incoming SIP call",
-    "reject": "declines an incoming SIP call",
-    "refer": "transfers a SIP call to another destination",
-}
+_SIP_ONLY_VERBS: frozendict[str, str] = frozendict(
+    {
+        "accept": "answers an incoming SIP call",
+        "reject": "declines an incoming SIP call",
+        "refer": "transfers a SIP call to another destination",
+    }
+)
 
 
 class _UnsupportedContentTypeError(ApiError):

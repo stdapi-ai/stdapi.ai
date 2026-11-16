@@ -13,14 +13,16 @@ if TYPE_CHECKING:
 type KimiReasoning = Literal["low", "medium", "high"]
 
 #: OpenAI effort levels mapped onto the values Kimi accepts (``minimal`` is rejected).
-_REASONING_OVERRIDE: dict[Effort | None, KimiReasoning] = {
-    "minimal": "low",
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-    "xhigh": "high",
-    "max": "high",
-}
+_REASONING_OVERRIDE: frozendict[Effort | None, KimiReasoning] = frozendict(
+    {
+        "minimal": "low",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "high",
+        "max": "high",
+    }
+)
 
 
 class ChatModel(_BaseChatModel):

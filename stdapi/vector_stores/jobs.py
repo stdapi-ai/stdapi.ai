@@ -42,7 +42,6 @@ What the design rests on, and what breaks if it is changed:
 from asyncio import CancelledError, Task, create_task, sleep, wait
 from contextlib import suppress
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -246,7 +245,7 @@ class _JobHandler:
 
 
 #: The job types this server runs, fixed at import: a message names one or none.
-_HANDLERS: Final[Mapping[str, _JobHandler]] = MappingProxyType(
+_HANDLERS: Final[Mapping[str, _JobHandler]] = frozendict(
     {
         _INDEX_FILES: _JobHandler(
             model=IndexFilesJob, run=_run_index_files, settle=_settle_index_files

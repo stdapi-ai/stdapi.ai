@@ -10,18 +10,20 @@ if TYPE_CHECKING:
     from stdapi.types import JsonMapping
 
 #: Aspect ratios supported by Luma Ray, keyed by reduced width:height fraction.
-_ASPECT_RATIOS = {
-    (1, 1): "1:1",
-    (16, 9): "16:9",
-    (9, 16): "9:16",
-    (4, 3): "4:3",
-    (3, 4): "3:4",
-    (7, 3): "21:9",
-    (3, 7): "9:21",
-}
+_ASPECT_RATIOS = frozendict(
+    {
+        (1, 1): "1:1",
+        (16, 9): "16:9",
+        (9, 16): "9:16",
+        (4, 3): "4:3",
+        (3, 4): "3:4",
+        (7, 3): "21:9",
+        (3, 7): "9:21",
+    }
+)
 
 #: Resolution names keyed by the smaller frame dimension in pixels.
-_RESOLUTIONS = {540: "540p", 720: "720p"}
+_RESOLUTIONS = frozendict({540: "540p", 720: "720p"})
 
 #: Supported clip durations in seconds.
 _DURATIONS = frozenset({5, 9})

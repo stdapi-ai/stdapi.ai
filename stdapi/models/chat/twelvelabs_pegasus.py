@@ -48,10 +48,9 @@ _PEGASUS_INLINE_BASE64: int = 25 * 1024 * 1024
 _PEGASUS_INLINE_BYTES: int = _PEGASUS_INLINE_BASE64 * 3 // 4  # 18_874_368
 
 #: Maps Pegasus finish/stop reason strings to Bedrock Converse stop reasons.
-_STOP_MAP: dict[_FinishReason, StopReasonType] = {
-    "stop": "end_turn",
-    "length": "max_tokens",
-}
+_STOP_MAP: frozendict[_FinishReason, StopReasonType] = frozendict(
+    {"stop": "end_turn", "length": "max_tokens"}
+)
 
 
 class _S3Location(TypedDict):

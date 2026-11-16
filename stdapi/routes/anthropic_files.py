@@ -35,10 +35,9 @@ from stdapi.types.anthropic_files import (
 from stdapi.utils import b64_encoded_len, missing_file_error, validation_error_handler
 
 #: Content type is client-controlled: force download and disable content-type sniffing.
-_CONTENT_DOWNLOAD_HEADERS = {
-    "Content-Disposition": "attachment",
-    "X-Content-Type-Options": "nosniff",
-}
+_CONTENT_DOWNLOAD_HEADERS = frozendict(
+    {"Content-Disposition": "attachment", "X-Content-Type-Options": "nosniff"}
+)
 
 
 #: Most unique IDs one listing request may name, per the Anthropic Files API.

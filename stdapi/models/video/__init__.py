@@ -59,11 +59,9 @@ _INVOCATION_ARN_PATTERN = re_compile(
 _JobStatus = Literal["in_progress", "completed", "failed"]
 
 #: Bedrock async invocation status mapped to the API job status.
-_JOB_STATUS: dict[str, _JobStatus] = {
-    "InProgress": "in_progress",
-    "Completed": "completed",
-    "Failed": "failed",
-}
+_JOB_STATUS: frozendict[str, _JobStatus] = frozendict(
+    {"InProgress": "in_progress", "Completed": "completed", "Failed": "failed"}
+)
 
 #: GetAsyncInvoke error codes meaning the job is gone, foreign, or invalid.
 _JOB_NOT_FOUND_ERRORS = frozenset(

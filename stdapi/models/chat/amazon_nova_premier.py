@@ -1,7 +1,5 @@
 """Amazon Nova premier chat model implementation."""
 
-from types import MappingProxyType
-
 from stdapi.models.chat._amazon_nova import (
     NOVA_INLINE_MEDIA_LIMITS,
     NOVA_S3_LOCATION_MEDIA_TYPES,
@@ -19,4 +17,4 @@ class ChatModel(_BaseChatModel):
     S3_LOCATION_MEDIA_TYPES = NOVA_S3_LOCATION_MEDIA_TYPES
     INLINE_MEDIA_LIMITS = NOVA_INLINE_MEDIA_LIMITS
     SUPPORTED_SYSTEM_TOOLS = frozenset({"nova_grounding"})
-    CANONICAL_TO_BEDROCK_TOOL_MAP = MappingProxyType({"web_search": "nova_grounding"})
+    CANONICAL_TO_BEDROCK_TOOL_MAP = frozendict({"web_search": "nova_grounding"})

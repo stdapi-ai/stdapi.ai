@@ -72,15 +72,17 @@ if TYPE_CHECKING:
     )
 
 #: Ollama's two stop reasons, keyed by the OpenAI finish reason.
-_DONE_REASON_BY_FINISH_REASON: dict[str, str] = {
-    "stop": "stop",
-    "length": "length",
-    # ``llm/server.go`` emits nothing else, so the three reasons with no Ollama
-    # spelling report the closer of the two.
-    "tool_calls": "stop",
-    "function_call": "stop",
-    "content_filter": "stop",
-}
+_DONE_REASON_BY_FINISH_REASON: frozendict[str, str] = frozendict(
+    {
+        "stop": "stop",
+        "length": "length",
+        # ``llm/server.go`` emits nothing else, so the three reasons with no Ollama
+        # spelling report the closer of the two.
+        "tool_calls": "stop",
+        "function_call": "stop",
+        "content_filter": "stop",
+    }
+)
 
 #: Fallback for an upstream error event whose payload is not an object.
 _STREAM_FAILED: str = "The request could not be completed. Retry the request."

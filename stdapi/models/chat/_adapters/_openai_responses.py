@@ -13,7 +13,6 @@ from enum import Enum
 from functools import partial
 from time import time
 from traceback import format_exception
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from botocore.exceptions import ClientError, HTTPClientError
@@ -262,7 +261,7 @@ type _CodeStatus = Literal["in_progress", "completed", "failed"]
 
 
 #: Mapping from OpenAI integrated tool classes to canonical server tool names (translated to Bedrock names via tool_name_map in ``_build_tool_config``).
-_TOOL_TYPE_TO_BEDROCK_NAME: MappingProxyType[type[Tool], str] = MappingProxyType(
+_TOOL_TYPE_TO_BEDROCK_NAME: frozendict[type[Tool], str] = frozendict(
     {
         CodeInterpreter: "code_execution",
         WebSearchTool: "web_search",
@@ -2952,18 +2951,24 @@ def _extract_output_items(
 
 
 #: Bedrock stop reason a continued turn's status resolves back to, for the terminal event.
-_STATUS_STOP_REASONS: dict[str, str] = {
-    "completed": "end_turn",
-    "incomplete": "max_tokens",
-    "failed": "malformed_model_output",
-}
+_STATUS_STOP_REASONS: frozendict[str, str] = frozendict(
+    {
+        "completed": "end_turn",
+        "incomplete": "max_tokens",
+        "failed": "malformed_model_output",
+    }
+)
 
 #: Maps Bedrock stop reasons; unknown reasons default to ``"max_output_tokens"``.
-_INCOMPLETE_REASONS: dict[str, Literal["max_output_tokens", "content_filter"]] = {
-    "content_filtered": "content_filter",
-    "guardrail_intervened": "content_filter",
-    "max_tokens": "max_output_tokens",
-}
+_INCOMPLETE_REASONS: frozendict[str, Literal["max_output_tokens", "content_filter"]] = (
+    frozendict(
+        {
+            "content_filtered": "content_filter",
+            "guardrail_intervened": "content_filter",
+            "max_tokens": "max_output_tokens",
+        }
+    )
+)
 
 
 def _map_stop_reason(

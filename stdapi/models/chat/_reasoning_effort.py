@@ -24,15 +24,17 @@ if TYPE_CHECKING:
 type ReasoningObjectEffort = Literal["none", "low", "medium", "high", "xhigh", "max"]
 
 #: Requested effort mapped onto the accepted values; ``minimal`` is rejected, so it maps to ``low``.
-_REASONING_EFFORT: dict[Effort | None, ReasoningObjectEffort] = {
-    "none": "none",
-    "minimal": "low",
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-    "xhigh": "xhigh",
-    "max": "max",
-}
+_REASONING_EFFORT: frozendict[Effort | None, ReasoningObjectEffort] = frozendict(
+    {
+        "none": "none",
+        "minimal": "low",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max",
+    }
+)
 
 #: Sampling fields a model with fixed sampling refuses, with the client parameter each comes from.
 _SAMPLING_FIELDS: tuple[tuple[Literal["temperature", "topP"], str], ...] = (

@@ -65,31 +65,35 @@ class _DimensionInfo:
 
 
 #: Billable dimension registry: public log key and EMF metric unit.
-_DIMENSION_INFO: Final[dict[Dimension, _DimensionInfo]] = {
-    Dimension.INPUT_TOKENS: _DimensionInfo("input_tokens", "Count"),
-    Dimension.OUTPUT_TOKENS: _DimensionInfo("output_tokens", "Count"),
-    Dimension.CACHE_READ_TOKENS: _DimensionInfo("cached_tokens", "Count"),
-    Dimension.CACHE_WRITE_TOKENS: _DimensionInfo("cache_write_tokens", "Count"),
-    Dimension.OUTPUT_IMAGES: _DimensionInfo("output_images", "Count"),
-    Dimension.INPUT_SECONDS: _DimensionInfo("input_seconds", "Seconds"),
-    Dimension.INPUT_CHARACTERS: _DimensionInfo("input_characters", "Count"),
-    Dimension.COMPREHEND_UNITS: _DimensionInfo("comprehend_units", "Count"),
-    Dimension.GROUNDING_REQUESTS: _DimensionInfo("grounding_requests", "Count"),
-    Dimension.SEARCH_UNITS: _DimensionInfo("search_units", "Count"),
-    Dimension.INPUT_IMAGES: _DimensionInfo("input_images", "Count"),
-    Dimension.OUTPUT_SECONDS: _DimensionInfo("output_seconds", "Seconds"),
-    Dimension.TEXT_UNITS: _DimensionInfo("text_units", "Count"),
-}
+_DIMENSION_INFO: Final[frozendict[Dimension, _DimensionInfo]] = frozendict(
+    {
+        Dimension.INPUT_TOKENS: _DimensionInfo("input_tokens", "Count"),
+        Dimension.OUTPUT_TOKENS: _DimensionInfo("output_tokens", "Count"),
+        Dimension.CACHE_READ_TOKENS: _DimensionInfo("cached_tokens", "Count"),
+        Dimension.CACHE_WRITE_TOKENS: _DimensionInfo("cache_write_tokens", "Count"),
+        Dimension.OUTPUT_IMAGES: _DimensionInfo("output_images", "Count"),
+        Dimension.INPUT_SECONDS: _DimensionInfo("input_seconds", "Seconds"),
+        Dimension.INPUT_CHARACTERS: _DimensionInfo("input_characters", "Count"),
+        Dimension.COMPREHEND_UNITS: _DimensionInfo("comprehend_units", "Count"),
+        Dimension.GROUNDING_REQUESTS: _DimensionInfo("grounding_requests", "Count"),
+        Dimension.SEARCH_UNITS: _DimensionInfo("search_units", "Count"),
+        Dimension.INPUT_IMAGES: _DimensionInfo("input_images", "Count"),
+        Dimension.OUTPUT_SECONDS: _DimensionInfo("output_seconds", "Seconds"),
+        Dimension.TEXT_UNITS: _DimensionInfo("text_units", "Count"),
+    }
+)
 
 #: Dimension to its ``UsageRecord`` per-spec breakdown attribute name.
-_SPEC_BREAKDOWN_ATTRS: Final[dict[Dimension, str]] = {
-    Dimension.OUTPUT_IMAGES: "output_images_by_spec",
-    Dimension.OUTPUT_SECONDS: "output_seconds_by_spec",
-    Dimension.INPUT_IMAGES: "input_images_by_spec",
-    Dimension.INPUT_SECONDS: "input_seconds_by_spec",
-    Dimension.INPUT_TOKENS: "input_tokens_by_spec",
-    Dimension.OUTPUT_TOKENS: "output_tokens_by_spec",
-}
+_SPEC_BREAKDOWN_ATTRS: Final[frozendict[Dimension, str]] = frozendict(
+    {
+        Dimension.OUTPUT_IMAGES: "output_images_by_spec",
+        Dimension.OUTPUT_SECONDS: "output_seconds_by_spec",
+        Dimension.INPUT_IMAGES: "input_images_by_spec",
+        Dimension.INPUT_SECONDS: "input_seconds_by_spec",
+        Dimension.INPUT_TOKENS: "input_tokens_by_spec",
+        Dimension.OUTPUT_TOKENS: "output_tokens_by_spec",
+    }
+)
 
 #: Dimensions AWS has no guaranteed Price List coverage for: a miss is a catalog gap.
 _BEST_EFFORT_PRICED_DIMENSIONS: Final[frozenset[Dimension]] = frozenset(
@@ -659,19 +663,27 @@ def record_guardrail_usage(
 
 
 #: ApplyGuardrail ``usage`` field to the policy slug and dimension it bills.
-_GUARDRAIL_POLICY_USAGE: Final[Mapping[str, tuple[str, Dimension]]] = {
-    "topicPolicyUnits": ("topic", Dimension.TEXT_UNITS),
-    "contentPolicyUnits": ("content", Dimension.TEXT_UNITS),
-    "contentPolicyImageUnits": ("content", Dimension.INPUT_IMAGES),
-    "wordPolicyUnits": ("word", Dimension.TEXT_UNITS),
-    "sensitiveInformationPolicyUnits": ("sensitive-information", Dimension.TEXT_UNITS),
-    "sensitiveInformationPolicyFreeUnits": (
-        "sensitive-information-free",
-        Dimension.TEXT_UNITS,
-    ),
-    "contextualGroundingPolicyUnits": ("contextual-grounding", Dimension.TEXT_UNITS),
-    "automatedReasoningPolicyUnits": ("automated-reasoning", Dimension.TEXT_UNITS),
-}
+_GUARDRAIL_POLICY_USAGE: Final[frozendict[str, tuple[str, Dimension]]] = frozendict(
+    {
+        "topicPolicyUnits": ("topic", Dimension.TEXT_UNITS),
+        "contentPolicyUnits": ("content", Dimension.TEXT_UNITS),
+        "contentPolicyImageUnits": ("content", Dimension.INPUT_IMAGES),
+        "wordPolicyUnits": ("word", Dimension.TEXT_UNITS),
+        "sensitiveInformationPolicyUnits": (
+            "sensitive-information",
+            Dimension.TEXT_UNITS,
+        ),
+        "sensitiveInformationPolicyFreeUnits": (
+            "sensitive-information-free",
+            Dimension.TEXT_UNITS,
+        ),
+        "contextualGroundingPolicyUnits": (
+            "contextual-grounding",
+            Dimension.TEXT_UNITS,
+        ),
+        "automatedReasoningPolicyUnits": ("automated-reasoning", Dimension.TEXT_UNITS),
+    }
+)
 
 
 def record_guardrail_policy_usage(

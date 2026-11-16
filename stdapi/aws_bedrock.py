@@ -95,39 +95,45 @@ if TYPE_CHECKING:
     )
 
 #: Bedrock documents types with the matching MIME type
-MIME_TYPES_TO_DOCUMENT_TYPE: dict[str, DocumentFormatType] = {
-    "csv": "csv",
-    "html": "html",
-    "pdf": "pdf",
-    "msword": "doc",
-    "vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
-    "vnd.ms-excel": "xls",
-    "vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
-    "plain": "txt",
-    "markdown": "md",
-}
+MIME_TYPES_TO_DOCUMENT_TYPE: frozendict[str, DocumentFormatType] = frozendict(
+    {
+        "csv": "csv",
+        "html": "html",
+        "pdf": "pdf",
+        "msword": "doc",
+        "vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+        "vnd.ms-excel": "xls",
+        "vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+        "plain": "txt",
+        "markdown": "md",
+    }
+)
 
 #: Bedrock videos types with the matching MIME type
-MIME_TYPES_TO_VIDEO_TYPE: dict[str, VideoFormatType] = {
-    "x-matroska": "mkv",
-    "quicktime": "mov",
-    "x-flv": "flv",
-    "x-ms-wmv": "wmv",
-    "3gpp": "three_gp",
-}
+MIME_TYPES_TO_VIDEO_TYPE: frozendict[str, VideoFormatType] = frozendict(
+    {
+        "x-matroska": "mkv",
+        "quicktime": "mov",
+        "x-flv": "flv",
+        "x-ms-wmv": "wmv",
+        "3gpp": "three_gp",
+    }
+)
 
 #: Bedrock audio types with the matching MIME type
-MIME_TYPES_TO_AUDIO_TYPE: dict[str, AudioFormatType] = {
-    "x-aac": "aac",
-    # libmagic reports raw ADTS AAC streams as "audio/x-hx-aac-adts".
-    "x-hx-aac-adts": "aac",
-    "x-flac": "flac",
-    "x-m4a": "mp4",
-    # libmagic reports Matroska as "x-matroska" for both .mka and .mkv.
-    "x-matroska": "mkv",
-    "mpeg": "mp3",
-    "x-wav": "wav",
-}
+MIME_TYPES_TO_AUDIO_TYPE: frozendict[str, AudioFormatType] = frozendict(
+    {
+        "x-aac": "aac",
+        # libmagic reports raw ADTS AAC streams as "audio/x-hx-aac-adts".
+        "x-hx-aac-adts": "aac",
+        "x-flac": "flac",
+        "x-m4a": "mp4",
+        # libmagic reports Matroska as "x-matroska" for both .mka and .mkv.
+        "x-matroska": "mkv",
+        "mpeg": "mp3",
+        "x-wav": "wav",
+    }
+)
 
 #: Bedrock limit for sync body size (25MB), here with a little margin
 BEDROCK_BODY_SIZE_LIMIT = 24_990_000
@@ -212,53 +218,62 @@ PROMPT_CACHING_BASIC: frozenset[PromptCaching] = frozenset(("system", "messages"
 PROMPT_CACHING_DEFAULT: ContentBlockTypeDef = {"cachePoint": {"type": "default"}}
 
 #: AWS error codes to HTTP status + error type mapping
-AWS_ERROR_MAP: dict[str, tuple[int, str]] = {
-    **dict.fromkeys(
-        {
-            "ThrottlingException",
-            "TooManyRequestsException",
-            "ServiceQuotaExceededException",
-        },
-        (429, "rate_limit_error"),
-    ),
-    # Only ever reached for a call the end user's own role session signed: a tenant-signed denial gets its own fixed 403 and every other denial is `denied_feature_unavailable`'s, at 503.
-    **dict.fromkeys({"AccessDeniedException"}, (403, "permission_error")),
-    **dict.fromkeys(
-        {
-            "UnrecognizedClientException",
-            "InvalidSignatureException",
-            "ExpiredTokenException",
-        },
-        (401, "authentication_error"),
-    ),
-    **dict.fromkeys(
-        {"ResourceNotFoundException", "NotFoundException"}, (404, "not_found_error")
-    ),
-    **dict.fromkeys({"ConflictException"}, (409, "invalid_request_error")),
-    **dict.fromkeys(
-        {"ValidationException", "BadRequestException", "EntityTooSmall", "InvalidPart"},
-        (400, "invalid_request_error"),
-    ),
-    **dict.fromkeys(
-        {
-            "ServiceUnavailableException",
-            "InternalServerException",
-            "ServiceFailureException",
-            "ReadTimeoutError",
-        },
-        (503, "server_error"),
-    ),
-}
+AWS_ERROR_MAP: frozendict[str, tuple[int, str]] = frozendict(
+    {
+        **dict.fromkeys(
+            {
+                "ThrottlingException",
+                "TooManyRequestsException",
+                "ServiceQuotaExceededException",
+            },
+            (429, "rate_limit_error"),
+        ),
+        # Only ever reached for a call the end user's own role session signed: a tenant-signed denial gets its own fixed 403 and every other denial is `denied_feature_unavailable`'s, at 503.
+        **dict.fromkeys({"AccessDeniedException"}, (403, "permission_error")),
+        **dict.fromkeys(
+            {
+                "UnrecognizedClientException",
+                "InvalidSignatureException",
+                "ExpiredTokenException",
+            },
+            (401, "authentication_error"),
+        ),
+        **dict.fromkeys(
+            {"ResourceNotFoundException", "NotFoundException"}, (404, "not_found_error")
+        ),
+        **dict.fromkeys({"ConflictException"}, (409, "invalid_request_error")),
+        **dict.fromkeys(
+            {
+                "ValidationException",
+                "BadRequestException",
+                "EntityTooSmall",
+                "InvalidPart",
+            },
+            (400, "invalid_request_error"),
+        ),
+        **dict.fromkeys(
+            {
+                "ServiceUnavailableException",
+                "InternalServerException",
+                "ServiceFailureException",
+                "ReadTimeoutError",
+            },
+            (503, "server_error"),
+        ),
+    }
+)
 
 #: Stream error event keys → canonical AWS error code.
-INVOKE_STREAM_ERRORS: dict[str, str] = {
-    "internalServerException": "InternalServerException",
-    "modelStreamErrorException": "ModelStreamErrorException",
-    "validationException": "ValidationException",
-    "throttlingException": "ThrottlingException",
-    "modelTimeoutException": "ModelTimeoutException",
-    "serviceUnavailableException": "ServiceUnavailableException",
-}
+INVOKE_STREAM_ERRORS: frozendict[str, str] = frozendict(
+    {
+        "internalServerException": "InternalServerException",
+        "modelStreamErrorException": "ModelStreamErrorException",
+        "validationException": "ValidationException",
+        "throttlingException": "ThrottlingException",
+        "modelTimeoutException": "ModelTimeoutException",
+        "serviceUnavailableException": "ServiceUnavailableException",
+    }
+)
 
 
 class _DefaultModelParameters(BaseModel):
@@ -516,21 +531,20 @@ COMPREHEND_MODERATION_MODEL: str = "amazon.comprehend-toxicity"
 GUARDRAIL_MODERATION_MODEL: str = "amazon.bedrock-runtime-guardrail"
 
 #: Bedrock guardrail content filter types mapped to OpenAI moderation categories.
-_GUARDRAIL_FILTER_CATEGORIES: dict[str, str] = {
-    "HATE": "hate",
-    "INSULTS": "harassment",
-    "SEXUAL": "sexual",
-    "VIOLENCE": "violence",
-    "MISCONDUCT": "illicit",
-}
+_GUARDRAIL_FILTER_CATEGORIES: frozendict[str, str] = frozendict(
+    {
+        "HATE": "hate",
+        "INSULTS": "harassment",
+        "SEXUAL": "sexual",
+        "VIOLENCE": "violence",
+        "MISCONDUCT": "illicit",
+    }
+)
 
 #: Bedrock guardrail confidence levels mapped to OpenAI-style scores.
-_GUARDRAIL_CONFIDENCE_SCORES: dict[str, float] = {
-    "NONE": 0.0,
-    "LOW": 0.25,
-    "MEDIUM": 0.5,
-    "HIGH": 0.75,
-}
+_GUARDRAIL_CONFIDENCE_SCORES: frozendict[str, float] = frozendict(
+    {"NONE": 0.0, "LOW": 0.25, "MEDIUM": 0.5, "HIGH": 0.75}
+)
 
 #: Guardrail policies scanned for interventions, as (policy, entry list) keys.
 _GUARDRAIL_POLICY_ENTRIES: tuple[tuple[str, str], ...] = (

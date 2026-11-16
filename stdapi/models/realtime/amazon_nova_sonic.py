@@ -86,18 +86,20 @@ _FINAL_STAGE: Final = "FINAL"
 _ANY_INPUT: Final[dict[str, Any]] = {"type": "object", "properties": {}}
 
 #: Voice each OpenAI voice name is served by; anything else is passed through.
-_VOICES: Final[dict[str, str]] = {
-    "alloy": "tiffany",
-    "ash": "matthew",
-    "ballad": "amy",
-    "cedar": "stephen",
-    "coral": "danielle",
-    "echo": "matthew",
-    "marin": "joanna",
-    "sage": "ruth",
-    "shimmer": "olivia",
-    "verse": "stephen",
-}
+_VOICES: Final[frozendict[str, str]] = frozendict(
+    {
+        "alloy": "tiffany",
+        "ash": "matthew",
+        "ballad": "amy",
+        "cedar": "stephen",
+        "coral": "danielle",
+        "echo": "matthew",
+        "marin": "joanna",
+        "sage": "ruth",
+        "shimmer": "olivia",
+        "verse": "stephen",
+    }
+)
 
 
 class _SessionNames:

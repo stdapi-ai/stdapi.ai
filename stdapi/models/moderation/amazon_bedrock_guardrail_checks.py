@@ -42,13 +42,15 @@ if TYPE_CHECKING:
     from stdapi.models.moderation import ModerationInput
 
 #: Guardrail checks content filter categories mapped to OpenAI moderation categories.
-_CONTENT_FILTER_CATEGORIES: dict[str, str] = {
-    "HATE": "hate",
-    "INSULTS": "harassment",
-    "SEXUAL": "sexual",
-    "VIOLENCE": "violence",
-    "MISCONDUCT": "illicit",
-}
+_CONTENT_FILTER_CATEGORIES: frozendict[str, str] = frozendict(
+    {
+        "HATE": "hate",
+        "INSULTS": "harassment",
+        "SEXUAL": "sexual",
+        "VIOLENCE": "violence",
+        "MISCONDUCT": "illicit",
+    }
+)
 
 #: Severity score at or above which guardrail checks results are flagged.
 _SEVERITY_THRESHOLD: float = 0.5
@@ -67,10 +69,12 @@ _PROMPT_ATTACK_CHECK: dict[str, Any] = {
 }
 
 #: Requested check name to the synthetic model its billed text units are recorded against.
-_CHECK_USAGE_MODELS: dict[str, str] = {
-    "promptAttack": guardrail_policy_model("checks-prompt-attack"),
-    "sensitiveInformation": guardrail_policy_model("checks-sensitive-information"),
-}
+_CHECK_USAGE_MODELS: frozendict[str, str] = frozendict(
+    {
+        "promptAttack": guardrail_policy_model("checks-prompt-attack"),
+        "sensitiveInformation": guardrail_policy_model("checks-sensitive-information"),
+    }
+)
 
 #: Per-category score template (zeroed), copied per call instead of rebuilt via dict.fromkeys().
 _SCORE_TEMPLATE: dict[str, float] = dict.fromkeys(

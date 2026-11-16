@@ -570,7 +570,9 @@ class TestOpenAIBatchValidation:
              stdapi/batches.py:_iter_input_requests
         """
         _batches.install(monkeypatch)
-        monkeypatch.setitem(batches.MAX_REQUESTS, "openai", 5)
+        monkeypatch.setattr(
+            batches, "MAX_REQUESTS", batches.MAX_REQUESTS | {"openai": 5}
+        )
         file_id = _batches.install_input_file(monkeypatch, chat_lines(20))
         body = _create(app_client, file_id)
         assert body["http_status"] == 400

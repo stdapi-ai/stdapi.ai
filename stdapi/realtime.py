@@ -225,10 +225,12 @@ _ULAW_ENCODE: Final = _encode_table(_ULAW_DECODE)
 _ALAW_ENCODE: Final = _encode_table(_ALAW_DECODE)
 
 #: Decode and encode tables of each companded format, keyed by its media type.
-_COMPANDED: Final[dict[str, tuple[array[int], bytes]]] = {
-    "audio/pcmu": (_ULAW_DECODE, _ULAW_ENCODE),
-    "audio/pcma": (_ALAW_DECODE, _ALAW_ENCODE),
-}
+_COMPANDED: Final[frozendict[str, tuple[array[int], bytes]]] = frozendict(
+    {
+        "audio/pcmu": (_ULAW_DECODE, _ULAW_ENCODE),
+        "audio/pcma": (_ALAW_DECODE, _ALAW_ENCODE),
+    }
+)
 
 
 def _samples(pcm: bytes) -> array[int]:

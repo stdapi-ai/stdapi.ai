@@ -45,7 +45,7 @@ router = APIRouter(
 )
 
 #: Content-type format name if different from the response format name
-_FORMAT_CONTENT_TYPE = {"mp3": "mpeg"}
+_FORMAT_CONTENT_TYPE = frozendict({"mp3": "mpeg"})
 
 
 async def _speech_audio_sse(

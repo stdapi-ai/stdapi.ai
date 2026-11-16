@@ -60,12 +60,14 @@ _MediaTypes = Literal["video", "text", "audio", "image"]
 _RESERVED_MEDIA_PARAMS = frozenset({"source", "format", "value"})
 
 #: Synchronous invoke limit size for S3 files
-_SYNC_LIMIT_SIZES: dict[_MediaTypes, int] = {
-    "image": 50_000_000,
-    "video": 100_000_000,  # 30 seconds; 100 MB
-    "audio": 100_000_000,  # 30 seconds; 100 MB
-    "text": 50_000,  # 1 MB; 50,000 characters
-}
+_SYNC_LIMIT_SIZES: frozendict[_MediaTypes, int] = frozendict(
+    {
+        "image": 50_000_000,
+        "video": 100_000_000,  # 30 seconds; 100 MB
+        "audio": 100_000_000,  # 30 seconds; 100 MB
+        "text": 50_000,  # 1 MB; 50,000 characters
+    }
+)
 
 #: Default segmented-embedding video mode when not otherwise specified.
 _DEFAULT_VIDEO_EMBEDDING_MODE: _VideoEmbeddingMode = "AUDIO_VIDEO_COMBINED"

@@ -97,12 +97,9 @@ class Service(StrEnum):
 
 
 #: Default currency per AWS partition.
-PARTITION_CURRENCY: Final[dict[str, str]] = {
-    "aws": "USD",
-    "aws-eusc": "EUR",
-    "aws-us-gov": "USD",
-    "aws-cn": "CNY",
-}
+PARTITION_CURRENCY: Final[frozendict[str, str]] = frozendict(
+    {"aws": "USD", "aws-eusc": "EUR", "aws-us-gov": "USD", "aws-cn": "CNY"}
+)
 
 
 def partition_of_region(region: str) -> str:
@@ -603,11 +600,9 @@ def long_context_threshold(model_id: str) -> int:
 
 
 #: AWS tier-price ratios: flex/batch = 0.5 (50% discount), priority = 1.75 (75% premium).
-_TIER_PRICE_RATIO: Final[dict[str, Decimal]] = {
-    "flex": Decimal("0.5"),
-    "batch": Decimal("0.5"),
-    "priority": Decimal("1.75"),
-}
+_TIER_PRICE_RATIO: Final[frozendict[str, Decimal]] = frozendict(
+    {"flex": Decimal("0.5"), "batch": Decimal("0.5"), "priority": Decimal("1.75")}
+)
 
 #: Neutral tier ratio (exact-tier price, no scaling).
 _ONE: Final = Decimal(1)
@@ -699,18 +694,20 @@ def resolve_price(
 
 
 #: AWS Price List service codes mapped to their internal service.
-_SERVICE_CODE_TO_SERVICE: Final[dict[str, Service]] = {
-    "AmazonBedrock": Service.BEDROCK,
-    "AmazonBedrockService": Service.BEDROCK,
-    "AmazonBedrockFoundationModels": Service.BEDROCK,
-    "AmazonPolly": Service.POLLY,
-    "AmazonTranscribe": Service.TRANSCRIBE,
-    "transcribe": Service.TRANSCRIBE,
-    "AmazonTranslate": Service.TRANSLATE,
-    "translate": Service.TRANSLATE,
-    "AmazonComprehend": Service.COMPREHEND,
-    "comprehend": Service.COMPREHEND,
-}
+_SERVICE_CODE_TO_SERVICE: Final[frozendict[str, Service]] = frozendict(
+    {
+        "AmazonBedrock": Service.BEDROCK,
+        "AmazonBedrockService": Service.BEDROCK,
+        "AmazonBedrockFoundationModels": Service.BEDROCK,
+        "AmazonPolly": Service.POLLY,
+        "AmazonTranscribe": Service.TRANSCRIBE,
+        "transcribe": Service.TRANSCRIBE,
+        "AmazonTranslate": Service.TRANSLATE,
+        "translate": Service.TRANSLATE,
+        "AmazonComprehend": Service.COMPREHEND,
+        "comprehend": Service.COMPREHEND,
+    }
+)
 
 #: Bounds concurrent Pricing API fetches -- the API enforces a very low request-rate quota.
 _MAX_CONCURRENT_FETCHES: Final[int] = 4
@@ -727,15 +724,17 @@ type _PricingEndpoint = Literal[
 ]
 
 #: Price List API endpoint per geography prefix (us-east-1 for the rest).
-_PRICING_ENDPOINT_BY_GEOGRAPHY: Final[dict[str, _PricingEndpoint]] = {
-    "eu": "eu-central-1",
-    "me": "eu-central-1",
-    "af": "eu-central-1",
-    "il": "eu-central-1",
-    "ap": "ap-south-1",
-    "eusc": "eusc-de-east-1",
-    "cn": "cn-north-1",
-}
+_PRICING_ENDPOINT_BY_GEOGRAPHY: Final[frozendict[str, _PricingEndpoint]] = frozendict(
+    {
+        "eu": "eu-central-1",
+        "me": "eu-central-1",
+        "af": "eu-central-1",
+        "il": "eu-central-1",
+        "ap": "ap-south-1",
+        "eusc": "eusc-de-east-1",
+        "cn": "cn-north-1",
+    }
+)
 
 #: Partitions with no Price List API endpoint at all (verified: no DNS).
 _UNPRICED_PARTITIONS: Final[frozenset[str]] = frozenset({"aws-us-gov"})
@@ -806,19 +805,23 @@ async def _fetch_service_pricing(
 
 
 #: Fallback dimension by service (for services without inferenceType).
-_SERVICE_FALLBACK_DIMENSION: Final[dict[Service, Dimension]] = {
-    Service.POLLY: Dimension.INPUT_CHARACTERS,
-    Service.TRANSLATE: Dimension.INPUT_CHARACTERS,
-    Service.TRANSCRIBE: Dimension.INPUT_SECONDS,
-    Service.COMPREHEND: Dimension.COMPREHEND_UNITS,
-}
+_SERVICE_FALLBACK_DIMENSION: Final[frozendict[Service, Dimension]] = frozendict(
+    {
+        Service.POLLY: Dimension.INPUT_CHARACTERS,
+        Service.TRANSLATE: Dimension.INPUT_CHARACTERS,
+        Service.TRANSCRIBE: Dimension.INPUT_SECONDS,
+        Service.COMPREHEND: Dimension.COMPREHEND_UNITS,
+    }
+)
 
 
 #: featuretype to Dimension; authoritative for prompt caching (inferenceType lacks it).
-_FEATURE_TYPE_TO_DIMENSION: Final[dict[str, Dimension]] = {
-    "prompt cache read": Dimension.CACHE_READ_TOKENS,
-    "prompt cache write": Dimension.CACHE_WRITE_TOKENS,
-}
+_FEATURE_TYPE_TO_DIMENSION: Final[frozendict[str, Dimension]] = frozendict(
+    {
+        "prompt cache read": Dimension.CACHE_READ_TOKENS,
+        "prompt cache write": Dimension.CACHE_WRITE_TOKENS,
+    }
+)
 
 
 def _resolve_dimension(
@@ -1003,12 +1006,17 @@ def _bedrock_synthetic_model(usagetype: str) -> str:
 TRANSCRIBE_STREAMING_SPEC: Final = "streaming"
 
 #: Transcribe Price List operation to the (synthetic model, spec bucket) it prices.
-_TRANSCRIBE_OPERATIONS: Final[dict[str, tuple[str, str]]] = {
-    "TranscribeAudio": ("amazon.transcribe", ""),
-    "StreamingAudio": ("amazon.transcribe", TRANSCRIBE_STREAMING_SPEC),
-    "MedicalTranscribeAudio": ("amazon.transcribe-medical", ""),
-    "MedicalStreamingAudio": ("amazon.transcribe-medical", TRANSCRIBE_STREAMING_SPEC),
-}
+_TRANSCRIBE_OPERATIONS: Final[frozendict[str, tuple[str, str]]] = frozendict(
+    {
+        "TranscribeAudio": ("amazon.transcribe", ""),
+        "StreamingAudio": ("amazon.transcribe", TRANSCRIBE_STREAMING_SPEC),
+        "MedicalTranscribeAudio": ("amazon.transcribe-medical", ""),
+        "MedicalStreamingAudio": (
+            "amazon.transcribe-medical",
+            TRANSCRIBE_STREAMING_SPEC,
+        ),
+    }
+)
 
 
 def _synthesize_service_model_key(

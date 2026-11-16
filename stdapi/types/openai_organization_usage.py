@@ -12,7 +12,7 @@ from pydantic import Field
 from stdapi.types import BaseModelResponse
 
 #: Bucket widths a usage query may ask for, and their width in seconds.
-BUCKET_SECONDS: dict[str, int] = {"1m": 60, "1h": 3600, "1d": 86400}
+BUCKET_SECONDS: frozendict[str, int] = frozendict({"1m": 60, "1h": 3600, "1d": 86400})
 
 
 class UsageAmount(BaseModelResponse):

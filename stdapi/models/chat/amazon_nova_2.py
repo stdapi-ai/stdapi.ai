@@ -1,6 +1,5 @@
 """Amazon Nova 2 chat model implementation."""
 
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from stdapi.models.chat._amazon_nova import (
@@ -51,14 +50,16 @@ NovaReasoning = Literal["low", "medium", "high"]
 
 
 #: OpenAI to Nova reasoning effort override
-_REASONING_OVERRIDE: dict[Effort | None, NovaReasoning] = {
-    "minimal": "low",
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-    "xhigh": "high",
-    "max": "high",
-}
+_REASONING_OVERRIDE: frozendict[Effort | None, NovaReasoning] = frozendict(
+    {
+        "minimal": "low",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "high",
+        "max": "high",
+    }
+)
 
 
 class ChatModel(_BaseChatModel):
@@ -71,7 +72,7 @@ class ChatModel(_BaseChatModel):
     S3_LOCATION_MEDIA_TYPES = NOVA_S3_LOCATION_MEDIA_TYPES
     INLINE_MEDIA_LIMITS = NOVA_INLINE_MEDIA_LIMITS
     SUPPORTED_SYSTEM_TOOLS = frozenset({"nova_grounding", "nova_code_interpreter"})
-    CANONICAL_TO_BEDROCK_TOOL_MAP = MappingProxyType(
+    CANONICAL_TO_BEDROCK_TOOL_MAP = frozendict(
         {"web_search": "nova_grounding", "code_execution": "nova_code_interpreter"}
     )
 

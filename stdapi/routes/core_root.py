@@ -197,9 +197,9 @@ _ROBOTS_TXT = "\n".join(
 _OAUTH_METADATA_MAX_AGE = 3600
 
 #: Caching directive carried by the protected resource metadata.
-_OAUTH_METADATA_HEADERS = {
-    "cache-control": f"public, max-age={_OAUTH_METADATA_MAX_AGE}"
-}
+_OAUTH_METADATA_HEADERS = frozendict(
+    {"cache-control": f"public, max-age={_OAUTH_METADATA_MAX_AGE}"}
+)
 
 
 @router.get("/")

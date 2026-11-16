@@ -32,11 +32,9 @@ _USAGE_PERMISSIONS: Final = (
 #: Longest age, in seconds, CloudWatch still serves a period at full resolution.
 #: Shorter periods are aggregated up rather than refused, so a query past the
 #: boundary would silently answer at a coarser resolution than it asked for.
-RETENTION_SECONDS: Final[dict[int, int]] = {
-    60: 15 * 86400,
-    3600: 455 * 86400,
-    86400: 455 * 86400,
-}
+RETENTION_SECONDS: Final[frozendict[int, int]] = frozendict(
+    {60: 15 * 86400, 3600: 455 * 86400, 86400: 455 * 86400}
+)
 
 #: Characters a dimension value may carry into a search expression. Anything
 #: else is refused rather than quoted: the expression is a query language, and

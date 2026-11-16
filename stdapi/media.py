@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 #: Format aliases for ffmpeg (only when output format differs from requested format)
-_FFMPEG_FORMAT_ALIASES = {"aac": "adts", "pcm": "s16le", "vorbis": "ogg"}
+_FFMPEG_FORMAT_ALIASES = frozendict({"aac": "adts", "pcm": "s16le", "vorbis": "ogg"})
 
 #: Streaming chunk size (64KB optimal for network streaming with encoding)
 _CHUNK_SIZE = 65536

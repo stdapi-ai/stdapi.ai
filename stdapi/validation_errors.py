@@ -35,31 +35,35 @@ _UNION_BRANCH_TAG = compile_regex(r"[a-z-]+\[.+\]|str|int|float|bool|none")
 _DISCRIMINATING_FIELDS: Final = frozenset({"type", "role"})
 
 #: What each Pydantic type error expected, in OpenAI's words and as a JSON-schema type.
-_EXPECTED_TYPES: Final = {
-    "string_type": ("a string", "string"),
-    "int_type": ("an integer", "integer"),
-    "int_parsing": ("an integer", "integer"),
-    "int_from_float": ("an integer", "integer"),
-    "float_type": ("a decimal", "number"),
-    "float_parsing": ("a decimal", "number"),
-    "bool_type": ("a boolean", "boolean"),
-    "bool_parsing": ("a boolean", "boolean"),
-    "list_type": ("an array", "array"),
-    "tuple_type": ("an array", "array"),
-    "set_type": ("an array", "array"),
-    "dict_type": ("an object", "object"),
-    "model_type": ("an object", "object"),
-    "model_attributes_type": ("an object", "object"),
-    "dataclass_type": ("an object", "object"),
-}
+_EXPECTED_TYPES: Final = frozendict(
+    {
+        "string_type": ("a string", "string"),
+        "int_type": ("an integer", "integer"),
+        "int_parsing": ("an integer", "integer"),
+        "int_from_float": ("an integer", "integer"),
+        "float_type": ("a decimal", "number"),
+        "float_parsing": ("a decimal", "number"),
+        "bool_type": ("a boolean", "boolean"),
+        "bool_parsing": ("a boolean", "boolean"),
+        "list_type": ("an array", "array"),
+        "tuple_type": ("an array", "array"),
+        "set_type": ("an array", "array"),
+        "dict_type": ("an object", "object"),
+        "model_type": ("an object", "object"),
+        "model_attributes_type": ("an object", "object"),
+        "dataclass_type": ("an object", "object"),
+    }
+)
 
 #: Range errors: the bound's context key, its operator, and the side it limits in words and in the code.
-_RANGE_ERRORS: Final = {
-    "greater_than": ("gt", ">", "below minimum", "below_min"),
-    "greater_than_equal": ("ge", ">=", "below minimum", "below_min"),
-    "less_than": ("lt", "<", "above maximum", "above_max"),
-    "less_than_equal": ("le", "<=", "above maximum", "above_max"),
-}
+_RANGE_ERRORS: Final = frozendict(
+    {
+        "greater_than": ("gt", ">", "below minimum", "below_min"),
+        "greater_than_equal": ("ge", ">=", "below minimum", "below_min"),
+        "less_than": ("lt", "<", "above maximum", "above_max"),
+        "less_than_equal": ("le", "<=", "above maximum", "above_max"),
+    }
+)
 
 #: Errors naming a list of accepted values.
 _ENUM_ERRORS: Final = frozenset({"literal_error", "enum", "union_tag_invalid"})
@@ -115,16 +119,20 @@ _FILE_OR_FILES_ROUTES: Final = frozenset({("POST", "/v1/images/edits")})
 _JSON_SCHEMA_NAMED_FIELDS: Final = frozenset({"purpose"})
 
 #: Fields refused ahead of the route's own wording: a fixed refusal, or None for the Chat Completions wording.
-_FIELD_REFUSALS: Final[dict[Route, dict[str, Refusal | None]]] = {
-    ("POST", "/v1/audio/speech"): {
-        "response_format": (
-            "Invalid response_format.",
-            "response_format",
-            "unsupported_value",
-        ),
-        "instructions": None,
+_FIELD_REFUSALS: Final[frozendict[Route, frozendict[str, Refusal | None]]] = frozendict(
+    {
+        ("POST", "/v1/audio/speech"): frozendict(
+            {
+                "response_format": (
+                    "Invalid response_format.",
+                    "response_format",
+                    "unsupported_value",
+                ),
+                "instructions": None,
+            }
+        )
     }
-}
+)
 
 
 def validation_error_path(loc: Iterable[Any]) -> str:
@@ -663,7 +671,7 @@ def openai_validation_error(  # noqa: C901, PLR0911, PLR0912 - one arm per route
             param, ["one of an array of files or file"], error.get("input")
         )
     field = param.split(".", 1)[0].split("[", 1)[0]
-    fields = _FIELD_REFUSALS.get(route, {})
+    fields = _FIELD_REFUSALS.get(route, frozendict())
     if field in fields:
         return fields[field] or wording
     if route in _ERROR_LIST_ROUTES:

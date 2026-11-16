@@ -58,7 +58,7 @@ _STATIC_MAX_AGE = 86400
 _FAVICON = (files("stdapi") / "favicon.svg").read_bytes()
 
 #: Headers a static file is served with, copied into a fresh response per request.
-_STATIC_HEADERS = {"cache-control": f"public, max-age={_STATIC_MAX_AGE}"}
+_STATIC_HEADERS = frozendict({"cache-control": f"public, max-age={_STATIC_MAX_AGE}"})
 
 
 def _mounted(request: Request, path: str) -> str:

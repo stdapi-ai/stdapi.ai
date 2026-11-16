@@ -1,7 +1,6 @@
 """Anthropic Claude 3.5 chat model implementation."""
 
 from re import compile as re_compile
-from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from stdapi.models.chat._anthropic_claude import (
@@ -21,7 +20,7 @@ class ChatModel(AnthropicClaudeChatModel):
     __slots__ = ()
 
     MATCHER = re_compile(r"^anthropic\.claude-3-5-(?:haiku|sonnet)-")
-    TOOL_BETA_FLAGS = MappingProxyType(
+    TOOL_BETA_FLAGS = frozendict(
         {
             "bash": _BETA_COMPUTER_USE_2024,
             "str_replace_editor": _BETA_COMPUTER_USE_2024,
@@ -29,7 +28,7 @@ class ChatModel(AnthropicClaudeChatModel):
             "computer": _BETA_COMPUTER_USE_2024,
         }
     )
-    SERVER_TOOL_NAME_TO_TYPE = MappingProxyType(
+    SERVER_TOOL_NAME_TO_TYPE = frozendict(
         {
             "bash": "bash_20250124",
             "str_replace_based_edit_tool": "text_editor_20250728",

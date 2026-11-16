@@ -111,34 +111,36 @@ _CHAT_EXTENSION_FIELDS = (
 _RESPONSES_EXTENSION_FIELDS = ("moderation",)
 
 #: Anthropic stop reason keyed by Chat Completions finish reason.
-_FINISH_TO_STOP = {
-    "stop": "end_turn",
-    "length": "max_tokens",
-    "tool_calls": "tool_use",
-    "function_call": "tool_use",
-    "content_filter": "refusal",
-}
+_FINISH_TO_STOP = frozendict(
+    {
+        "stop": "end_turn",
+        "length": "max_tokens",
+        "tool_calls": "tool_use",
+        "function_call": "tool_use",
+        "content_filter": "refusal",
+    }
+)
 
 #: Chat Completions finish reason keyed by Anthropic stop reason.
-_STOP_TO_FINISH = {
-    "end_turn": "stop",
-    "max_tokens": "length",
-    "tool_use": "tool_calls",
-    "stop_sequence": "stop",
-    "refusal": "content_filter",
-}
+_STOP_TO_FINISH = frozendict(
+    {
+        "end_turn": "stop",
+        "max_tokens": "length",
+        "tool_use": "tool_calls",
+        "stop_sequence": "stop",
+        "refusal": "content_filter",
+    }
+)
 
 #: Responses ``incomplete_details.reason`` keyed by Chat Completions finish reason.
-_FINISH_TO_INCOMPLETE = {
-    "length": "max_output_tokens",
-    "content_filter": "content_filter",
-}
+_FINISH_TO_INCOMPLETE = frozendict(
+    {"length": "max_output_tokens", "content_filter": "content_filter"}
+)
 
 #: Chat Completions finish reason keyed by Responses ``incomplete_details.reason``.
-_INCOMPLETE_TO_FINISH = {
-    "max_output_tokens": "length",
-    "content_filter": "content_filter",
-}
+_INCOMPLETE_TO_FINISH = frozendict(
+    {"max_output_tokens": "length", "content_filter": "content_filter"}
+)
 
 #: Finish reasons natively supported by the legacy text-completion shape.
 _TEXT_FINISH_REASONS = frozenset({"stop", "length", "content_filter"})
@@ -160,26 +162,30 @@ _OPENAI_COMMON_FIELDS = (
 )
 
 #: Anthropic ``output_config.effort`` keyed by OpenAI reasoning effort.
-_EFFORT_TO_ANTHROPIC = {
-    "minimal": "low",
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-    "xhigh": "high",
-    "max": "high",
-}
+_EFFORT_TO_ANTHROPIC = frozendict(
+    {
+        "minimal": "low",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "high",
+        "max": "high",
+    }
+)
 
 #: Claude versions taking an effort above ``high`` as it stands, per effort; others get ``high``.
-_TOP_EFFORT_MATCHERS = {
-    "xhigh": re_compile(
-        r"^anthropic\.claude-(?:(?:fable|mythos)-"
-        r"|(?:opus|sonnet|haiku)-(?:4-(?:[7-9]|\d{2})|[5-9]|\d{2})(?:\D|$))"
-    ),
-    "max": re_compile(
-        r"^anthropic\.claude-(?:(?:fable|mythos)-"
-        r"|(?:opus|sonnet|haiku)-(?:4-(?:[6-9]|\d{2})|[5-9]|\d{2})(?:\D|$))"
-    ),
-}
+_TOP_EFFORT_MATCHERS = frozendict(
+    {
+        "xhigh": re_compile(
+            r"^anthropic\.claude-(?:(?:fable|mythos)-"
+            r"|(?:opus|sonnet|haiku)-(?:4-(?:[7-9]|\d{2})|[5-9]|\d{2})(?:\D|$))"
+        ),
+        "max": re_compile(
+            r"^anthropic\.claude-(?:(?:fable|mythos)-"
+            r"|(?:opus|sonnet|haiku)-(?:4-(?:[6-9]|\d{2})|[5-9]|\d{2})(?:\D|$))"
+        ),
+    }
+)
 
 #: Claude 3.7 to 4.5, which take a thinking budget and refuse an effort level.
 _BUDGET_THINKING_MATCHER = re_compile(
@@ -2268,16 +2274,18 @@ def _chat_tool_choice_from_anthropic(
 
 
 #: Request converters into the Chat Completions shape, keyed by source API.
-_TO_CHAT_REQUEST: dict[MantleApi, Callable[[dict[str, Any]], dict[str, Any]]] = {
-    "responses": _responses_to_chat_request,
-    "messages": _messages_to_chat_request,
-}
+_TO_CHAT_REQUEST: frozendict[MantleApi, Callable[[dict[str, Any]], dict[str, Any]]] = (
+    frozendict(
+        {"responses": _responses_to_chat_request, "messages": _messages_to_chat_request}
+    )
+)
 
 #: Request converters out of the Chat Completions shape, keyed by target API.
-_FROM_CHAT_REQUEST: dict[MantleApi, Callable[[dict[str, Any]], dict[str, Any]]] = {
-    "responses": _chat_to_responses_request,
-    "messages": _chat_to_messages_request,
-}
+_FROM_CHAT_REQUEST: frozendict[
+    MantleApi, Callable[[dict[str, Any]], dict[str, Any]]
+] = frozendict(
+    {"responses": _chat_to_responses_request, "messages": _chat_to_messages_request}
+)
 
 
 def convert_payload(
@@ -2602,10 +2610,14 @@ def _chat_to_messages_response(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 #: Response converters into the Chat Completions shape, keyed by source API.
-_TO_CHAT_RESPONSE: dict[MantleApi, Callable[[dict[str, Any]], dict[str, Any]]] = {
-    "responses": _responses_to_chat_response,
-    "messages": _messages_to_chat_response,
-}
+_TO_CHAT_RESPONSE: frozendict[MantleApi, Callable[[dict[str, Any]], dict[str, Any]]] = (
+    frozendict(
+        {
+            "responses": _responses_to_chat_response,
+            "messages": _messages_to_chat_response,
+        }
+    )
+)
 
 
 def convert_response(
@@ -3788,9 +3800,11 @@ def _messages_stream_tail(state: _MessagesStreamState) -> list[SseEvent]:
 
 
 #: Stream converters into the Chat Completions shape, keyed by source API.
-_TO_CHAT_STREAM: dict[
+_TO_CHAT_STREAM: frozendict[
     MantleApi, Callable[[AsyncGenerator[SseEvent]], AsyncGenerator[SseEvent]]
-] = {"responses": _responses_stream_to_chat, "messages": _messages_stream_to_chat}
+] = frozendict(
+    {"responses": _responses_stream_to_chat, "messages": _messages_stream_to_chat}
+)
 
 
 def convert_stream(

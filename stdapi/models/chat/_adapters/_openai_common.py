@@ -33,41 +33,51 @@ if TYPE_CHECKING:
 
 
 #: OpenAI service tiers to their (Bedrock tier, echoed OpenAI tier) pair
-_SERVICES_TIERS: dict[
+_SERVICES_TIERS: frozendict[
     ServiceTiers | ResponsesServiceTiers, tuple[ServiceTierTypeType, ServiceTiers]
-] = {
-    "priority": ("priority", "priority"),
-    # "fast" is upstream's alias of "priority" and is echoed as "priority"
-    "fast": ("priority", "priority"),
-    "flex": ("flex", "flex"),
-    # Extra bedrock specific values
-    "reserved": ("reserved", "reserved"),
-}
+] = frozendict(
+    {
+        "priority": ("priority", "priority"),
+        # "fast" is upstream's alias of "priority" and is echoed as "priority"
+        "fast": ("priority", "priority"),
+        "flex": ("flex", "flex"),
+        # Extra bedrock specific values
+        "reserved": ("reserved", "reserved"),
+    }
+)
 
 #: Bedrock service tiers to the OpenAI tier a response reports
-_RESPONSE_SERVICES_TIERS: dict[ServiceTierTypeType | str, ServiceTiers] = {
-    "priority": "priority",
-    "flex": "flex",
-    "default": "default",
-    # Extra bedrock specific value, absent from the Responses vocabulary
-    "reserved": "reserved",
-}
+_RESPONSE_SERVICES_TIERS: frozendict[ServiceTierTypeType | str, ServiceTiers] = (
+    frozendict(
+        {
+            "priority": "priority",
+            "flex": "flex",
+            "default": "default",
+            # Extra bedrock specific value, absent from the Responses vocabulary
+            "reserved": "reserved",
+        }
+    )
+)
 
 #: `prompt_cache_options.mode` value disabling the `prompt_cache_key` heuristic
 EXPLICIT_CACHE_MODE = "explicit"
 
 #: OpenAI to Bedrock prompt cache retention mapping
-CACHE_TTL: dict[PromptCacheRetention | None, CacheTTLType | None] = {
-    "in_memory": None,
-    "24h": "1h",  # max current value
-    "1h": "1h",
-    "5m": "5m",
-}
+CACHE_TTL: frozendict[PromptCacheRetention | None, CacheTTLType | None] = frozendict(
+    {
+        "in_memory": None,
+        "24h": "1h",  # max current value
+        "1h": "1h",
+        "5m": "5m",
+    }
+)
 
 #: OpenAI `prompt_cache_options.ttl` to Bedrock cache TTL mapping
-_OPTIONS_CACHE_TTL: dict[str, CacheTTLType] = {
-    "30m": "1h"  # closest AWS Bedrock TTL covering 30 minutes
-}
+_OPTIONS_CACHE_TTL: frozendict[str, CacheTTLType] = frozendict(
+    {
+        "30m": "1h"  # closest AWS Bedrock TTL covering 30 minutes
+    }
+)
 
 
 def parse_tool_content(text: str) -> ToolResultContentBlockUnionTypeDef:

@@ -128,7 +128,9 @@ _CALL_WAVE: Final[int] = 8
 SERVED_KINDS: Final[tuple[str, ...]] = ("MANAGED", "VECTOR")
 
 #: Characters a search query may hold, per knowledge base generation.
-_QUERY_CHARACTERS_MAX: Final[dict[str, int]] = {"VECTOR": 1000, "MANAGED": 10000}
+_QUERY_CHARACTERS_MAX: Final[frozendict[str, int]] = frozendict(
+    {"VECTOR": 1000, "MANAGED": 10000}
+)
 
 #: Largest ``numberOfResults`` a retrieval accepts.
 _RESULTS_MAX: Final[int] = 100
@@ -147,19 +149,23 @@ _WRONG_KIND_MARKER: Final[str] = "dataSourceType"
 _ABSENT_STATUS: Final[str] = "NOT_FOUND"
 
 #: OpenAI comparison operator -> retrieval filter operator.
-_FILTER_OPERATORS: Final[dict[str, str]] = {
-    "eq": "equals",
-    "ne": "notEquals",
-    "gt": "greaterThan",
-    "gte": "greaterThanOrEquals",
-    "lt": "lessThan",
-    "lte": "lessThanOrEquals",
-    "in": "in",
-    "nin": "notIn",
-}
+_FILTER_OPERATORS: Final[frozendict[str, str]] = frozendict(
+    {
+        "eq": "equals",
+        "ne": "notEquals",
+        "gt": "greaterThan",
+        "gte": "greaterThanOrEquals",
+        "lt": "lessThan",
+        "lte": "lessThanOrEquals",
+        "in": "in",
+        "nin": "notIn",
+    }
+)
 
 #: OpenAI combinator -> retrieval filter combinator.
-_FILTER_COMBINATORS: Final[dict[str, str]] = {"and": "andAll", "or": "orAll"}
+_FILTER_COMBINATORS: Final[frozendict[str, str]] = frozendict(
+    {"and": "andAll", "or": "orAll"}
+)
 
 #: Document formats every knowledge base indexes as they stand.
 _DOCUMENT_MEDIA_TYPES: Final[frozenset[str]] = frozenset(
@@ -232,19 +238,21 @@ CAPABILITIES: Final = IndexCapabilities(
 )
 
 #: Document status reported by the service -> the status the API answers with.
-_DOCUMENT_STATUS: Final[dict[str, str]] = {
-    "INDEXED": "completed",
-    "PARTIALLY_INDEXED": "completed",
-    "METADATA_PARTIALLY_INDEXED": "completed",
-    "PENDING": "in_progress",
-    "STARTING": "in_progress",
-    "IN_PROGRESS": "in_progress",
-    "DELETING": "in_progress",
-    "DELETE_IN_PROGRESS": "in_progress",
-    "FAILED": "failed",
-    "METADATA_UPDATE_FAILED": "failed",
-    "IGNORED": "failed",
-}
+_DOCUMENT_STATUS: Final[frozendict[str, str]] = frozendict(
+    {
+        "INDEXED": "completed",
+        "PARTIALLY_INDEXED": "completed",
+        "METADATA_PARTIALLY_INDEXED": "completed",
+        "PENDING": "in_progress",
+        "STARTING": "in_progress",
+        "IN_PROGRESS": "in_progress",
+        "DELETING": "in_progress",
+        "DELETE_IN_PROGRESS": "in_progress",
+        "FAILED": "failed",
+        "METADATA_UPDATE_FAILED": "failed",
+        "IGNORED": "failed",
+    }
+)
 
 
 def is_knowledge_base_store(store_id: str) -> bool:

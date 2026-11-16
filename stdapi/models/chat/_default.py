@@ -3,7 +3,6 @@
 from asyncio import gather
 from contextlib import suppress
 from functools import partial
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
@@ -171,9 +170,7 @@ class ChatModel(ChatModelBase[Any, Any]):
     SUPPORTED_SYSTEM_TOOLS: ClassVar[frozenset[str]] = frozenset()
 
     #: Canonical (Anthropic-style) server tool name → Bedrock system tool name; consulted on all routes.
-    CANONICAL_TO_BEDROCK_TOOL_MAP: ClassVar[MappingProxyType[ServerTools, str]] = (
-        MappingProxyType({})
-    )
+    CANONICAL_TO_BEDROCK_TOOL_MAP: ClassVar[frozendict[ServerTools, str]] = frozendict()
 
     #: Refusal for a model whose backend serves no server tool at all; ``None`` (default) instead forwards an undeclared server tool as a stub ``toolSpec``, which Claude needs to accept ``toolResult`` blocks in multi-turn.
     SERVER_TOOLS_UNSERVED: ClassVar[NoServerTools | None] = None

@@ -45,16 +45,18 @@ if TYPE_CHECKING:
     )
 
 #: Bedrock stop-reason → OpenAI completion finish-reason.
-_FINISH_REASONS: dict[str, CompletionFinishReasonLiteral] = {
-    "end_turn": "stop",
-    "stop_sequence": "stop",
-    "max_tokens": "length",
-    "model_context_window_exceeded": "length",
-    "incomplete": "length",
-    "content_filtered": "content_filter",
-    "guardrail_intervened": "content_filter",
-    "malformed_model_output": "content_filter",
-}
+_FINISH_REASONS: frozendict[str, CompletionFinishReasonLiteral] = frozendict(
+    {
+        "end_turn": "stop",
+        "stop_sequence": "stop",
+        "max_tokens": "length",
+        "model_context_window_exceeded": "length",
+        "incomplete": "length",
+        "content_filtered": "content_filter",
+        "guardrail_intervened": "content_filter",
+        "malformed_model_output": "content_filter",
+    }
+)
 
 #: ``set_inference_configuration`` argument names a request extra cannot reuse
 _RESERVED_INFERENCE_PARAMS: frozenset[str] = frozenset(

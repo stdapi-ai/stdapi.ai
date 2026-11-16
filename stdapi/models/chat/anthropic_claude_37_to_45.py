@@ -1,7 +1,6 @@
 """Anthropic Claude 3.7 to 4.5 chat model implementation."""
 
 from re import compile as re_compile
-from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from stdapi.models.chat._anthropic_claude import (
@@ -17,13 +16,9 @@ if TYPE_CHECKING:
     from stdapi.types.anthropic_messages import ThinkingDisplay
 
 #: Reasoning models: Budget factor over the token max count
-_REASONING_EFFORT_BUDGET_FACTOR: dict[Effort, float] = {
-    "low": 0.25,
-    "medium": 0.5,
-    "high": 0.75,
-    "xhigh": 1.0,
-    "max": 1.0,
-}
+_REASONING_EFFORT_BUDGET_FACTOR: frozendict[Effort, float] = frozendict(
+    {"low": 0.25, "medium": 0.5, "high": 0.75, "xhigh": 1.0, "max": 1.0}
+)
 
 #: Minimal value for reasoning budget
 _REASONING_BUDGET_MINIMAL = 1024
@@ -76,7 +71,7 @@ class ChatModel(AnthropicClaudeChatModel):
     MATCHER = re_compile(
         r"^anthropic\.claude-(?:opus-(?:4-5|4-1|4)|sonnet-(?:4-5|4)|haiku-4-5|3-7-sonnet)-2"
     )
-    TOOL_BETA_FLAGS = MappingProxyType(
+    TOOL_BETA_FLAGS = frozendict(
         {
             "bash": _BETA_COMPUTER_USE_2025,
             "str_replace_editor": _BETA_COMPUTER_USE_2025,
@@ -85,7 +80,7 @@ class ChatModel(AnthropicClaudeChatModel):
             "memory": _BETA_CONTEXT_MANAGEMENT_2025,
         }
     )
-    SERVER_TOOL_NAME_TO_TYPE = MappingProxyType(
+    SERVER_TOOL_NAME_TO_TYPE = frozendict(
         {
             "bash": "bash_20250124",
             "str_replace_based_edit_tool": "text_editor_20250728",

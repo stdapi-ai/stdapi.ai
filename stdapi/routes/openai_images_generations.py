@@ -52,14 +52,16 @@ router = APIRouter(
 )
 
 #: Uniformize the OpenAI quality levels in only 3 levels
-_OPENAI_QUALITY_LEVELS: dict[str, ImageOutputQuality | None] = {
-    "standard": "medium",
-    "hd": "high",
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-    "auto": None,  # if not specified, use model default
-}
+_OPENAI_QUALITY_LEVELS: frozendict[str, ImageOutputQuality | None] = frozendict(
+    {
+        "standard": "medium",
+        "hd": "high",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "auto": None,  # if not specified, use model default
+    }
+)
 
 
 async def stream_generator(

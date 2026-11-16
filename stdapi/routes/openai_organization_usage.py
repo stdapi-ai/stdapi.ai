@@ -60,56 +60,55 @@ _router = APIRouter(
 )
 
 #: Default and maximum number of buckets a page holds, per bucket width.
-_PAGE_LIMITS: Final[dict[str, tuple[int, int]]] = {
-    "1m": (60, 1440),
-    "1h": (24, 168),
-    "1d": (7, 31),
-}
+_PAGE_LIMITS: Final[frozendict[str, tuple[int, int]]] = frozendict(
+    {"1m": (60, 1440), "1h": (24, 168), "1d": (7, 31)}
+)
 
 #: Same, for the costs endpoint, whose only bucket width is a day.
 _COSTS_LIMITS: Final[tuple[int, int]] = (7, 180)
 
 #: Grouping keys the published metrics carry a dimension for, by request key.
-_GROUP_DIMENSION: Final[dict[str, str]] = {
-    "model": "Model",
-    "api_key_id": "ApiKey",
-    "user_id": "User",
-    "source": "Operation",
-}
+_GROUP_DIMENSION: Final[frozendict[str, str]] = frozendict(
+    {"model": "Model", "api_key_id": "ApiKey", "user_id": "User", "source": "Operation"}
+)
 
 #: Why a grouping key or filter upstream declares cannot be answered here.
-_REFUSALS: Final[dict[str, str]] = {
-    "project_id": "this server has no projects, so usage is never attributed to one",
-    "project_ids": "this server has no projects, so usage is never attributed to one",
-    "batch": "Batch API usage is not reported by the usage endpoints at all; "
-    "its spend appears in '/v1/organization/costs'",
-    "service_tier": "the service tier a request ran under is not reported apart",
-    "size": "the size of a generated image is not reported",
-    "sizes": "the size of a generated image is not reported",
-    "context_level": "the context size of a web search is not reported",
-    "context_levels": "the context size of a web search is not reported",
-    "vector_store_id": "file searches are not reported per vector store",
-    "vector_store_ids": "file searches are not reported per vector store",
-    "line_item": "costs are not reported per product line item",
-    "api_key_id": "this server issues no per-caller API keys ('tenant_api_keys')",
-    "api_key_ids": "this server issues no per-caller API keys ('tenant_api_keys')",
-    "user_id": "usage is not reported per user on this server "
-    "('cloudwatch_metrics_user_dimension')",
-    "user_ids": "usage is not reported per user on this server "
-    "('cloudwatch_metrics_user_dimension')",
-}
+_REFUSALS: Final[frozendict[str, str]] = frozendict(
+    {
+        "project_id": "this server has no projects, so usage is never attributed to one",
+        "project_ids": "this server has no projects, so usage is never attributed to one",
+        "batch": "Batch API usage is not reported by the usage endpoints at all; "
+        "its spend appears in '/v1/organization/costs'",
+        "service_tier": "the service tier a request ran under is not reported apart",
+        "size": "the size of a generated image is not reported",
+        "sizes": "the size of a generated image is not reported",
+        "context_level": "the context size of a web search is not reported",
+        "context_levels": "the context size of a web search is not reported",
+        "vector_store_id": "file searches are not reported per vector store",
+        "vector_store_ids": "file searches are not reported per vector store",
+        "line_item": "costs are not reported per product line item",
+        "api_key_id": "this server issues no per-caller API keys ('tenant_api_keys')",
+        "api_key_ids": "this server issues no per-caller API keys ('tenant_api_keys')",
+        "user_id": "usage is not reported per user on this server "
+        "('cloudwatch_metrics_user_dimension')",
+        "user_ids": "usage is not reported per user on this server "
+        "('cloudwatch_metrics_user_dimension')",
+    }
+)
 
 #: Image sources, and the operation each one is recorded under.
-_IMAGE_SOURCES: Final[dict[str, str]] = {
-    "image.generation": "images.generations",
-    "image.edit": "images.edits",
-    "image.variation": "images.variations",
-}
+_IMAGE_SOURCES: Final[frozendict[str, str]] = frozendict(
+    {
+        "image.generation": "images.generations",
+        "image.edit": "images.edits",
+        "image.variation": "images.variations",
+    }
+)
 
 #: Operation of an image source, reversed.
-_IMAGE_OPERATIONS: Final[dict[str, str]] = {
-    operation: source for source, operation in _IMAGE_SOURCES.items()
-}
+_IMAGE_OPERATIONS: Final[frozendict[str, str]] = frozendict(
+    {operation: source for source, operation in _IMAGE_SOURCES.items()}
+)
 
 #: Metric counting the backend invocations behind a usage figure.
 _REQUESTS: Final = "Requests"
@@ -145,75 +144,80 @@ _COMPLETION_OPERATIONS: Final = (
     "realtime",
 )
 
-_ENDPOINTS: Final[dict[str, _Endpoint]] = {
-    "completions": _Endpoint(
-        result=CompletionsResult,
-        operations=_COMPLETION_OPERATIONS,
-        quantities={
-            "InputTokens": "input_tokens",
-            "OutputTokens": "output_tokens",
-            "CachedTokens": "input_cached_tokens",
-            "CacheWriteTokens": "input_cache_write_tokens",
-            _REQUESTS: "num_model_requests",
-        },
-        group_keys=frozenset({"model"}),
-    ),
-    "embeddings": _Endpoint(
-        result=EmbeddingsResult,
-        operations=("embeddings",),
-        quantities={"InputTokens": "input_tokens", _REQUESTS: "num_model_requests"},
-        group_keys=frozenset({"model"}),
-    ),
-    "moderations": _Endpoint(
-        result=ModerationsResult,
-        operations=("moderations",),
-        quantities={"InputTokens": "input_tokens", _REQUESTS: "num_model_requests"},
-        group_keys=frozenset({"model"}),
-        # A guardrail and Amazon Comprehend are moderating backends here rather
-        # than a filter around another call, and neither publishes input
-        # tokens, so every record under the operation is a moderation.
-        requests_follow_quantities=False,
-    ),
-    "images": _Endpoint(
-        result=ImagesResult,
-        operations=tuple(_IMAGE_SOURCES.values()),
-        quantities={"OutputImages": "images", _REQUESTS: "num_model_requests"},
-        group_keys=frozenset({"model", "source"}),
-    ),
-    "audio_speeches": _Endpoint(
-        result=AudioSpeechesResult,
-        operations=("audio.speech",),
-        quantities={"InputCharacters": "characters", _REQUESTS: "num_model_requests"},
-        group_keys=frozenset({"model"}),
-    ),
-    "audio_transcriptions": _Endpoint(
-        result=AudioTranscriptionsResult,
-        operations=("audio.transcriptions", "audio.translations"),
-        quantities={"InputSeconds": "seconds", _REQUESTS: "num_model_requests"},
-        group_keys=frozenset({"model"}),
-    ),
-    "file_search_calls": _Endpoint(
-        result=FileSearchesResult,
-        operations=("vector_stores.search",),
-        quantities={_REQUESTS: "num_requests"},
-        group_keys=frozenset(),
-        # The search itself is the only record the operation carries, and the
-        # invocation count is the only quantity it publishes.
-        requests_follow_quantities=False,
-    ),
-    "web_search_calls": _Endpoint(
-        result=WebSearchesResult,
-        # Web search is recorded as grounding requests, and only ever during a
-        # model invocation: 'SearchUnits' is the rerank and knowledge base
-        # retrieval unit, which this endpoint does not report.
-        operations=_COMPLETION_OPERATIONS,
-        quantities={
-            "GroundingRequests": "num_requests",
-            _REQUESTS: "num_model_requests",
-        },
-        group_keys=frozenset({"model"}),
-    ),
-}
+_ENDPOINTS: Final[frozendict[str, _Endpoint]] = frozendict(
+    {
+        "completions": _Endpoint(
+            result=CompletionsResult,
+            operations=_COMPLETION_OPERATIONS,
+            quantities={
+                "InputTokens": "input_tokens",
+                "OutputTokens": "output_tokens",
+                "CachedTokens": "input_cached_tokens",
+                "CacheWriteTokens": "input_cache_write_tokens",
+                _REQUESTS: "num_model_requests",
+            },
+            group_keys=frozenset({"model"}),
+        ),
+        "embeddings": _Endpoint(
+            result=EmbeddingsResult,
+            operations=("embeddings",),
+            quantities={"InputTokens": "input_tokens", _REQUESTS: "num_model_requests"},
+            group_keys=frozenset({"model"}),
+        ),
+        "moderations": _Endpoint(
+            result=ModerationsResult,
+            operations=("moderations",),
+            quantities={"InputTokens": "input_tokens", _REQUESTS: "num_model_requests"},
+            group_keys=frozenset({"model"}),
+            # A guardrail and Amazon Comprehend are moderating backends here rather
+            # than a filter around another call, and neither publishes input
+            # tokens, so every record under the operation is a moderation.
+            requests_follow_quantities=False,
+        ),
+        "images": _Endpoint(
+            result=ImagesResult,
+            operations=tuple(_IMAGE_SOURCES.values()),
+            quantities={"OutputImages": "images", _REQUESTS: "num_model_requests"},
+            group_keys=frozenset({"model", "source"}),
+        ),
+        "audio_speeches": _Endpoint(
+            result=AudioSpeechesResult,
+            operations=("audio.speech",),
+            quantities={
+                "InputCharacters": "characters",
+                _REQUESTS: "num_model_requests",
+            },
+            group_keys=frozenset({"model"}),
+        ),
+        "audio_transcriptions": _Endpoint(
+            result=AudioTranscriptionsResult,
+            operations=("audio.transcriptions", "audio.translations"),
+            quantities={"InputSeconds": "seconds", _REQUESTS: "num_model_requests"},
+            group_keys=frozenset({"model"}),
+        ),
+        "file_search_calls": _Endpoint(
+            result=FileSearchesResult,
+            operations=("vector_stores.search",),
+            quantities={_REQUESTS: "num_requests"},
+            group_keys=frozenset(),
+            # The search itself is the only record the operation carries, and the
+            # invocation count is the only quantity it publishes.
+            requests_follow_quantities=False,
+        ),
+        "web_search_calls": _Endpoint(
+            result=WebSearchesResult,
+            # Web search is recorded as grounding requests, and only ever during a
+            # model invocation: 'SearchUnits' is the rerank and knowledge base
+            # retrieval unit, which this endpoint does not report.
+            operations=_COMPLETION_OPERATIONS,
+            quantities={
+                "GroundingRequests": "num_requests",
+                _REQUESTS: "num_model_requests",
+            },
+            group_keys=frozenset({"model"}),
+        ),
+    }
+)
 
 #: Answered pages, keyed by the normalised query, with their expiry.
 _CACHE: OrderedDict[str, tuple[float, UsagePage]] = OrderedDict()

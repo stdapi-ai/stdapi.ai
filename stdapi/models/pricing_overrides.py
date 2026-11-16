@@ -31,101 +31,103 @@ from typing import Final
 from stdapi.pricing import Dimension
 
 #: Manual model-ID-to-price-key overrides where automatic normalization mismatches.
-MODEL_KEY_OVERRIDES: Final[dict[str, str]] = {
-    "openai.gpt-oss-120b-1:0": "gptoss120b",
-    "openai.gpt-oss-20b-1:0": "gptoss20b",
-    "deepseek.v3.2": "deepseekv32",
-    # Bedrock's ID for DeepSeek-V3.1 -- normalize_model_key() yields "v3",
-    # but the Price List `model` attribute is "DeepSeek V3.1".
-    "deepseek.v3-v1:0": "deepseekv31",
-    # Mantle IDs whose Price List `model` attribute is the display name
-    # without the "-instruct" suffix (mantle rows keyed per invocation API).
-    "deepseek.v3.1": "deepseekv31",
-    "qwen.qwen3-coder-30b-a3b-instruct": "qwen3coder30ba3b",
-    "qwen.qwen3-coder-480b-a35b-instruct": "qwen3coder480ba35b",
-    "qwen.qwen3-next-80b-a3b-instruct": "qwen3next80ba3b",
-    "qwen.qwen3-vl-235b-a22b-instruct": "qwen3vl235ba22b",
-    # Price List `model` attribute is the display name "Grok 4.7".
-    "xai.grok-4.7": "grok47",
-    # Dated snapshot aliases billed at the bare model's rate.
-    "openai.gpt-5.4-2026-03-05": "gpt54",
-    "openai.gpt-5.5-2026-04-23": "gpt55",
-    "amazon.nova-2-omni-v1:0": "nova20omni",
-    "amazon.nova-2-pro-v1:0": "nova20pro",
-    # Marketplace-listed -- keyed from the listing name (servicename).
-    "stability.sd3-large-v1:0": "stablediffusion3largev10",
-    "stability.sd3-5-large-v1:0": "stablediffusion35largev10",
-    "cohere.command-r-v1:0": "coherecommandr",
-    "cohere.command-r-plus-v1:0": "coherecommandr+",
-    "twelvelabs.pegasus-1-2-v1:0": "twelvelabspegasus12",
-    "twelvelabs.pegasus-1-5-v1:0": "twelvelabspegasus15",
-    "twelvelabs.marengo-embed-3-0-v1:0": "twelvelabsmarengoembed30",
-    "twelvelabs.marengo-embed-2-7-v1:0": "twelvelabsmarengoembed27",
-    "google.gemma-3-12b-it": "gemma312b",
-    "google.gemma-3-27b-it": "gemma327b",
-    "google.gemma-3-4b-it": "gemma34b",
-    "mistral.mistral-large-3-675b-instruct": "mistrallarge3",
-    "mistral.ministral-3-14b-instruct": "ministral14b30",
-    "mistral.ministral-3-8b-instruct": "ministral8b30",
-    "mistral.ministral-3-3b-instruct": "ministral3b30",
-    "mistral.devstral-2-123b": "devstral",
-    "mistral.magistral-small-2509": "magistralsmall12",
-    "mistral.voxtral-mini-3b-2507": "voxtralmini10",
-    "mistral.voxtral-small-24b-2507": "voxtralsmall10",
-    "mistral.mistral-7b-instruct-v0:2": "mistral7b",
-    "mistral.mixtral-8x7b-instruct-v0:1": "mixtral8x7b",
-    "mistral.mistral-large-2402-v1:0": "mistrallarge",
-    "mistral.mistral-small-2402-v1:0": "mistralsmall",
-    "meta.llama3-8b-instruct-v1:0": "llama38b",
-    "meta.llama3-70b-instruct-v1:0": "llama370b",
-    "meta.llama3-1-8b-instruct-v1:0": "llama318b",
-    "meta.llama3-1-70b-instruct-v1:0": "llama3170b",
-    "meta.llama3-3-70b-instruct-v1:0": "llama3370b",
-    "meta.llama4-scout-17b-instruct-v1:0": "llama4scout17b",
-    "meta.llama4-maverick-17b-instruct-v1:0": "llama4maverick17b",
-    "writer.palmyra-vision-7b": "writerpalmyravision7b",
-    "nvidia.nemotron-super-3-120b": "nvidianemotron3super120ba12b",
-    "nvidia.nemotron-nano-9b-v2": "nvidianemotronnano2",
-    "nvidia.nemotron-nano-12b-v2": "nvidianemotronnano2vl",
-    "amazon.nova-2-lite-v1:0": "nova20lite",
-    "amazon.nova-2-sonic-v1:0": "novasonic20",
-    # No Price List `model` attribute at all: values below are
-    # normalize_usagetype_model()'s output, not normalize_model_key()'s.
-    "amazon.titan-embed-text-v1": "titanembeddingsg1text",
-    "amazon.titan-embed-text-v2:0": "titanembeddingv2text",
-    "amazon.nova-2-multimodal-embeddings-v1:0": "novamultimodalembeddings",
-    "amazon.rerank-v1:0": "amazonrerankv1searchunits",
-    "amazon.titan-text-express-v1": "titantextg1express",
-    "amazon.titan-text-lite-v1": "titantextg1lite",
-    "amazon.titan-embed-image-v1": "titanembeddingsg1",
-    # normalize_model_key() strips "V2" as a version suffix but not "G1".
-    "amazon.titan-image-generator-v1": "titanimagegeneratorg1",
-    # Deprecated/legacy IDs (stdapi/models/deprecation.py): still invoked as-is
-    # where AWS hasn't retired them, so they need pricing coverage of their own.
-    "anthropic.claude-v2": "claude20",
-    "anthropic.claude-v2:1": "claude21",
-    "meta.llama3-1-405b-instruct-v1:0": "llama31405b",
-    "meta.llama3-2-1b-instruct-v1:0": "llama321b",
-    "meta.llama3-2-3b-instruct-v1:0": "llama323b",
-    "meta.llama3-2-11b-instruct-v1:0": "llama3211b",
-    "meta.llama3-2-90b-instruct-v1:0": "llama3290b",
-    # Marketplace-listed legacy models -- naming diverges from normalize_model_key.
-    "cohere.embed-english-v3": "cohereembed3modelenglish",
-    "cohere.embed-multilingual-v3": "cohereembedmodel3multilingual",
-    "cohere.embed-v4:0": "cohereembed4model",
-    "cohere.rerank-v3-5:0": "coherererankv35",
-    "cohere.command-text-v14": "coheregeneratemodelcommand",
-    "cohere.command-light-text-v14": "coheregeneratemodelcommandlight",
-    "ai21.j2-mid-v1": "jurassic2mid",
-    "ai21.j2-ultra-v1": "jurassic2ultra",
-    "ai21.j2-grande-instruct": "jurassic2mid",
-    "ai21.j2-jumbo-instruct": "jurassic2ultra",
-    "ai21.jamba-instruct-v1:0": "jambainstruct",
-    "meta.llama2-13b-chat-v1": "metallama2chat13b",
-    "meta.llama2-70b-chat-v1": "metallama2chat70b",
-    "meta.llama2-13b-v1": "metallama2chat13b",
-    "meta.llama2-70b-v1": "metallama2chat70b",
-}
+MODEL_KEY_OVERRIDES: Final[frozendict[str, str]] = frozendict(
+    {
+        "openai.gpt-oss-120b-1:0": "gptoss120b",
+        "openai.gpt-oss-20b-1:0": "gptoss20b",
+        "deepseek.v3.2": "deepseekv32",
+        # Bedrock's ID for DeepSeek-V3.1 -- normalize_model_key() yields "v3",
+        # but the Price List `model` attribute is "DeepSeek V3.1".
+        "deepseek.v3-v1:0": "deepseekv31",
+        # Mantle IDs whose Price List `model` attribute is the display name
+        # without the "-instruct" suffix (mantle rows keyed per invocation API).
+        "deepseek.v3.1": "deepseekv31",
+        "qwen.qwen3-coder-30b-a3b-instruct": "qwen3coder30ba3b",
+        "qwen.qwen3-coder-480b-a35b-instruct": "qwen3coder480ba35b",
+        "qwen.qwen3-next-80b-a3b-instruct": "qwen3next80ba3b",
+        "qwen.qwen3-vl-235b-a22b-instruct": "qwen3vl235ba22b",
+        # Price List `model` attribute is the display name "Grok 4.7".
+        "xai.grok-4.7": "grok47",
+        # Dated snapshot aliases billed at the bare model's rate.
+        "openai.gpt-5.4-2026-03-05": "gpt54",
+        "openai.gpt-5.5-2026-04-23": "gpt55",
+        "amazon.nova-2-omni-v1:0": "nova20omni",
+        "amazon.nova-2-pro-v1:0": "nova20pro",
+        # Marketplace-listed -- keyed from the listing name (servicename).
+        "stability.sd3-large-v1:0": "stablediffusion3largev10",
+        "stability.sd3-5-large-v1:0": "stablediffusion35largev10",
+        "cohere.command-r-v1:0": "coherecommandr",
+        "cohere.command-r-plus-v1:0": "coherecommandr+",
+        "twelvelabs.pegasus-1-2-v1:0": "twelvelabspegasus12",
+        "twelvelabs.pegasus-1-5-v1:0": "twelvelabspegasus15",
+        "twelvelabs.marengo-embed-3-0-v1:0": "twelvelabsmarengoembed30",
+        "twelvelabs.marengo-embed-2-7-v1:0": "twelvelabsmarengoembed27",
+        "google.gemma-3-12b-it": "gemma312b",
+        "google.gemma-3-27b-it": "gemma327b",
+        "google.gemma-3-4b-it": "gemma34b",
+        "mistral.mistral-large-3-675b-instruct": "mistrallarge3",
+        "mistral.ministral-3-14b-instruct": "ministral14b30",
+        "mistral.ministral-3-8b-instruct": "ministral8b30",
+        "mistral.ministral-3-3b-instruct": "ministral3b30",
+        "mistral.devstral-2-123b": "devstral",
+        "mistral.magistral-small-2509": "magistralsmall12",
+        "mistral.voxtral-mini-3b-2507": "voxtralmini10",
+        "mistral.voxtral-small-24b-2507": "voxtralsmall10",
+        "mistral.mistral-7b-instruct-v0:2": "mistral7b",
+        "mistral.mixtral-8x7b-instruct-v0:1": "mixtral8x7b",
+        "mistral.mistral-large-2402-v1:0": "mistrallarge",
+        "mistral.mistral-small-2402-v1:0": "mistralsmall",
+        "meta.llama3-8b-instruct-v1:0": "llama38b",
+        "meta.llama3-70b-instruct-v1:0": "llama370b",
+        "meta.llama3-1-8b-instruct-v1:0": "llama318b",
+        "meta.llama3-1-70b-instruct-v1:0": "llama3170b",
+        "meta.llama3-3-70b-instruct-v1:0": "llama3370b",
+        "meta.llama4-scout-17b-instruct-v1:0": "llama4scout17b",
+        "meta.llama4-maverick-17b-instruct-v1:0": "llama4maverick17b",
+        "writer.palmyra-vision-7b": "writerpalmyravision7b",
+        "nvidia.nemotron-super-3-120b": "nvidianemotron3super120ba12b",
+        "nvidia.nemotron-nano-9b-v2": "nvidianemotronnano2",
+        "nvidia.nemotron-nano-12b-v2": "nvidianemotronnano2vl",
+        "amazon.nova-2-lite-v1:0": "nova20lite",
+        "amazon.nova-2-sonic-v1:0": "novasonic20",
+        # No Price List `model` attribute at all: values below are
+        # normalize_usagetype_model()'s output, not normalize_model_key()'s.
+        "amazon.titan-embed-text-v1": "titanembeddingsg1text",
+        "amazon.titan-embed-text-v2:0": "titanembeddingv2text",
+        "amazon.nova-2-multimodal-embeddings-v1:0": "novamultimodalembeddings",
+        "amazon.rerank-v1:0": "amazonrerankv1searchunits",
+        "amazon.titan-text-express-v1": "titantextg1express",
+        "amazon.titan-text-lite-v1": "titantextg1lite",
+        "amazon.titan-embed-image-v1": "titanembeddingsg1",
+        # normalize_model_key() strips "V2" as a version suffix but not "G1".
+        "amazon.titan-image-generator-v1": "titanimagegeneratorg1",
+        # Deprecated/legacy IDs (stdapi/models/deprecation.py): still invoked as-is
+        # where AWS hasn't retired them, so they need pricing coverage of their own.
+        "anthropic.claude-v2": "claude20",
+        "anthropic.claude-v2:1": "claude21",
+        "meta.llama3-1-405b-instruct-v1:0": "llama31405b",
+        "meta.llama3-2-1b-instruct-v1:0": "llama321b",
+        "meta.llama3-2-3b-instruct-v1:0": "llama323b",
+        "meta.llama3-2-11b-instruct-v1:0": "llama3211b",
+        "meta.llama3-2-90b-instruct-v1:0": "llama3290b",
+        # Marketplace-listed legacy models -- naming diverges from normalize_model_key.
+        "cohere.embed-english-v3": "cohereembed3modelenglish",
+        "cohere.embed-multilingual-v3": "cohereembedmodel3multilingual",
+        "cohere.embed-v4:0": "cohereembed4model",
+        "cohere.rerank-v3-5:0": "coherererankv35",
+        "cohere.command-text-v14": "coheregeneratemodelcommand",
+        "cohere.command-light-text-v14": "coheregeneratemodelcommandlight",
+        "ai21.j2-mid-v1": "jurassic2mid",
+        "ai21.j2-ultra-v1": "jurassic2ultra",
+        "ai21.j2-grande-instruct": "jurassic2mid",
+        "ai21.j2-jumbo-instruct": "jurassic2ultra",
+        "ai21.jamba-instruct-v1:0": "jambainstruct",
+        "meta.llama2-13b-chat-v1": "metallama2chat13b",
+        "meta.llama2-70b-chat-v1": "metallama2chat70b",
+        "meta.llama2-13b-v1": "metallama2chat13b",
+        "meta.llama2-70b-v1": "metallama2chat70b",
+    }
+)
 
 #: Regions the AWS pricing page lists for the DEFAULT_MODEL_PRICES rates.
 DEFAULT_MODEL_PRICE_REGIONS: Final[tuple[str, ...]] = (
@@ -135,352 +137,477 @@ DEFAULT_MODEL_PRICE_REGIONS: Final[tuple[str, ...]] = (
 )
 
 #: Pricing-page per-generation fallback rates, absent from the Price List API.
-DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
-    "stability.stable-image-remove-background-v1:0": {Dimension.OUTPUT_IMAGES: "0.07"},
-    "stability.stable-image-erase-object-v1:0": {Dimension.OUTPUT_IMAGES: "0.07"},
-    "stability.stable-image-control-structure-v1:0": {Dimension.OUTPUT_IMAGES: "0.07"},
-    "stability.stable-image-control-sketch-v1:0": {Dimension.OUTPUT_IMAGES: "0.07"},
-    "stability.stable-image-style-guide-v1:0": {Dimension.OUTPUT_IMAGES: "0.07"},
-    "stability.stable-image-search-replace-v1:0": {Dimension.OUTPUT_IMAGES: "0.07"},
-    "stability.stable-image-inpaint-v1:0": {Dimension.OUTPUT_IMAGES: "0.07"},
-    "stability.stable-image-search-recolor-v1:0": {Dimension.OUTPUT_IMAGES: "0.07"},
-    "stability.stable-style-transfer-v1:0": {Dimension.OUTPUT_IMAGES: "0.08"},
-    "stability.stable-conservative-upscale-v1:0": {Dimension.OUTPUT_IMAGES: "0.40"},
-    "stability.stable-creative-upscale-v1:0": {Dimension.OUTPUT_IMAGES: "0.60"},
-    "stability.stable-fast-upscale-v1:0": {Dimension.OUTPUT_IMAGES: "0.03"},
-    "stability.stable-outpaint-v1:0": {Dimension.OUTPUT_IMAGES: "0.06"},
-    # "Kimi K3.1 Pro - Highspeed" model card (verified 2026-11-16), its "US CRIS"
-    # and "IN CRIS" row: no Price List row, no In-Region option, one table for
-    # the whole 1M window.
-    "moonshotai.kimi-k3.1": {
-        Dimension.INPUT_TOKENS: "0.0000044",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000055",
-        Dimension.CACHE_READ_TOKENS: "0.00000022",
-        Dimension.OUTPUT_TOKENS: "0.000022",
-    },
-    # OpenAI frontier models: model-card In-Region per-1M rates / 1e6 (verified
-    # 2026-09-22), absent from the Price List API outside GovCloud. These are
-    # the 272K short-context tier; the long one is priced below.
-    # The cards price Geo cross-Region identically to In-Region, so these also
-    # serve a "us."/"eu." profile; the Global profile has its own table below.
-    # Dated aliases share these via MODEL_KEY_OVERRIDES.
-    "openai.gpt-5.4": {
-        Dimension.INPUT_TOKENS: "0.00000275",
-        Dimension.CACHE_READ_TOKENS: "0.000000275",
-        Dimension.OUTPUT_TOKENS: "0.0000165",
-    },
-    "openai.gpt-5.5": {
-        Dimension.INPUT_TOKENS: "0.0000055",
-        Dimension.CACHE_READ_TOKENS: "0.00000055",
-        Dimension.OUTPUT_TOKENS: "0.000033",
-    },
-    # Daybreak Red.
-    "openai.gpt-5.6-cyber": {
-        Dimension.INPUT_TOKENS: "0.00001375",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000171875",
-        Dimension.CACHE_READ_TOKENS: "0.000001375",
-        Dimension.OUTPUT_TOKENS: "0.0000825",
-    },
-    "openai.gpt-5.6-luna": {
-        Dimension.INPUT_TOKENS: "0.00000022",
-        Dimension.CACHE_WRITE_TOKENS: "0.000000275",
-        Dimension.CACHE_READ_TOKENS: "0.000000022",
-        Dimension.OUTPUT_TOKENS: "0.00000132",
-    },
-    "openai.gpt-5.6-sol": {
-        Dimension.INPUT_TOKENS: "0.0000044",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000055",
-        Dimension.CACHE_READ_TOKENS: "0.00000044",
-        Dimension.OUTPUT_TOKENS: "0.000022",
-    },
-    "openai.gpt-5.6-terra": {
-        Dimension.INPUT_TOKENS: "0.0000022",
-        Dimension.CACHE_WRITE_TOKENS: "0.00000275",
-        Dimension.CACHE_READ_TOKENS: "0.00000022",
-        Dimension.OUTPUT_TOKENS: "0.0000132",
-    },
-    # Daybreak Blue: same rates as GPT-5.6 Sol above.
-    "openai.gpt-daybreak-blue-5.6-sol": {
-        Dimension.INPUT_TOKENS: "0.0000044",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000055",
-        Dimension.CACHE_READ_TOKENS: "0.00000044",
-        Dimension.OUTPUT_TOKENS: "0.000022",
-    },
-    "openai.gpt-6-astra": {
-        Dimension.INPUT_TOKENS: "0.000011",
-        Dimension.CACHE_WRITE_TOKENS: "0.00001375",
-        Dimension.CACHE_READ_TOKENS: "0.0000011",
-        Dimension.OUTPUT_TOKENS: "0.000055",
-    },
-    # Model card (verified 2026-09-29), in all four tables; same layout as Astra.
-    "openai.gpt-6-luna": {
-        Dimension.INPUT_TOKENS: "0.00000011",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000001375",
-        Dimension.CACHE_READ_TOKENS: "0.000000011",
-        Dimension.OUTPUT_TOKENS: "0.00000055",
-    },
-    "openai.gpt-6-sol": {
-        Dimension.INPUT_TOKENS: "0.0000022",
-        Dimension.CACHE_WRITE_TOKENS: "0.00000275",
-        Dimension.CACHE_READ_TOKENS: "0.00000022",
-        Dimension.OUTPUT_TOKENS: "0.000011",
-    },
-    # Model card (verified 2026-09-30): "Regional (Mantle in IAD)" and "US CRIS"
-    # rows; its cache read is 5% of input where GPT-6 Sol's is 10%.
-    "openai.gpt-6.1-sol": {
-        Dimension.INPUT_TOKENS: "0.0000022",
-        Dimension.CACHE_WRITE_TOKENS: "0.00000275",
-        Dimension.CACHE_READ_TOKENS: "0.00000011",
-        Dimension.OUTPUT_TOKENS: "0.000011",
-    },
-    # Model card (verified 2026-11-16), in all four tables: half GPT-6.1 Sol's
-    # input and output rate.
-    "openai.gpt-6.1-terra": {
-        Dimension.INPUT_TOKENS: "0.0000011",
-        Dimension.CACHE_WRITE_TOKENS: "0.000001375",
-        Dimension.CACHE_READ_TOKENS: "0.000000055",
-        Dimension.OUTPUT_TOKENS: "0.0000055",
-    },
-    # No card or Price List row (verified 2026-09-24): Z.ai's API per-1M rates
-    # / 1e6. Bedrock bills Z.ai's direct rate for GLM 5, 4.7 and 4.7 Flash in
-    # these regions; it publishes no cache rate for them.
-    "zai.glm-4.6": {
-        Dimension.INPUT_TOKENS: "0.0000006",
-        Dimension.OUTPUT_TOKENS: "0.0000022",
-    },
-    # Bedrock pricing page "GLM 5.3" panel (verified 2026-11-16), its "US CRIS"
-    # row: no Price List row, a card without rates, no In-Region option, and a
-    # 30-minute cache write.
-    "zai.glm-5.3": {
-        Dimension.INPUT_TOKENS: "0.000001848",
-        Dimension.CACHE_WRITE_TOKENS: "0.00000231",
-        Dimension.CACHE_READ_TOKENS: "0.0000003432",
-        Dimension.OUTPUT_TOKENS: "0.000005808",
-    },
-}
+DEFAULT_MODEL_PRICES: Final[frozendict[str, frozendict[Dimension, str]]] = frozendict(
+    {
+        "stability.stable-image-remove-background-v1:0": frozendict(
+            {Dimension.OUTPUT_IMAGES: "0.07"}
+        ),
+        "stability.stable-image-erase-object-v1:0": frozendict(
+            {Dimension.OUTPUT_IMAGES: "0.07"}
+        ),
+        "stability.stable-image-control-structure-v1:0": frozendict(
+            {Dimension.OUTPUT_IMAGES: "0.07"}
+        ),
+        "stability.stable-image-control-sketch-v1:0": frozendict(
+            {Dimension.OUTPUT_IMAGES: "0.07"}
+        ),
+        "stability.stable-image-style-guide-v1:0": frozendict(
+            {Dimension.OUTPUT_IMAGES: "0.07"}
+        ),
+        "stability.stable-image-search-replace-v1:0": frozendict(
+            {Dimension.OUTPUT_IMAGES: "0.07"}
+        ),
+        "stability.stable-image-inpaint-v1:0": frozendict(
+            {Dimension.OUTPUT_IMAGES: "0.07"}
+        ),
+        "stability.stable-image-search-recolor-v1:0": frozendict(
+            {Dimension.OUTPUT_IMAGES: "0.07"}
+        ),
+        "stability.stable-style-transfer-v1:0": frozendict(
+            {Dimension.OUTPUT_IMAGES: "0.08"}
+        ),
+        "stability.stable-conservative-upscale-v1:0": frozendict(
+            {Dimension.OUTPUT_IMAGES: "0.40"}
+        ),
+        "stability.stable-creative-upscale-v1:0": frozendict(
+            {Dimension.OUTPUT_IMAGES: "0.60"}
+        ),
+        "stability.stable-fast-upscale-v1:0": frozendict(
+            {Dimension.OUTPUT_IMAGES: "0.03"}
+        ),
+        "stability.stable-outpaint-v1:0": frozendict({Dimension.OUTPUT_IMAGES: "0.06"}),
+        # "Kimi K3.1 Pro - Highspeed" model card (verified 2026-11-16), its "US CRIS"
+        # and "IN CRIS" row: no Price List row, no In-Region option, one table for
+        # the whole 1M window.
+        "moonshotai.kimi-k3.1": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000044",
+                Dimension.CACHE_WRITE_TOKENS: "0.0000055",
+                Dimension.CACHE_READ_TOKENS: "0.00000022",
+                Dimension.OUTPUT_TOKENS: "0.000022",
+            }
+        ),
+        # OpenAI frontier models: model-card In-Region per-1M rates / 1e6 (verified
+        # 2026-09-22), absent from the Price List API outside GovCloud. These are
+        # the 272K short-context tier; the long one is priced below.
+        # The cards price Geo cross-Region identically to In-Region, so these also
+        # serve a "us."/"eu." profile; the Global profile has its own table below.
+        # Dated aliases share these via MODEL_KEY_OVERRIDES.
+        "openai.gpt-5.4": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.00000275",
+                Dimension.CACHE_READ_TOKENS: "0.000000275",
+                Dimension.OUTPUT_TOKENS: "0.0000165",
+            }
+        ),
+        "openai.gpt-5.5": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000055",
+                Dimension.CACHE_READ_TOKENS: "0.00000055",
+                Dimension.OUTPUT_TOKENS: "0.000033",
+            }
+        ),
+        # Daybreak Red.
+        "openai.gpt-5.6-cyber": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.00001375",
+                Dimension.CACHE_WRITE_TOKENS: "0.0000171875",
+                Dimension.CACHE_READ_TOKENS: "0.000001375",
+                Dimension.OUTPUT_TOKENS: "0.0000825",
+            }
+        ),
+        "openai.gpt-5.6-luna": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.00000022",
+                Dimension.CACHE_WRITE_TOKENS: "0.000000275",
+                Dimension.CACHE_READ_TOKENS: "0.000000022",
+                Dimension.OUTPUT_TOKENS: "0.00000132",
+            }
+        ),
+        "openai.gpt-5.6-sol": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000044",
+                Dimension.CACHE_WRITE_TOKENS: "0.0000055",
+                Dimension.CACHE_READ_TOKENS: "0.00000044",
+                Dimension.OUTPUT_TOKENS: "0.000022",
+            }
+        ),
+        "openai.gpt-5.6-terra": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000022",
+                Dimension.CACHE_WRITE_TOKENS: "0.00000275",
+                Dimension.CACHE_READ_TOKENS: "0.00000022",
+                Dimension.OUTPUT_TOKENS: "0.0000132",
+            }
+        ),
+        # Daybreak Blue: same rates as GPT-5.6 Sol above.
+        "openai.gpt-daybreak-blue-5.6-sol": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000044",
+                Dimension.CACHE_WRITE_TOKENS: "0.0000055",
+                Dimension.CACHE_READ_TOKENS: "0.00000044",
+                Dimension.OUTPUT_TOKENS: "0.000022",
+            }
+        ),
+        "openai.gpt-6-astra": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.000011",
+                Dimension.CACHE_WRITE_TOKENS: "0.00001375",
+                Dimension.CACHE_READ_TOKENS: "0.0000011",
+                Dimension.OUTPUT_TOKENS: "0.000055",
+            }
+        ),
+        # Model card (verified 2026-09-29), in all four tables; same layout as Astra.
+        "openai.gpt-6-luna": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.00000011",
+                Dimension.CACHE_WRITE_TOKENS: "0.0000001375",
+                Dimension.CACHE_READ_TOKENS: "0.000000011",
+                Dimension.OUTPUT_TOKENS: "0.00000055",
+            }
+        ),
+        "openai.gpt-6-sol": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000022",
+                Dimension.CACHE_WRITE_TOKENS: "0.00000275",
+                Dimension.CACHE_READ_TOKENS: "0.00000022",
+                Dimension.OUTPUT_TOKENS: "0.000011",
+            }
+        ),
+        # Model card (verified 2026-09-30): "Regional (Mantle in IAD)" and "US CRIS"
+        # rows; its cache read is 5% of input where GPT-6 Sol's is 10%.
+        "openai.gpt-6.1-sol": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000022",
+                Dimension.CACHE_WRITE_TOKENS: "0.00000275",
+                Dimension.CACHE_READ_TOKENS: "0.00000011",
+                Dimension.OUTPUT_TOKENS: "0.000011",
+            }
+        ),
+        # Model card (verified 2026-11-16), in all four tables: half GPT-6.1 Sol's
+        # input and output rate.
+        "openai.gpt-6.1-terra": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000011",
+                Dimension.CACHE_WRITE_TOKENS: "0.000001375",
+                Dimension.CACHE_READ_TOKENS: "0.000000055",
+                Dimension.OUTPUT_TOKENS: "0.0000055",
+            }
+        ),
+        # No card or Price List row (verified 2026-09-24): Z.ai's API per-1M rates
+        # / 1e6. Bedrock bills Z.ai's direct rate for GLM 5, 4.7 and 4.7 Flash in
+        # these regions; it publishes no cache rate for them.
+        "zai.glm-4.6": frozendict(
+            {Dimension.INPUT_TOKENS: "0.0000006", Dimension.OUTPUT_TOKENS: "0.0000022"}
+        ),
+        # Bedrock pricing page "GLM 5.3" panel (verified 2026-11-16), its "US CRIS"
+        # row: no Price List row, a card without rates, no In-Region option, and a
+        # 30-minute cache write.
+        "zai.glm-5.3": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.000001848",
+                Dimension.CACHE_WRITE_TOKENS: "0.00000231",
+                Dimension.CACHE_READ_TOKENS: "0.0000003432",
+                Dimension.OUTPUT_TOKENS: "0.000005808",
+            }
+        ),
+    }
+)
 
 #: Global cross-Region rates for the models above whose card publishes one.
-DEFAULT_MODEL_GLOBAL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
-    # Model-card "Global CRIS" per-1M rates / 1e6 (verified 2026-09-22), ~9%
-    # under In-Region. Reached only through the "global." inference profile on
-    # bedrock-runtime; Bedrock Mantle serves no cross-Region inference at all,
-    # so its calls stay on the In-Region rates above. A model absent here
-    # publishes no Global rate and keeps them too, resolve_price relaxing the
-    # routing axis rather than leaving the call unpriced.
-    # Kimi K3.1 card's "Global CRIS" row (verified 2026-11-16).
-    "moonshotai.kimi-k3.1": {
-        Dimension.INPUT_TOKENS: "0.000004",
-        Dimension.CACHE_WRITE_TOKENS: "0.000005",
-        Dimension.CACHE_READ_TOKENS: "0.0000002",
-        Dimension.OUTPUT_TOKENS: "0.00002",
-    },
-    "openai.gpt-5.6-luna": {
-        Dimension.INPUT_TOKENS: "0.0000002",
-        Dimension.CACHE_WRITE_TOKENS: "0.00000025",
-        Dimension.CACHE_READ_TOKENS: "0.00000002",
-        Dimension.OUTPUT_TOKENS: "0.0000012",
-    },
-    "openai.gpt-5.6-sol": {
-        Dimension.INPUT_TOKENS: "0.000004",
-        Dimension.CACHE_WRITE_TOKENS: "0.000005",
-        Dimension.CACHE_READ_TOKENS: "0.0000004",
-        Dimension.OUTPUT_TOKENS: "0.00002",
-    },
-    "openai.gpt-5.6-terra": {
-        Dimension.INPUT_TOKENS: "0.000002",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000025",
-        Dimension.CACHE_READ_TOKENS: "0.0000002",
-        Dimension.OUTPUT_TOKENS: "0.000012",
-    },
-    "openai.gpt-6-astra": {
-        Dimension.INPUT_TOKENS: "0.00001",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000125",
-        Dimension.CACHE_READ_TOKENS: "0.000001",
-        Dimension.OUTPUT_TOKENS: "0.00005",
-    },
-    "openai.gpt-6-luna": {
-        Dimension.INPUT_TOKENS: "0.0000001",
-        Dimension.CACHE_WRITE_TOKENS: "0.000000125",
-        Dimension.CACHE_READ_TOKENS: "0.00000001",
-        Dimension.OUTPUT_TOKENS: "0.0000005",
-    },
-    "openai.gpt-6-sol": {
-        Dimension.INPUT_TOKENS: "0.000002",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000025",
-        Dimension.CACHE_READ_TOKENS: "0.0000002",
-        Dimension.OUTPUT_TOKENS: "0.00001",
-    },
-    # The card's "Global base rate": it offers no Global profile, yet
-    # bedrock-runtime lists and serves one (verified 2026-09-30).
-    "openai.gpt-6.1-sol": {
-        Dimension.INPUT_TOKENS: "0.000002",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000025",
-        Dimension.CACHE_READ_TOKENS: "0.0000001",
-        Dimension.OUTPUT_TOKENS: "0.00001",
-    },
-    "openai.gpt-6.1-terra": {
-        Dimension.INPUT_TOKENS: "0.000001",
-        Dimension.CACHE_WRITE_TOKENS: "0.00000125",
-        Dimension.CACHE_READ_TOKENS: "0.00000005",
-        Dimension.OUTPUT_TOKENS: "0.000005",
-    },
-    # Bedrock pricing page "GLM 5.3" panel (verified 2026-11-16), its "Global
-    # CRIS" row.
-    "zai.glm-5.3": {
-        Dimension.INPUT_TOKENS: "0.00000168",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000021",
-        Dimension.CACHE_READ_TOKENS: "0.000000312",
-        Dimension.OUTPUT_TOKENS: "0.00000528",
-    },
-}
+DEFAULT_MODEL_GLOBAL_PRICES: Final[frozendict[str, frozendict[Dimension, str]]] = (
+    frozendict(
+        {
+            # Model-card "Global CRIS" per-1M rates / 1e6 (verified 2026-09-22), ~9%
+            # under In-Region. Reached only through the "global." inference profile on
+            # bedrock-runtime; Bedrock Mantle serves no cross-Region inference at all,
+            # so its calls stay on the In-Region rates above. A model absent here
+            # publishes no Global rate and keeps them too, resolve_price relaxing the
+            # routing axis rather than leaving the call unpriced.
+            # Kimi K3.1 card's "Global CRIS" row (verified 2026-11-16).
+            "moonshotai.kimi-k3.1": frozendict(
+                {
+                    Dimension.INPUT_TOKENS: "0.000004",
+                    Dimension.CACHE_WRITE_TOKENS: "0.000005",
+                    Dimension.CACHE_READ_TOKENS: "0.0000002",
+                    Dimension.OUTPUT_TOKENS: "0.00002",
+                }
+            ),
+            "openai.gpt-5.6-luna": frozendict(
+                {
+                    Dimension.INPUT_TOKENS: "0.0000002",
+                    Dimension.CACHE_WRITE_TOKENS: "0.00000025",
+                    Dimension.CACHE_READ_TOKENS: "0.00000002",
+                    Dimension.OUTPUT_TOKENS: "0.0000012",
+                }
+            ),
+            "openai.gpt-5.6-sol": frozendict(
+                {
+                    Dimension.INPUT_TOKENS: "0.000004",
+                    Dimension.CACHE_WRITE_TOKENS: "0.000005",
+                    Dimension.CACHE_READ_TOKENS: "0.0000004",
+                    Dimension.OUTPUT_TOKENS: "0.00002",
+                }
+            ),
+            "openai.gpt-5.6-terra": frozendict(
+                {
+                    Dimension.INPUT_TOKENS: "0.000002",
+                    Dimension.CACHE_WRITE_TOKENS: "0.0000025",
+                    Dimension.CACHE_READ_TOKENS: "0.0000002",
+                    Dimension.OUTPUT_TOKENS: "0.000012",
+                }
+            ),
+            "openai.gpt-6-astra": frozendict(
+                {
+                    Dimension.INPUT_TOKENS: "0.00001",
+                    Dimension.CACHE_WRITE_TOKENS: "0.0000125",
+                    Dimension.CACHE_READ_TOKENS: "0.000001",
+                    Dimension.OUTPUT_TOKENS: "0.00005",
+                }
+            ),
+            "openai.gpt-6-luna": frozendict(
+                {
+                    Dimension.INPUT_TOKENS: "0.0000001",
+                    Dimension.CACHE_WRITE_TOKENS: "0.000000125",
+                    Dimension.CACHE_READ_TOKENS: "0.00000001",
+                    Dimension.OUTPUT_TOKENS: "0.0000005",
+                }
+            ),
+            "openai.gpt-6-sol": frozendict(
+                {
+                    Dimension.INPUT_TOKENS: "0.000002",
+                    Dimension.CACHE_WRITE_TOKENS: "0.0000025",
+                    Dimension.CACHE_READ_TOKENS: "0.0000002",
+                    Dimension.OUTPUT_TOKENS: "0.00001",
+                }
+            ),
+            # The card's "Global base rate": it offers no Global profile, yet
+            # bedrock-runtime lists and serves one (verified 2026-09-30).
+            "openai.gpt-6.1-sol": frozendict(
+                {
+                    Dimension.INPUT_TOKENS: "0.000002",
+                    Dimension.CACHE_WRITE_TOKENS: "0.0000025",
+                    Dimension.CACHE_READ_TOKENS: "0.0000001",
+                    Dimension.OUTPUT_TOKENS: "0.00001",
+                }
+            ),
+            "openai.gpt-6.1-terra": frozendict(
+                {
+                    Dimension.INPUT_TOKENS: "0.000001",
+                    Dimension.CACHE_WRITE_TOKENS: "0.00000125",
+                    Dimension.CACHE_READ_TOKENS: "0.00000005",
+                    Dimension.OUTPUT_TOKENS: "0.000005",
+                }
+            ),
+            # Bedrock pricing page "GLM 5.3" panel (verified 2026-11-16), its "Global
+            # CRIS" row.
+            "zai.glm-5.3": frozendict(
+                {
+                    Dimension.INPUT_TOKENS: "0.00000168",
+                    Dimension.CACHE_WRITE_TOKENS: "0.0000021",
+                    Dimension.CACHE_READ_TOKENS: "0.000000312",
+                    Dimension.OUTPUT_TOKENS: "0.00000528",
+                }
+            ),
+        }
+    )
+)
 
 #: Prompt size at which a model leaves its short-context rate, where its own source says.
-MODEL_LONG_CONTEXT_THRESHOLDS: Final[dict[str, int]] = {
-    # The OpenAI frontier cards split their rates at a 272K short context
-    # window, not at the 200K DEFAULT_LONG_CONTEXT_THRESHOLD most models switch
-    # at. Cyber is here for the same reason though it publishes no long rate:
-    # its window is 272K, so a 250K prompt to it is not a long-context call and
-    # must not be recorded as one.
-    "openai.gpt-5.4": 272_000,
-    "openai.gpt-5.5": 272_000,
-    "openai.gpt-5.6-cyber": 272_000,
-    "openai.gpt-5.6-luna": 272_000,
-    "openai.gpt-5.6-sol": 272_000,
-    "openai.gpt-5.6-terra": 272_000,
-    "openai.gpt-daybreak-blue-5.6-sol": 272_000,
-    "openai.gpt-6-astra": 272_000,
-    "openai.gpt-6-luna": 272_000,
-    "openai.gpt-6-sol": 272_000,
-    "openai.gpt-6.1-sol": 272_000,
-    "openai.gpt-6.1-terra": 272_000,
-}
+MODEL_LONG_CONTEXT_THRESHOLDS: Final[frozendict[str, int]] = frozendict(
+    {
+        # The OpenAI frontier cards split their rates at a 272K short context
+        # window, not at the 200K DEFAULT_LONG_CONTEXT_THRESHOLD most models switch
+        # at. Cyber is here for the same reason though it publishes no long rate:
+        # its window is 272K, so a 250K prompt to it is not a long-context call and
+        # must not be recorded as one.
+        "openai.gpt-5.4": 272_000,
+        "openai.gpt-5.5": 272_000,
+        "openai.gpt-5.6-cyber": 272_000,
+        "openai.gpt-5.6-luna": 272_000,
+        "openai.gpt-5.6-sol": 272_000,
+        "openai.gpt-5.6-terra": 272_000,
+        "openai.gpt-daybreak-blue-5.6-sol": 272_000,
+        "openai.gpt-6-astra": 272_000,
+        "openai.gpt-6-luna": 272_000,
+        "openai.gpt-6-sol": 272_000,
+        "openai.gpt-6.1-sol": 272_000,
+        "openai.gpt-6.1-terra": 272_000,
+    }
+)
 
 #: In-Region rates past MODEL_LONG_CONTEXT_THRESHOLDS, for the cards publishing one.
-DEFAULT_MODEL_LONG_CONTEXT_PRICES: Final[dict[str, dict[Dimension, str]]] = {
-    # Model-card long-context In-Region per-1M rates / 1e6 (verified
-    # 2026-09-22): 2x the short-context rate on input and both cache
-    # dimensions, 1.5x on output. AWS bills the whole call at these once the
-    # prompt crosses the boundary. A model absent here publishes no long rate
-    # and keeps its short one, resolve_price relaxing the context axis rather
-    # than leaving the call unpriced.
-    "openai.gpt-5.4": {
-        Dimension.INPUT_TOKENS: "0.0000055",
-        Dimension.CACHE_READ_TOKENS: "0.00000055",
-        Dimension.OUTPUT_TOKENS: "0.00002475",
-    },
-    "openai.gpt-5.5": {
-        Dimension.INPUT_TOKENS: "0.000011",
-        Dimension.CACHE_READ_TOKENS: "0.0000011",
-        Dimension.OUTPUT_TOKENS: "0.0000495",
-    },
-    "openai.gpt-5.6-luna": {
-        Dimension.INPUT_TOKENS: "0.00000044",
-        Dimension.CACHE_WRITE_TOKENS: "0.00000055",
-        Dimension.CACHE_READ_TOKENS: "0.000000044",
-        Dimension.OUTPUT_TOKENS: "0.00000198",
-    },
-    "openai.gpt-5.6-sol": {
-        Dimension.INPUT_TOKENS: "0.0000088",
-        Dimension.CACHE_WRITE_TOKENS: "0.000011",
-        Dimension.CACHE_READ_TOKENS: "0.00000088",
-        Dimension.OUTPUT_TOKENS: "0.000033",
-    },
-    "openai.gpt-5.6-terra": {
-        Dimension.INPUT_TOKENS: "0.0000044",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000055",
-        Dimension.CACHE_READ_TOKENS: "0.00000044",
-        Dimension.OUTPUT_TOKENS: "0.0000198",
-    },
-    # Daybreak Blue: same rates as GPT-5.6 Sol above.
-    "openai.gpt-daybreak-blue-5.6-sol": {
-        Dimension.INPUT_TOKENS: "0.0000088",
-        Dimension.CACHE_WRITE_TOKENS: "0.000011",
-        Dimension.CACHE_READ_TOKENS: "0.00000088",
-        Dimension.OUTPUT_TOKENS: "0.000033",
-    },
-    "openai.gpt-6-astra": {
-        Dimension.INPUT_TOKENS: "0.000022",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000275",
-        Dimension.CACHE_READ_TOKENS: "0.0000022",
-        Dimension.OUTPUT_TOKENS: "0.0000825",
-    },
-    "openai.gpt-6-luna": {
-        Dimension.INPUT_TOKENS: "0.00000022",
-        Dimension.CACHE_WRITE_TOKENS: "0.000000275",
-        Dimension.CACHE_READ_TOKENS: "0.000000022",
-        Dimension.OUTPUT_TOKENS: "0.000000825",
-    },
-    "openai.gpt-6-sol": {
-        Dimension.INPUT_TOKENS: "0.0000044",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000055",
-        Dimension.CACHE_READ_TOKENS: "0.00000044",
-        Dimension.OUTPUT_TOKENS: "0.0000165",
-    },
-    "openai.gpt-6.1-sol": {
-        Dimension.INPUT_TOKENS: "0.0000044",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000055",
-        Dimension.CACHE_READ_TOKENS: "0.00000022",
-        Dimension.OUTPUT_TOKENS: "0.0000165",
-    },
-    "openai.gpt-6.1-terra": {
-        Dimension.INPUT_TOKENS: "0.0000022",
-        Dimension.CACHE_WRITE_TOKENS: "0.00000275",
-        Dimension.CACHE_READ_TOKENS: "0.00000011",
-        Dimension.OUTPUT_TOKENS: "0.00000825",
-    },
-}
+DEFAULT_MODEL_LONG_CONTEXT_PRICES: Final[
+    frozendict[str, frozendict[Dimension, str]]
+] = frozendict(
+    {
+        # Model-card long-context In-Region per-1M rates / 1e6 (verified
+        # 2026-09-22): 2x the short-context rate on input and both cache
+        # dimensions, 1.5x on output. AWS bills the whole call at these once the
+        # prompt crosses the boundary. A model absent here publishes no long rate
+        # and keeps its short one, resolve_price relaxing the context axis rather
+        # than leaving the call unpriced.
+        "openai.gpt-5.4": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000055",
+                Dimension.CACHE_READ_TOKENS: "0.00000055",
+                Dimension.OUTPUT_TOKENS: "0.00002475",
+            }
+        ),
+        "openai.gpt-5.5": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.000011",
+                Dimension.CACHE_READ_TOKENS: "0.0000011",
+                Dimension.OUTPUT_TOKENS: "0.0000495",
+            }
+        ),
+        "openai.gpt-5.6-luna": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.00000044",
+                Dimension.CACHE_WRITE_TOKENS: "0.00000055",
+                Dimension.CACHE_READ_TOKENS: "0.000000044",
+                Dimension.OUTPUT_TOKENS: "0.00000198",
+            }
+        ),
+        "openai.gpt-5.6-sol": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000088",
+                Dimension.CACHE_WRITE_TOKENS: "0.000011",
+                Dimension.CACHE_READ_TOKENS: "0.00000088",
+                Dimension.OUTPUT_TOKENS: "0.000033",
+            }
+        ),
+        "openai.gpt-5.6-terra": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000044",
+                Dimension.CACHE_WRITE_TOKENS: "0.0000055",
+                Dimension.CACHE_READ_TOKENS: "0.00000044",
+                Dimension.OUTPUT_TOKENS: "0.0000198",
+            }
+        ),
+        # Daybreak Blue: same rates as GPT-5.6 Sol above.
+        "openai.gpt-daybreak-blue-5.6-sol": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000088",
+                Dimension.CACHE_WRITE_TOKENS: "0.000011",
+                Dimension.CACHE_READ_TOKENS: "0.00000088",
+                Dimension.OUTPUT_TOKENS: "0.000033",
+            }
+        ),
+        "openai.gpt-6-astra": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.000022",
+                Dimension.CACHE_WRITE_TOKENS: "0.0000275",
+                Dimension.CACHE_READ_TOKENS: "0.0000022",
+                Dimension.OUTPUT_TOKENS: "0.0000825",
+            }
+        ),
+        "openai.gpt-6-luna": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.00000022",
+                Dimension.CACHE_WRITE_TOKENS: "0.000000275",
+                Dimension.CACHE_READ_TOKENS: "0.000000022",
+                Dimension.OUTPUT_TOKENS: "0.000000825",
+            }
+        ),
+        "openai.gpt-6-sol": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000044",
+                Dimension.CACHE_WRITE_TOKENS: "0.0000055",
+                Dimension.CACHE_READ_TOKENS: "0.00000044",
+                Dimension.OUTPUT_TOKENS: "0.0000165",
+            }
+        ),
+        "openai.gpt-6.1-sol": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000044",
+                Dimension.CACHE_WRITE_TOKENS: "0.0000055",
+                Dimension.CACHE_READ_TOKENS: "0.00000022",
+                Dimension.OUTPUT_TOKENS: "0.0000165",
+            }
+        ),
+        "openai.gpt-6.1-terra": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000022",
+                Dimension.CACHE_WRITE_TOKENS: "0.00000275",
+                Dimension.CACHE_READ_TOKENS: "0.00000011",
+                Dimension.OUTPUT_TOKENS: "0.00000825",
+            }
+        ),
+    }
+)
 
 #: Global cross-Region rates for the long-context models above whose card publishes one.
-DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES: Final[dict[str, dict[Dimension, str]]] = {
-    # Model-card long-context "Global CRIS" per-1M rates / 1e6 (verified
-    # 2026-09-22). Same routing scope as DEFAULT_MODEL_GLOBAL_PRICES:
-    # bedrock-runtime's "global." profile only.
-    "openai.gpt-5.6-luna": {
-        Dimension.INPUT_TOKENS: "0.0000004",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000005",
-        Dimension.CACHE_READ_TOKENS: "0.00000004",
-        Dimension.OUTPUT_TOKENS: "0.0000018",
-    },
-    "openai.gpt-5.6-sol": {
-        Dimension.INPUT_TOKENS: "0.000008",
-        Dimension.CACHE_WRITE_TOKENS: "0.00001",
-        Dimension.CACHE_READ_TOKENS: "0.0000008",
-        Dimension.OUTPUT_TOKENS: "0.00003",
-    },
-    "openai.gpt-5.6-terra": {
-        Dimension.INPUT_TOKENS: "0.000004",
-        Dimension.CACHE_WRITE_TOKENS: "0.000005",
-        Dimension.CACHE_READ_TOKENS: "0.0000004",
-        Dimension.OUTPUT_TOKENS: "0.000018",
-    },
-    "openai.gpt-6-astra": {
-        Dimension.INPUT_TOKENS: "0.00002",
-        Dimension.CACHE_WRITE_TOKENS: "0.000025",
-        Dimension.CACHE_READ_TOKENS: "0.000002",
-        Dimension.OUTPUT_TOKENS: "0.000075",
-    },
-    "openai.gpt-6-luna": {
-        Dimension.INPUT_TOKENS: "0.0000002",
-        Dimension.CACHE_WRITE_TOKENS: "0.00000025",
-        Dimension.CACHE_READ_TOKENS: "0.00000002",
-        Dimension.OUTPUT_TOKENS: "0.00000075",
-    },
-    "openai.gpt-6-sol": {
-        Dimension.INPUT_TOKENS: "0.000004",
-        Dimension.CACHE_WRITE_TOKENS: "0.000005",
-        Dimension.CACHE_READ_TOKENS: "0.0000004",
-        Dimension.OUTPUT_TOKENS: "0.000015",
-    },
-    "openai.gpt-6.1-sol": {
-        Dimension.INPUT_TOKENS: "0.000004",
-        Dimension.CACHE_WRITE_TOKENS: "0.000005",
-        Dimension.CACHE_READ_TOKENS: "0.0000002",
-        Dimension.OUTPUT_TOKENS: "0.000015",
-    },
-    "openai.gpt-6.1-terra": {
-        Dimension.INPUT_TOKENS: "0.000002",
-        Dimension.CACHE_WRITE_TOKENS: "0.0000025",
-        Dimension.CACHE_READ_TOKENS: "0.0000001",
-        Dimension.OUTPUT_TOKENS: "0.0000075",
-    },
-}
+DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES: Final[
+    frozendict[str, frozendict[Dimension, str]]
+] = frozendict(
+    {
+        # Model-card long-context "Global CRIS" per-1M rates / 1e6 (verified
+        # 2026-09-22). Same routing scope as DEFAULT_MODEL_GLOBAL_PRICES:
+        # bedrock-runtime's "global." profile only.
+        "openai.gpt-5.6-luna": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000004",
+                Dimension.CACHE_WRITE_TOKENS: "0.0000005",
+                Dimension.CACHE_READ_TOKENS: "0.00000004",
+                Dimension.OUTPUT_TOKENS: "0.0000018",
+            }
+        ),
+        "openai.gpt-5.6-sol": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.000008",
+                Dimension.CACHE_WRITE_TOKENS: "0.00001",
+                Dimension.CACHE_READ_TOKENS: "0.0000008",
+                Dimension.OUTPUT_TOKENS: "0.00003",
+            }
+        ),
+        "openai.gpt-5.6-terra": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.000004",
+                Dimension.CACHE_WRITE_TOKENS: "0.000005",
+                Dimension.CACHE_READ_TOKENS: "0.0000004",
+                Dimension.OUTPUT_TOKENS: "0.000018",
+            }
+        ),
+        "openai.gpt-6-astra": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.00002",
+                Dimension.CACHE_WRITE_TOKENS: "0.000025",
+                Dimension.CACHE_READ_TOKENS: "0.000002",
+                Dimension.OUTPUT_TOKENS: "0.000075",
+            }
+        ),
+        "openai.gpt-6-luna": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.0000002",
+                Dimension.CACHE_WRITE_TOKENS: "0.00000025",
+                Dimension.CACHE_READ_TOKENS: "0.00000002",
+                Dimension.OUTPUT_TOKENS: "0.00000075",
+            }
+        ),
+        "openai.gpt-6-sol": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.000004",
+                Dimension.CACHE_WRITE_TOKENS: "0.000005",
+                Dimension.CACHE_READ_TOKENS: "0.0000004",
+                Dimension.OUTPUT_TOKENS: "0.000015",
+            }
+        ),
+        "openai.gpt-6.1-sol": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.000004",
+                Dimension.CACHE_WRITE_TOKENS: "0.000005",
+                Dimension.CACHE_READ_TOKENS: "0.0000002",
+                Dimension.OUTPUT_TOKENS: "0.000015",
+            }
+        ),
+        "openai.gpt-6.1-terra": frozendict(
+            {
+                Dimension.INPUT_TOKENS: "0.000002",
+                Dimension.CACHE_WRITE_TOKENS: "0.0000025",
+                Dimension.CACHE_READ_TOKENS: "0.0000001",
+                Dimension.OUTPUT_TOKENS: "0.0000075",
+            }
+        ),
+    }
+)

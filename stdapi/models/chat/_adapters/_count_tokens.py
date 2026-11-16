@@ -15,7 +15,6 @@ from itertools import accumulate
 from math import ceil, sumprod
 from re import IGNORECASE, Pattern
 from re import compile as re_compile
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -54,27 +53,23 @@ if TYPE_CHECKING:
     from stdapi.types.anthropic_messages import MessageParam
 
 #: Tokens upstream counts for a server tool beyond a ``{"type": "object"}`` stub of its name, by type (Claude 4.5 and 4.6).
-SERVER_TOOL_TOKENS: Final = MappingProxyType(
+SERVER_TOOL_TOKENS: Final = frozendict(
     {
-        "web_search": MappingProxyType(
+        "web_search": frozendict(
             {"web_search_20250305": 1678, "web_search_20260209": 3844}
         ),
-        "web_fetch": MappingProxyType(
+        "web_fetch": frozendict(
             {"web_fetch_20250910": 493, "web_fetch_20260209": 2925}
         ),
-        "code_execution": MappingProxyType(
+        "code_execution": frozendict(
             {
                 "code_execution_20250522": 392,
                 "code_execution_20250825": 1708,
                 "code_execution_20260120": 1708,
             }
         ),
-        "tool_search_tool_bm25": MappingProxyType(
-            {"tool_search_tool_bm25_20251119": 144}
-        ),
-        "tool_search_tool_regex": MappingProxyType(
-            {"tool_search_tool_regex_20251119": 173}
-        ),
+        "tool_search_tool_bm25": frozendict({"tool_search_tool_bm25_20251119": 144}),
+        "tool_search_tool_regex": frozendict({"tool_search_tool_regex_20251119": 173}),
     }
 )
 

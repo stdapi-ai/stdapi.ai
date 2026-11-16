@@ -96,16 +96,18 @@ _DELETE_VECTORS_BATCH: Final[int] = 500
 _CALL_WAVE: Final[int] = 16
 
 #: OpenAI comparison operator → index filter operator.
-_FILTER_OPERATORS: Final[dict[str, str]] = {
-    "eq": "$eq",
-    "ne": "$ne",
-    "gt": "$gt",
-    "gte": "$gte",
-    "lt": "$lt",
-    "lte": "$lte",
-    "in": "$in",
-    "nin": "$nin",
-}
+_FILTER_OPERATORS: Final[frozendict[str, str]] = frozendict(
+    {
+        "eq": "$eq",
+        "ne": "$ne",
+        "gt": "$gt",
+        "gte": "$gte",
+        "lt": "$lt",
+        "lte": "$lte",
+        "in": "$in",
+        "nin": "$nin",
+    }
+)
 
 #: Content types whose bytes are never text, rejected before decoding is attempted.
 _BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset(

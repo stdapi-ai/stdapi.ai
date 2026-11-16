@@ -191,34 +191,37 @@ def _build_cache_point(
 
 
 #: Bedrock stop reasons to Anthropic stop reasons mapping.
-_STOP_REASONS: dict[StopReasonType | str | None, StopReason] = {
-    "end_turn": "end_turn",
-    "max_tokens": "max_tokens",
-    "model_context_window_exceeded": "model_context_window_exceeded",
-    "stop_sequence": "stop_sequence",
-    "tool_use": "tool_use",
-    "content_filtered": "refusal",
-    "guardrail_intervened": "refusal",
-    "malformed_model_output": "refusal",
-    "malformed_tool_use": "refusal",
-    # Non-standard but observed
-    "incomplete": "max_tokens",
-}
+_STOP_REASONS: frozendict[StopReasonType | str | None, StopReason] = frozendict(
+    {
+        "end_turn": "end_turn",
+        "max_tokens": "max_tokens",
+        "model_context_window_exceeded": "model_context_window_exceeded",
+        "stop_sequence": "stop_sequence",
+        "tool_use": "tool_use",
+        "content_filtered": "refusal",
+        "guardrail_intervened": "refusal",
+        "malformed_model_output": "refusal",
+        "malformed_tool_use": "refusal",
+        # Non-standard but observed
+        "incomplete": "max_tokens",
+    }
+)
 
 #: Anthropic services tiers to Bedrock mapping
-_SERVICES_TIERS: dict[ServiceTiers | None, ServiceTierTypeType] = {
-    "standard_only": "default",
-    # Extra bedrock specific values
-    "priority": "priority",
-    "flex": "flex",
-    "reserved": "reserved",
-}
+_SERVICES_TIERS: frozendict[ServiceTiers | None, ServiceTierTypeType] = frozendict(
+    {
+        "standard_only": "default",
+        # Extra bedrock specific values
+        "priority": "priority",
+        "flex": "flex",
+        "reserved": "reserved",
+    }
+)
 
 #: Bedrock service tiers to the tier an Anthropic response reports; "flex"/"reserved" have no Anthropic equivalent and are deliberately absent.
-_RESPONSE_SERVICES_TIERS: dict[str, ResponseServiceTiers] = {
-    "default": "standard",
-    "priority": "priority",
-}
+_RESPONSE_SERVICES_TIERS: frozendict[str, ResponseServiceTiers] = frozendict(
+    {"default": "standard", "priority": "priority"}
+)
 
 #: Cache TTLs Anthropic's ``cache_creation`` breakdown has a field for.
 _CACHE_CREATION_TTLS: frozenset[CacheTTLType] = frozenset({"5m", "1h"})

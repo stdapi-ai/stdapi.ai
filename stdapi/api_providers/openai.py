@@ -22,16 +22,18 @@ OPENAI_ORGANIZATION_HEADER = "OpenAI-Organization"
 TAG_OPENAI: str = "OpenAI"
 
 #: Mapping from status code to OpenAI error types, default to "invalid_request_error"
-_STATUS = {
-    401: "authentication_error",
-    403: "permission_error",
-    409: "conflict_error",
-    429: "rate_limit_error",
-    500: "server_error",
-    502: "server_error",
-    503: "service_unavailable_error",
-    529: "server_error",
-}
+_STATUS = frozendict(
+    {
+        401: "authentication_error",
+        403: "permission_error",
+        409: "conflict_error",
+        429: "rate_limit_error",
+        500: "server_error",
+        502: "server_error",
+        503: "service_unavailable_error",
+        529: "server_error",
+    }
+)
 
 
 def _format_error(

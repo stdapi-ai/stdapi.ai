@@ -1530,10 +1530,9 @@ _MCP_RESULT_BLOCK_TYPE = "mcp_tool_result"
 #: Content block types an MCP-connector turn records, and their ordinary equivalent.
 # Ref: anthropic.types.beta.beta_mcp_tool_use_block_param.BetaMCPToolUseBlockParam
 # Ref: anthropic.types.beta.beta_request_mcp_tool_result_block_param.BetaRequestMCPToolResultBlockParam
-_MCP_BLOCK_TYPES: dict[str, str] = {
-    "mcp_tool_use": "tool_use",
-    _MCP_RESULT_BLOCK_TYPE: "tool_result",
-}
+_MCP_BLOCK_TYPES: frozendict[str, str] = frozendict(
+    {"mcp_tool_use": "tool_use", _MCP_RESULT_BLOCK_TYPE: "tool_result"}
+)
 
 
 def _as_ordinary_tool_block(block: Any) -> Any:  # noqa: ANN401

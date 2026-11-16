@@ -34,7 +34,9 @@ if TYPE_CHECKING:
     from stdapi.models.moderation import ModerationInput
 
 #: Guardrail-supported image formats by MIME type.
-_IMAGE_FORMATS: dict[str, str] = {"image/png": "png", "image/jpeg": "jpeg"}
+_IMAGE_FORMATS: frozendict[str, str] = frozendict(
+    {"image/png": "png", "image/jpeg": "jpeg"}
+)
 
 
 async def _to_content_block(item: ModerationInput) -> GuardrailContentBlockTypeDef:

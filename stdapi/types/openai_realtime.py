@@ -19,11 +19,13 @@ PCM_SAMPLE_RATE = 24000
 G711_SAMPLE_RATE = 8000
 
 #: Sample rate of each audio format, keyed by its media type.
-FORMAT_SAMPLE_RATES: dict[str, int] = {
-    "audio/pcm": PCM_SAMPLE_RATE,
-    "audio/pcmu": G711_SAMPLE_RATE,
-    "audio/pcma": G711_SAMPLE_RATE,
-}
+FORMAT_SAMPLE_RATES: frozendict[str, int] = frozendict(
+    {
+        "audio/pcm": PCM_SAMPLE_RATE,
+        "audio/pcmu": G711_SAMPLE_RATE,
+        "audio/pcma": G711_SAMPLE_RATE,
+    }
+)
 
 #: Longest time to live an ephemeral client secret may be minted with, in seconds.
 MAX_CLIENT_SECRET_TTL = 7200

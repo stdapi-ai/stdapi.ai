@@ -31,7 +31,7 @@ SWAGGER_UI_VERSION = "5.33.0"
 REDOC_VERSION = "2.5.4"
 
 #: Licence each package is published under, checked against npm by the drift lane.
-UPSTREAM_LICENSES = {"swagger-ui-dist": "Apache-2.0", "redoc": "MIT"}
+UPSTREAM_LICENSES = frozendict({"swagger-ui-dist": "Apache-2.0", "redoc": "MIT"})
 
 #: Publishers of an exact npm file, tried in order; the first is what a page names.
 _PUBLISHERS = (
@@ -54,12 +54,14 @@ LICENSES_DIR = ASSETS_DIR / "licenses"
 # still tried to reach that host -- which the documentation says it does not, and a
 # strict `img-src 'self'` policy refuses. Pointing it at a path the gateway does not
 # serve keeps the badge hidden by the same route, without an outbound request.
-_REWRITES: dict[str, tuple[bytes, bytes]] = {
-    "redoc.standalone.js": (
-        b"https://cdn.redoc.ly/redoc/logo-mini.svg",
-        f"{ASSETS_PATH}/redocly-logo-mini.svg".encode(),
-    )
-}
+_REWRITES: frozendict[str, tuple[bytes, bytes]] = frozendict(
+    {
+        "redoc.standalone.js": (
+            b"https://cdn.redoc.ly/redoc/logo-mini.svg",
+            f"{ASSETS_PATH}/redocly-logo-mini.svg".encode(),
+        )
+    }
+)
 
 #: Seconds one publisher gets to serve one file.
 _FETCH_TIMEOUT = 60.0
@@ -114,32 +116,34 @@ class Asset:
 
 
 #: Files a documentation page loads in a browser, keyed by the name it is served as.
-BROWSER_ASSETS: dict[str, Asset] = {
-    asset.name: asset
-    for asset in (
-        Asset(
-            "swagger-ui-dist",
-            SWAGGER_UI_VERSION,
-            "swagger-ui-bundle.js",
-            "62df541529080464a7660adc793eab7128c6193ce3be24ddc1e0e0a4a63edc2f",
-            "text/javascript",
-        ),
-        Asset(
-            "swagger-ui-dist",
-            SWAGGER_UI_VERSION,
-            "swagger-ui.css",
-            "1ac324f7dcd27e4b9386b4bd6421271ec147e922a22c05ba24b11515e9aa6321",
-            "text/css",
-        ),
-        Asset(
-            "redoc",
-            REDOC_VERSION,
-            "bundles/redoc.standalone.js",
-            "dcaf76612bc4a3fbcc923a8966dee2f6146a5f32e5ce1b6f02dd60cbbf89500b",
-            "text/javascript",
-        ),
-    )
-}
+BROWSER_ASSETS: frozendict[str, Asset] = frozendict(
+    {
+        asset.name: asset
+        for asset in (
+            Asset(
+                "swagger-ui-dist",
+                SWAGGER_UI_VERSION,
+                "swagger-ui-bundle.js",
+                "62df541529080464a7660adc793eab7128c6193ce3be24ddc1e0e0a4a63edc2f",
+                "text/javascript",
+            ),
+            Asset(
+                "swagger-ui-dist",
+                SWAGGER_UI_VERSION,
+                "swagger-ui.css",
+                "1ac324f7dcd27e4b9386b4bd6421271ec147e922a22c05ba24b11515e9aa6321",
+                "text/css",
+            ),
+            Asset(
+                "redoc",
+                REDOC_VERSION,
+                "bundles/redoc.standalone.js",
+                "dcaf76612bc4a3fbcc923a8966dee2f6146a5f32e5ce1b6f02dd60cbbf89500b",
+                "text/javascript",
+            ),
+        )
+    }
+)
 
 #: Upstream licence and notice texts, redistributed beside the files they cover.
 LICENSE_ASSETS: tuple[Asset, ...] = (

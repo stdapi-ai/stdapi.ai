@@ -16,7 +16,6 @@ class ChatModel(AnthropicClaudeChatModel):
     __slots__ = ()
 
     MATCHER = re_compile(r"anthropic\.claude-(?:sonnet|opus)-4-6")
-    REASONING_OVERRIDE: ClassVar[dict[Effort | None, ThinkingEffort]] = {
-        "minimal": "low",
-        "xhigh": "high",
-    }
+    REASONING_OVERRIDE: ClassVar[frozendict[Effort | None, ThinkingEffort]] = (
+        frozendict({"minimal": "low", "xhigh": "high"})
+    )

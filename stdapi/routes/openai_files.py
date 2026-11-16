@@ -32,10 +32,9 @@ from stdapi.types.openai_files import (
 from stdapi.utils import missing_file_error, validation_error_handler
 
 #: Content type is client-controlled: force download and disable content-type sniffing.
-_CONTENT_DOWNLOAD_HEADERS = {
-    "Content-Disposition": "attachment",
-    "X-Content-Type-Options": "nosniff",
-}
+_CONTENT_DOWNLOAD_HEADERS = frozendict(
+    {"Content-Disposition": "attachment", "X-Content-Type-Options": "nosniff"}
+)
 
 #: Minimum accepted value (seconds) for ``expires_after[seconds]`` (1 hour).
 _EXPIRES_AFTER_SECONDS_MIN = 3600

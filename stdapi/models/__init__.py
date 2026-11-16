@@ -14,7 +14,6 @@ from itertools import chain
 from pkgutil import iter_modules
 from re import IGNORECASE, Pattern
 from re import compile as re_compile
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Never, TypedDict
 
 from botocore.exceptions import (
@@ -429,20 +428,22 @@ NON_CONVERSE_SPEECH_MODEL_PREFIXES: tuple[str, ...] = (
 MANTLE_MODELS: dict[str, ModelDetails] = {}
 
 #: Mantle model ID provider prefix to display name.
-_MANTLE_PROVIDERS = {
-    "anthropic": "Anthropic",
-    "deepseek": "DeepSeek",
-    "google": "Google",
-    "minimax": "MiniMax",
-    "mistral": "Mistral AI",
-    "moonshotai": "Moonshot AI",
-    "nvidia": "NVIDIA",
-    "openai": "OpenAI",
-    "qwen": "Qwen",
-    "writer": "Writer",
-    "xai": "xAI",
-    "zai": "Zhipu AI",
-}
+_MANTLE_PROVIDERS = frozendict(
+    {
+        "anthropic": "Anthropic",
+        "deepseek": "DeepSeek",
+        "google": "Google",
+        "minimax": "MiniMax",
+        "mistral": "Mistral AI",
+        "moonshotai": "Moonshot AI",
+        "nvidia": "NVIDIA",
+        "openai": "OpenAI",
+        "qwen": "Qwen",
+        "writer": "Writer",
+        "xai": "xAI",
+        "zai": "Zhipu AI",
+    }
+)
 
 #: Non-Bedrock models details
 EXTRA_MODELS: dict[str, ModelDetails] = {}
@@ -814,9 +815,9 @@ class ModelBase[RequestT, ResponseT]:
     IS_MANTLE: ClassVar[bool] = False
 
     #: Maps HTTP header name (lowercase) to a (field_key, transform) tuple.
-    PASSTHROUGH_HEADERS: ClassVar[
-        MappingProxyType[str, tuple[str, Callable[[str], Any]]]
-    ] = MappingProxyType({})
+    PASSTHROUGH_HEADERS: ClassVar[frozendict[str, tuple[str, Callable[[str], Any]]]] = (
+        frozendict()
+    )
 
     #: Regex to extract model alias from model ID
     ALIAS_MATCHER: ClassVar[Pattern[str] | None] = None

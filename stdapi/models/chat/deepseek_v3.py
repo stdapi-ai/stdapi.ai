@@ -13,14 +13,16 @@ if TYPE_CHECKING:
 DeepseekReasoning = Literal["low", "medium", "high"]
 
 #: Mapping of OpenAI effort levels to the values Deepseek accepts.
-_REASONING_OVERRIDE: dict[Effort | None, DeepseekReasoning] = {
-    "minimal": "low",
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-    "xhigh": "high",
-    "max": "high",
-}
+_REASONING_OVERRIDE: frozendict[Effort | None, DeepseekReasoning] = frozendict(
+    {
+        "minimal": "low",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "high",
+        "max": "high",
+    }
+)
 
 
 class ChatModel(_BaseChatModel):

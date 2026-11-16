@@ -62,11 +62,13 @@ class UsageKwargs(TypedDict, total=False):
 
 
 #: Mantle upstream API to request path (OpenAI paths relative to a surface).
-API_PATHS: dict[MantleApi, str] = {
-    "chat_completions": "/chat/completions",
-    "responses": "/responses",
-    "messages": "/anthropic/v1/messages",
-}
+API_PATHS: frozendict[MantleApi, str] = frozendict(
+    {
+        "chat_completions": "/chat/completions",
+        "responses": "/responses",
+        "messages": "/anthropic/v1/messages",
+    }
+)
 
 #: Anthropic version header required by the Mantle Messages API.
 MESSAGES_API_HEADERS = {"anthropic-version": "2023-06-01"}

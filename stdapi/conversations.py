@@ -69,24 +69,26 @@ _STEP_CONCURRENCY: int = 8
 _SCAN_LIMIT: int = 1_000
 
 #: Public item ID prefix per item type; other types fall back to ``item``.
-_ITEM_ID_PREFIXES: dict[str, str] = {
-    "message": "msg",
-    "reasoning": "rs",
-    "function_call": "fc",
-    "function_call_output": "fco",
-    "computer_call": "cu",
-    "computer_call_output": "cuo",
-    "custom_tool_call": "ctc",
-    "custom_tool_call_output": "ctco",
-    "code_interpreter_call": "cic",
-    "file_search_call": "fs",
-    "image_generation_call": "ig",
-    "local_shell_call": "lsh",
-    "local_shell_call_output": "lsho",
-    "mcp_call": "mcp",
-    "web_search_call": "ws",
-    "compaction": "cmp",
-}
+_ITEM_ID_PREFIXES: frozendict[str, str] = frozendict(
+    {
+        "message": "msg",
+        "reasoning": "rs",
+        "function_call": "fc",
+        "function_call_output": "fco",
+        "computer_call": "cu",
+        "computer_call_output": "cuo",
+        "custom_tool_call": "ctc",
+        "custom_tool_call_output": "ctco",
+        "code_interpreter_call": "cic",
+        "file_search_call": "fs",
+        "image_generation_call": "ig",
+        "local_shell_call": "lsh",
+        "local_shell_call_output": "lsho",
+        "mcp_call": "mcp",
+        "web_search_call": "ws",
+        "compaction": "cmp",
+    }
+)
 
 #: Fallback item ID prefix for an item type without a dedicated one.
 _ITEM_ID_FALLBACK_PREFIX: str = "item"
@@ -261,11 +263,9 @@ ITEM_ADAPTER: TypeAdapter[ResponseItem] = TypeAdapter[ResponseItem](ResponseItem
 #: Safe default backfilled onto a stored item missing this field, keyed by field name.
 # `execution` is `client` because this server runs no tool search: whoever ran the
 # call a client replays, it was not this one.
-_ITEM_FIELD_DEFAULTS: dict[str, Any] = {
-    "status": "completed",
-    "summary": [],
-    "execution": "client",
-}
+_ITEM_FIELD_DEFAULTS: frozendict[str, Any] = frozendict(
+    {"status": "completed", "summary": [], "execution": "client"}
+)
 
 
 def _listable_item_defaults() -> dict[str, dict[str, Any]]:

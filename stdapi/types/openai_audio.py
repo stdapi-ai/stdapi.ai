@@ -29,21 +29,23 @@ AudioSubtitleFormat = Literal["srt", "vtt"]
 SUBTITLE_FORMATS: set[AudioSubtitleFormat] = {"srt", "vtt"}
 
 #: OpenAI voices and matching gender (True for Female, False elsewhere)
-OPENAI_VOICES_FEMALE: dict[str, bool] = {
-    "alloy": True,
-    "ash": False,
-    "ballad": True,
-    "cedar": False,
-    "coral": True,
-    "echo": False,
-    "fable": True,
-    "marin": True,
-    "nova": True,
-    "onyx": False,
-    "sage": True,
-    "shimmer": True,
-    "verse": False,
-}
+OPENAI_VOICES_FEMALE: frozendict[str, bool] = frozendict(
+    {
+        "alloy": True,
+        "ash": False,
+        "ballad": True,
+        "cedar": False,
+        "coral": True,
+        "echo": False,
+        "fable": True,
+        "marin": True,
+        "nova": True,
+        "onyx": False,
+        "sage": True,
+        "shimmer": True,
+        "verse": False,
+    }
+)
 
 # Ref: openai.types.audio.transcription_include.TranscriptionInclude
 TranscriptionInclude = Literal["logprobs"]

@@ -1140,11 +1140,13 @@ _STREAM_FRAME_BYTES: Final = _STREAM_SAMPLE_RATE * 2 // 10
 _STREAM_EVENT_TIMEOUT: Final = 60.0
 
 #: Extra parameters a live session honours, mapped to its own field names.
-_STREAM_EXTRA_FIELDS: Final[dict[str, str]] = {
-    "VocabularyName": "vocabulary_name",
-    "VocabularyFilterName": "vocabulary_filter_name",
-    "VocabularyFilterMethod": "vocabulary_filter_method",
-}
+_STREAM_EXTRA_FIELDS: Final[frozendict[str, str]] = frozendict(
+    {
+        "VocabularyName": "vocabulary_name",
+        "VocabularyFilterName": "vocabulary_filter_name",
+        "VocabularyFilterMethod": "vocabulary_filter_method",
+    }
+)
 
 #: Language options a live session needs to identify a language at all.
 _MIN_STREAM_LANGUAGE_OPTIONS: Final = 2

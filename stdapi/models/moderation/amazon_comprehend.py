@@ -29,14 +29,16 @@ if TYPE_CHECKING:
     from stdapi.models.moderation import ModerationInput
 
 #: Comprehend toxicity labels mapped to OpenAI moderation categories.
-_TOXICITY_CATEGORIES: dict[str, str] = {
-    "HATE_SPEECH": "hate",
-    "HARASSMENT_OR_ABUSE": "harassment",
-    "INSULT": "harassment",
-    "SEXUAL": "sexual",
-    "VIOLENCE_OR_THREAT": "violence",
-    "GRAPHIC": "violence/graphic",
-}
+_TOXICITY_CATEGORIES: frozendict[str, str] = frozendict(
+    {
+        "HATE_SPEECH": "hate",
+        "HARASSMENT_OR_ABUSE": "harassment",
+        "INSULT": "harassment",
+        "SEXUAL": "sexual",
+        "VIOLENCE_OR_THREAT": "violence",
+        "GRAPHIC": "violence/graphic",
+    }
+)
 
 #: Score at or above which Comprehend toxicity results are flagged.
 _TOXICITY_THRESHOLD: float = 0.5

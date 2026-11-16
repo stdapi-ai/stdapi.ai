@@ -2,7 +2,6 @@
 
 from copy import deepcopy
 from re import compile as re_compile
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from stdapi.config import SETTINGS
@@ -47,9 +46,9 @@ _BETA_CONTEXT_MANAGEMENT_2025 = "context-management-2025-06-27"
 _CONTEXT_MANAGEMENT_RESPONSE_PATHS = ("/context_management",)
 
 #: Beta flags keyed by versioned tool type, taking precedence over name-based ``TOOL_BETA_FLAGS``.
-_VERSIONED_TYPE_BETA_FLAGS: dict[str, str] = {
-    "computer_20251124": _BETA_COMPUTER_USE_2025_11
-}
+_VERSIONED_TYPE_BETA_FLAGS: frozendict[str, str] = frozendict(
+    {"computer_20251124": _BETA_COMPUTER_USE_2025_11}
+)
 
 #: Fields excluded when serialising Anthropic server tools
 _SERVER_TOOL_SERIALIZE_EXCLUDE: frozenset[str] = frozenset(
@@ -318,13 +317,13 @@ class AnthropicClaudeChatModel(_BaseChatModel):
     PROMPT_CACHING_SUPPORTED = True
     PROMPT_CACHING_TOOL_SUPPORTED = True
     PROMPT_CACHING_TTL_SUPPORTED = True
-    PASSTHROUGH_HEADERS = MappingProxyType(
+    PASSTHROUGH_HEADERS = frozendict(
         {"anthropic-beta": ("anthropic_beta", _split_beta_flags)}
     )
     SIMPLIFIED_CACHE_MANAGEMENT = True
 
     #: Required ``anthropic_beta`` flag per server tool name, as the current generations need them.
-    TOOL_BETA_FLAGS: ClassVar[MappingProxyType[ServerTools, str]] = MappingProxyType(
+    TOOL_BETA_FLAGS: ClassVar[frozendict[ServerTools, str]] = frozendict(
         {
             "bash": _BETA_COMPUTER_USE_2025,
             "str_replace_editor": _BETA_COMPUTER_USE_2025,
@@ -335,7 +334,7 @@ class AnthropicClaudeChatModel(_BaseChatModel):
     )
 
     #: Server tool name to its versioned type (``bash`` → ``bash_20250124``), as the current generations accept them.
-    SERVER_TOOL_NAME_TO_TYPE: ClassVar[MappingProxyType[str, str]] = MappingProxyType(
+    SERVER_TOOL_NAME_TO_TYPE: ClassVar[frozendict[str, str]] = frozendict(
         {
             "bash": "bash_20250124",
             "str_replace_based_edit_tool": "text_editor_20250728",
@@ -346,10 +345,9 @@ class AnthropicClaudeChatModel(_BaseChatModel):
     )
 
     #: OpenAI to Anthropic reasoning effort override - subclass to customize
-    REASONING_OVERRIDE: ClassVar[dict[Effort | None, ThinkingEffort]] = {
-        "minimal": "low",
-        "low": "low",
-    }
+    REASONING_OVERRIDE: ClassVar[frozendict[Effort | None, ThinkingEffort]] = (
+        frozendict({"minimal": "low", "low": "low"})
+    )
 
     #: Whether the model accepts an explicitly disabled reasoning configuration.
     REASONING_DISABLE_SUPPORTED: ClassVar[bool] = True

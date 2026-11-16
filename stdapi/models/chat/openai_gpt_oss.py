@@ -15,14 +15,16 @@ if TYPE_CHECKING:
 type GptOssReasoning = Literal["low", "medium", "high"]
 
 #: Requested effort mapped onto gpt-oss's scale; ``none`` and ``minimal`` are rejected.
-_REASONING_OVERRIDE: dict[Effort | None, GptOssReasoning] = {
-    "minimal": "low",
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-    "xhigh": "high",
-    "max": "high",
-}
+_REASONING_OVERRIDE: frozendict[Effort | None, GptOssReasoning] = frozendict(
+    {
+        "minimal": "low",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "high",
+        "max": "high",
+    }
+)
 
 
 class ChatModel(_GptChatModel):

@@ -134,7 +134,9 @@ MIN_REQUESTS_PER_MODEL: int = 100
 MAX_MODELS_PER_BATCH: int = 8
 
 #: Maximum number of requests one batch may carry, per calling API.
-MAX_REQUESTS: dict[str, int] = {"openai": 50_000, "anthropic": 100_000}
+MAX_REQUESTS: frozendict[str, int] = frozendict(
+    {"openai": 50_000, "anthropic": 100_000}
+)
 
 #: Maximum accepted size of a batch input file, matching the upstream limit.
 _MAX_INPUT_FILE_BYTES: int = 200 * 1024**2
@@ -235,16 +237,18 @@ _OUTPUT_FILE_MARKER: int = 1
 _ERROR_FILE_MARKER: int = 2
 
 #: Client-facing message for a request the backend rejected as invalid.
-_RECORD_ERRORS: dict[int, tuple[str, str]] = {
-    400: (
-        "invalid_request_error",
-        "The request was rejected as invalid and produced no output.",
-    ),
-    429: (
-        "rate_limit_exceeded",
-        "The request was not run because the rate limit was exceeded.",
-    ),
-}
+_RECORD_ERRORS: frozendict[int, tuple[str, str]] = frozendict(
+    {
+        400: (
+            "invalid_request_error",
+            "The request was rejected as invalid and produced no output.",
+        ),
+        429: (
+            "rate_limit_exceeded",
+            "The request was not run because the rate limit was exceeded.",
+        ),
+    }
+)
 
 #: Client-facing message for a request that failed for any other reason.
 _RECORD_ERROR_DEFAULT = (

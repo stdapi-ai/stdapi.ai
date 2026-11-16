@@ -83,10 +83,9 @@ _TAG_CACHE_LIMIT: int = 4_096
 _UNTAGGED: str = ""
 
 #: Stored object kind declared by each document ``response.object`` field.
-_KIND_BY_OBJECT: dict[str, StoredObjectKind] = {
-    "response": "response",
-    "chat.completion": "chat_completion",
-}
+_KIND_BY_OBJECT: frozendict[str, StoredObjectKind] = frozendict(
+    {"response": "response", "chat.completion": "chat_completion"}
+)
 
 
 def _cache_tags(session_id: str, entry: tuple[str, str]) -> None:

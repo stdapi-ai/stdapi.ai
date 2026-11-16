@@ -101,17 +101,19 @@ if TYPE_CHECKING:
     )
 
 #: Bedrock stop reasons to OpenAI finish reasons mapping
-_FINISH_REASONS: dict[StopReasonType | str | None, FinishReason] = {
-    "max_tokens": "length",
-    "model_context_window_exceeded": "length",
-    "content_filtered": "content_filter",
-    "guardrail_intervened": "content_filter",
-    "malformed_model_output": "content_filter",
-    "malformed_tool_use": "content_filter",
-    "tool_use": "tool_calls",
-    # Non-standard but observed
-    "incomplete": "length",
-}
+_FINISH_REASONS: frozendict[StopReasonType | str | None, FinishReason] = frozendict(
+    {
+        "max_tokens": "length",
+        "model_context_window_exceeded": "length",
+        "content_filtered": "content_filter",
+        "guardrail_intervened": "content_filter",
+        "malformed_model_output": "content_filter",
+        "malformed_tool_use": "content_filter",
+        "tool_use": "tool_calls",
+        # Non-standard but observed
+        "incomplete": "length",
+    }
+)
 
 #: Empty tool schema for Bedrock tool configuration
 _EMPTY_TOOL: dict[str, str] = {"type": "object"}

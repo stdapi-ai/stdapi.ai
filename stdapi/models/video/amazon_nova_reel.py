@@ -21,7 +21,7 @@ _MAX_SECONDS = 120
 _SIZE = "1280x720"
 
 #: Reference image formats accepted by Nova Reel, keyed by MIME type.
-_IMAGE_FORMATS = {"image/png": "png", "image/jpeg": "jpeg"}
+_IMAGE_FORMATS = frozendict({"image/png": "png", "image/jpeg": "jpeg"})
 
 
 class VideoModel(VideoModelBase):

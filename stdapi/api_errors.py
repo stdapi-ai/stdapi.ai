@@ -42,20 +42,22 @@ _DENIAL_RE: Final = re.compile(
 )
 
 #: The S3 operations authorized by an IAM action that is not their own name.
-_S3_IAM_ACTIONS: Final[dict[str, str]] = {
-    "CompleteMultipartUpload": "s3:PutObject",
-    "CopyObject": "s3:PutObject",
-    "CreateMultipartUpload": "s3:PutObject",
-    "DeleteObjects": "s3:DeleteObject",
-    "HeadBucket": "s3:ListBucket",
-    "HeadObject": "s3:GetObject",
-    "ListMultipartUploads": "s3:ListBucketMultipartUploads",
-    "ListObjects": "s3:ListBucket",
-    "ListObjectsV2": "s3:ListBucket",
-    "ListParts": "s3:ListMultipartUploadParts",
-    "UploadPart": "s3:PutObject",
-    "UploadPartCopy": "s3:PutObject",
-}
+_S3_IAM_ACTIONS: Final[frozendict[str, str]] = frozendict(
+    {
+        "CompleteMultipartUpload": "s3:PutObject",
+        "CopyObject": "s3:PutObject",
+        "CreateMultipartUpload": "s3:PutObject",
+        "DeleteObjects": "s3:DeleteObject",
+        "HeadBucket": "s3:ListBucket",
+        "HeadObject": "s3:GetObject",
+        "ListMultipartUploads": "s3:ListBucketMultipartUploads",
+        "ListObjects": "s3:ListBucket",
+        "ListObjectsV2": "s3:ListBucket",
+        "ListParts": "s3:ListMultipartUploadParts",
+        "UploadPart": "s3:PutObject",
+        "UploadPartCopy": "s3:PutObject",
+    }
+)
 
 
 def iam_action(model: OperationModel) -> str:

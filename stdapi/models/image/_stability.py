@@ -22,17 +22,19 @@ if TYPE_CHECKING:
 AspectRatio = Literal["16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21"]
 
 #: Maps a width/height ratio to the closest supported aspect ratio.
-ASPECT_RATIOS: dict[float, AspectRatio] = {
-    16 / 9: "16:9",
-    1.0: "1:1",
-    21 / 9: "21:9",
-    2 / 3: "2:3",
-    3 / 2: "3:2",
-    4 / 5: "4:5",
-    5 / 4: "5:4",
-    9 / 16: "9:16",
-    9 / 21: "9:21",
-}
+ASPECT_RATIOS: frozendict[float, AspectRatio] = frozendict(
+    {
+        16 / 9: "16:9",
+        1.0: "1:1",
+        21 / 9: "21:9",
+        2 / 3: "2:3",
+        3 / 2: "3:2",
+        4 / 5: "4:5",
+        5 / 4: "5:4",
+        9 / 16: "9:16",
+        9 / 21: "9:21",
+    }
+)
 
 
 class TextToImageRequest(TypedDict):

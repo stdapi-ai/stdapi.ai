@@ -762,10 +762,9 @@ def _anthropic_headers(ledger: _Ledger) -> dict[str, str]:
 
 
 #: Route tag to the builder of that dialect's rate-limit headers.
-_HEADERS_BY_TAG: Final[dict[str, Callable[[_Ledger], dict[str, str]]]] = {
-    TAG_OPENAI: _openai_headers,
-    TAG_ANTHROPIC: _anthropic_headers,
-}
+_HEADERS_BY_TAG: Final[frozendict[str, Callable[[_Ledger], dict[str, str]]]] = (
+    frozendict({TAG_OPENAI: _openai_headers, TAG_ANTHROPIC: _anthropic_headers})
+)
 
 
 def rate_limit_headers(request: Request) -> dict[str, str]:

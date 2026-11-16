@@ -29,11 +29,9 @@ TaskType = Literal[
 ]
 
 #: Maps OpenAI's three image-quality levels to Amazon's two-tier quality value.
-AMZ_QUALITY_MAP: dict[ImageOutputQuality, AmzQuality] = {
-    "low": "standard",
-    "medium": "standard",
-    "high": "premium",
-}
+AMZ_QUALITY_MAP: frozendict[ImageOutputQuality, AmzQuality] = frozendict(
+    {"low": "standard", "medium": "standard", "high": "premium"}
+)
 
 
 def get_amz_quality(quality: ImageOutputQuality | str | None) -> AmzQuality | None:

@@ -27,7 +27,7 @@ USER_AGENT = f"stdapi.ai/{SERVER_VERSION}/{SERVER_ID} APN_1.1/pc_{PRODUCT_CODE}$
 MCP_USER_AGENT = f"stdapi.ai/MCP/{SERVER_ID}"
 
 #: Default headers for HTTP clients used in the server
-HTTP_CLIENT_HEADERS = {"User-Agent": USER_AGENT}
+HTTP_CLIENT_HEADERS = frozendict({"User-Agent": USER_AGENT})
 
 #: Internal header name for request ID propagation; randomised at startup to prevent spoofing.
 INTERNAL_REQUEST_ID_HEADER = f"x-stdapi-{webuuid()}"
