@@ -213,7 +213,7 @@ For contributors working on stdapi.ai itself:
 
 ### Prerequisites
 
-- Python 3.14+
+- Python 3.15+
 - [uv](https://github.com/astral-sh/uv) package manager
 - AWS credentials configured
 

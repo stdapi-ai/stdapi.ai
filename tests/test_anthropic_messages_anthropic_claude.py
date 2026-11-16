@@ -37,7 +37,13 @@ from pathlib import Path
 
 import pytest
 from anthropic import Anthropic, BadRequestError
-from anthropic.types import Message, ToolUseBlock
+from anthropic.types import (
+    AssistantMessageParam,
+    Message,
+    ToolResultBlockParam,
+    ToolUseBlock,
+    UserMessageParam,
+)
 
 #: Claude models covering both computer-use tool types, for tools billed on every call.
 _CLAUDE_SYSTEM_TOOLS = (
@@ -93,13 +99,11 @@ _TEXT_EDITOR_COMMANDS = frozenset({"view", "create", "str_replace", "insert"})
 
 def _tool_result(
     tool_use_id: str, content: str, *, is_error: bool = False
-) -> dict[str, object]:
+) -> ToolResultBlockParam:
     """Build the ``tool_result`` block answering the tool use *tool_use_id*."""
-    block: dict[str, object] = {
-        "type": "tool_result",
-        "tool_use_id": tool_use_id,
-        "content": content,
-    }
+    block = ToolResultBlockParam(
+        type="tool_result", tool_use_id=tool_use_id, content=content
+    )
     if is_error:
         block["is_error"] = True
     return block
@@ -111,7 +115,7 @@ def _reply_with_tool_result(
     user_prompt: str,
     first_turn: Message,
     tools: list[dict[str, object]],
-    result: dict[str, object],
+    result: ToolResultBlockParam,
     *,
     extra_headers: dict[str, str] | None = None,
 ) -> Message:
@@ -137,9 +141,9 @@ def _reply_with_tool_result(
         model=model,
         max_tokens=1024,
         messages=[
-            {"role": "user", "content": user_prompt},
-            {"role": "assistant", "content": list(first_turn.content)},
-            {"role": "user", "content": [result]},  # type: ignore[list-item]
+            UserMessageParam(role="user", content=user_prompt),
+            AssistantMessageParam(role="assistant", content=list(first_turn.content)),
+            UserMessageParam(role="user", content=[result]),
         ],
         tools=tools,  # type: ignore[arg-type]
         extra_headers=extra_headers,
@@ -1289,7 +1293,7 @@ class TestComputerUseTool:
         return {"anthropic-beta": beta}
 
     @staticmethod
-    def _screenshot_result(tool_use_id: str, b64_data: str) -> dict[str, object]:
+    def _screenshot_result(tool_use_id: str, b64_data: str) -> ToolResultBlockParam:
         """Build a ``tool_result`` content dict carrying a JPEG screenshot.
 
         Args:

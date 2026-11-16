@@ -1348,10 +1348,11 @@ def _suppress_system_tool_event(
     elif block_delta := event.get("contentBlockDelta"):
         if block_delta["contentBlockIndex"] in suppressed_indices:
             return True
-    elif block_stop := event.get("contentBlockStop"):
-        if (idx := block_stop["contentBlockIndex"]) in suppressed_indices:
-            suppressed_indices.discard(idx)
-            return True
+    elif (block_stop := event.get("contentBlockStop")) and (
+        idx := block_stop["contentBlockIndex"]
+    ) in suppressed_indices:
+        suppressed_indices.discard(idx)
+        return True
     return False
 
 

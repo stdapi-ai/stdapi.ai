@@ -98,11 +98,7 @@ class TestMantleModelDiscovery:
         only because the test environment lists it in
         ``aws_bedrock_mantle_preferred_models``.
         """
-        from stdapi.models import (  # noqa: PLC0415
-            MANTLE_MODELS,
-            is_mantle_preferred,
-            is_mantle_served,
-        )
+        from stdapi.models import MANTLE_MODELS, is_mantle_preferred, is_mantle_served  # noqa: PLC0415 -- imported lazily under the test's settings
 
         assert MANTLE_MODELS, "Expected Mantle model discovery to populate the registry"
         for model_id in (_GEMMA3, _GEMMA4, _LUNA):
@@ -120,11 +116,7 @@ class TestMantleModelDiscovery:
         -- the setting's own default among them, which covers the GPT-5.6 family
         -- so every dual-homed entry left on runtime is non-preferred.
         """
-        from stdapi.models import (  # noqa: PLC0415
-            MANTLE_MODELS,
-            is_mantle_preferred,
-            is_mantle_served,
-        )
+        from stdapi.models import MANTLE_MODELS, is_mantle_preferred, is_mantle_served  # noqa: PLC0415 -- imported lazily under the test's settings
 
         dual_homed = [mid for mid in MANTLE_MODELS if not is_mantle_served(mid)]
         assert dual_homed, "Expected dual-homed models to keep runtime priority"
@@ -682,9 +674,7 @@ class TestMantleResponses:
             assert first.id.startswith("resp_")
             assert first.status == "completed"
             if test_client is not None:
-                from stdapi.aws_bedrock_mantle import (  # noqa: PLC0415
-                    decode_mantle_response_id,
-                )
+                from stdapi.aws_bedrock_mantle import decode_mantle_response_id  # noqa: PLC0415 -- imported lazily under the test's settings
 
                 decoded = decode_mantle_response_id(first.id)
                 assert decoded is not None
@@ -740,9 +730,7 @@ class TestMantleResponses:
             data = "".join(event.model_dump_json() for event in stream)
             assert first.id in data, "Public previous_response_id must be echoed"
             if test_client is not None:
-                from stdapi.aws_bedrock_mantle import (  # noqa: PLC0415
-                    decode_mantle_response_id,
-                )
+                from stdapi.aws_bedrock_mantle import decode_mantle_response_id  # noqa: PLC0415 -- imported lazily under the test's settings
 
                 decoded = decode_mantle_response_id(first.id)
                 assert decoded is not None

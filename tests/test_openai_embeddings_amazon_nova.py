@@ -487,9 +487,7 @@ class TestAmazonNovaSegmentedEmbedding:
              stdapi/models/embedding/amazon_nova_embed.py:_fetch_and_parse_embedding_jsonl
         """
         from stdapi.aws_s3 import S3Object  # noqa: PLC0415
-        from stdapi.models.embedding.amazon_nova_embed import (  # noqa: PLC0415
-            EmbeddingModel,
-        )
+        from stdapi.models.embedding.amazon_nova_embed import EmbeddingModel  # noqa: PLC0415 -- imported lazily under the test's settings
 
         requests = self._stub_backend(
             monkeypatch,
@@ -539,9 +537,7 @@ class TestAmazonNovaSegmentedEmbedding:
         """
         from stdapi.api_errors import ApiError  # noqa: PLC0415
         from stdapi.aws_s3 import S3Object  # noqa: PLC0415
-        from stdapi.models.embedding.amazon_nova_embed import (  # noqa: PLC0415
-            EmbeddingModel,
-        )
+        from stdapi.models.embedding.amazon_nova_embed import EmbeddingModel  # noqa: PLC0415 -- imported lazily under the test's settings
 
         self._stub_backend(
             monkeypatch,
@@ -579,9 +575,7 @@ class TestAmazonNovaSegmentedEmbedding:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
              stdapi/models/embedding/amazon_nova_embed.py:_RESERVED_MEDIA_PARAMS
         """
-        from stdapi.models.embedding.amazon_nova_embed import (  # noqa: PLC0415
-            EmbeddingModel,
-        )
+        from stdapi.models.embedding.amazon_nova_embed import EmbeddingModel  # noqa: PLC0415 -- imported lazily under the test's settings
 
         params: dict[str, Any] = {
             "image": {"source": {"s3Location": {"uri": "s3://mine/ok.png"}}}
@@ -644,9 +638,7 @@ class TestAmazonNovaStorageThreshold:
         """
         from stdapi.aws_s3 import S3Object  # noqa: PLC0415
         from stdapi.input_file import InputFile  # noqa: PLC0415
-        from stdapi.models.embedding.amazon_nova_embed import (  # noqa: PLC0415
-            EmbeddingModel,
-        )
+        from stdapi.models.embedding.amazon_nova_embed import EmbeddingModel  # noqa: PLC0415 -- imported lazily under the test's settings
 
         sent: list[Any] = []
 
@@ -674,9 +666,7 @@ class TestAmazonNovaStorageThreshold:
         Returns:
             The value handed to the invocation: a reference or inline base64.
         """
-        from stdapi.models.embedding.amazon_nova_embed import (  # noqa: PLC0415
-            EmbeddingModel,
-        )
+        from stdapi.models.embedding.amazon_nova_embed import EmbeddingModel  # noqa: PLC0415 -- imported lazily under the test's settings
 
         sent = self._stub_transports(monkeypatch)
         await EmbeddingModel(NOVA_V1)._embed(  # noqa: SLF001

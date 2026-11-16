@@ -1341,10 +1341,7 @@ class TestIdentityAndBinding:
 
     def test_a_minted_realtime_secret_is_bound_to_its_tenant(self) -> None:
         """The signed secret carries the key ID, so the session keeps the scopes."""
-        from stdapi.realtime import (  # noqa: PLC0415
-            mint_client_secret,
-            read_client_secret,
-        )
+        from stdapi.realtime import mint_client_secret, read_client_secret  # noqa: PLC0415 -- imported lazily under the test's settings
         from stdapi.types.openai_realtime import RealtimeSessionConfig  # noqa: PLC0415
 
         tenant_token = TENANT.set(Tenant(key_id=_UNKNOWN_KEY_ID, name="t"))

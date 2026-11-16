@@ -61,9 +61,7 @@ if TYPE_CHECKING:
     from stdapi.usage import ModelInvocationState, UsageKey, UsageRecord
 
 if not SETTINGS.otel_enabled:
-    from stdapi.monitoring_otel_base import (  # type: ignore[assignment]
-        OpenTelemetryManager,
-    )
+    from stdapi.monitoring_otel_base import OpenTelemetryManager  # type: ignore[assignment]  # -- no-op stub stands in when OTel is off
 
 else:
     from opentelemetry.trace import Status, StatusCode

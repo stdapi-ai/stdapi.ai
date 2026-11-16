@@ -3,7 +3,7 @@ name = "stdapi"
 version = "1.19.1"
 description = "Standard API for AI on AWS"
 authors = [{ name = "J.Goutin", email = "contact@stdapi.ai" }]
-requires-python = ">=3.14"
+requires-python = ">=3.15"
 dependencies = [
     "fastapi",
     "aiobotocore>=3",
@@ -97,12 +97,10 @@ dev = [
 ]
 
 [tool.uv]
-# aiobotocore 3.7.0 pins "botocore>=1.42.90,<1.43.1", lagging the bedrock-runtime
-# API (InvokeGuardrailChecks added in botocore 1.43.30). aiobotocore only wraps
-# HTTP transport/credentials/loaders, not the generated service clients, so
-# newer botocore releases work in practice despite the declared ceiling.
+# Only releases at least a week old, so a compromised upload is likely caught
+# and yanked before it reaches the lock file.
+exclude-newer = "7 days"
 override-dependencies = [
-    "botocore>=1.43.30,<1.44",
     # Declared by fastapi-mcp but never imported by any shipped code path.
     "rich; sys_platform == 'never'",
     "typer; sys_platform == 'never'",

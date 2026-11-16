@@ -62,11 +62,13 @@ from stdapi.monitoring import TENANT, Tenant, log_request_event
 from stdapi.realtime import _MAX_EVENT_BYTES, mint_client_secret
 from stdapi.realtime_webrtc import (
     _CALLS,
+    _MAX_BUFFERED_SECONDS,
     _MAX_CHANNEL_BUFFERED_BYTES,
     _MAX_QUEUED_MESSAGES,
     InvalidOfferError,
     RealtimeCall,
     WebRTCCallTransport,
+    _OutgoingTrack,
     _screen_candidates,
     drain_realtime_calls,
     get_call,
@@ -1719,11 +1721,6 @@ class TestOutgoingTrack:
 
     async def test_the_buffer_keeps_the_newest_speech_past_its_cap(self) -> None:
         """The not-yet-spoken buffer is bounded, dropping the oldest bytes."""
-        from stdapi.realtime_webrtc import (  # noqa: PLC0415
-            _MAX_BUFFERED_SECONDS,
-            _OutgoingTrack,
-        )
-
         track = _OutgoingTrack(8000)
         limit = _MAX_BUFFERED_SECONDS * 8000 * 2
         track.write(b"\x00" * limit)

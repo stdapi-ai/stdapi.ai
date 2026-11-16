@@ -269,9 +269,9 @@ class TestDefaultRouting:
         itself a rewrite of the shared registry, so this test saves and
         restores it exactly as the ones it checks do.
         """
-        sentinel = {
-            "sentinel-model": ModelDetails(
-                id="sentinel-model",
+        seeded = {
+            "seeded-model": ModelDetails(
+                id="seeded-model",
                 name="Sentinel",
                 provider="Sentinel",
                 input_modalities=["TEXT"],
@@ -281,12 +281,12 @@ class TestDefaultRouting:
         }
         saved_registries = _snapshot_mantle_registries()
         MANTLE_MODELS.clear()
-        MANTLE_MODELS.update(sentinel)
+        MANTLE_MODELS.update(seeded)
         try:
             self.test_the_merge_serves_a_dual_homed_model_from_the_preferred_endpoint(
                 monkeypatch
             )
-            assert sentinel == MANTLE_MODELS
+            assert seeded == MANTLE_MODELS
         finally:
             _restore_mantle_registries(saved_registries)
 
@@ -681,10 +681,10 @@ class TestDisplacedRuntimeEntry:
             [*DEFAULT_MANTLE_PREFERRED_MODELS],
         )
         model_id = _DUAL_HOMED[0]
-        sentinel = {model_id: _details(model_id, "GPT-5.6 Sol", RUNTIME_SERVICE)}
+        seeded = {model_id: _details(model_id, "GPT-5.6 Sol", RUNTIME_SERVICE)}
         outer = _snapshot_mantle_registries()
         models._DISPLACED_RUNTIME_MODELS.clear()  # noqa: SLF001
-        models._DISPLACED_RUNTIME_MODELS.update(sentinel)  # noqa: SLF001
+        models._DISPLACED_RUNTIME_MODELS.update(seeded)  # noqa: SLF001 -- test seeds private registry state
         try:
             snapshot = _snapshot_mantle_registries()
             merged = {model_id: _details(model_id, "GPT-5.6 Sol", MANTLE_SERVICE)}
@@ -695,7 +695,7 @@ class TestDisplacedRuntimeEntry:
 
             _restore_mantle_registries(snapshot)
 
-            assert sentinel == models._DISPLACED_RUNTIME_MODELS  # noqa: SLF001
+            assert seeded == models._DISPLACED_RUNTIME_MODELS  # noqa: SLF001 -- test inspects private state
         finally:
             _restore_mantle_registries(outer)
 

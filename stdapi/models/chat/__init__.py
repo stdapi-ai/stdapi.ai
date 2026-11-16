@@ -242,9 +242,7 @@ def get_chat_model(
     """
     if is_sagemaker_endpoint(model_id):
         # Imported here: the module subclasses the Mantle chat model.
-        from stdapi.models.chat._sagemaker import (  # noqa: PLC0415
-            get_sagemaker_chat_model,
-        )
+        from stdapi.models.chat._sagemaker import get_sagemaker_chat_model  # noqa: PLC0415 -- lazy import, subclasses the Mantle chat model
 
         return get_sagemaker_chat_model(model_id)
     if allow_mantle and serves_via_mantle(model_id):

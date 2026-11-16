@@ -3383,9 +3383,7 @@ class TestCodeExecutionOutputItem:
 
         Ref: stdapi/models/chat/_default.py:ChatModel.create_response
         """
-        from stdapi.models.chat.amazon_nova_2 import (  # noqa: PLC0415
-            ChatModel as NovaChatModel,
-        )
+        from stdapi.models.chat.amazon_nova_2 import ChatModel as NovaChatModel  # noqa: PLC0415 -- imported lazily under the test's settings
 
         converse_response = {
             "output": {

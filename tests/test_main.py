@@ -46,7 +46,13 @@ from stdapi.exceptions import (
 )
 from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile
 from stdapi.main import handle_exception_group
-from stdapi.routes import core_root, openai_chat_completions
+from stdapi.routes import (
+    anthropic_files,
+    anthropic_models,
+    core_root,
+    discover_routers,
+    openai_chat_completions,
+)
 from stdapi.server import SERVER_ID
 from stdapi.types.openai_chat_completions import ChatCompletion
 from tests._helpers import make_client_error, make_event_log, make_model_details
@@ -437,13 +443,6 @@ class TestSharedPrefixRouterOptOut:
 
         from fastapi import FastAPI  # noqa: PLC0415
         from fastapi.routing import iter_route_contexts  # noqa: PLC0415
-
-        from stdapi.config import SETTINGS  # noqa: PLC0415
-        from stdapi.routes import (  # noqa: PLC0415
-            anthropic_files,
-            anthropic_models,
-            discover_routers,
-        )
 
         monkeypatch.setattr(SETTINGS, "openai_routes_prefix", "")
         monkeypatch.setattr(SETTINGS, "anthropic_routes_prefix", "")

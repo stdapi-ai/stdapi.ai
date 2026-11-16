@@ -267,9 +267,7 @@ class TestMarengoRequestShapes:
     @staticmethod
     def _model(model_id: str) -> Any:  # noqa: ANN401
         """Build a model instance without touching the AWS-backed model registry."""
-        from stdapi.models.embedding.twelvelabs_marengo_embed import (  # noqa: PLC0415
-            EmbeddingModel,
-        )
+        from stdapi.models.embedding.twelvelabs_marengo_embed import EmbeddingModel  # noqa: PLC0415 -- imported lazily under the test's settings
 
         return EmbeddingModel(model_id)
 
@@ -373,18 +371,14 @@ class TestMarengoStorageThreshold:
 
     async def test_media_that_only_fits_undecoded_is_read_from_storage(self) -> None:
         """A file under the body limit whose base64 form is over it goes to storage."""
-        from stdapi.models.embedding.twelvelabs_marengo_embed import (  # noqa: PLC0415
-            _needs_s3,
-        )
+        from stdapi.models.embedding.twelvelabs_marengo_embed import _needs_s3  # noqa: PLC0415 -- private helper used by this test only
 
         # 20,000,000 bytes weigh 26,666,668 once base64-encoded.
         assert await _needs_s3(self._remote(20_000_000), force_s3_data=False)
 
     async def test_media_that_fits_encoded_travels_in_the_request(self) -> None:
         """A file whose base64 form is still under the limit stays inline."""
-        from stdapi.models.embedding.twelvelabs_marengo_embed import (  # noqa: PLC0415
-            _needs_s3,
-        )
+        from stdapi.models.embedding.twelvelabs_marengo_embed import _needs_s3  # noqa: PLC0415 -- private helper used by this test only
 
         # 18,000,000 bytes weigh 24,000,000 once base64-encoded.
         assert not await _needs_s3(self._remote(18_000_000), force_s3_data=False)

@@ -10,14 +10,14 @@
 # Pinned to the interpreter version this project requires, on the current Debian
 # stable.  The patch level floats so every rebuild picks up Debian's security
 # updates, which a digest pin would freeze out.
-FROM python:3.14-slim-trixie AS builder
+FROM python:3.15-slim-trixie AS builder
 
 # uv is copied from its own digest-pinned image rather than fetched unpinned
 # from PyPI: the hash verification the next stage relies on ("uv export"'s
 # requirements.txt carries the lock file's hashes) is only as trustworthy as
 # the tool doing the verifying, and an unpinned fetch of that tool would trust
 # whatever PyPI serves at build time.
-COPY --from=ghcr.io/astral-sh/uv:0.12.7@sha256:95f2aa1fe59274951cfe9b0cbc7972e879ff1004bc8945d130a32eb0dbd85945 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 /uv /usr/local/bin/uv
 
 # Dependencies are installed into a virtual environment the runtime stage copies
 # whole, so uv, pip and their caches stay in this stage.
@@ -52,7 +52,7 @@ COPY stdapi ./stdapi
 RUN "${VIRTUAL_ENV}/bin/python" -m stdapi.docs_assets && \
     chmod -R a+rX /opt/app /opt/venv
 
-FROM python:3.14-slim-trixie
+FROM python:3.15-slim-trixie
 
 # The MCP Registry validates this against the name in the server.json it is
 # given and rejects a mismatch, so the image has to carry it before the server

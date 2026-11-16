@@ -1091,9 +1091,7 @@ class TestFixUnionParamTypes:
         If this fails after a ``fastapi_mcp`` upgrade, the union repair may have
         become unnecessary — re-evaluate :func:`_fix_union_param_types`.
         """
-        from fastapi_mcp.openapi.utils import (  # type: ignore[import-untyped]  # noqa: PLC0415
-            get_single_param_type_from_schema,
-        )
+        from fastapi_mcp.openapi.utils import get_single_param_type_from_schema  # type: ignore[import-untyped]  # noqa: PLC0415 -- fastapi_mcp ships no type stubs, imported lazily
 
         union = {"anyOf": [{"type": "string"}, {"type": "array"}]}
         assert get_single_param_type_from_schema(union) in {"string", "array"}

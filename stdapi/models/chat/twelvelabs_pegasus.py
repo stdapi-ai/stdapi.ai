@@ -103,7 +103,8 @@ def _extract_latest_video(messages: list[MessageTypeDef]) -> dict[str, Any] | No
     for message in reversed(messages):
         for block in reversed(message.get("content", [])):
             if "video" in block:
-                return block["video"]  # type: ignore[return-value]
+                video: dict[str, Any] = block["video"]
+                return video
     return None
 
 

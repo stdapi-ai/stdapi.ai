@@ -591,10 +591,7 @@ async def call_with_region_failover[ResultT](
                 raise
             await _cleanup_failed_region(service, region, on_failed_region)
             # Imported here: stdapi.monitoring transitively imports this module.
-            from stdapi.monitoring import (  # noqa: PLC0415
-                REQUEST_LOG,
-                log_error_details,
-            )
+            from stdapi.monitoring import REQUEST_LOG, log_error_details  # noqa: PLC0415 -- circular import
 
             if REQUEST_LOG.get(None) is not None:
                 log_error_details(
@@ -1241,11 +1238,7 @@ async def request_signing_credentials() -> AioDeferredRefreshableCredentials | N
             identifies no end user where the configuration requires one.
     """
     # Imported here: stdapi.monitoring transitively imports this module.
-    from stdapi.monitoring import (  # noqa: PLC0415
-        REQUEST_LOG,
-        TENANT,
-        tenant_aws_credential,
-    )
+    from stdapi.monitoring import REQUEST_LOG, TENANT, tenant_aws_credential  # noqa: PLC0415 -- circular import
 
     if (tenant := TENANT.get()) is not None and (
         credential := tenant_aws_credential()

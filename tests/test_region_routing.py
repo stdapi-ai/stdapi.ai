@@ -37,6 +37,12 @@ if TYPE_CHECKING:
     import stdapi.region_routing as _rr_mod
     from stdapi.region_routing import RegionState
 
+from stdapi.input_file import (
+    _CURRENT_INPUT_FILES,
+    InputFile,
+    _FileOrigin,
+    get_s3_input_regions,
+)
 
 pytestmark = [
     pytest.mark.local,
@@ -1865,11 +1871,6 @@ class TestS3InputRegions:
 
     async def test_get_s3_input_regions_empty_when_no_s3_files(self) -> None:
         """get_s3_input_regions returns an empty dict when no S3 InputFiles are in context."""
-        from stdapi.input_file import (  # noqa: PLC0415
-            _CURRENT_INPUT_FILES,
-            get_s3_input_regions,
-        )
-
         token = _CURRENT_INPUT_FILES.set([])
         try:
             regions = get_s3_input_regions()
@@ -2682,11 +2683,6 @@ class TestInputFilePublicApi:
     ) -> None:
         """An S3 virtual-hosted HTTP URL for an accepted bucket is normalised to s3:// origin."""
         _require_s3_bucket()
-        from stdapi.input_file import (  # noqa: PLC0415
-            _CURRENT_INPUT_FILES,
-            InputFile,
-            _FileOrigin,
-        )
 
         # Build a virtual-hosted style URL for the accepted bucket/key.
         http_url = f"https://{s3_file.bucket}.s3.amazonaws.com/{s3_file.key}"
@@ -2707,11 +2703,6 @@ class TestInputFilePublicApi:
     ) -> None:
         """An S3 path-style HTTP URL for an accepted bucket is normalised to s3:// origin."""
         _require_s3_bucket()
-        from stdapi.input_file import (  # noqa: PLC0415
-            _CURRENT_INPUT_FILES,
-            InputFile,
-            _FileOrigin,
-        )
 
         http_url = f"https://s3.amazonaws.com/{s3_file.bucket}/{s3_file.key}"
 
@@ -2728,12 +2719,6 @@ class TestInputFilePublicApi:
 
     def test_normalize_s3_http_url_unknown_bucket_treated_as_http(self) -> None:
         """An S3 HTTP URL for a non-accepted bucket is treated as a plain HTTP URL."""
-        from stdapi.input_file import (  # noqa: PLC0415
-            _CURRENT_INPUT_FILES,
-            InputFile,
-            _FileOrigin,
-        )
-
         http_url = "https://unknown-bucket-xyz.s3.amazonaws.com/some/key.png"
 
         token = _CURRENT_INPUT_FILES.set([])

@@ -1074,10 +1074,7 @@ def handle_bedrock_client_error() -> Generator[None]:
         yield
     except ClientError as error:
         # Imported here: stdapi.monitoring imports stdapi.aws_bedrock (import cycle).
-        from stdapi.monitoring import (  # noqa: PLC0415
-            context_length_error,
-            log_error_details,
-        )
+        from stdapi.monitoring import context_length_error, log_error_details  # noqa: PLC0415 -- circular import
 
         error_message = error.response["Error"]["Message"]
         match error.response["Error"]["Code"]:

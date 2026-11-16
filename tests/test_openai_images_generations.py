@@ -1237,22 +1237,22 @@ class TestStreamGeneratorUsageMatchesNonStream:
         log_token = REQUEST_LOG.set(cast("EventLog", {"level": "info"}))
         try:
             job = object.__new__(ImageGenerationJobBase)
-            job._count = 2  # noqa: SLF001
-            job._response_width = 512  # noqa: SLF001
-            job._response_height = 512  # noqa: SLF001
-            job._response_quality = "medium"  # noqa: SLF001
-            job._output_format = "png"  # noqa: SLF001
-            job._response_output_format = "png"  # noqa: SLF001
-            job._input_tokens = None  # noqa: SLF001
-            job._output_tokens = None  # noqa: SLF001
+            job._count = 2
+            job._response_width = 512
+            job._response_height = 512
+            job._response_quality = "medium"
+            job._output_format = "png"
+            job._response_output_format = "png"
+            job._input_tokens = None
+            job._output_tokens = None
 
             async def image_stream() -> AsyncGenerator[ImageGenerationResponse]:
                 """Simulate progressive per-image token accumulation (e.g. Stability fan-out)."""
-                job._input_tokens = 5  # noqa: SLF001
-                job._output_tokens = 1  # noqa: SLF001
+                job._input_tokens = 5
+                job._output_tokens = 1
                 yield ImageGenerationResponse(image="aaa", index=0)
-                job._input_tokens = 12  # noqa: SLF001
-                job._output_tokens = 2  # noqa: SLF001
+                job._input_tokens = 12
+                job._output_tokens = 2
                 yield ImageGenerationResponse(image="bbb", index=1)
 
             events = []
@@ -1393,14 +1393,14 @@ class TestStreamGeneratorEventNames:
     def _job() -> ImageGenerationJobBase[Any]:
         """Build a minimal job whose counters are already final."""
         job = object.__new__(ImageGenerationJobBase)
-        job._count = 1  # noqa: SLF001
-        job._response_width = 512  # noqa: SLF001
-        job._response_height = 512  # noqa: SLF001
-        job._response_quality = "medium"  # noqa: SLF001
-        job._output_format = "png"  # noqa: SLF001
-        job._response_output_format = "png"  # noqa: SLF001
-        job._input_tokens = 3  # noqa: SLF001
-        job._output_tokens = 1  # noqa: SLF001
+        job._count = 1
+        job._response_width = 512
+        job._response_height = 512
+        job._response_quality = "medium"
+        job._output_format = "png"
+        job._response_output_format = "png"
+        job._input_tokens = 3
+        job._output_tokens = 1
         return job
 
     @pytest.mark.local
@@ -2355,14 +2355,14 @@ class TestStreamGeneratorPartialImages:
         log_token = REQUEST_LOG.set(cast("EventLog", {"level": "info"}))
         try:
             job = object.__new__(ImageGenerationJobBase)
-            job._count = 2  # noqa: SLF001
-            job._response_width = 512  # noqa: SLF001
-            job._response_height = 512  # noqa: SLF001
-            job._response_quality = "medium"  # noqa: SLF001
-            job._output_format = "png"  # noqa: SLF001
-            job._response_output_format = "png"  # noqa: SLF001
-            job._input_tokens = 7  # noqa: SLF001
-            job._output_tokens = 2  # noqa: SLF001
+            job._count = 2
+            job._response_width = 512
+            job._response_height = 512
+            job._response_quality = "medium"
+            job._output_format = "png"
+            job._response_output_format = "png"
+            job._input_tokens = 7
+            job._output_tokens = 2
 
             async def image_stream() -> AsyncGenerator[ImageGenerationResponse]:
                 """Emit two previews for image 0 and one for image 1, then finals."""
@@ -2422,9 +2422,9 @@ class TestImageUsageFallbacks:
     ) -> ImageGenerationJobBase[Any]:
         """Build a *count*-image job billed *input_tokens*/*output_tokens*."""
         job = object.__new__(ImageGenerationJobBase)
-        job._count = count  # noqa: SLF001
-        job._input_tokens = input_tokens  # noqa: SLF001
-        job._output_tokens = output_tokens  # noqa: SLF001
+        job._count = count
+        job._input_tokens = input_tokens
+        job._output_tokens = output_tokens
         return job
 
     def test_unreported_tokens_fall_back_to_the_image_counts(self) -> None:

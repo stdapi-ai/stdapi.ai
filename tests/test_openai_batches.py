@@ -41,7 +41,7 @@ from openai import BadRequestError
 from stdapi import aws_s3, batches
 from stdapi.api_errors import ApiError
 from stdapi.cleanup import CLEANUPS
-from stdapi.files import payload_created_at
+from stdapi.files import _core, parse_file_id, payload_created_at, resolve_file_bucket
 from tests import _batches
 from tests._batches import chat_lines, converse_output
 from tests._helpers import poll_batch_until_ended
@@ -1727,14 +1727,6 @@ class TestOpenAIBatchLifecycle:
         Ref: stdapi/batches.py:_derive_file_payload
              stdapi/files/_core.py:resolve_file_bucket
         """
-        from binascii import crc32  # noqa: PLC0415
-
-        from stdapi.files import (  # noqa: PLC0415
-            _core,
-            parse_file_id,
-            resolve_file_bucket,
-        )
-
         s3, bedrock = _batches.install(monkeypatch)
         monkeypatch.setitem(
             _core._BUCKET_CRC32,  # noqa: SLF001

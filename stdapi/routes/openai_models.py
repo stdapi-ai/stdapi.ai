@@ -189,7 +189,6 @@ async def retrieve_model(
         examples=["amazon.nova-micro-v1:0"],
         min_length=1,
         max_length=255,
-        str_strip_whitespace=True,
     ),
     _: Annotated[None, Depends(authenticate)] = None,
 ) -> Model:

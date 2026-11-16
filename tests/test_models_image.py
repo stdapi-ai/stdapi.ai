@@ -497,7 +497,7 @@ class TestStreamCancelsAbandonedJobs:
             ImageGenerationJobBase, "_ensure_image_output_format", _passthrough_format
         )
         job = object.__new__(ImageGenerationJobBase)
-        stream = job._stream_completed_images([_fast(), _never()])  # noqa: SLF001
+        stream = job._stream_completed_images([_fast(), _never()])
         assert await stream.__anext__() is first_image
         await stream.aclose()
         await wait_for(cancelled.wait(), timeout=5)
@@ -537,12 +537,12 @@ class TestStabilityMultiImageTokenAccumulation:
                 return next(results)
 
         job = object.__new__(StabilityImageGenerationJobBase)
-        job._model = cast("StabilityImageModelBase", _FakeModel())  # noqa: SLF001
-        job._input_tokens = None  # noqa: SLF001
-        job._output_tokens = None  # noqa: SLF001
+        job._model = cast("StabilityImageModelBase", _FakeModel())
+        job._input_tokens = None
+        job._output_tokens = None
 
         images = [
-            await job._get_image_from_response({}, index)  # type: ignore[arg-type]  # noqa: SLF001
+            await job._get_image_from_response({}, index)  # type: ignore[arg-type]  # -- test passes a deliberately minimal response
             for index in range(3)
         ]
 
@@ -890,9 +890,9 @@ class TestStabilityContentFilter:
                 )
 
         job = object.__new__(StabilityImageGenerationJobBase)
-        job._model = cast("StabilityImageModelBase", _FakeModel())  # noqa: SLF001
-        job._input_tokens = None  # noqa: SLF001
-        job._output_tokens = None  # noqa: SLF001
+        job._model = cast("StabilityImageModelBase", _FakeModel())
+        job._input_tokens = None
+        job._output_tokens = None
         return job
 
     async def test_filtered_response_raises_naming_the_reason(self) -> None:

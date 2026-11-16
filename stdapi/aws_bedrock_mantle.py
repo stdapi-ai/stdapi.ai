@@ -363,10 +363,7 @@ def refuse_unappliable_guardrail() -> None:
     """
     # Imported here: stdapi.aws imports this module, so stdapi.aws_bedrock
     # cannot be reached from its top level.
-    from stdapi.aws_bedrock import (  # noqa: PLC0415
-        GUARDRAIL_CONFIG_VAR,
-        GUARDRAIL_REQUEST_OVERRIDE_VAR,
-    )
+    from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, GUARDRAIL_REQUEST_OVERRIDE_VAR  # noqa: PLC0415 -- circular import
 
     if GUARDRAIL_CONFIG_VAR.get(None) is None:
         return
