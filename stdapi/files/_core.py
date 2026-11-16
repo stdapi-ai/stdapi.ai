@@ -29,7 +29,6 @@ from binascii import Error as _BinasciiError
 from binascii import crc32 as _crc32
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from itertools import chain
 from mimetypes import guess_extension
 from re import compile as re_compile
 from typing import TYPE_CHECKING
@@ -657,7 +656,7 @@ async def list_files(
             )
             keys = [
                 k
-                for k in sorted(chain.from_iterable(per_bucket))
+                for k in sorted(*bucket_keys for bucket_keys in per_bucket)
                 if len(k) - prefix_len == 32
             ][: limit + 1]
             if not keys or keys[-1] == start_after:
@@ -673,18 +672,14 @@ async def list_files(
     all_keys = [
         k
         for k in sorted(
-            chain.from_iterable(
-                await gather(
-                    *[
-                        _scan_all_keys(
-                            get_client("s3", BUCKET_TO_REGION[b]),
-                            b,
-                            prefix,
-                            start_after,
-                        )
-                        for b in buckets
-                    ]
-                )
+            *bucket_keys
+            for bucket_keys in await gather(
+                *[
+                    _scan_all_keys(
+                        get_client("s3", BUCKET_TO_REGION[b]), b, prefix, start_after
+                    )
+                    for b in buckets
+                ]
             )
         )
         if len(k) - prefix_len == 32

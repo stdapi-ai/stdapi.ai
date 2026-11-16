@@ -989,7 +989,7 @@ async def _run_file_search(tool: FileSearchTool, query: str) -> list[FileSearchR
             for store_id in tool.vector_store_ids
         )
     )
-    merged = [result for store_results in per_store for result in store_results]
+    merged = [*store_results for store_results in per_store]
     merged.sort(key=lambda result: result.score or 0.0, reverse=True)
     return merged[:max_results]
 
