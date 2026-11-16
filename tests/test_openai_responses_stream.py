@@ -61,6 +61,7 @@ from stdapi.types.openai_responses import (
     WebSearchActionSearch,
 )
 from stdapi.vector_stores import SearchResult, StoreRecord
+lazy from stdapi.api_errors import ApiError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Generator, Sequence
@@ -646,8 +647,6 @@ class TestMidStreamErrors:
 
         Ref: stdapi/api_errors.py:ApiError
         """
-        from stdapi.api_errors import ApiError  # noqa: PLC0415
-
         exc = ApiError("bad tool", status=400)
         exc.code = "invalid_value"
         exc.param = "tools"

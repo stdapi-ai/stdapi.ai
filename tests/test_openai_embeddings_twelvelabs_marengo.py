@@ -16,6 +16,8 @@ import pytest
 from openai import BadRequestError, OpenAI
 
 from tests._helpers import assert_embedding_list
+lazy from stdapi.input_file import InputFileUrl
+lazy from stdapi.models.embedding.twelvelabs_marengo_embed import _needs_s3
 
 #: Only Marengo generation currently reachable on Bedrock.
 MARANGO_V3 = "twelvelabs.marengo-embed-3-0-v1:0"
@@ -361,8 +363,6 @@ class TestMarengoStorageThreshold:
         Returns:
             An ``InputFileUrl`` that resolves its metadata without a request.
         """
-        from stdapi.input_file import InputFileUrl  # noqa: PLC0415
-
         value = InputFileUrl("https://example.com/clip.mp4", content_type="video/mp4")
         source = value._source  # noqa: SLF001
         source._filename = None  # noqa: SLF001
@@ -371,14 +371,10 @@ class TestMarengoStorageThreshold:
 
     async def test_media_that_only_fits_undecoded_is_read_from_storage(self) -> None:
         """A file under the body limit whose base64 form is over it goes to storage."""
-        from stdapi.models.embedding.twelvelabs_marengo_embed import _needs_s3  # noqa: PLC0415 -- private helper used by this test only
-
         # 20,000,000 bytes weigh 26,666,668 once base64-encoded.
         assert await _needs_s3(self._remote(20_000_000), force_s3_data=False)
 
     async def test_media_that_fits_encoded_travels_in_the_request(self) -> None:
         """A file whose base64 form is still under the limit stays inline."""
-        from stdapi.models.embedding.twelvelabs_marengo_embed import _needs_s3  # noqa: PLC0415 -- private helper used by this test only
-
         # 18,000,000 bytes weigh 24,000,000 once base64-encoded.
         assert not await _needs_s3(self._remote(18_000_000), force_s3_data=False)

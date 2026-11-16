@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import struct
 import threading
 import time
 from contextlib import asynccontextmanager, suppress
@@ -19,10 +20,14 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 import pytest
 from openai.types.realtime.realtime_server_event import RealtimeServerEvent
-from pydantic import BaseModel, TypeAdapter
-from starlette.websockets import WebSocketDisconnect
+from pydantic import BaseModel, SecretStr, TypeAdapter, ValidationError
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, PERFORMANCE_CONFIG_VAR
+from stdapi.aws_bedrock import (
+    GUARDRAIL_CONFIG_VAR,
+    PERFORMANCE_CONFIG_VAR,
+    GuardrailInterventionError,
+)
 from stdapi.aws_bedrock_mantle import MANTLE_PROJECT_VAR
 from stdapi.config import SETTINGS
 from stdapi.models.realtime import (
@@ -56,6 +61,10 @@ from stdapi.types.openai_realtime import (
     TranscriptionSessionConfig,
 )
 from tests.conftest import logged_usage_entries
+lazy from stdapi import realtime
+lazy from stdapi.api_errors import ApiError, UnsupportedModelError
+lazy from stdapi.auth import AuthenticationHandler
+lazy from stdapi.monitoring import REQUEST_LOG
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Iterator
@@ -155,8 +164,6 @@ def _assert_official_shape(events: list[dict[str, Any]]) -> None:
     Args:
         events: Every event the session sent, in order.
     """
-    from pydantic import ValidationError  # noqa: PLC0415
-
     for event in events:
         try:
             parsed = _SERVER_EVENT.validate_python(event)
@@ -320,7 +327,6 @@ def fake_backend(monkeypatch: pytest.MonkeyPatch) -> Iterator[type[_FakeModel]]:
         The fake model class, whose ``script`` the test sets and whose
         ``opened`` sessions it asserts on.
     """
-    from stdapi import realtime  # noqa: PLC0415
 
     class _Details:
         """The one field the session reads off a validated model."""
@@ -329,9 +335,6 @@ def fake_backend(monkeypatch: pytest.MonkeyPatch) -> Iterator[type[_FakeModel]]:
 
     async def _validate_model(model_id: str, **_: Any) -> Any:  # noqa: ANN401
         """Accept the fake model and refuse everything else."""
-        from stdapi.api_errors import UnsupportedModelError  # noqa: PLC0415
-        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
-
         if model_id != _MODEL:
             raise UnsupportedModelError(model_id)
         REQUEST_LOG.get()["model_id"] = _MODEL
@@ -382,10 +385,7 @@ def _arm_authentication(monkeypatch: pytest.MonkeyPatch) -> None:
     Args:
         monkeypatch: The test's patcher.
     """
-    from pydantic import SecretStr  # noqa: PLC0415
-
     import stdapi.auth  # noqa: PLC0415
-    from stdapi.auth import AuthenticationHandler  # noqa: PLC0415
 
     monkeypatch.setattr(SETTINGS, "api_key", SecretStr("the-deployment-key"))
     monkeypatch.setattr(SETTINGS, "api_key_ssm_parameter", None)
@@ -478,10 +478,6 @@ class TestSigningKeyDerivation:
 
     def test_the_same_api_key_derives_the_same_signing_key(self) -> None:
         """Two independent handlers holding one API key agree on the key."""
-        from pydantic import SecretStr  # noqa: PLC0415
-
-        from stdapi.auth import AuthenticationHandler  # noqa: PLC0415
-
         first, second = AuthenticationHandler(), AuthenticationHandler()
         first._hash_api_key(SecretStr("the-deployment-key"))  # noqa: SLF001
         second._hash_api_key(SecretStr("the-deployment-key"))  # noqa: SLF001
@@ -492,10 +488,6 @@ class TestSigningKeyDerivation:
 
     def test_a_different_api_key_derives_a_different_signing_key(self) -> None:
         """A deployment cannot verify a secret another deployment minted."""
-        from pydantic import SecretStr  # noqa: PLC0415
-
-        from stdapi.auth import AuthenticationHandler  # noqa: PLC0415
-
         first, second = AuthenticationHandler(), AuthenticationHandler()
         first._hash_api_key(SecretStr("one-key"))  # noqa: SLF001
         second._hash_api_key(SecretStr("another-key"))  # noqa: SLF001
@@ -506,8 +498,6 @@ class TestSigningKeyDerivation:
 
     def test_no_api_key_derives_nothing(self) -> None:
         """Without a credential to derive from there is no deployment-wide key."""
-        from stdapi.auth import AuthenticationHandler  # noqa: PLC0415
-
         assert AuthenticationHandler().derived_key(b"stdapi-rt", 32) is None
 
 
@@ -532,8 +522,6 @@ class TestClientSecretRoute:
 
     def test_the_requested_lifetime_is_applied(self, app_client: TestClient) -> None:
         """``expires_after.seconds`` decides when the secret stops working."""
-        import time  # noqa: PLC0415
-
         response = app_client.post(
             "/v1/realtime/client_secrets",
             json={
@@ -620,8 +608,6 @@ class TestAudioConversion:
     @pytest.mark.parametrize("media_type", ["audio/pcmu", "audio/pcma"])
     def test_a_g711_round_trip_keeps_the_signal(self, media_type: str) -> None:
         """Every sample survives encoding and decoding within codec tolerance."""
-        import struct  # noqa: PLC0415
-
         pcm = struct.pack(f"<{len(_SAMPLE_SWEEP)}h", *_SAMPLE_SWEEP)
 
         companded = encode_client_audio(pcm, media_type)
@@ -663,8 +649,6 @@ class TestAudioConversion:
 
         Ref: https://www.itu.int/rec/T-REC-G.711
         """
-        import struct  # noqa: PLC0415
-
         for encoded, sample in _G711_VECTORS[media_type].items():
             decoded = decode_client_audio(bytes([encoded]), media_type)
             assert struct.unpack("<h", decoded)[0] == sample, hex(encoded)
@@ -688,8 +672,6 @@ class TestWebsocketCredential:
     @staticmethod
     def _websocket(*headers: tuple[bytes, bytes]) -> Any:  # noqa: ANN401
         """Build a WebSocket carrying *headers* and nothing else."""
-        from starlette.websockets import WebSocket  # noqa: PLC0415
-
         return WebSocket(
             {
                 "type": "websocket",
@@ -1110,7 +1092,6 @@ class TestSessionEvents:
 
         Ref: stdapi/realtime.py:serve_realtime_session
         """
-        from stdapi import realtime  # noqa: PLC0415
 
         def _fail(_model_id: str) -> Any:  # noqa: ANN401
             message = "backend exploded"
@@ -1512,8 +1493,6 @@ class TestTranscriptionFailure:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The failure is reported against the item, before the session ends."""
-        from stdapi import realtime  # noqa: PLC0415
-        from stdapi.api_errors import ApiError  # noqa: PLC0415
 
         async def _apply(text: str, *, source: str, **_: object) -> str:
             """Fail every check of the caller's speech."""
@@ -1554,8 +1533,6 @@ class TestTranscriptionFailure:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The event only exists for a session that asked for transcription."""
-        from stdapi import realtime  # noqa: PLC0415
-        from stdapi.api_errors import ApiError  # noqa: PLC0415
 
         async def _apply(text: str, *, source: str, **_: object) -> str:
             """Fail every check of the caller's speech."""
@@ -2363,8 +2340,6 @@ class TestSecretCarriedSessions:
         Returns:
             The request configuration in force when the guardrail ran.
         """
-        from stdapi import realtime  # noqa: PLC0415
-
         seen: dict[str, Any] = {}
 
         async def _apply(text: str, **_: object) -> str:
@@ -2456,8 +2431,6 @@ class TestSessionBounds:
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """One event past the cap answers an error rather than being buffered."""
-        from stdapi import realtime  # noqa: PLC0415
-
         monkeypatch.setattr(realtime, "_MAX_EVENT_BYTES", 256)
 
         with _connect(app_client) as websocket:
@@ -2483,8 +2456,6 @@ class TestSessionBounds:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Past the cap the append is refused, and clearing lets the caller on."""
-        from stdapi import realtime  # noqa: PLC0415
-
         monkeypatch.setattr(realtime, "_MAX_BUFFERED_AUDIO_BYTES", len(_SILENT_FRAME))
         chunk = base64.b64encode(_SILENT_FRAME).decode()
 
@@ -2682,8 +2653,6 @@ class TestGuardrailedSession:
     @staticmethod
     def _record(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
         """Replace the guardrail with a recorder returning masked text."""
-        from stdapi import realtime  # noqa: PLC0415
-
         checked: list[tuple[str, str]] = []
 
         async def _apply(text: str, *, source: str, **_: object) -> str:
@@ -2750,9 +2719,6 @@ class TestGuardrailedSession:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """An intervention on the answer is terminal, as it cannot be undone."""
-        from stdapi import realtime  # noqa: PLC0415
-        from stdapi.aws_bedrock import GuardrailInterventionError  # noqa: PLC0415
-
         blocked = "The content was blocked by the configured guardrail."
 
         async def _apply(text: str, *, source: str, **_: object) -> str:
@@ -3334,8 +3300,6 @@ class TestFunctionTools:
         context, which is the reading the guardrail is configured for: what
         reaches the model is what the check left, not what the client sent.
         """
-        from stdapi import realtime  # noqa: PLC0415
-
         checked: list[tuple[str, str]] = []
 
         async def _apply(text: str, *, source: str, **_: object) -> str:
@@ -3635,8 +3599,6 @@ class TestFunctionTools:
         acts on, so the client would never run the tool, and the model would
         never be answered by anyone.
         """
-        from stdapi import realtime  # noqa: PLC0415
-
         gate = _Gate()
 
         async def _apply(text: str, *, source: str, **_: object) -> str:

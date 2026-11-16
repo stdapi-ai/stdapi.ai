@@ -32,6 +32,9 @@ from openai import BadRequestError, NotFoundError, OpenAI
 
 from tests._helpers import long_text, red_png_b64
 from tests.conftest import REPO_ROOT, logged_usage_entries
+lazy from stdapi.aws_bedrock_mantle import decode_mantle_response_id
+lazy from stdapi.models import MANTLE_MODELS, is_mantle_served
+lazy from stdapi.models.chat._mantle import _default
 
 #: The learned-routing caches are process-global, so these tests must not be split
 #: across xdist workers that would each learn a different routing surface.
@@ -140,8 +143,6 @@ class TestMantleModelDiscovery:
         Ref: https://developers.openai.com/api/reference/resources/models
              stdapi/models/chat/_mantle/qwen_vl.py:ChatModel
         """
-        from stdapi.models import MANTLE_MODELS  # noqa: PLC0415
-
         model = MANTLE_MODELS.get(_QWEN3_VL)
         assert model is not None, f"{_QWEN3_VL} is not offered by this deployment"
         assert _QWEN3_VL in listed_model_ids
@@ -521,7 +522,6 @@ class TestMantleChatCompletions:
         assert response.usage.completion_tokens > 0
         if test_client is None:
             return
-        from stdapi.models import MANTLE_MODELS  # noqa: PLC0415
         from stdapi.models.chat import get_chat_model  # noqa: PLC0415
 
         assert "chat_completions" in get_chat_model(_GPT6_LUNA).NATIVE_APIS  # type: ignore[attr-defined]
@@ -582,7 +582,6 @@ class TestMantleServiceHeader:
         entry, not merely a successful generation.
         """
         from stdapi.config import SETTINGS  # noqa: PLC0415
-        from stdapi.models import MANTLE_MODELS, is_mantle_served  # noqa: PLC0415
 
         if _GEMMA3_DUAL not in MANTLE_MODELS or is_mantle_served(_GEMMA3_DUAL):
             pytest.skip("Requires a dual-homed runtime-served model")
@@ -861,9 +860,6 @@ class TestMantleResponses:
 
         Ref: stdapi/models/chat/_mantle/_default.py:ChatModel._select_api
         """
-        from stdapi.aws_bedrock_mantle import decode_mantle_response_id  # noqa: PLC0415
-        from stdapi.models.chat._mantle import _default  # noqa: PLC0415
-
         # Force the optimistic Responses probe so the fallback happens live; the
         # cache is process-global, so the deletion is undone after the test.
         monkeypatch.delitem(_default._LEARNED_APIS, _GEMMA3, raising=False)  # noqa: SLF001
@@ -909,8 +905,6 @@ class TestMantleResponses:
         Ref: stdapi/aws_bedrock_mantle.py:_map_error
              stdapi/models/chat/_mantle/_default.py:ChatModel._api_paths
         """
-        from stdapi.models.chat._mantle import _default  # noqa: PLC0415
-
         monkeypatch.setitem(_default._LEARNED_SURFACE, _GEMMA4, "/v1")  # noqa: SLF001
         response = openai_client.chat.completions.create(
             model=_GEMMA4,
@@ -997,8 +991,6 @@ class TestMantleWebSearch:
              stdapi/config.py:DEFAULT_MANTLE_PREFERRED_MODELS
              stdapi/models/chat/_mantle/openai_gpt6.py:ChatModel
         """
-        from stdapi.models import MANTLE_MODELS, is_mantle_served  # noqa: PLC0415
-
         if not is_mantle_served(_GPT6_LUNA):
             pytest.skip("GPT-6 Luna is not listed by a configured Mantle region")
         capfd.readouterr()

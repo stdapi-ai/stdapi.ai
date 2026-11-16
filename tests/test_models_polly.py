@@ -43,6 +43,8 @@ from stdapi.monitoring import REQUEST_LOG, EventLog
 from stdapi.pricing import Dimension
 from tests._helpers import make_client_error, make_model_details
 from tests.test_aws_bidi import FakeDuplexStream
+lazy from stdapi.main import app
+lazy from stdapi.routes import openai_audio_speech
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping
@@ -1774,8 +1776,6 @@ class TestSynthesisJobPath:
              stdapi/models/audio/amazon_polly.py:_synthesize_long_text
              stdapi/api_errors.py:denied_feature_unavailable
         """
-        from stdapi.main import app  # noqa: PLC0415
-        from stdapi.routes import openai_audio_speech  # noqa: PLC0415
 
         async def _resolve(model_id: str, *_args: Any, **_kwargs: Any) -> Any:  # noqa: ANN401
             """Resolve the model without the live Bedrock catalog."""

@@ -30,6 +30,8 @@ if TYPE_CHECKING:
     from starlette.testclient import TestClient
 
     from stdapi.models import ModelDetails
+lazy from openai import NotFoundError
+
 from stdapi.routes import openai_chat_completions
 from stdapi.types.openai_chat_completions import ChatCompletion, CompletionCreateParams
 from tests._helpers import make_model_details
@@ -1527,8 +1529,6 @@ class TestStoredChatCompletionsLive:
         ``/messages`` returns the *request* messages, so the prompt text is the
         deterministic thing to assert on rather than the generated answer.
         """
-        from openai import NotFoundError  # noqa: PLC0415
-
         marker = uuid4().hex
         created = openai_client.chat.completions.create(
             model=chat_model,

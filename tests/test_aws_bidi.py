@@ -32,6 +32,7 @@ from aws_sdk_bedrock_runtime.models import (
 )
 from aws_sdk_polly.models import InvalidSsmlException, ServiceFailureException
 from smithy_core.exceptions import CallError, ClientTimeoutError, SmithyError
+lazy from botocore.credentials import ReadOnlyCredentials
 
 import stdapi.aws
 import stdapi.aws_bidi
@@ -274,8 +275,6 @@ class FakeCredentials:
 
     async def get_frozen_credentials(self) -> Any:  # noqa: ANN401
         """Return a frozen credentials tuple, as aiobotocore does -- awaitable."""
-        from botocore.credentials import ReadOnlyCredentials  # noqa: PLC0415
-
         self.frozen_calls += 1
         return ReadOnlyCredentials("AKIAEXAMPLE", "secret", "token", "123456789012")
 

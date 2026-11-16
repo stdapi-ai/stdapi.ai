@@ -12,9 +12,13 @@ Ref: stdapi/mcp.py:mount_mcp
 
 from __future__ import annotations
 
+import json
 import logging
+import logging as stdlib_logging
 import sys
+from base64 import b64decode
 from contextvars import Context
+from copy import deepcopy
 from typing import TYPE_CHECKING
 
 import pytest
@@ -22,13 +26,22 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from fastapi_mcp import FastApiMCP  # type: ignore[import-untyped]
 from starlette.requests import Request as StarletteRequest
+lazy from mcp.types import Tool
 
+from stdapi import mcp as stdapi_mcp
 from stdapi import server
 from stdapi.config import SETTINGS
 from stdapi.mcp import (
+    _COSTS_OPERATIONS,
+    _HIDDEN_TOOL_PARAMS,
     _MCP_MAX_INLINE_BYTES,
+    _USAGE_API_OPERATIONS,
     _bind_media_results,
+    _CompactJson,
     _configure_session_manager,
+    _fix_union_param_types,
+    _operation_filters,
+    _prune_hidden_params,
 )
 from stdapi.monitoring import REQUEST_ID, log_error_details, log_request_event
 from stdapi.types.openai_audio import (
@@ -461,8 +474,6 @@ class TestMCPIntegration:
         Ref: stdapi/mcp.py:_prune_hidden_params
              stdapi/mcp.py:_fix_union_param_types
         """
-        from stdapi.mcp import _HIDDEN_TOOL_PARAMS  # noqa: PLC0415
-
         response = _mcp_post(
             local_test_client,
             api_key,
@@ -533,8 +544,6 @@ class TestMCPIntegration:
 
         Ref: stdapi/mcp.py:_CompactJson
         """
-        import json  # noqa: PLC0415
-
         response = _mcp_post(
             local_test_client,
             api_key,
@@ -826,10 +835,6 @@ class TestToolSelectionSettings:
         Returns:
             The tool names ``tools/list`` returned, and the ones on the server card.
         """
-        import logging as stdlib_logging  # noqa: PLC0415
-
-        from stdapi import mcp as stdapi_mcp  # noqa: PLC0415
-
         card: dict[str, Any] = {}
         monkeypatch.setattr(SETTINGS, "mcp_include_tools", include)
         monkeypatch.setattr(SETTINGS, "mcp_exclude_tools", exclude)
@@ -891,12 +896,6 @@ class TestToolSelectionSettings:
             Whether the ten usage tools are published, and whether the costs
             tool is, each True when none of them is excluded.
         """
-        from stdapi.mcp import (  # noqa: PLC0415
-            _COSTS_OPERATIONS,
-            _USAGE_API_OPERATIONS,
-            _operation_filters,
-        )
-
         monkeypatch.setattr(SETTINGS, "mcp_include_tools", None)
         monkeypatch.setattr(SETTINGS, "mcp_exclude_tools", None)
         monkeypatch.setattr(SETTINGS, "usage_api", enabled)
@@ -981,8 +980,6 @@ class TestToolSelectionSettings:
 
 def _make_tool(schema: dict[str, Any]) -> Any:  # noqa: ANN401
     """Build a minimal MCP Tool carrying *schema* as its input schema."""
-    from mcp.types import Tool  # noqa: PLC0415
-
     return Tool(name="tool", inputSchema=schema)
 
 
@@ -1002,8 +999,6 @@ class TestPruneHiddenParams:
         ``Nested`` stays because the surviving ``prompt`` still reaches it;
         ``StreamOptions`` was only reachable through the removed ``stream``.
         """
-        from stdapi.mcp import _prune_hidden_params  # noqa: PLC0415
-
         tool = _make_tool(
             {
                 "type": "object",
@@ -1028,10 +1023,6 @@ class TestPruneHiddenParams:
 
     def test_tool_without_hidden_params_untouched(self) -> None:
         """A schema with no hidden parameter is left byte-identical."""
-        from copy import deepcopy  # noqa: PLC0415
-
-        from stdapi.mcp import _prune_hidden_params  # noqa: PLC0415
-
         schema = {
             "type": "object",
             "properties": {"model": {"type": "string"}},
@@ -1057,8 +1048,6 @@ class TestFixUnionParamTypes:
 
     def test_type_beside_anyof_is_removed(self) -> None:
         """The contradictory sibling ``type`` disappears; the anyOf stays."""
-        from stdapi.mcp import _fix_union_param_types  # noqa: PLC0415
-
         tool = _make_tool(
             {
                 "type": "object",
@@ -1077,8 +1066,6 @@ class TestFixUnionParamTypes:
 
     def test_plain_typed_param_keeps_its_type(self) -> None:
         """A non-union parameter keeps its legitimate ``type``."""
-        from stdapi.mcp import _fix_union_param_types  # noqa: PLC0415
-
         tool = _make_tool(
             {"type": "object", "properties": {"model": {"type": "string"}}}
         )
@@ -1106,17 +1093,11 @@ class TestCompactJson:
 
     def test_dumps_is_compact_and_ignores_formatting_kwargs(self) -> None:
         """The indent/ensure_ascii kwargs fastapi_mcp passes are ignored."""
-        from stdapi.mcp import _CompactJson  # noqa: PLC0415
-
         rendered = _CompactJson.dumps({"a": [1, 2], "é": "ü"}, indent=2)
         assert rendered == '{"a":[1,2],"é":"ü"}'
 
     def test_decode_error_is_the_stdlib_exception(self) -> None:
         """The façade exposes the exact exception class fastapi_mcp catches."""
-        import json  # noqa: PLC0415
-
-        from stdapi.mcp import _CompactJson  # noqa: PLC0415
-
         assert _CompactJson.JSONDecodeError is json.JSONDecodeError
 
     @pytest.mark.local
@@ -1125,8 +1106,6 @@ class TestCompactJson:
     def test_facade_installed_on_fastapi_mcp(self) -> None:
         """Mounting MCP swaps fastapi_mcp.server's ``json`` for the façade."""
         import fastapi_mcp.server  # type: ignore[import-untyped]  # noqa: PLC0415
-
-        from stdapi.mcp import _CompactJson  # noqa: PLC0415
 
         assert fastapi_mcp.server.json is _CompactJson
 
@@ -1200,8 +1179,6 @@ def _call_tool(app: FastAPI, name: str) -> Any:  # noqa: ANN401
     Returns:
         The JSON-RPC ``result`` object, carrying ``content`` and ``isError``.
     """
-    import json  # noqa: PLC0415
-
     from starlette.testclient import TestClient  # noqa: PLC0415
 
     with TestClient(app) as client:
@@ -1240,8 +1217,6 @@ class TestBinaryToolResults:
     @staticmethod
     def _reference(result: Any) -> Any:  # noqa: ANN401
         """Assert the call succeeded with a text block, and parse it as JSON."""
-        import json  # noqa: PLC0415
-
         assert not result["isError"], result["content"]
         assert result["content"][0]["type"] == "text"
         return json.loads(result["content"][0]["text"])
@@ -1278,8 +1253,6 @@ class TestBinaryToolResults:
 
     def test_an_image_body_is_returned_as_image_content(self) -> None:
         """An image small enough to travel reaches the agent as image content."""
-        from base64 import b64decode  # noqa: PLC0415
-
         result = _call_tool(_media_app(), "media_image")
         assert not result["isError"], result["content"]
         block = result["content"][0]
@@ -1289,8 +1262,6 @@ class TestBinaryToolResults:
 
     def test_an_audio_body_is_returned_as_audio_content(self) -> None:
         """Generated speech reaches the agent as audio content, not as text."""
-        from base64 import b64decode  # noqa: PLC0415
-
         result = _call_tool(_media_app(), "media_audio")
         assert not result["isError"], result["content"]
         block = result["content"][0]

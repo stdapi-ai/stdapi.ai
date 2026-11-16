@@ -31,6 +31,7 @@ from stdapi.models.chat._default import ChatModel
 from stdapi.monitoring import REQUEST_ID
 from stdapi.types.openai_responses import Response, ResponseCreateParams, ResponsePrompt
 from stdapi.utils import match_bedrock_prompt_arn
+lazy from stdapi.routes import openai_responses
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
@@ -311,7 +312,6 @@ class TestPromptRouteGuards:
     @pytest.fixture
     def backend(self, monkeypatch: pytest.MonkeyPatch) -> _StubPromptChatModel:
         """Stub model validation and the generation backend of the route."""
-        from stdapi.routes import openai_responses  # noqa: PLC0415
 
         async def _validate_model(
             model_id: str, *_args: object, **_kwargs: object
@@ -337,8 +337,6 @@ class TestPromptRouteGuards:
         Returns:
             The mutable list of ``(prompt id, version)`` resolution calls.
         """
-        from stdapi.routes import openai_responses  # noqa: PLC0415
-
         calls: list[tuple[str, str | None]] = []
 
         async def _resolve(prompt_id: str, version: str | None) -> BedrockPrompt:

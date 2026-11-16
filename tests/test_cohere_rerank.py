@@ -22,6 +22,7 @@ from stdapi.models.rerank import RerankedDocument, RerankResponse
 from stdapi.routes import cohere_rerank, cohere_rerank_v1
 from tests._helpers import make_model_details
 from tests.test_models_rerank import RERANK_MODELS
+lazy from stdapi import monitoring
 
 if TYPE_CHECKING:
     from starlette.testclient import TestClient
@@ -211,8 +212,6 @@ class TestCohereRerankRoute:
              stdapi/routes/cohere_rerank.py:rerank
              stdapi/monitoring.py:log_response_params
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         written: list[dict[str, Any]] = []
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(monitoring, "write_log_event", written.append)
@@ -472,8 +471,6 @@ class TestCohereRerankV1Route:
              stdapi/routes/cohere_rerank_v1.py:rerank_v1
              stdapi/monitoring.py:log_response_params
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         written: list[dict[str, Any]] = []
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(monitoring, "write_log_event", written.append)

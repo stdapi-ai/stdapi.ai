@@ -110,8 +110,6 @@ def client() -> TestClient:
     ``Authorization`` header is baked in: every test sets its own, including
     the 401 tests in ``TestSearchModelsAuthentication``.
     """
-    from stdapi.main import app  # noqa: PLC0415
-
     return TestClient(app)
 
 
@@ -129,8 +127,6 @@ async def authenticated_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     Ref: stdapi/auth.py:AuthenticationHandler
          tests/test_openai_moderations.py:test_missing_or_wrong_bearer_returns_401_envelope
     """
-    from stdapi.main import app  # noqa: PLC0415
-
     monkeypatch.setattr(SETTINGS, "api_key", SecretStr("core-models-test-key"))
     monkeypatch.setattr(SETTINGS, "api_key_ssm_parameter", None)
     monkeypatch.setattr(SETTINGS, "api_key_secretsmanager_secret", None)

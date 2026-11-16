@@ -10,7 +10,7 @@ from json import loads
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from openai import NotFoundError
+from openai import BadRequestError, NotFoundError
 from openai.types.responses import ResponseInputMessageItem, ResponseInputText
 from sse_starlette import EventSourceResponse
 
@@ -1634,8 +1634,6 @@ class TestStoredResponsesLive:
         Ref: https://developers.openai.com/api/docs/guides/conversation-state#passing-context-from-the-previous-response
              https://developers.openai.com/api/reference/resources/responses/methods/delete
         """
-        from openai import BadRequestError  # noqa: PLC0415
-
         created = openai_client.responses.create(
             model=responses_model,
             input="The secret word is 'xylophone'. Acknowledge briefly.",

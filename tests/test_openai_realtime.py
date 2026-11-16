@@ -16,6 +16,9 @@ import base64
 import io
 import json
 import re
+import shutil
+import struct
+import subprocess
 import wave
 from typing import TYPE_CHECKING, Any
 
@@ -332,9 +335,6 @@ def _ffmpeg(arguments: list[str], data: bytes) -> bytes:
     Returns:
         What it wrote to its standard output.
     """
-    import shutil  # noqa: PLC0415
-    import subprocess  # noqa: PLC0415
-
     ffmpeg = shutil.which("ffmpeg")
     assert ffmpeg, "ffmpeg is required to compand the Realtime audio"
     converted = subprocess.run(  # noqa: S603
@@ -415,8 +415,6 @@ def _peak_amplitude(pcm: bytes) -> int:
     Returns:
         The largest absolute sample value, zero when there are none.
     """
-    import struct  # noqa: PLC0415
-
     usable = len(pcm) // 2
     samples: tuple[int, ...] = struct.unpack(f"<{usable}h", pcm[: usable * 2])
     return max((abs(sample) for sample in samples), default=0)

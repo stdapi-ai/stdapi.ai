@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, NamedTuple
 
 import pytest
 from openai import APIStatusError, BadRequestError, NotFoundError
+lazy import boto3  # type: ignore[import-untyped]  # boto3 ships no stubs
 
 from stdapi.config import SETTINGS
 from stdapi.pricing import KNOWLEDGE_BASE_MODEL
@@ -246,8 +247,6 @@ def _synced_data_source(knowledge_base_id: str) -> str:
     Returns:
         The data source identifier, or ``""`` when every one of them is custom.
     """
-    import boto3  # type: ignore[import-untyped]  # noqa: PLC0415
-
     client = boto3.client("bedrock-agent", region_name=SETTINGS.aws_bedrock_regions[0])
     listed = client.list_data_sources(knowledgeBaseId=knowledge_base_id, maxResults=10)
     for summary in listed.get("dataSourceSummaries", ()):

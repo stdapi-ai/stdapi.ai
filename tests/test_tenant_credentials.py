@@ -59,15 +59,20 @@ from stdapi.models import (
     route_and_execute,
 )
 from stdapi.monitoring import (
+    REQUEST,
     REQUEST_LOG,
     TENANT,
     Tenant,
     TenantAwsCredential,
+    _api_error_sse_event,
     tenant_aws_credential,
 )
 from stdapi.region_routing import RegionRouter
 from stdapi.utils import hide_security_details
 from tests._helpers import make_event_log
+lazy from stdapi.batches import create_batch
+lazy from stdapi.main import handle_api_error
+lazy from stdapi.models.video.amazon_nova_reel import VideoModel
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator
@@ -682,8 +687,6 @@ class TestTheRefusalReachesTheTenant:
     )
     async def test_the_rest_body_carries_the_message(self, message: str) -> None:
         """The JSON error envelope of a REST route carries the text itself."""
-        from stdapi.main import handle_api_error  # noqa: PLC0415
-
         token = REQUEST_LOG.set(make_event_log())
         try:
             response = await handle_api_error(
@@ -701,8 +704,6 @@ class TestTheRefusalReachesTheTenant:
     )
     def test_the_streamed_error_event_carries_the_message(self, message: str) -> None:
         """A refusal ending a stream says the same thing the REST body does."""
-        from stdapi.monitoring import REQUEST, _api_error_sse_event  # noqa: PLC0415
-
         log_token = REQUEST_LOG.set(make_event_log())
         request_token = REQUEST.set(self._connection("/v1/chat/completions"))
         try:
@@ -920,8 +921,6 @@ class TestServiceRefusals:
         refusal shares the "Batch API is not available" prefix and is a 503,
         and must not be able to satisfy this test.
         """
-        from stdapi.batches import create_batch  # noqa: PLC0415
-
         with pytest.raises(
             ApiError, match="carry an AWS credential of their own"
         ) as excinfo:
@@ -952,8 +951,6 @@ class TestServiceRefusals:
         self, tenant_signing: Tenant
     ) -> None:
         """StartAsyncInvoke writes to the gateway's bucket on its account."""
-        from stdapi.models.video.amazon_nova_reel import VideoModel  # noqa: PLC0415
-
         with pytest.raises(ApiError, match="asynchronously"):
             await VideoModel("amazon.nova-reel-v1:1").invoke_async({})
 
@@ -962,7 +959,6 @@ class TestServiceRefusals:
     ) -> None:
         """The per-request Mantle header would bill the operator: refuse it."""
         from stdapi.models.chat import serves_via_mantle  # noqa: PLC0415
-        from stdapi.monitoring import REQUEST  # noqa: PLC0415
 
         monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_service_header", True)
         monkeypatch.setitem(stdapi.models.MANTLE_MODELS, "openai.gpt-5.6", object())

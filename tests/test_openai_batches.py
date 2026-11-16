@@ -19,7 +19,7 @@ Ref: https://developers.openai.com/api/docs/guides/batch.md
 """
 
 import contextlib
-from asyncio import CancelledError, Event, create_task
+from asyncio import CancelledError, Event, Semaphore, create_task, gather
 from asyncio import sleep as async_sleep
 from base64 import b32hexencode
 from binascii import crc32
@@ -37,14 +37,24 @@ from uuid import UUID
 import pytest
 from botocore.exceptions import ClientError
 from openai import BadRequestError
+lazy from openai.types import Batch as OpenAIBatch
+lazy from pydantic_core import from_json
+lazy from starlette.requests import Request
 
 from stdapi import aws_s3, batches
+from stdapi import models as models_module
 from stdapi.api_errors import ApiError
 from stdapi.cleanup import CLEANUPS
 from stdapi.files import _core, parse_file_id, payload_created_at, resolve_file_bucket
 from tests import _batches
 from tests._batches import chat_lines, converse_output
-from tests._helpers import poll_batch_until_ended
+from tests._helpers import make_model_details, poll_batch_until_ended
+from tests.conftest import logged_usage_entries, set_test_price
+lazy from stdapi.aws_s3 import require_s3_bucket_for_region
+lazy from stdapi.models import EXTRA_MODELS
+lazy from stdapi.monitoring import REQUEST, TENANT, Tenant
+lazy from stdapi.pricing import Dimension
+lazy from stdapi.utils import to_json_bytes
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -96,7 +106,6 @@ def _resolve_alias(monkeypatch: pytest.MonkeyPatch) -> None:
     Args:
         monkeypatch: The test's patcher.
     """
-    from tests._helpers import make_model_details  # noqa: PLC0415
 
     async def _validate_model(model_id: str, *_args: object, **_kwargs: object) -> Any:  # noqa: ANN401
         return make_model_details(_ALIAS_TARGET if model_id == _ALIAS else model_id)
@@ -130,8 +139,6 @@ def _translation_backlog(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     Returns:
         The backlog after each translation, filled in as the batch is built.
     """
-    from stdapi.utils import to_json_bytes  # noqa: PLC0415
-
     backlog: list[int] = []
     counts = {"translated": 0, "written": 0}
     to_batched_form = batches._to_model_input  # noqa: SLF001
@@ -198,8 +205,6 @@ def _instrument_waves(monkeypatch: pytest.MonkeyPatch) -> _WaveRecord:
     Returns:
         What every creation's waves did, filled in as they run.
     """
-    from asyncio import Semaphore  # noqa: PLC0415
-
     # Server-wide and created once, so it belongs to whichever loop first
     # waited on it; each test contends on one of its own.
     monkeypatch.setattr(batches, "_CREATE_SEMAPHORE", Semaphore(batches._CREATE_SLOTS))  # noqa: SLF001
@@ -356,8 +361,6 @@ class TestOpenAIBatchValidation:
         Ref: https://stdapi.ai/api_openai_batches/#model-support
              stdapi/batches.py:_resolve_model
         """
-        from tests._helpers import make_model_details  # noqa: PLC0415
-
         _, bedrock = _batches.install(monkeypatch)
         pattern = "amazon.nova-mic*"
         resolutions: list[str] = []
@@ -389,8 +392,6 @@ class TestOpenAIBatchValidation:
 
         Ref: stdapi/batches.py:_resolve_distinct
         """
-        from tests._helpers import make_model_details  # noqa: PLC0415
-
         _batches.install(monkeypatch)
         refused = "amazon.nova-000"
         started: list[str] = []
@@ -849,7 +850,6 @@ class TestOpenAIBatchValidation:
         Ref: stdapi/batches.py:_submit_job
              stdapi/aws_s3.py:require_s3_bucket_for_region
         """
-        from stdapi.aws_s3 import require_s3_bucket_for_region  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
         _batches.install(monkeypatch)
@@ -973,12 +973,6 @@ class TestOpenAIBatchValidation:
              stdapi/models/__init__.py:sync_batch_support
              stdapi/batches.py:_submit_job
         """
-        from stdapi import models as registry  # noqa: PLC0415
-        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
-        from stdapi.pricing import Dimension  # noqa: PLC0415
-        from tests._helpers import make_model_details  # noqa: PLC0415
-        from tests.conftest import set_test_price  # noqa: PLC0415
-
         model = "amazon.nova-micro-v1:0"
         saved = dict(EXTRA_MODELS)
         try:
@@ -991,7 +985,7 @@ class TestOpenAIBatchValidation:
                 "USD",
             )
             EXTRA_MODELS[model] = make_model_details(model)
-            registry.update_unified_models_collections()
+            models_module.update_unified_models_collections()
             assert EXTRA_MODELS[model].batch is False
 
             _, bedrock = _batches.install(monkeypatch)
@@ -1000,7 +994,7 @@ class TestOpenAIBatchValidation:
         finally:
             EXTRA_MODELS.clear()
             EXTRA_MODELS.update(saved)
-            registry.update_unified_models_collections()
+            models_module.update_unified_models_collections()
 
         assert body["http_status"] == 200
         assert [job["modelId"] for job in bedrock.created] == [model]
@@ -1121,8 +1115,6 @@ class TestOpenAIBatchInputFile:
         Ref: stdapi/aws_s3.py:put_s3_object
              stdapi/batches.py:_job_records
         """
-        from pydantic_core import from_json  # noqa: PLC0415
-
         s3, bedrock = _batches.install(monkeypatch)
         monkeypatch.setattr(aws_s3, "UPLOAD_CHUNK_SIZE", 1024)
         file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
@@ -1254,8 +1246,6 @@ class TestOpenAIBatchCreationConcurrency:
 
         Ref: stdapi/batches.py:_iter_prepared_requests
         """
-        from asyncio import gather  # noqa: PLC0415
-
         _batches.install(monkeypatch)
         file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
         waves = _instrument_waves(monkeypatch)
@@ -1338,8 +1328,6 @@ class TestOpenAIBatchCreationConcurrency:
 
         Ref: stdapi/batches.py:_tenant_creation
         """
-        from stdapi.monitoring import TENANT, Tenant  # noqa: PLC0415
-
         _batches.install(monkeypatch)
         file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
         waves = _instrument_waves(monkeypatch)
@@ -1399,10 +1387,6 @@ class TestOpenAIBatchCreationConcurrency:
 
         Ref: stdapi/batches.py:_refuse_gone_caller
         """
-        from starlette.requests import Request  # noqa: PLC0415
-
-        from stdapi.monitoring import REQUEST  # noqa: PLC0415
-
         _batches.install(monkeypatch)
         file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
         waves = _instrument_waves(monkeypatch)
@@ -1476,8 +1460,6 @@ class TestOpenAIBatchLifecycle:
         Ref: https://developers.openai.com/api/docs/guides/batch
              stdapi/batches.py:_submit_job
         """
-        from pydantic_core import from_json  # noqa: PLC0415
-
         s3, _ = _batches.install(monkeypatch)
         file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
         assert _create(app_client, file_id)["http_status"] == 200
@@ -1507,8 +1489,6 @@ class TestOpenAIBatchLifecycle:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
              stdapi/batches.py:_to_model_input
         """
-        from pydantic_core import from_json  # noqa: PLC0415
-
         s3, _ = _batches.install(monkeypatch, translate=True)
         translated = _batches.capture_translations(monkeypatch)
         file_id = _batches.install_input_file(
@@ -1716,8 +1696,6 @@ class TestOpenAIBatchLifecycle:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference.html
              stdapi/batches.py:settle
         """
-        from tests.conftest import logged_usage_entries  # noqa: PLC0415
-
         s3, bedrock = _batches.install(monkeypatch)
         file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
         batch_id = _create(app_client, file_id)["id"]
@@ -2419,8 +2397,6 @@ class TestOpenAIBatchLifecycle:
              openai/types/batch_error.py
              stdapi/routes/openai_batches.py:_to_batch
         """
-        from openai.types import Batch as OpenAIBatch  # noqa: PLC0415
-
         _, bedrock = _batches.install(monkeypatch)
         file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
         batch_id = _create(app_client, file_id)["id"]
@@ -2492,8 +2468,6 @@ class TestOpenAIBatchLifecycle:
         Ref: https://developers.openai.com/api/docs/guides/batch
              stdapi/batches.py:finish_listed
         """
-        from tests.conftest import logged_usage_entries  # noqa: PLC0415
-
         s3, _, batch_id = self._ended_batch(app_client, monkeypatch)
         capfd.readouterr()
 
@@ -2524,8 +2498,6 @@ class TestOpenAIBatchLifecycle:
 
         Ref: stdapi/batches.py:finish_listed
         """
-        from tests.conftest import logged_usage_entries  # noqa: PLC0415
-
         s3, _, _ = self._ended_batch(app_client, monkeypatch)
         _create(app_client, _batches.install_input_file(monkeypatch, chat_lines(100)))
         assert len(app_client.get("/v1/batches?limit=10").json()["data"]) == 2
@@ -3103,8 +3075,6 @@ class TestOpenAIEmbeddingsBatch:
         Ref: tests/probes/results/bedrock.batch-embeddings.json
              stdapi/batches.py:_record_media_usage
         """
-        from tests.conftest import logged_usage_entries  # noqa: PLC0415
-
         s3, bedrock = _batches.install(monkeypatch)
         file_id = _batches.install_input_file(
             monkeypatch, _batches.embedding_lines(100)
@@ -3145,8 +3115,6 @@ class TestOpenAIEmbeddingsBatch:
 
         Ref: stdapi/batches.py:settle
         """
-        from tests.conftest import logged_usage_entries  # noqa: PLC0415
-
         s3, bedrock = _batches.install(monkeypatch)
         file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
         batch_id = _create(app_client, file_id)["id"]
@@ -3296,9 +3264,7 @@ class TestBatchOnAnApplicationInferenceProfile:
         Yields:
             The job service the batch submits to.
         """
-        from stdapi import models as models_module  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
-        from tests._helpers import make_model_details  # noqa: PLC0415
 
         _, bedrock = _batches.install(monkeypatch, catalog=True)
         saved = dict(models_module._MODELS)  # noqa: SLF001

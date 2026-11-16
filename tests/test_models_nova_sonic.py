@@ -19,7 +19,7 @@ from __future__ import annotations
 import io
 import wave
 from asyncio import Future
-from json import dumps
+from json import dumps, loads
 from math import ceil
 from typing import TYPE_CHECKING, Any
 
@@ -764,8 +764,6 @@ def _sent_events(stream: FakeDuplexStream) -> list[dict[str, Any]]:
     Returns:
         The decoded event payloads, in send order.
     """
-    from json import loads  # noqa: PLC0415
-
     return [loads(event.value.bytes_) for event in stream.input_stream.sent]
 
 

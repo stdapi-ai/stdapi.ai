@@ -37,12 +37,32 @@ if TYPE_CHECKING:
     import stdapi.region_routing as _rr_mod
     from stdapi.region_routing import RegionState
 
+import base64
+import re
+from uuid import uuid4
+
+lazy from aiobotocore.stub import AioStubber
+lazy from openai import BadRequestError, RateLimitError
+lazy from pydantic_core import CoreSchema
+
 from stdapi.input_file import (
     _CURRENT_INPUT_FILES,
     InputFile,
+    InputFileUrl,
     _FileOrigin,
     get_s3_input_regions,
+    prefetch_all_content_types,
+    resolve_all_bedrock_content_blocks,
 )
+lazy import stdapi.aws as _aws_mod
+lazy import stdapi.models as _models
+lazy import stdapi.security as _security_mod
+lazy from stdapi.api_errors import ApiError
+lazy from stdapi.aws_bedrock_mantle import MantleError
+lazy from stdapi.aws_s3 import BUCKET_TO_REGION, get_s3_bucket_for_region
+lazy from stdapi.cleanup import CLEANUPS
+lazy from stdapi.config import AWS_SESSION
+lazy from stdapi.models import ModelDetails, compute_candidate_regions
 
 pytestmark = [
     pytest.mark.local,
@@ -117,8 +137,6 @@ class RoutingFixture:
     @contextmanager
     def stub_errors(self, region: str, errors: list[tuple[str, str]]) -> Iterator[None]:
         """Enqueue stubbed AWS errors for *region* for the duration of the block."""
-        from aiobotocore.stub import AioStubber  # noqa: PLC0415
-
         stubber = AioStubber(self.no_retry_clients[region])
         for op, code in errors:
             stubber.add_client_error(op, service_error_code=code)
@@ -144,8 +162,6 @@ async def _routing_fixture_context(
     this test module during pytest collection does not instantiate SETTINGS
     before the test_client fixture has set environ["api_key"].
     """
-    import stdapi.aws as _aws_mod  # noqa: PLC0415
-    import stdapi.models as _models_mod  # noqa: PLC0415
     import stdapi.region_routing as _rr_mod  # noqa: PLC0415
     from stdapi.config import AWS_SESSION, SETTINGS  # noqa: PLC0415
 
@@ -186,7 +202,7 @@ async def _routing_fixture_context(
         # compute_candidate_regions reads the startup-time cache, which may name
         # regions outside effective_regions; restrict it so bedrock_client() cannot
         # KeyError.
-        _orig_ccr = _models_mod.compute_candidate_regions
+        _orig_ccr = _models.compute_candidate_regions
         _effective_regions_set = set(effective_regions)
 
         async def _filtered_ccr(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -210,8 +226,8 @@ async def _routing_fixture_context(
             ),
             patch.object(_rr_mod, "REGION_ROUTER", router),
             patch.object(_rr_mod, "ORDERED_BEDROCK_REGIONS", list(effective_regions)),
-            patch.object(_models_mod, "REGION_ROUTER", router),
-            patch.object(_models_mod, "compute_candidate_regions", _filtered_ccr),
+            patch.object(_models, "REGION_ROUTER", router),
+            patch.object(_models, "compute_candidate_regions", _filtered_ccr),
         ):
             yield RoutingFixture(
                 openai=openai_client, router=router, no_retry_clients=no_retry_clients
@@ -367,8 +383,6 @@ class TestOrderedRouting:
         outside ``ROUTING_RETRYABLE_CODES``; the gateway re-raises it so the client
         sees the AWS code in ``error.code`` instead of a region failover.
         """
-        from openai import BadRequestError  # noqa: PLC0415
-
         with (
             routing_ordered.stub_errors(
                 ROUTING_PRIMARY, [("converse", "ValidationException")]
@@ -400,8 +414,6 @@ class TestOrderedRouting:
         rather than an exhausted stub queue. ``retry-after`` reports the smallest
         backoff applied, i.e. the un-escalated base value.
         """
-        from openai import RateLimitError  # noqa: PLC0415
-
         throttles = [("converse", "ThrottlingException")] * 3
         with (
             routing_ordered.stub_errors(ROUTING_PRIMARY, throttles),
@@ -688,8 +700,6 @@ class TestSingleRegionMode:
 
 def _make_model_details(available_regions: list[str]) -> Any:  # noqa: ANN401
     """Build a minimal ModelDetails instance for use in candidate-region tests."""
-    from stdapi.models import ModelDetails  # noqa: PLC0415
-
     return ModelDetails(
         id=MODEL,
         name=MODEL,
@@ -713,8 +723,6 @@ class TestCandidateRegions:
 
     async def test_s3_input_overlap_returns_single_best_region(self) -> None:
         """The single model region holding the most S3 input bytes is returned."""
-        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
-
         model = _make_model_details([ROUTING_PRIMARY, ROUTING_SECONDARY])
         with (
             patch("stdapi.models.get_model_details", new=AsyncMock(return_value=model)),
@@ -728,8 +736,6 @@ class TestCandidateRegions:
 
     async def test_s3_input_no_overlap_falls_back_to_bucketed_region(self) -> None:
         """When the S3 file region doesn't match any model region, fall back to a region with a configured bucket."""
-        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
-
         model = _make_model_details([ROUTING_PRIMARY, ROUTING_SECONDARY])
         with (
             patch("stdapi.models.get_model_details", new=AsyncMock(return_value=model)),
@@ -745,9 +751,6 @@ class TestCandidateRegions:
 
     async def test_s3_input_no_overlap_no_bucket_raises(self) -> None:
         """A 400 ApiError naming both region sets is raised when neither overlap nor bucket exists."""
-        from stdapi.api_errors import ApiError  # noqa: PLC0415
-        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
-
         model = _make_model_details([ROUTING_PRIMARY, ROUTING_SECONDARY])
         with (
             patch("stdapi.models.get_model_details", new=AsyncMock(return_value=model)),
@@ -770,8 +773,6 @@ class TestCandidateRegions:
         self,
     ) -> None:
         """s3_required=True never pins to an overlapping S3 input region lacking a bucket."""
-        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
-
         model = _make_model_details([ROUTING_PRIMARY, ROUTING_SECONDARY])
         with (
             patch("stdapi.models.get_model_details", new=AsyncMock(return_value=model)),
@@ -791,8 +792,6 @@ class TestCandidateRegions:
 
     async def test_s3_required_with_bucket_returns_capable_regions(self) -> None:
         """With s3_required=True, only regions with a configured bucket are returned."""
-        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
-
         model = _make_model_details([ROUTING_PRIMARY, ROUTING_SECONDARY])
         with (
             patch("stdapi.models.get_model_details", new=AsyncMock(return_value=model)),
@@ -808,9 +807,6 @@ class TestCandidateRegions:
 
     async def test_s3_required_no_bucket_raises(self) -> None:
         """A 400 ApiError reporting the missing bucket is raised when s3_required has no candidate."""
-        from stdapi.api_errors import ApiError  # noqa: PLC0415
-        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
-
         model = _make_model_details([ROUTING_PRIMARY, ROUTING_SECONDARY])
         with (
             patch("stdapi.models.get_model_details", new=AsyncMock(return_value=model)),
@@ -1418,7 +1414,6 @@ class TestRouteAndExecute:
         self,
     ) -> None:
         """A connection error is retried once more, then re-raised unchanged."""
-        import stdapi.models as _models  # noqa: PLC0415
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
@@ -1455,7 +1450,6 @@ class TestRouteAndExecute:
         Connection failures carry no AWS error code, so ``_region_failover_label``
         falls back to the class name and the router applies the unavailability backoff.
         """
-        import stdapi.models as _models  # noqa: PLC0415
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
@@ -1492,9 +1486,7 @@ class TestRouteAndExecute:
         Bedrock Mantle reports HTTP statuses rather than Converse error codes, so the
         router reuses the Converse taxonomy to pick the quota backoff.
         """
-        import stdapi.models as _models  # noqa: PLC0415
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
-        from stdapi.aws_bedrock_mantle import MantleError  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
         router = _rr_mod.RegionRouter()
@@ -1538,9 +1530,7 @@ class TestRouteAndExecute:
 
     async def test_mantle_error_failover_unavailable_retries_next_region(self) -> None:
         """A failover MantleError with a non-429 status takes the unavailability branch and is retried."""
-        import stdapi.models as _models  # noqa: PLC0415
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
-        from stdapi.aws_bedrock_mantle import MantleError  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
         router = _rr_mod.RegionRouter()
@@ -1587,9 +1577,7 @@ class TestRouteAndExecute:
         ``failover=False`` marks a client-side error (here 400) that another region
         would reject identically, so retrying would only waste the retry budget.
         """
-        import stdapi.models as _models  # noqa: PLC0415
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
-        from stdapi.aws_bedrock_mantle import MantleError  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
         router = _rr_mod.RegionRouter()
@@ -1641,7 +1629,6 @@ class TestNoRetryClientWarmUp:
         monkeypatch: pytest.MonkeyPatch,
     ) -> dict[tuple[str, str], list[Any]]:
         """Stub client creation and record the configs passed per (service, region)."""
-        import stdapi.aws as _aws_mod  # noqa: PLC0415
         from stdapi.config import AWS_SESSION, SETTINGS  # noqa: PLC0415
 
         monkeypatch.setattr(_aws_mod, "_CLIENTS", {})
@@ -1672,7 +1659,6 @@ class TestNoRetryClientWarmUp:
         self, monkeypatch: pytest.MonkeyPatch, service: str
     ) -> None:
         """With routing active, each region gets an extra ``max_attempts=1`` client."""
-        import stdapi.aws as _aws_mod  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
         monkeypatch.setattr(SETTINGS, "aws_bedrock_region_routing", "ordered")
@@ -1702,7 +1688,6 @@ class TestNoRetryClientWarmUp:
         self, monkeypatch: pytest.MonkeyPatch, service: str
     ) -> None:
         """With routing disabled, only the full-retry clients are created."""
-        import stdapi.aws as _aws_mod  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
         monkeypatch.setattr(SETTINGS, "aws_bedrock_region_routing", "disabled")
@@ -1760,10 +1745,6 @@ async def s3_file(sample_image_file: bytes) -> AsyncGenerator[S3FileFixture]:
     """
     _require_s3_bucket()
 
-    from uuid import uuid4  # noqa: PLC0415
-
-    import stdapi.aws as _aws_mod  # noqa: PLC0415
-    from stdapi.aws_s3 import BUCKET_TO_REGION  # noqa: PLC0415
     from stdapi.config import AWS_SESSION, SETTINGS  # noqa: PLC0415
 
     bucket: str = SETTINGS.aws_s3_bucket  # type: ignore[assignment]
@@ -1831,12 +1812,6 @@ class TestS3InputRegions:
     ) -> None:
         """A resolved S3 InputFile contributes its region mapped to its exact byte count."""
         _require_s3_bucket()
-        from stdapi.input_file import (  # noqa: PLC0415
-            _CURRENT_INPUT_FILES,
-            InputFile,
-            get_s3_input_regions,
-            prefetch_all_content_types,
-        )
 
         token = _CURRENT_INPUT_FILES.set([])
         try:
@@ -1854,11 +1829,6 @@ class TestS3InputRegions:
     ) -> None:
         """S3 InputFile before metadata is resolved contributes 0 bytes but registers its region."""
         _require_s3_bucket()
-        from stdapi.input_file import (  # noqa: PLC0415
-            _CURRENT_INPUT_FILES,
-            InputFile,
-            get_s3_input_regions,
-        )
 
         token = _CURRENT_INPUT_FILES.set([])
         try:
@@ -1894,7 +1864,6 @@ class TestS3SourceToS3:
     ) -> None:
         """to_s3 for an S3 file already in the target region returns the same bucket and key."""
         _require_s3_bucket()
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
 
         token = _CURRENT_INPUT_FILES.set([])
         try:
@@ -1911,11 +1880,7 @@ class TestS3SourceToS3:
     ) -> None:
         """to_s3 copies the object, byte-for-byte, into the target region's bucket under a new key."""
         _require_s3_bucket()
-        import stdapi.aws as _aws_mod  # noqa: PLC0415
-        from stdapi.aws_s3 import get_s3_bucket_for_region  # noqa: PLC0415
-        from stdapi.cleanup import CLEANUPS  # noqa: PLC0415
         from stdapi.config import AWS_SESSION, SETTINGS  # noqa: PLC0415
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
 
         # Find a secondary region that has an S3 bucket configured.
         dest_region = next(
@@ -1986,12 +1951,6 @@ class TestS3ComputeCandidateRegions:
     async def test_s3_input_routes_to_file_region(self, s3_file: S3FileFixture) -> None:
         """compute_candidate_regions pins to the single region where the S3 file lives."""
         _require_s3_bucket()
-        from stdapi.input_file import (  # noqa: PLC0415
-            _CURRENT_INPUT_FILES,
-            InputFile,
-            prefetch_all_content_types,
-        )
-        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
 
         model = _make_model_details([s3_file.region, ROUTING_SECONDARY])
 
@@ -2013,14 +1972,7 @@ class TestS3ComputeCandidateRegions:
     ) -> None:
         """When the S3 file region isn't among the model's regions, fall back to a bucket region."""
         _require_s3_bucket()
-        from stdapi.aws_s3 import get_s3_bucket_for_region  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
-        from stdapi.input_file import (  # noqa: PLC0415
-            _CURRENT_INPUT_FILES,
-            InputFile,
-            prefetch_all_content_types,
-        )
-        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
 
         # Pick a model region that is NOT the s3_file region but has a bucket.
         bucketed_region = next(
@@ -2069,11 +2021,6 @@ class TestResolveBedrockContentBlocksS3:
     ) -> None:
         """resolve_all_bedrock_content_blocks with to_s3=True replaces the source with an s3Location."""
         _require_s3_bucket()
-        from stdapi.input_file import (  # noqa: PLC0415
-            _CURRENT_INPUT_FILES,
-            InputFile,
-            resolve_all_bedrock_content_blocks,
-        )
 
         token = _CURRENT_INPUT_FILES.set([])
         try:
@@ -2098,11 +2045,6 @@ class TestResolveBedrockContentBlocksS3:
     ) -> None:
         """resolve_all_bedrock_content_blocks with to_s3=False inlines the object's bytes."""
         _require_s3_bucket()
-        from stdapi.input_file import (  # noqa: PLC0415
-            _CURRENT_INPUT_FILES,
-            InputFile,
-            resolve_all_bedrock_content_blocks,
-        )
 
         token = _CURRENT_INPUT_FILES.set([])
         try:
@@ -2140,7 +2082,6 @@ class TestFileSourceBaseMethodsS3:
     ) -> None:
         """_FileSource.get_size resolves metadata and returns the object's exact byte count."""
         _require_s3_bucket()
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
 
         token = _CURRENT_INPUT_FILES.set([])
         try:
@@ -2154,7 +2095,6 @@ class TestFileSourceBaseMethodsS3:
     async def test_s3source_get_filename_from_key(self, s3_file: S3FileFixture) -> None:
         """_FileSource.get_filename returns the last path component of the S3 key."""
         _require_s3_bucket()
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
 
         token = _CURRENT_INPUT_FILES.set([])
         try:
@@ -2168,7 +2108,6 @@ class TestFileSourceBaseMethodsS3:
     async def test_s3source_is_s3_true(self, s3_file: S3FileFixture) -> None:
         """InputFile.is_s3 is True for an s3:// URI."""
         _require_s3_bucket()
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
 
         token = _CURRENT_INPUT_FILES.set([])
         try:
@@ -2181,7 +2120,6 @@ class TestFileSourceBaseMethodsS3:
     async def test_s3source_to_data_uri(self, s3_file: S3FileFixture) -> None:
         """_FileSource.to_data_uri returns a valid data: URI with the correct content type."""
         _require_s3_bucket()
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
 
         token = _CURRENT_INPUT_FILES.set([])
         try:
@@ -2192,7 +2130,6 @@ class TestFileSourceBaseMethodsS3:
 
         assert data_uri.startswith(f"data:{s3_file.content_type};base64,")
         # Verify the payload decodes back to the original content.
-        import base64  # noqa: PLC0415
 
         payload = data_uri.split(",", 1)[1]
         assert base64.b64decode(payload) == s3_file.content
@@ -2206,13 +2143,8 @@ class TestFileSourceBaseMethodsS3:
         materialise the payload through ``put_s3_object`` in the target region.
         """
         _require_s3_bucket()
-        import base64 as _b64  # noqa: PLC0415
 
-        from stdapi.cleanup import CLEANUPS  # noqa: PLC0415
-        from stdapi.config import AWS_SESSION  # noqa: PLC0415
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
-
-        b64_value = _b64.b64encode(sample_image_file).decode()
+        b64_value = base64.b64encode(sample_image_file).decode()
         token = _CURRENT_INPUT_FILES.set([])
         cleanups_token = CLEANUPS.set([])
         result = None
@@ -2260,8 +2192,6 @@ async def s3_presigned_url(s3_file: S3FileFixture) -> str:
     """Generate a SigV4 presigned GET URL for the s3_file object."""
     from aiobotocore.config import AioConfig  # noqa: PLC0415
 
-    from stdapi.config import AWS_SESSION  # noqa: PLC0415
-
     # Resolve the bucket's physical region: the app's BUCKET_TO_REGION model
     # assumes the default bucket lives in the primary Bedrock region, which a
     # SigV4 presign (unlike redirect-following SDK calls) cannot tolerate.
@@ -2292,7 +2222,6 @@ class TestHttpSourceWithPresignedUrl:
     ) -> None:
         """_HttpSource._resolve_metadata reads Content-Type and Content-Length from HEAD."""
         _require_s3_bucket()
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
 
         token = _CURRENT_INPUT_FILES.set([])
         try:
@@ -2310,7 +2239,6 @@ class TestHttpSourceWithPresignedUrl:
     ) -> None:
         """_HttpSource._resolve_metadata derives filename from the URL path."""
         _require_s3_bucket()
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
 
         token = _CURRENT_INPUT_FILES.set([])
         try:
@@ -2327,7 +2255,6 @@ class TestHttpSourceWithPresignedUrl:
     ) -> None:
         """_HttpSource._read downloads and returns the full file content."""
         _require_s3_bucket()
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
 
         token = _CURRENT_INPUT_FILES.set([])
         try:
@@ -2348,7 +2275,6 @@ class TestHttpSourceWithPresignedUrl:
         returns it untouched.
         """
         _require_s3_bucket()
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
 
         token = _CURRENT_INPUT_FILES.set([])
         try:
@@ -2371,13 +2297,6 @@ class TestHttpSourceWithPresignedUrl:
         the streaming upload path.
         """
         _require_s3_bucket()
-        from unittest.mock import patch  # noqa: PLC0415
-
-        import stdapi.aws as _aws_mod  # noqa: PLC0415
-        import stdapi.security as _security_mod  # noqa: PLC0415
-        from stdapi.cleanup import CLEANUPS  # noqa: PLC0415
-        from stdapi.config import AWS_SESSION  # noqa: PLC0415
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
 
         # Clear any cached DNS resolver that may be bound to a different event loop;
         # the SSRF connector's resolver lazily recreates one on the current loop.
@@ -2420,10 +2339,6 @@ class TestHttpSourceMocked:
         self, sample_image_file: bytes
     ) -> None:
         """A HEAD response without Content-Type falls back to magic detection on a ranged read."""
-        from unittest.mock import AsyncMock, MagicMock, patch  # noqa: PLC0415
-
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
-
         # HEAD response: no Content-Type, with Content-Length
         mock_head_resp = AsyncMock()
         mock_head_resp.__aenter__ = AsyncMock(return_value=mock_head_resp)
@@ -2468,8 +2383,6 @@ class TestHttpSourceMocked:
 
     async def test_http_source_is_s3_false(self) -> None:
         """InputFile from an http:// URL is not an S3 file."""
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
-
         token = _CURRENT_INPUT_FILES.set([])
         try:
             f = InputFile("https://example.com/file.png")
@@ -2494,10 +2407,6 @@ class TestDataUriSource:
         self, sample_image_file: bytes
     ) -> None:
         """_DataUriSource.to_base64 returns the raw base64 payload from the data URI."""
-        import base64  # noqa: PLC0415
-
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
-
         b64 = base64.b64encode(sample_image_file).decode()
         data_uri = f"data:image/png;base64,{b64}"
 
@@ -2514,10 +2423,6 @@ class TestDataUriSource:
         self, sample_image_file: bytes
     ) -> None:
         """_DataUriSource.to_data_uri returns the original data URI unchanged."""
-        import base64  # noqa: PLC0415
-
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
-
         b64 = base64.b64encode(sample_image_file).decode()
         data_uri = f"data:image/png;base64,{b64}"
 
@@ -2532,10 +2437,6 @@ class TestDataUriSource:
 
     async def test_data_uri_get_size(self, sample_pdf_file: bytes) -> None:
         """_DataUriSource.get_size returns the decoded byte count."""
-        import base64  # noqa: PLC0415
-
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
-
         b64 = base64.b64encode(sample_pdf_file).decode()
         data_uri = f"data:application/pdf;base64,{b64}"
 
@@ -2552,10 +2453,6 @@ class TestDataUriSource:
         self, sample_image_file: bytes
     ) -> None:
         """_DataUriSource.get_filename returns None (no filename in data URIs)."""
-        import base64  # noqa: PLC0415
-
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
-
         b64 = base64.b64encode(sample_image_file).decode()
         data_uri = f"data:image/png;base64,{b64}"
 
@@ -2585,10 +2482,6 @@ class TestBase64Source:
         self, sample_image_file: bytes
     ) -> None:
         """_Base64Source.to_base64 returns the raw base64 string passed at construction."""
-        import base64  # noqa: PLC0415
-
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
-
         b64 = base64.b64encode(sample_image_file).decode()
 
         token = _CURRENT_INPUT_FILES.set([])
@@ -2604,10 +2497,6 @@ class TestBase64Source:
         self, sample_image_file: bytes
     ) -> None:
         """_Base64Source.to_data_uri builds a data: URI with the magic-detected content type."""
-        import base64  # noqa: PLC0415
-
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
-
         b64 = base64.b64encode(sample_image_file).decode()
 
         token = _CURRENT_INPUT_FILES.set([])
@@ -2628,9 +2517,6 @@ class TestBase64Source:
         client error rather than a 500. The raw ``binascii`` wording is not forwarded
         to the caller (AGENTS.md "Never leak internals").
         """
-        from stdapi.api_errors import ApiError  # noqa: PLC0415
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
-
         # Use a string that looks like base64 but fails strict validation.
         bad_b64 = "not!valid==base64!!"
 
@@ -2665,10 +2551,6 @@ class TestInputFilePublicApi:
 
     def test_new_with_content_type_sets_source_content_type(self) -> None:
         """InputFile.__new__ with content_type pre-populates _source._content_type."""
-        import base64  # noqa: PLC0415
-
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
-
         b64 = base64.b64encode(b"fake image bytes").decode()
         token = _CURRENT_INPUT_FILES.set([])
         try:
@@ -2732,10 +2614,6 @@ class TestInputFilePublicApi:
 
     def test_get_pydantic_json_schema_with_base64_allowed(self) -> None:
         """__get_pydantic_json_schema__ omits the URL pattern when BASE64 is in ALLOWED_ORIGINS."""
-        from pydantic_core import CoreSchema  # noqa: PLC0415
-
-        from stdapi.input_file import InputFile, _FileOrigin  # noqa: PLC0415
-
         handler = None  # handler is not used in the implementation
         schema = InputFile.__get_pydantic_json_schema__(
             CoreSchema,  # type: ignore[arg-type]
@@ -2747,12 +2625,6 @@ class TestInputFilePublicApi:
 
     def test_get_pydantic_json_schema_url_only_has_pattern(self) -> None:
         """A base64-rejecting subclass advertises a URL-only ``pattern`` in its JSON schema."""
-        import re  # noqa: PLC0415
-
-        from pydantic_core import CoreSchema  # noqa: PLC0415
-
-        from stdapi.input_file import InputFileUrl, _FileOrigin  # noqa: PLC0415
-
         assert _FileOrigin.BASE64 not in InputFileUrl.ALLOWED_ORIGINS
         schema = InputFileUrl.__get_pydantic_json_schema__(
             CoreSchema,  # type: ignore[arg-type]
@@ -2770,10 +2642,6 @@ class TestInputFilePublicApi:
         self, sample_pdf_file: bytes
     ) -> None:
         """InputFile.get_size resolves size through the data-URI source."""
-        import base64  # noqa: PLC0415
-
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
-
         b64 = base64.b64encode(sample_pdf_file).decode()
         data_uri = f"data:application/pdf;base64,{b64}"
 
@@ -2790,10 +2658,6 @@ class TestInputFilePublicApi:
         self, sample_image_file: bytes
     ) -> None:
         """InputFile.get_filename returns None for a data-URI source."""
-        import base64  # noqa: PLC0415
-
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
-
         b64 = base64.b64encode(sample_image_file).decode()
         data_uri = f"data:image/png;base64,{b64}"
 
@@ -2810,10 +2674,6 @@ class TestInputFilePublicApi:
         self, sample_image_file: bytes
     ) -> None:
         """InputFile.to_data_uri builds a valid data: URI from a raw base64 source."""
-        import base64  # noqa: PLC0415
-
-        from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
-
         b64 = base64.b64encode(sample_image_file).decode()
 
         token = _CURRENT_INPUT_FILES.set([])

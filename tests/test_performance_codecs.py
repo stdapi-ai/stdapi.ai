@@ -35,6 +35,7 @@ from stdapi.models.chat._mantle._convert import _json_object, _parsed_chunk
 from stdapi.models.chat._mantle._default import _scrub_error_event
 from stdapi.routes.cohere_rerank_v1 import _echo_document_text
 from stdapi.utils import JSONResponse, json_sse, to_json_bytes, to_json_str
+lazy from stdapi.main import app
 
 pytestmark = pytest.mark.local
 
@@ -220,8 +221,6 @@ def test_json_response_installed_as_app_default() -> None:
 
     Ref: stdapi/main.py
     """
-    from stdapi.main import app  # noqa: PLC0415 (import cost deferred to this test)
-
     assert app.router.default_response_class is JSONResponse
     context = next(
         ctx

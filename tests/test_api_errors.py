@@ -24,6 +24,7 @@ from botocore.exceptions import (
     EndpointConnectionError,
     EndpointResolutionError,
 )
+lazy from botocore.session import get_session
 
 from stdapi import models as models_module
 from stdapi.api_errors import (
@@ -324,8 +325,6 @@ _DENIAL_RESOURCE = "arn:aws:bedrock:eu-west-3:123456789012:provisioned-model/*"
 
 def _operation_model(service: str, operation: str) -> OperationModel:
     """Return the botocore operation model of a real AWS API operation."""
-    from botocore.session import get_session  # noqa: PLC0415
-
     model: OperationModel = (
         get_session().get_service_model(service).operation_model(operation)
     )

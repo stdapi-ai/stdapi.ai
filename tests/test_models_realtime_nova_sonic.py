@@ -15,6 +15,8 @@ Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/sonic-input-events.
 
 from __future__ import annotations
 
+import asyncio
+from base64 import b64encode
 from contextlib import asynccontextmanager
 from json import dumps, loads
 from math import ceil
@@ -377,8 +379,6 @@ class TestTurnFraming:
         self, streams: _StreamPool, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A caller pausing between two questions must not lose the session."""
-        import asyncio  # noqa: PLC0415
-
         monkeypatch.setattr(sonic, "_KEEPALIVE_SECONDS", 0.01)
 
         async with _session(), asyncio.timeout(_KEEPALIVE_TIMEOUT):
@@ -509,8 +509,6 @@ class TestEventTranslation:
 
     async def test_spoken_audio_is_decoded(self, streams: _StreamPool) -> None:
         """The model's speech reaches the session as raw samples."""
-        from base64 import b64encode  # noqa: PLC0415
-
         streams.script(
             FakeDuplexStream(
                 events=[
@@ -527,8 +525,6 @@ class TestEventTranslation:
         self, streams: _StreamPool
     ) -> None:
         """``speech_output=False`` drops the speech instead of sending it on."""
-        from base64 import b64encode  # noqa: PLC0415
-
         streams.script(
             FakeDuplexStream(
                 events=[

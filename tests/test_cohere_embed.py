@@ -33,6 +33,7 @@ from stdapi.models.embedding.cohere_embed import EmbeddingModel
 from stdapi.routes import cohere_embed, cohere_embed_v1
 from tests._helpers import make_model_details
 from tests.conftest import logged_usage_entries
+lazy from stdapi import input_file, monitoring
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -79,7 +80,6 @@ def _serve_png(monkeypatch: pytest.MonkeyPatch, source_name: str) -> None:
         monkeypatch: Patch context.
         source_name: ``_HttpSource`` or ``_S3Source``.
     """
-    from stdapi import input_file  # noqa: PLC0415
 
     async def _resolve_metadata(source: Any) -> None:  # noqa: ANN401
         source._content_type = "image/png"  # noqa: SLF001
@@ -276,8 +276,6 @@ class TestCohereEmbedRoute:
              stdapi/routes/cohere_embed.py:embed
              stdapi/monitoring.py:log_response_params
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         written: list[dict[str, Any]] = []
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(monitoring, "write_log_event", written.append)
@@ -402,8 +400,6 @@ class TestCohereEmbedRoute:
              stdapi/types/cohere_embed.py:_EmbedRequestBase
              stdapi/input_file.py:_S3Source
         """
-        from stdapi import input_file  # noqa: PLC0415
-
         monkeypatch.setattr(input_file, "_ACCEPTED_BUCKETS", frozenset({_S3_BUCKET}))
         monkeypatch.setattr(input_file, "BUCKET_TO_REGION", {_S3_BUCKET: "us-east-1"})
         _serve_png(monkeypatch, "_S3Source")
@@ -1467,8 +1463,6 @@ class TestCohereEmbedV1Route:
              stdapi/routes/cohere_embed_v1.py:embed_v1
              stdapi/monitoring.py:log_response_params
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         body: dict[str, Any] = {
             "model": "cohere.embed-multilingual-v3",
             "texts": ["hello"],

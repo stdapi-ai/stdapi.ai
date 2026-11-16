@@ -37,6 +37,7 @@ import re
 import time
 import wave
 from array import array
+from contextlib import asynccontextmanager
 from fractions import Fraction
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -44,6 +45,8 @@ import pytest
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import AUDIO_PTIME, AudioStreamTrack, MediaStreamError
 from av.audio.frame import AudioFrame
+lazy from starlette.requests import Request
+lazy from starlette.websockets import WebSocketState
 
 from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR
 from stdapi.aws_bedrock_mantle import MANTLE_PROJECT_VAR
@@ -58,7 +61,7 @@ from stdapi.models.realtime import (
     ToolCall,
     UsageReport,
 )
-from stdapi.monitoring import TENANT, Tenant, log_request_event
+from stdapi.monitoring import REQUEST_LOG, TENANT, Tenant, log_request_event
 from stdapi.realtime import _MAX_EVENT_BYTES, mint_client_secret
 from stdapi.realtime_webrtc import (
     _CALLS,
@@ -70,6 +73,7 @@ from stdapi.realtime_webrtc import (
     WebRTCCallTransport,
     _OutgoingTrack,
     _screen_candidates,
+    _serve_call,
     drain_realtime_calls,
     get_call,
     hangup_call,
@@ -83,6 +87,8 @@ from stdapi.types.openai_realtime import (
     RealtimeSessionConfig,
 )
 from tests.conftest import logged_usage_entries
+lazy from stdapi import realtime, realtime_webrtc
+lazy from stdapi.api_errors import ApiError, UnsupportedModelError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Iterator
@@ -210,7 +216,6 @@ class _FakeModel(RealtimeModelBase[Any, Any]):
         Returns:
             An async context manager yielding the fake session.
         """
-        from contextlib import asynccontextmanager  # noqa: PLC0415
 
         @asynccontextmanager
         async def _session() -> AsyncGenerator[_FakeSession]:
@@ -232,14 +237,11 @@ def fake_backend(monkeypatch: pytest.MonkeyPatch) -> Iterator[type[_FakeModel]]:
         The fake model class, whose ``script`` the test sets and whose
         ``opened`` sessions it asserts on.
     """
-    from stdapi import realtime  # noqa: PLC0415
 
     class _Details:
         id = _MODEL
 
     async def _validate_model(model_id: str, **_: Any) -> Any:  # noqa: ANN401
-        from stdapi.api_errors import UnsupportedModelError  # noqa: PLC0415
-        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
 
         if model_id != _MODEL:
             raise UnsupportedModelError(model_id)
@@ -404,8 +406,6 @@ def _fake_request() -> Any:  # noqa: ANN401
     Returns:
         A minimal HTTP request, as the middleware would have seen it.
     """
-    from starlette.requests import Request  # noqa: PLC0415
-
     return Request(
         {
             "type": "http",
@@ -826,8 +826,6 @@ class TestLockedSecret:
     @pytest.mark.usefixtures("fake_backend")
     async def test_a_differing_model_query_is_refused(self) -> None:
         """A locked secret's model wins over the query string, as on the socket."""
-        from stdapi.api_errors import ApiError  # noqa: PLC0415
-
         with log_request_event(_fake_request()), pytest.raises(ApiError) as excinfo:
             await open_call(
                 _fake_request(),
@@ -882,8 +880,6 @@ class TestUnservableModel:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A model with no live-conversation support closes what the offer opened."""
-        from stdapi import realtime, realtime_webrtc  # noqa: PLC0415
-        from stdapi.api_errors import UnsupportedModelError  # noqa: PLC0415
 
         def _unservable(model_id: str) -> Any:  # noqa: ANN401
             raise UnsupportedModelError(model_id)
@@ -921,8 +917,6 @@ class TestCallRegistry:
 
     def test_an_unknown_call_answers_an_upstream_shaped_404(self) -> None:
         """The 404 does not describe the deployment's instance topology."""
-        from stdapi.api_errors import ApiError  # noqa: PLC0415
-
         with pytest.raises(ApiError) as excinfo:
             get_call("rtc_unknown")
         assert excinfo.value.status == 404
@@ -969,7 +963,6 @@ class TestCallOwnership:
     ) -> None:
         """Another tenant cannot end, observe or drive the call."""
         del owned_call
-        from stdapi.api_errors import ApiError  # noqa: PLC0415
 
         token = TENANT.set(Tenant(key_id="tk_other", name="other"))
         try:
@@ -997,8 +990,6 @@ class TestCallOwnership:
 
     async def test_a_tenant_cannot_reach_a_deployment_owned_call(self) -> None:
         """A tenant key does not address a call the deployment opened."""
-        from stdapi.api_errors import ApiError  # noqa: PLC0415
-
         transport = WebRTCCallTransport("rtc_deploy", 24000, 24000)
         _CALLS["rtc_deploy"] = RealtimeCall(
             transport, cast("RealtimeSession", _StubCloseSession()), None
@@ -1060,8 +1051,6 @@ class _StubSocket:
 
     def __init__(self) -> None:
         """Start connected, with nothing exchanged."""
-        from starlette.websockets import WebSocketState  # noqa: PLC0415
-
         self.client_state = WebSocketState.CONNECTED
         self.incoming: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.sent: list[str] = []
@@ -1077,8 +1066,6 @@ class _StubSocket:
 
     async def close(self, code: int = 1000, reason: str = "") -> None:
         """Record the close."""
-        from starlette.websockets import WebSocketState  # noqa: PLC0415
-
         self.closed = (code, reason)
         self.client_state = WebSocketState.DISCONNECTED
 
@@ -1735,8 +1722,6 @@ class TestOutgoingTrack:
 
     async def test_buffered_speech_is_framed_then_silence_follows(self) -> None:
         """Written PCM comes back frame by frame, then frames go quiet."""
-        from stdapi.realtime_webrtc import _OutgoingTrack  # noqa: PLC0415
-
         track = _OutgoingTrack(24000)
         track.write(b"\x01\x00" * 480)
         first = await track.recv()
@@ -2129,7 +2114,6 @@ class TestCallBilling:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """An escape from a detached call task is logged, not swallowed."""
-        from stdapi.realtime_webrtc import _serve_call  # noqa: PLC0415
 
         class _BoomSession:
             async def run(self) -> None:

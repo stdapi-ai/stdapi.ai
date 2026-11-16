@@ -41,6 +41,7 @@ from stdapi.types.openai_chat_completions import (
 from stdapi.types.openai_responses import ResponseCreateParams
 from stdapi.utils import to_json_str
 from tests.conftest import logged_usage_entries
+lazy from stdapi.models import MANTLE_MODELS
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
@@ -353,8 +354,6 @@ class TestResponsesReasoningSummary:
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
              stdapi/models/chat/_mantle/_convert.py:convert_payload
         """
-        from stdapi.models import MANTLE_MODELS  # noqa: PLC0415
-
         if _SONNET_5 not in MANTLE_MODELS:
             pytest.skip("Requires Claude Sonnet 5 listed by a configured Mantle region")
         monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_service_header", True)

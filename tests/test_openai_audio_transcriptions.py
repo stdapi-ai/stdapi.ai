@@ -60,6 +60,8 @@ if TYPE_CHECKING:
     from stdapi.usage import UsageLogEntry
 
 from stdapi.models.audio.amazon_transcribe import TranscribeJobData
+lazy from stdapi.main import app
+lazy from stdapi.monitoring import REQUEST_ID
 
 #: Stubbed AWS Transcribe job result used by response-format regression tests.
 _STUB_TRANSCRIPT_DATA: TranscribeJobData = {
@@ -1547,8 +1549,6 @@ class TestTranscriptionAdvertisedRequestSchema:
         Returns:
             The property schemas of the generated request-body model.
         """
-        from stdapi.main import app  # noqa: PLC0415
-
         spec = app.openapi()
         content = spec["paths"]["/v1/audio/transcriptions"]["post"]["requestBody"][
             "content"
@@ -2635,8 +2635,6 @@ class TestStreamingTranscriptionRoute:
 @pytest.fixture
 def _request_id() -> Iterator[None]:
     """Bind a request id for code calling ``build_metadata`` outside a request."""
-    from stdapi.monitoring import REQUEST_ID  # noqa: PLC0415
-
     token = REQUEST_ID.set("test-request-id")
     yield
     REQUEST_ID.reset(token)

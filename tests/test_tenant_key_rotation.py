@@ -24,8 +24,10 @@ Ref: stdapi/tenant_keys.py
 
 from __future__ import annotations
 
+from asyncio import sleep
 from contextlib import suppress
 from hmac import compare_digest
+from secrets import token_hex
 from time import time
 from typing import TYPE_CHECKING, Any
 
@@ -35,10 +37,10 @@ from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
 from stdapi import tenant_keys
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import ApiError, FeatureUnavailableError
 from stdapi.aws_dynamodb import PARTITION_KEY, SORT_KEY, delete_item, get_item, put_item
-from stdapi.config import SETTINGS, _Settings
-from stdapi.monitoring import TENANT, EventLog
+from stdapi.config import AWS_REGION, SETTINGS, _Settings
+from stdapi.monitoring import TENANT, EventLog, log_error_details
 from stdapi.tenant_keys import (
     KEY_PREFIX,
     initialize_tenant_keys,
@@ -46,6 +48,7 @@ from stdapi.tenant_keys import (
     tenant_key_client_specs,
     verify_tenant_key,
 )
+lazy from stdapi.aws import _CLIENTS
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Coroutine
@@ -124,8 +127,6 @@ async def secrets_backend(
     Ref: tests/conftest.py:dynamodb_table
          tests/test_tenant_keys.py:tenant_backend
     """
-    from stdapi.aws import _CLIENTS  # noqa: PLC0415
-
     region = SETTINGS.aws_bedrock_regions[0]
     session = get_session()
     async with session.create_client(
@@ -319,8 +320,6 @@ def _spy_warnings(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     Returns:
         The warning details, in order.
     """
-    from stdapi.monitoring import log_error_details  # noqa: PLC0415
-
     warnings: list[str] = []
 
     def _spy(
@@ -671,8 +670,6 @@ class TestMintingIntoTheStore:
 
         Ref: stdapi/tenant_keys.py:tenant_key_client_specs
         """
-        from stdapi.aws import _CLIENTS  # noqa: PLC0415
-
         await _declare_and_mint(secrets_backend, key_id="p" + "0" * 15)
 
         assert "ssm" not in _CLIENTS
@@ -1653,8 +1650,6 @@ class TestOverlap:
 
         Ref: stdapi/tenant_keys.py:_build_entry
         """
-        from stdapi.api_errors import FeatureUnavailableError  # noqa: PLC0415
-
         key_id = "o" + "6" * 15
         _, new = await _rotate_once(secrets_backend, key_id)
         record = await _secret_record(key_id)
@@ -1889,13 +1884,6 @@ class TestRealBackends:
         Ref: stdapi/tenant_keys.py:_rotate
              https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_UpdateSecretVersionStage.html
         """
-        from asyncio import sleep  # noqa: PLC0415
-        from contextlib import suppress  # noqa: PLC0415
-        from secrets import token_hex  # noqa: PLC0415
-
-        from stdapi.aws import _CLIENTS  # noqa: PLC0415
-        from stdapi.config import AWS_REGION  # noqa: PLC0415
-
         del sandbox_dynamodb
         monkeypatch.setattr(SETTINGS, "tenant_key_secretsmanager_prefix", _PREFIX)
         monkeypatch.setattr(SETTINGS, "tenant_key_secretsmanager_kms_key_id", None)

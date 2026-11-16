@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from asyncio import Event, gather, wait_for
 from hmac import compare_digest
-from secrets import token_bytes
+from secrets import token_bytes, token_hex
 from sys import modules
 from types import CodeType, ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -30,10 +30,12 @@ from botocore.exceptions import ClientError
 from fastapi import Request
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import SecretStr, ValidationError
+lazy from fastapi.routing import APIRoute, APIWebSocketRoute
+lazy from httpx import ASGITransport, AsyncClient
 
 import stdapi.auth
 from stdapi import tenant_keys
-from stdapi.api_errors import ApiError, FeatureUnavailableError
+from stdapi.api_errors import ApiError, FeatureUnavailableError, UnsupportedModelError
 from stdapi.auth import (
     AuthenticationHandler,
     authenticate,
@@ -48,12 +50,15 @@ from stdapi.aws_dynamodb import (
     put_item,
     query_partition,
 )
-from stdapi.config import SETTINGS, _Settings
+from stdapi.config import AWS_REGION, SETTINGS, _Settings
 from stdapi.monitoring import (
     PRINCIPAL,
+    REQUEST_ID,
+    REQUEST_LOG,
     TENANT,
     EventLog,
     Tenant,
+    log_error_details,
     resolve_request_identity,
 )
 from stdapi.tenant_keys import (
@@ -65,6 +70,20 @@ from stdapi.tenant_keys import (
     resume_tenant,
     verify_tenant_key,
 )
+lazy import stdapi.models as models_module
+lazy from stdapi.aws import _CLIENTS
+lazy from stdapi.aws_bedrock import COMPREHEND_MODERATION_MODEL
+lazy from stdapi.main import app
+lazy from stdapi.models import ModelDetails
+lazy from stdapi.routes.openai_moderations import create_moderation
+lazy from stdapi.types.openai_moderations import (
+    Moderation,
+    ModerationCategories,
+    ModerationCategoryScores,
+    ModerationCreateParams,
+)
+lazy from stdapi.types.openai_realtime import RealtimeSessionConfig
+lazy from stdapi.vector_stores import engine
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -146,8 +165,6 @@ async def tenant_backend(
 
     Ref: tests/conftest.py:dynamodb_table
     """
-    from stdapi.aws import _CLIENTS  # noqa: PLC0415
-
     region = SETTINGS.aws_bedrock_regions[0]
     session = get_session()
     async with session.create_client(
@@ -565,8 +582,6 @@ class TestMinting:
 
         Ref: stdapi/tenant_keys.py:_rotation_work
         """
-        from stdapi.monitoring import log_error_details  # noqa: PLC0415
-
         del tenant_backend
         warnings: list[str] = []
 
@@ -1113,10 +1128,6 @@ class TestEndpointScope:
 
         Ref: stdapi/auth.py:authenticate
         """
-        from httpx import ASGITransport, AsyncClient  # noqa: PLC0415
-
-        from stdapi.main import app  # noqa: PLC0415
-
         monkeypatch.setattr(stdapi.auth, "_auth_handler", AuthenticationHandler())
         key = await _declare_and_mint(
             tenant_backend,
@@ -1149,8 +1160,6 @@ class TestModelScope:
         monkeypatch: pytest.MonkeyPatch, model_id: str, output: str = "TEXT"
     ) -> None:
         """Install a one-model catalog so validation runs offline."""
-        import stdapi.models as models_module  # noqa: PLC0415
-        from stdapi.models import ModelDetails  # noqa: PLC0415
 
         async def _no_refresh(_start_event: object = None) -> bool:
             return False
@@ -1170,10 +1179,6 @@ class TestModelScope:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """To a tenant, a denied model is indistinguishable from a missing one."""
-        import stdapi.models as models_module  # noqa: PLC0415
-        from stdapi.api_errors import UnsupportedModelError  # noqa: PLC0415
-        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
-
         self._catalog(monkeypatch, "provider.denied-model-v1:0")
         token = REQUEST_LOG.set({"type": "request", "level": "info"})  # type: ignore[typeddict-item]
         tenant_token = TENANT.set(
@@ -1195,10 +1200,6 @@ class TestModelScope:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The scope is checked on the resolved ID, after alias resolution."""
-        import stdapi.models as models_module  # noqa: PLC0415
-        from stdapi.api_errors import UnsupportedModelError  # noqa: PLC0415
-        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
-
         self._catalog(monkeypatch, "provider.denied-model-v1:0")
         monkeypatch.setitem(
             models_module.MODEL_ALIASES, "friendly-alias", "provider.denied-model-v1:0"
@@ -1232,16 +1233,6 @@ class TestModelScope:
         Ref: https://stdapi.ai/operations_authentication_security/#scopes
              stdapi/routes/openai_moderations.py:create_moderation
         """
-        from stdapi.api_errors import UnsupportedModelError  # noqa: PLC0415
-        from stdapi.aws_bedrock import COMPREHEND_MODERATION_MODEL  # noqa: PLC0415
-        from stdapi.monitoring import REQUEST_ID, REQUEST_LOG  # noqa: PLC0415
-        from stdapi.routes.openai_moderations import create_moderation  # noqa: PLC0415
-        from stdapi.types.openai_moderations import (  # noqa: PLC0415
-            Moderation,
-            ModerationCategories,
-            ModerationCategoryScores,
-            ModerationCreateParams,
-        )
 
         async def _moderate(_self: object, _item: object) -> Moderation:
             return Moderation(
@@ -1295,9 +1286,6 @@ class TestModelScope:
         Ref: https://stdapi.ai/operations_authentication_security/#scopes
              stdapi/vector_stores/engine.py:resolve_embedding_model
         """
-        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
-        from stdapi.vector_stores import engine  # noqa: PLC0415
-
         model_id = SETTINGS.vector_store_embedding_model
         self._catalog(monkeypatch, model_id, output="EMBEDDING")
 
@@ -1325,8 +1313,6 @@ class TestIdentityAndBinding:
 
     def test_the_tenant_is_the_identity_of_last_resort(self) -> None:
         """Principal, then the declared user, then the tenant key ID."""
-        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
-
         log_token = REQUEST_LOG.set({"type": "request", "level": "info"})  # type: ignore[typeddict-item]
         principal_token = PRINCIPAL.set(None)
         tenant_token = TENANT.set(Tenant(key_id=_UNKNOWN_KEY_ID, name="t"))
@@ -1342,7 +1328,6 @@ class TestIdentityAndBinding:
     def test_a_minted_realtime_secret_is_bound_to_its_tenant(self) -> None:
         """The signed secret carries the key ID, so the session keeps the scopes."""
         from stdapi.realtime import mint_client_secret, read_client_secret  # noqa: PLC0415 -- imported lazily under the test's settings
-        from stdapi.types.openai_realtime import RealtimeSessionConfig  # noqa: PLC0415
 
         tenant_token = TENANT.set(Tenant(key_id=_UNKNOWN_KEY_ID, name="t"))
         try:
@@ -1419,9 +1404,6 @@ class TestEveryRouteIsAuthenticated:
 
     def test_every_route_carries_the_authenticate_dependency(self) -> None:
         """Endpoint scopes are only real if no route can forget to authenticate."""
-        from fastapi.routing import APIRoute  # noqa: PLC0415
-
-        from stdapi.main import app  # noqa: PLC0415
 
         def _has_authenticate(dependant: Dependant) -> bool:
             return any(
@@ -1463,10 +1445,6 @@ class TestEveryRouteIsAuthenticated:
 
         Ref: stdapi/auth.py:verify_websocket_credentials
         """
-        from fastapi.routing import APIWebSocketRoute  # noqa: PLC0415
-
-        from stdapi.main import app  # noqa: PLC0415
-
         websockets: dict[str, Callable[..., Any]] = {}
         for route in app.routes:
             if isinstance(route, APIWebSocketRoute):
@@ -1638,8 +1616,6 @@ class TestAwsCredentialRecords:
         Ref: stdapi/tenant_keys.py:_mint
              stdapi/tenant_keys.py:_backfill_external_id
         """
-        from stdapi.monitoring import log_error_details  # noqa: PLC0415
-
         logged: list[object] = []
 
         def _spy(
@@ -1773,8 +1749,6 @@ class TestReconciliationLifecycle:
 
         Ref: stdapi/tenant_keys.py:_store_failure_detail
         """
-        from stdapi.monitoring import log_error_details  # noqa: PLC0415
-
         warnings: list[object] = []
 
         def _spy(
@@ -1816,8 +1790,6 @@ class TestReconciliationLifecycle:
         Ref: stdapi/tenant_keys.py:_store_failure_detail
              stdapi/api_errors.py:iam_denial_detail
         """
-        from stdapi.monitoring import log_error_details  # noqa: PLC0415
-
         warnings: list[object] = []
 
         def _spy(
@@ -2019,11 +1991,6 @@ class TestRealBackends:
         Ref: stdapi/tenant_keys.py:_mint
              https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_PutParameter.html
         """
-        from secrets import token_hex  # noqa: PLC0415
-
-        from stdapi.aws import _CLIENTS  # noqa: PLC0415
-        from stdapi.config import AWS_REGION  # noqa: PLC0415
-
         del sandbox_dynamodb
         monkeypatch.setattr(SETTINGS, "tenant_key_ssm_parameter_prefix", _PREFIX)
         key_id = token_hex(8)

@@ -15,15 +15,22 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availa
 from typing import TYPE_CHECKING
 
 import pytest
+lazy from fastapi_mcp import FastApiMCP  # type: ignore[import-untyped]  # fastapi_mcp ships no stubs
 
 import stdapi.routes.openai_responses  # noqa: F401  (registers the input-tokens route capability)
 from stdapi import models
 from stdapi.config import SETTINGS
-from stdapi.models import MANTLE_SERVICE, ModelDetails, _compute_model_capabilities
+from stdapi.models import (
+    EXTRA_MODELS,
+    MANTLE_SERVICE,
+    ModelDetails,
+    _compute_model_capabilities,
+)
 from stdapi.models.capabilities import ROUTE_CAPABILITIES
-from stdapi.pricing import Dimension
+from stdapi.pricing import Dimension, _state
 from tests._helpers import make_model_details
 from tests.conftest import set_test_price
+lazy from stdapi.main import app
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -195,10 +202,6 @@ def mcp_tool_names() -> frozenset[str]:
     Returns:
         The tool names an MCP client can call on this server.
     """
-    from fastapi_mcp import FastApiMCP  # type: ignore[import-untyped] # noqa: PLC0415
-
-    from stdapi.main import app  # noqa: PLC0415
-
     return frozenset(
         tool.name for tool in FastApiMCP(app, name="test", description="test").tools
     )
@@ -210,8 +213,6 @@ def isolated_catalog() -> Generator[None]:
 
     Ref: stdapi/models/__init__.py:update_unified_models_collections
     """
-    from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
-
     saved = dict(EXTRA_MODELS)
     yield
     EXTRA_MODELS.clear()
@@ -322,7 +323,6 @@ class TestRealtimeRouteAdvertised:
         Ref: stdapi/routes/core_models.py:search_models
         """
         import stdapi.main  # noqa: F401, PLC0415
-        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
 
         EXTRA_MODELS[_SPEECH_MODEL] = _speech_model()
         models.update_unified_models_collections()
@@ -352,8 +352,6 @@ class TestBatchAdvertisement:
         Returns:
             The two registered models, keyed by model ID.
         """
-        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
-
         registered = {
             model_id: make_model_details(model_id)
             for model_id in (_BATCH_MODEL, _PLAIN_MODEL)
@@ -395,8 +393,6 @@ class TestBatchAdvertisement:
         deriving "false" from its absence would advertise every model as
         unbatchable on a deployment that simply does not track cost.
         """
-        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
-
         EXTRA_MODELS[_BATCH_MODEL] = make_model_details(_BATCH_MODEL)
         models.update_unified_models_collections()
 
@@ -415,8 +411,6 @@ class TestBatchAdvertisement:
 
         Ref: stdapi/main.py:lifespan
         """
-        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
-
         EXTRA_MODELS[_BATCH_MODEL] = make_model_details(_BATCH_MODEL)
         models.update_unified_models_collections()
         assert EXTRA_MODELS[_BATCH_MODEL].batch is None
@@ -444,8 +438,6 @@ class TestBatchAdvertisement:
 
         Ref: stdapi/models/__init__.py:sync_batch_support
         """
-        from stdapi.pricing import _state  # noqa: PLC0415
-
         registered = self._catalog()
         assert registered[_BATCH_MODEL].batch is True
 
@@ -467,8 +459,6 @@ class TestBatchAdvertisement:
 
         Ref: stdapi/batches.py:_batch_model_id
         """
-        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
-
         EXTRA_MODELS[_MANTLE_MODEL] = make_model_details(
             _MANTLE_MODEL, service=MANTLE_SERVICE
         )
@@ -495,8 +485,6 @@ class TestBatchAdvertisement:
 
         Ref: stdapi/models/__init__.py:build_runtime_twins
         """
-        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
-
         EXTRA_MODELS[_MANTLE_MODEL] = make_model_details(
             _MANTLE_MODEL, service=MANTLE_SERVICE
         )
@@ -522,8 +510,6 @@ class TestBatchAdvertisement:
 
         Ref: stdapi/batches.py:_EMBEDDINGS_ENDPOINT
         """
-        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
-
         EXTRA_MODELS[_EMBED_MODEL] = make_model_details(
             _EMBED_MODEL, output_modalities=["EMBEDDING"]
         )
@@ -564,8 +550,6 @@ class TestRuntimeTwins:
         Returns:
             The runtime identifier the Mantle model resolves to, if any.
         """
-        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
-
         EXTRA_MODELS[mantle_id] = make_model_details(mantle_id, service=MANTLE_SERVICE)
         EXTRA_MODELS[runtime_id] = make_model_details(runtime_id, name=runtime_name)
         models.update_unified_models_collections()
@@ -619,8 +603,6 @@ class TestRuntimeTwins:
 
     def test_a_runtime_model_pairs_with_nothing(self, isolated_catalog: None) -> None:
         """A model already served by the runtime endpoint needs no pairing."""
-        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
-
         EXTRA_MODELS[_TWIN_MODEL] = make_model_details(_TWIN_MODEL)
         models.update_unified_models_collections()
 

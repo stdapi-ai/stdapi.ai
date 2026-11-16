@@ -28,6 +28,7 @@ from stdapi.auth import AuthenticationHandler
 from stdapi.auth_cognito import CognitoAuthenticator
 from stdapi.config import SETTINGS
 from stdapi.routes import core_models
+lazy from stdapi.main import app
 
 if TYPE_CHECKING:
     from tests.conftest import CognitoSandboxPool
@@ -107,7 +108,6 @@ def gateway(
     monkeypatch: pytest.MonkeyPatch, authenticator: CognitoAuthenticator
 ) -> TestClient:
     """Lifespan-free gateway whose only accepted credential is a pool token."""
-    from stdapi.main import app  # noqa: PLC0415
 
     async def _no_models() -> bool:
         return False

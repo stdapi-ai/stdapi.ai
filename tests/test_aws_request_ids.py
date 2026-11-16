@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import pytest
 from botocore.exceptions import ClientError
 from starlette.requests import Request as StarletteRequest
+lazy from botocore.session import get_session
 
 from stdapi import monitoring, usage
 from stdapi.aws import _record_after_call, _record_after_call_error
@@ -77,8 +78,6 @@ def aws_calls() -> Generator[list[AwsApiCallLog]]:
 @pytest.fixture(scope="module")
 def put_object_model() -> OperationModel:
     """Real S3 PutObject operation model, loaded from the local botocore data."""
-    from botocore.session import get_session  # noqa: PLC0415
-
     return get_session().get_service_model("s3").operation_model("PutObject")
 
 

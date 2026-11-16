@@ -4,6 +4,7 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed
      stdapi/models/embedding/cohere_embed.py:EmbeddingModel
 """
 
+from base64 import b64encode
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -19,6 +20,8 @@ from stdapi.models.embedding.cohere_embed import EmbeddingModel
 from stdapi.pricing import Dimension
 from stdapi.usage import USAGE, init_model_state, init_usage
 from tests._helpers import make_model_details
+lazy from stdapi import input_file
+lazy from stdapi.input_file import InputFile, InputFileUrl
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -221,11 +224,6 @@ class TestCohereEmbeddingModelImageSources:
         The Bedrock body carries no URL locator, so a regression in the fetch or
         re-encode path would send an unusable value (or the raw URL) instead.
         """
-        from base64 import b64encode  # noqa: PLC0415
-
-        from stdapi import input_file  # noqa: PLC0415
-        from stdapi.input_file import InputFileUrl  # noqa: PLC0415
-
         png = b"\x89PNG\r\n\x1a\nstub"
 
         async def _resolve_metadata(source: Any) -> None:  # noqa: ANN401
@@ -443,7 +441,6 @@ class TestCohereEmbeddingV3MultiImageForwarding:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Two images sent to a v3 model reach Bedrock as two, not one."""
-        from stdapi.input_file import InputFile, InputFileUrl  # noqa: PLC0415
 
         async def _to_data_uri(_self: InputFile) -> str:
             return "data:image/png;base64,AAA="

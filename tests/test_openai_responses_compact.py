@@ -502,7 +502,6 @@ class TestResponsesCompactRoute:
         """
 
         async def _load(response_id: str, kind: str) -> dict[str, Any]:  # noqa: ARG001
-            from stdapi.api_errors import ApiError  # noqa: PLC0415
 
             msg = f"Response with id '{response_id}' not found."
             raise ApiError(msg, status=404)

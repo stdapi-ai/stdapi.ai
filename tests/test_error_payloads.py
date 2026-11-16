@@ -39,7 +39,7 @@ from stdapi.main import (
     set_retry_after_header,
 )
 from stdapi.models.chat._adapters._openai_responses import _classify_stream_error
-from stdapi.monitoring import REQUEST, _stream_backend_error
+from stdapi.monitoring import REQUEST, REQUEST_ID, _stream_backend_error
 from stdapi.region_routing import RegionRouter, quota_retry_after
 from stdapi.validation_errors import openai_validation_error, reported_error
 from tests._helpers import make_client_error
@@ -247,8 +247,6 @@ class TestFormatErrorFunctions:
         Ref: https://platform.claude.com/docs/en/api/errors
              stdapi/monitoring.py:REQUEST_ID
         """
-        from stdapi.monitoring import REQUEST_ID  # noqa: PLC0415
-
         token = REQUEST_ID.set("req_test123")
         try:
             body, _ = anthropic_format_error(404, "boom")
@@ -262,8 +260,6 @@ class TestFormatErrorFunctions:
 
         Ref: stdapi/api_providers/cohere.py:_format_error
         """
-        from stdapi.monitoring import REQUEST_ID  # noqa: PLC0415
-
         token = REQUEST_ID.set("req_test456")
         try:
             body, _ = cohere_format_error(404, "boom")

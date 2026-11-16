@@ -17,11 +17,14 @@ Ref: stdapi/aws_dynamodb.py
 from __future__ import annotations
 
 import re
+from asyncio import gather
+from secrets import token_bytes, token_hex
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
 
+import stdapi.aws_dynamodb as module
 from stdapi.aws_dynamodb import (
     EXPIRES_AT_ATTRIBUTE,
     KEY_SEPARATOR,
@@ -46,6 +49,10 @@ from stdapi.aws_dynamodb import (
     verify_table,
 )
 from stdapi.config import SETTINGS
+lazy from stdapi.aws import _CLIENTS, get_client
+lazy from stdapi.models._shared_cache import _SHARD_BYTES, NAMESPACE
+lazy from stdapi.tenant_keys import _PARTITION
+lazy from stdapi.tenant_rate_limits import _KIND
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -130,11 +137,6 @@ class TestKeys:
 
         Ref: stdapi/aws_dynamodb.py
         """
-        import stdapi.aws_dynamodb as module  # noqa: PLC0415
-        from stdapi.models._shared_cache import NAMESPACE  # noqa: PLC0415
-        from stdapi.tenant_keys import _PARTITION  # noqa: PLC0415
-        from stdapi.tenant_rate_limits import _KIND  # noqa: PLC0415
-
         assert module.__doc__ is not None
         documented = {
             match.split(KEY_SEPARATOR, 1)[0]
@@ -402,8 +404,6 @@ class TestDegradationContract:
         Ref: stdapi/aws_dynamodb.py:_client
              stdapi/aws.py:get_client
         """
-        from stdapi.aws import _CLIENTS  # noqa: PLC0415
-
         monkeypatch.setattr(SETTINGS, "aws_dynamodb_table", "configured")
         monkeypatch.delitem(_CLIENTS, "dynamodb", raising=False)
 
@@ -508,8 +508,6 @@ class TestTableAccess:
 
         Ref: stdapi/aws_dynamodb.py:get_item
         """
-        from stdapi.aws import get_client  # noqa: PLC0415
-
         await get_client("dynamodb").put_item(
             TableName=dynamodb_table,
             Item={
@@ -685,8 +683,6 @@ class TestTableAccess:
 
         Ref: stdapi/aws_dynamodb.py:query_partition
         """
-        from stdapi.aws import get_client  # noqa: PLC0415
-
         partition = item_key("MODELCACHE", "weird")
         await get_client("dynamodb").put_item(
             TableName=dynamodb_table,
@@ -722,8 +718,6 @@ class TestTableAccess:
         Ref: stdapi/aws_dynamodb.py:query_partition
              https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/QueryAndScan.html#Query.Pagination
         """
-        from secrets import token_bytes  # noqa: PLC0415
-
         partition = item_key("MODELCACHE", "paginated")
         for index in range(4):
             await put_item(
@@ -820,8 +814,6 @@ class TestStartupCheck:
         Ref: stdapi/aws_dynamodb.py:verify_table
              https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html
         """
-        from stdapi.aws import get_client  # noqa: PLC0415
-
         await get_client("dynamodb").update_time_to_live(
             TableName=dynamodb_table,
             TimeToLiveSpecification={
@@ -847,8 +839,6 @@ class TestStartupCheck:
         Ref: stdapi/aws_dynamodb.py:verify_table
              https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html
         """
-        from stdapi.aws import get_client  # noqa: PLC0415
-
         await get_client("dynamodb").update_time_to_live(
             TableName=dynamodb_table,
             TimeToLiveSpecification={"Enabled": True, "AttributeName": "ttl"},
@@ -871,8 +861,6 @@ class TestStartupCheck:
         Ref: stdapi/aws_dynamodb.py:verify_table
              https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_UpdateTable.html
         """
-        from stdapi.aws import get_client  # noqa: PLC0415
-
         flat = "stdapi-test-flat"
         await get_client("dynamodb").create_table(
             TableName=flat,
@@ -930,9 +918,6 @@ class TestRealTable:
         Ref: stdapi/aws_dynamodb.py:put_item
              https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.ConditionExpressions.html
         """
-        from asyncio import gather  # noqa: PLC0415
-        from secrets import token_hex  # noqa: PLC0415
-
         del sandbox_dynamodb
         partition = item_key("MODELCACHE", f"test-{token_hex(8)}")
         lease: dict[str, Any] = {
@@ -969,10 +954,6 @@ class TestRealTable:
         Ref: stdapi/models/_shared_cache.py:_SHARD_BYTES
              https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html
         """
-        from secrets import token_bytes, token_hex  # noqa: PLC0415
-
-        from stdapi.models._shared_cache import _SHARD_BYTES  # noqa: PLC0415
-
         del sandbox_dynamodb
         partition = item_key("MODELCACHE", f"test-{token_hex(8)}")
         sort_key = item_key("shard", token_hex(8), "0000")

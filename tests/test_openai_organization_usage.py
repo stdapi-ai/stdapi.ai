@@ -20,10 +20,24 @@ Ref: https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/graph-dynami
 Ref: stdapi/routes/openai_organization_usage.py
 """
 
+from base64 import urlsafe_b64decode
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pytest
+lazy from openai.types.admin.organization.usage_completions_response import (
+    UsageCompletionsResponse,
+)
+lazy from pydantic import SecretStr, ValidationError
+
+lazy from stdapi.aws import _CLIENTS
+lazy from stdapi.aws_cloudwatch import (
+    _MAX_PAGES,
+    add_usage_api_warnings,
+    metrics_region,
+)
+lazy from stdapi.monitoring import Principal, Tenant
+lazy from stdapi.routes import openai_organization_usage as routes
 
 if TYPE_CHECKING:
     from fastapi.testclient import TestClient
@@ -126,10 +140,6 @@ def cloudwatch(monkeypatch: pytest.MonkeyPatch) -> _FakeCloudWatch:
         The stub, so a test can set its listing and results and read the
         queries the routes built.
     """
-    from stdapi.aws import _CLIENTS  # noqa: PLC0415
-    from stdapi.aws_cloudwatch import metrics_region  # noqa: PLC0415
-    from stdapi.routes import openai_organization_usage as routes  # noqa: PLC0415
-
     client = _FakeCloudWatch()
     monkeypatch.setitem(_CLIENTS, "cloudwatch", {metrics_region(): client})
     monkeypatch.setattr(routes, "_CACHE", type(routes._CACHE)())  # noqa: SLF001
@@ -182,8 +192,6 @@ def _as_caller(monkeypatch: pytest.MonkeyPatch, name: str, value: Any) -> None: 
         name: "PRINCIPAL" or "TENANT", as the route module imported it.
         value: The identity every request is to read.
     """
-    from stdapi.routes import openai_organization_usage as routes  # noqa: PLC0415
-
     monkeypatch.setattr(routes, name, _FixedVar(value))
 
 
@@ -197,8 +205,6 @@ def _arm_deployment_key(monkeypatch: pytest.MonkeyPatch, api_key: str) -> None:
         monkeypatch: The patcher.
         api_key: The key the test client presents.
     """
-    from pydantic import SecretStr  # noqa: PLC0415
-
     import stdapi.auth  # noqa: PLC0415
 
     handler = stdapi.auth.AuthenticationHandler()
@@ -216,10 +222,6 @@ class TestEnvelope:
 
         Ref: openai.types.admin.organization.usage_completions_response
         """
-        from openai.types.admin.organization.usage_completions_response import (  # noqa: PLC0415
-            UsageCompletionsResponse,
-        )
-
         cloudwatch.listed = [
             {
                 "MetricName": "InputTokens",
@@ -1043,8 +1045,6 @@ class TestBackendPagination:
 
         Ref: stdapi/aws_cloudwatch.py:read_series
         """
-        from stdapi.aws_cloudwatch import _MAX_PAGES  # noqa: PLC0415
-
         cloudwatch.pages = [
             (
                 [
@@ -1087,8 +1087,6 @@ class TestPagination:
         self, app_client: TestClient, cloudwatch: _FakeCloudWatch
     ) -> None:
         """The cursor is this server's own, so it never leaks a backend one."""
-        from base64 import urlsafe_b64decode  # noqa: PLC0415
-
         now = int(datetime.now(UTC).timestamp())
         start = (now - 5 * _DAY) // _DAY * _DAY
         cursor = _get(app_client, "completions", start_time=start, limit=2).json()[
@@ -1216,8 +1214,6 @@ class TestAuthorization:
 
         Ref: stdapi/monitoring.py:TENANT
         """
-        from stdapi.monitoring import Tenant  # noqa: PLC0415
-
         _as_caller(monkeypatch, "TENANT", Tenant(key_id="key1", name="tenant"))
         response = _get(app_client, "completions", start_time=recent_start)
         assert response.status_code == 403, response.text
@@ -1231,8 +1227,6 @@ class TestAuthorization:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Fails closed: an end user must not read organization-wide usage."""
-        from stdapi.monitoring import Principal  # noqa: PLC0415
-
         _as_caller(monkeypatch, "PRINCIPAL", Principal(subject="bob"))
         response = _get(app_client, "completions", start_time=recent_start)
         assert response.status_code == 403, response.text
@@ -1252,8 +1246,6 @@ class TestAuthorization:
 
         Ref: stdapi/routes/openai_organization_usage.py:_require_admin
         """
-        from stdapi.monitoring import Tenant  # noqa: PLC0415
-
         _as_caller(monkeypatch, "TENANT", Tenant(key_id="key1", name="tenant"))
 
         response = _get(
@@ -1272,7 +1264,6 @@ class TestAuthorization:
     ) -> None:
         """The scopes the operator names are what makes a token administrative."""
         from stdapi.config import SETTINGS  # noqa: PLC0415
-        from stdapi.monitoring import Principal  # noqa: PLC0415
 
         monkeypatch.setattr(SETTINGS, "usage_api_admin_scopes", ["stdapi/usage.read"])
         _as_caller(
@@ -1292,7 +1283,6 @@ class TestAuthorization:
     ) -> None:
         """Every named scope must be carried, not just one of them."""
         from stdapi.config import SETTINGS  # noqa: PLC0415
-        from stdapi.monitoring import Principal  # noqa: PLC0415
 
         monkeypatch.setattr(
             SETTINGS, "usage_api_admin_scopes", ["stdapi/usage.read", "stdapi/admin"]
@@ -1319,8 +1309,6 @@ class TestAuthorization:
 
         Ref: stdapi/routes/openai_organization_usage.py:_require_admin
         """
-        from stdapi.monitoring import Tenant  # noqa: PLC0415
-
         _as_caller(monkeypatch, "TENANT", Tenant(key_id="key1", name="tenant"))
 
         for endpoint in (
@@ -1386,7 +1374,6 @@ class TestStartupWarnings:
         Returns:
             The warning texts the run added to the startup event.
         """
-        from stdapi.aws_cloudwatch import add_usage_api_warnings  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", cloudwatch_metrics)
@@ -1406,8 +1393,6 @@ class TestStartupWarnings:
 
         Ref: stdapi/config.py:_validate_usage_api
         """
-        from pydantic import ValidationError  # noqa: PLC0415
-
         from stdapi.config import _Settings  # noqa: PLC0415
 
         with pytest.raises(ValidationError, match="usage_api requires"):

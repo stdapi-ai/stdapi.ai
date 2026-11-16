@@ -13,10 +13,14 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from botocore.exceptions import ClientError
+lazy from pydantic_core import from_json
 
 from stdapi import aws_s3, batches
 from stdapi.models.chat._default import ChatModel
 from stdapi.models.embedding.amazon_titan_embed import EmbeddingModel
+from tests._helpers import make_model_details
+lazy from stdapi.files import FileRecord
+lazy from stdapi.utils import to_json_bytes
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -351,8 +355,6 @@ class _OfflineChatModel(CatalogChatModel):
     @property
     def model(self) -> Any:  # noqa: ANN401
         """Return canned details, so no live catalog is needed."""
-        from tests._helpers import make_model_details  # noqa: PLC0415
-
         return make_model_details(self._model_id)
 
 
@@ -408,8 +410,6 @@ class StubEmbeddingModel(EmbeddingModel):
     @property
     def model(self) -> Any:  # noqa: ANN401
         """Return canned details, so no live catalog is needed."""
-        from tests._helpers import make_model_details  # noqa: PLC0415
-
         return make_model_details(self._model_id, output_modalities=["EMBEDDING"])
 
 
@@ -453,7 +453,6 @@ def install(
         Tuple of (object store, job service).
     """
     from stdapi.config import SETTINGS  # noqa: PLC0415
-    from tests._helpers import make_model_details  # noqa: PLC0415
 
     s3 = FakeS3()
     bedrock = FakeBedrock()
@@ -529,8 +528,6 @@ def install_input_file(
     Returns:
         The file identifier to submit the batch with.
     """
-    from stdapi.files import FileRecord  # noqa: PLC0415
-
     file_id = "file-0123456789abcdefghijklmnopqrstuv"
     body = ("\n".join(lines)).encode()
 
@@ -573,8 +570,6 @@ def write_job_output(
         manifest: The aggregate counters the job reports.
         arn: The job to write for; every job when omitted.
     """
-    from stdapi.utils import to_json_bytes  # noqa: PLC0415
-
     for job_arn, job in bedrock.jobs.items():
         if arn not in (None, job_arn):
             continue
@@ -692,8 +687,6 @@ def embedding_output(dimensions: int = 4, *, tokens: int = 3) -> dict[str, Any]:
 
 def read_result_file(s3: FakeS3, file_id: str) -> list[dict[str, Any]]:
     """Return the decoded lines of the stored Files API object named by *file_id*."""
-    from pydantic_core import from_json  # noqa: PLC0415
-
     body = s3.objects[BUCKET, _file_key(file_id)]
     return [from_json(line) for line in body.splitlines()]
 

@@ -25,10 +25,13 @@ from __future__ import annotations
 
 from base64 import b64decode
 from json import loads
+from time import monotonic, sleep
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+lazy from mcp import ClientSession
+lazy from mcp.client.streamable_http import streamablehttp_client
 
 from stdapi.config import SETTINGS
 
@@ -63,8 +66,6 @@ async def _call_in_loop(
     transport, so the whole MCP stack (handshake, session management, tool
     dispatch, internal API re-entry) runs without a network socket.
     """
-    from mcp import ClientSession  # noqa: PLC0415
-    from mcp.client.streamable_http import streamablehttp_client  # noqa: PLC0415
 
     def _asgi_client(
         headers: dict[str, str] | None = None,
@@ -803,8 +804,6 @@ class TestStorageTools:
              stdapi/routes/openai_videos.py:openai_video_delete
              stdapi/mcp.py:_bind_media_results
         """
-        from time import monotonic, sleep  # noqa: PLC0415
-
         created = _json_result(
             mcp_call(
                 "openai_video_generation",

@@ -14,7 +14,7 @@ Ref: https://docs.aws.amazon.com/sagemaker/latest/dg/realtime-endpoints-openai-c
 
 from __future__ import annotations
 
-from asyncio import Event, gather, sleep, wait_for
+from asyncio import Event, ensure_future, gather, sleep, wait_for
 from base64 import b64decode
 from gc import collect as gc_collect
 from json import dumps, loads
@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from aiohttp import ClientError as AiohttpClientError
 
-from stdapi import aws_sagemaker
+from stdapi import aws_bedrock_mantle, aws_sagemaker
 from stdapi.aws_sagemaker import SageMakerError
 from stdapi.config import AWS_SESSION, SETTINGS
 
@@ -333,8 +333,6 @@ class TestBearerToken:
         other way round, so the shared presigner must be given both constants.
         """
         del credentials
-        # Imported here: only this test compares the two transports.
-        from stdapi import aws_bedrock_mantle  # noqa: PLC0415
 
         monkeypatched = await aws_sagemaker.bearer_token(REGION)
         # Replaced, never cleared: minting from these fake credentials into the
@@ -1022,9 +1020,6 @@ class TestColdStartCoalescing:
 
 def _spawn(coroutine: Any) -> Any:  # noqa: ANN401
     """Schedule *coroutine* as a task on the running loop."""
-    # Imported here: only this helper needs the loop accessor.
-    from asyncio import ensure_future  # noqa: PLC0415
-
     return ensure_future(coroutine)
 
 

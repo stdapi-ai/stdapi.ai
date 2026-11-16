@@ -41,6 +41,9 @@ from openai.types.responses.response_output_text import (
     AnnotationFileCitation as SDKAnnotationFileCitation,
 )
 from pydantic import ValidationError
+lazy from openai.types.responses.response_includable import (
+    ResponseIncludable as SdkResponseIncludable,
+)
 
 from stdapi import usage
 from stdapi.api_errors import ApiError
@@ -61,11 +64,12 @@ from stdapi.types.openai_responses import (
 )
 from stdapi.usage import record_bedrock_usage
 from stdapi.vector_stores import SearchResult, StoreRecord
-from stdapi.vector_stores.backend import IndexCapabilities
-from tests._helpers import long_text, strip_code_fence
+from stdapi.vector_stores.backend import IndexCapabilities, check_filter
+from tests._helpers import long_text, make_model_details, strip_code_fence
 from tests.conftest import OUTPUT_DIR, REPO_ROOT
 from tests.test_openai_vector_stores import _PLANTED
 from tests.test_openai_vector_stores import indexed_store as _indexed_store
+lazy from stdapi.routes import openai_responses
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -2519,8 +2523,6 @@ class TestInputTokensMantleEstimate:
 
         Ref: stdapi/models/chat/_adapters/_count_tokens.py:estimate_request_tokens
         """
-        from stdapi.routes import openai_responses  # noqa: PLC0415
-        from tests._helpers import make_model_details  # noqa: PLC0415
 
         async def _validate_model(
             model_id: str, *_args: object, **_kwargs: object
@@ -2558,8 +2560,6 @@ class TestInputTokensMantleEstimate:
         Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count
              stdapi/routes/openai_responses.py:count_input_tokens
         """
-        from stdapi.routes import openai_responses  # noqa: PLC0415
-        from tests._helpers import make_model_details  # noqa: PLC0415
 
         async def _validate_model(
             model_id: str, *_args: object, **_kwargs: object
@@ -2616,8 +2616,6 @@ class TestServerToolsUnservedOnRuntime:
         The refusal must precede the Bedrock call: a request that reached
         Converse would be answered with the stub tool instead.
         """
-        from stdapi.routes import openai_responses  # noqa: PLC0415
-        from tests._helpers import make_model_details  # noqa: PLC0415
 
         async def _validate_model(
             model_id: str, *_args: object, **_kwargs: object
@@ -4224,10 +4222,6 @@ class TestIncludeValuesAreAcceptedAndIgnored:
 
         Ref: installed ``openai`` package: openai.types.responses.response_includable
         """
-        from openai.types.responses.response_includable import (  # noqa: PLC0415
-            ResponseIncludable as SdkResponseIncludable,
-        )
-
         assert set(get_args(ResponseIncludable)) == set(get_args(SdkResponseIncludable))
 
     @pytest.mark.parametrize("include", get_args(ResponseIncludable))
@@ -4444,8 +4438,6 @@ def _stub_retrieval_turn(
     Returns:
         The Converse request bodies, in call order.
     """
-    from stdapi.routes import openai_responses  # noqa: PLC0415
-    from tests._helpers import make_model_details  # noqa: PLC0415
 
     async def _validate_model(
         model_id: str, *_args: object, **_kwargs: object
@@ -4607,8 +4599,6 @@ class TestFileSearchTool:
 
         Ref: stdapi/vector_stores/backend.py:IndexCapabilities
         """
-        from stdapi.vector_stores.backend import check_filter  # noqa: PLC0415
-
         capabilities = IndexCapabilities(
             filter_operators=frozenset({"eq", "ne"}),
             filter_combinators=frozenset({"and"}),

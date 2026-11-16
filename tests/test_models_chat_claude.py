@@ -36,6 +36,11 @@ from tests.test_input_file import (
     _stub_s3_read,
     input_files,  # noqa: F401
 )
+lazy from stdapi.input_file import (
+    InputFile,
+    _S3Source,
+    resolve_all_bedrock_content_blocks,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -1505,12 +1510,6 @@ class TestStoredAttachments:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An ``s3://`` image reaches Claude as inline content, not as a reference."""
-        from stdapi.input_file import (  # noqa: PLC0415
-            InputFile,
-            _S3Source,
-            resolve_all_bedrock_content_blocks,
-        )
-
         bucket = _allowed_bucket(monkeypatch)
         monkeypatch.setattr(SETTINGS, "max_input_file_size", 0)
         monkeypatch.setattr(_S3Source, "_read", _stub_s3_read)

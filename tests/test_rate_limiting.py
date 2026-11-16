@@ -24,7 +24,7 @@ import json
 import re
 from asyncio import CancelledError, Event, create_task, gather, sleep
 from datetime import UTC, datetime
-from secrets import token_bytes
+from secrets import token_bytes, token_hex
 from time import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -33,9 +33,10 @@ import pytest
 from aiobotocore.session import get_session
 from fastapi import Request, WebSocket
 from pydantic import ValidationError
+lazy from httpx import ASGITransport, AsyncClient
 
 import stdapi.auth
-from stdapi import tenant_keys, tenant_rate_limits
+from stdapi import realtime, tenant_keys, tenant_rate_limits
 from stdapi.api_errors import ApiError, FeatureUnavailableError, UnsupportedModelError
 from stdapi.auth import (
     AuthenticationHandler,
@@ -52,7 +53,7 @@ from stdapi.aws_dynamodb import (
     item_key,
     put_item,
 )
-from stdapi.config import SETTINGS, _Settings
+from stdapi.config import AWS_SESSION, SETTINGS, _Settings
 from stdapi.monitoring import (
     REQUEST,
     TENANT,
@@ -75,6 +76,9 @@ from stdapi.tenant_rate_limits import (
     verify_counter_access,
 )
 from stdapi.usage import record_bedrock_usage
+from tests._helpers import make_client_error, make_event_log
+lazy from stdapi.aws import _CLIENTS, CONFIG, AWSConnectionManager
+lazy from stdapi.main import _middleware, app
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
@@ -208,7 +212,6 @@ async def _handshake(
     Returns:
         The connection's scope, and every message the server sent on it.
     """
-    from stdapi import realtime  # noqa: PLC0415
 
     async def _no_such_model(model_id: str, **_: Any) -> Any:  # noqa: ANN401
         raise UnsupportedModelError(model_id)
@@ -261,8 +264,6 @@ async def limited_backend(
 
     Ref: tests/conftest.py:dynamodb_table
     """
-    from stdapi.aws import _CLIENTS  # noqa: PLC0415
-
     region = SETTINGS.aws_bedrock_regions[0]
     session = get_session()
     async with session.create_client(
@@ -1509,10 +1510,6 @@ class TestHeaders:
         Ref: stdapi/tenant_rate_limits.py:_openai_headers
              https://developers.openai.com/api/docs/guides/rate-limits
         """
-        from httpx import ASGITransport, AsyncClient  # noqa: PLC0415
-
-        from stdapi.main import app  # noqa: PLC0415
-
         key = await _declare_and_mint(
             limited_backend,
             key_id="o" + "0" * 15,
@@ -1547,10 +1544,6 @@ class TestHeaders:
 
         Ref: stdapi/tenant_rate_limits.py:_Ledger.remaining_tokens
         """
-        from httpx import ASGITransport, AsyncClient  # noqa: PLC0415
-
-        from stdapi.main import app  # noqa: PLC0415
-
         key_id = "o" + "1" * 15
         key = await _declare_and_mint(
             limited_backend, key_id, requests_per_minute=60, tokens_per_minute=150000
@@ -1585,10 +1578,6 @@ class TestHeaders:
         Ref: stdapi/tenant_rate_limits.py:_anthropic_headers
              https://platform.claude.com/docs/en/api/rate-limits
         """
-        from httpx import ASGITransport, AsyncClient  # noqa: PLC0415
-
-        from stdapi.main import app  # noqa: PLC0415
-
         key = await _declare_and_mint(
             limited_backend,
             key_id="n" + "0" * 15,
@@ -1626,10 +1615,6 @@ class TestHeaders:
         Ref: stdapi/main.py:set_retry_after_header
              stdapi/api_errors.py:RateLimitExceededError
         """
-        from httpx import ASGITransport, AsyncClient  # noqa: PLC0415
-
-        from stdapi.main import app  # noqa: PLC0415
-
         key = await _declare_and_mint(
             limited_backend, key_id="p" + "0" * 15, requests_per_minute=1
         )
@@ -1675,10 +1660,6 @@ class TestHeaders:
              stdapi/tenant_rate_limits.py:_anthropic_headers
              docs/operations_authentication_security.md#tenant-rate-limits
         """
-        from httpx import ASGITransport, AsyncClient  # noqa: PLC0415
-
-        from stdapi.main import app  # noqa: PLC0415
-
         tokens_only = await _declare_and_mint(
             limited_backend, key_id="o" + "6" * 15, tokens_per_minute=150000
         )
@@ -1720,10 +1701,6 @@ class TestHeaders:
              stdapi/api_providers/ollama.py:_format_error
              docs/operations_authentication_security.md#tenant-rate-limits
         """
-        from httpx import ASGITransport, AsyncClient  # noqa: PLC0415
-
-        from stdapi.main import app  # noqa: PLC0415
-
         key_id = "p" + "1" * 15
         key = await _declare_and_mint(limited_backend, key_id, requests_per_minute=1)
 
@@ -1764,10 +1741,6 @@ class TestHeaders:
 
         Ref: stdapi/api_providers/anthropic.py:_format_error
         """
-        from httpx import ASGITransport, AsyncClient  # noqa: PLC0415
-
-        from stdapi.main import app  # noqa: PLC0415
-
         key = await _declare_and_mint(
             limited_backend, key_id="q" + "0" * 15, requests_per_minute=8
         )
@@ -1804,10 +1777,6 @@ class TestSettlement:
 
         Ref: stdapi/tenant_rate_limits.py:settle_tenant_reservation
         """
-        from httpx import ASGITransport, AsyncClient  # noqa: PLC0415
-
-        from stdapi.main import app  # noqa: PLC0415
-
         key_id = "o" + "2" * 15
         key = await _declare_and_mint(limited_backend, key_id, tokens_per_minute=8000)
 
@@ -1834,7 +1803,6 @@ class TestSettlement:
         Returns:
             The status answered, or None when the failure escaped unanswered.
         """
-        from stdapi.main import _middleware  # noqa: PLC0415
 
         async def _disconnected() -> dict[str, Any]:
             return {"type": "http.disconnect"}
@@ -2215,8 +2183,6 @@ class TestCounterWrites:
 
         Ref: stdapi/aws_dynamodb.py:_failure
         """
-        from tests._helpers import make_client_error  # noqa: PLC0415
-
         denial = make_client_error(
             "AccessDeniedException",
             "UpdateItem",
@@ -2246,8 +2212,6 @@ class TestCounterWrites:
 
         Ref: stdapi/tenant_rate_limits.py:verify_counter_access
         """
-        from tests._helpers import make_event_log  # noqa: PLC0415
-
         start_event = make_event_log(type="start")
         await verify_counter_access(start_event)
         assert "server_warnings" not in start_event
@@ -2281,8 +2245,6 @@ class TestCounterWrites:
         Ref: stdapi/aws.py:AWSConnectionManager.__aenter__
         """
         import stdapi.aws  # noqa: PLC0415
-        from stdapi.aws import CONFIG, AWSConnectionManager  # noqa: PLC0415
-        from stdapi.config import AWS_SESSION  # noqa: PLC0415
 
         class _Entered:
             async def __aenter__(self) -> Any:  # noqa: ANN401
@@ -2339,8 +2301,6 @@ class TestRealBackends:
 
         Ref: stdapi/tenant_rate_limits.py:_sync
         """
-        from secrets import token_hex  # noqa: PLC0415
-
         del sandbox_dynamodb
         key_id = token_hex(8)
         tenant = Tenant(key_id=key_id, name="race", requests_per_minute=100)

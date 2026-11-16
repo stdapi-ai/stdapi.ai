@@ -21,11 +21,16 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import pytest
+lazy from httpx import URL
+lazy from pydantic_core import from_json
+lazy from starlette.requests import Request
 
 from stdapi import batches
 from tests import _batches
 from tests._batches import converse_output
 from tests._helpers import poll_batch_until_ended
+from tests.conftest import logged_usage_entries
+lazy from stdapi.routes import anthropic_messages_batches as routes
 
 if TYPE_CHECKING:
     from anthropic import Anthropic
@@ -262,8 +267,6 @@ class TestMessageBatchLifecycle:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
              stdapi/batches.py:_to_model_input
         """
-        from pydantic_core import from_json  # noqa: PLC0415
-
         s3, _ = _batches.install(monkeypatch, translate=True)
         translated = _batches.capture_translations(monkeypatch)
         requests = _requests(100)
@@ -329,8 +332,6 @@ class TestMessageBatchLifecycle:
         Ref: https://platform.claude.com/docs/en/build-with-claude/batch-processing
              stdapi/batches.py:iter_anthropic_results
         """
-        from pydantic_core import from_json  # noqa: PLC0415
-
         s3, bedrock = _batches.install(monkeypatch)
         batch_id = _create(anthropic_app_client, _requests(100))["id"]
         bedrock.finish(succeeded=99, errored=1)
@@ -398,8 +399,6 @@ class TestMessageBatchLifecycle:
              anthropic.types.usage.Usage
              stdapi/batches.py:_to_message
         """
-        from pydantic_core import from_json  # noqa: PLC0415
-
         s3, bedrock = _batches.install(monkeypatch)
         batch_id = _create(anthropic_app_client, _requests(100))["id"]
         bedrock.finish(succeeded=100)
@@ -434,8 +433,6 @@ class TestMessageBatchLifecycle:
              tests/probes/results/bedrock.batch-embeddings.json
              stdapi/batches.py:_chat_output
         """
-        from pydantic_core import from_json  # noqa: PLC0415 -- imported locally like in the other result tests here
-
         s3, bedrock = _batches.install(monkeypatch)
         batch_id = _create(anthropic_app_client, _requests(100))["id"]
         bedrock.finish(succeeded=100)
@@ -552,8 +549,6 @@ class TestMessageBatchLifecycle:
         Ref: https://platform.claude.com/docs/en/build-with-claude/batch-processing
              stdapi/batches.py:iter_anthropic_results
         """
-        from pydantic_core import from_json  # noqa: PLC0415
-
         s3, bedrock = _batches.install(monkeypatch)
         batch_id = _create(anthropic_app_client, _requests(100))["id"]
         anthropic_app_client.post(f"{_PATH}/{batch_id}/cancel")
@@ -646,8 +641,6 @@ class TestMessageBatchLifecycle:
         Ref: https://platform.claude.com/docs/en/api/listing-message-batches
              stdapi/batches.py:finish_listed
         """
-        from tests.conftest import logged_usage_entries  # noqa: PLC0415
-
         s3, bedrock = _batches.install(monkeypatch)
         batch_id = _create(anthropic_app_client, _requests(100))["id"]
         bedrock.finish(succeeded=100)
@@ -836,8 +829,6 @@ class TestMessageBatchFanOut:
 
         Ref: stdapi/batches.py:iter_anthropic_results
         """
-        from pydantic_core import from_json  # noqa: PLC0415
-
         s3, bedrock = _batches.install(monkeypatch)
         batch_id = self._create_two_models(anthropic_app_client)
         first, second = list(bedrock.jobs)
@@ -876,8 +867,6 @@ class TestMessageBatchFanOut:
 
         Ref: stdapi/batches.py:iter_anthropic_results
         """
-        from pydantic_core import from_json  # noqa: PLC0415
-
         s3, bedrock = _batches.install(monkeypatch)
         batch_id = self._create_two_models(anthropic_app_client)
         first, second = list(bedrock.jobs)
@@ -915,8 +904,6 @@ class TestMessageBatchFanOut:
 
         Ref: stdapi/batches.py:cancel_batch
         """
-        from pydantic_core import from_json  # noqa: PLC0415
-
         s3, bedrock = _batches.install(monkeypatch)
         batch_id = self._create_two_models(anthropic_app_client)
         first, second = list(bedrock.jobs)
@@ -1028,11 +1015,6 @@ class TestMessageBatchResultsUrl:
         Ref: anthropic/_base_client.py:_prepare_url
              stdapi/routes/anthropic_messages_batches.py:_results_url
         """
-        from httpx import URL  # noqa: PLC0415
-        from starlette.requests import Request  # noqa: PLC0415
-
-        from stdapi.routes import anthropic_messages_batches as routes  # noqa: PLC0415
-
         url = routes._results_url(  # noqa: SLF001
             Request(
                 {

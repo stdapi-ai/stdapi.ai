@@ -14,12 +14,15 @@ from __future__ import annotations
 import struct
 import zlib
 from datetime import UTC, datetime
+from math import hypot
 from time import monotonic, sleep
 from typing import TYPE_CHECKING, Any, NoReturn
 
 import pytest
 from botocore.exceptions import ClientError
 from pybase64 import b64decode, b64encode
+
+lazy from stdapi.models import ModelDetails as _ModelDetails
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -159,8 +162,6 @@ def make_model_details(model_id: str, **overrides: Any) -> ModelDetails:  # noqa
     Returns:
         The stub ModelDetails.
     """
-    from stdapi.models import ModelDetails as _ModelDetails  # noqa: PLC0415
-
     fields: dict[str, Any] = {
         "id": model_id,
         "name": model_id,
@@ -197,8 +198,6 @@ def assert_embedding_list(
     Returns:
         The vectors, in response order, for any further per-model assertions.
     """
-    from math import hypot  # noqa: PLC0415
-
     assert response.object == "list"
     assert len(response.data) == count
 

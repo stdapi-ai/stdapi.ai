@@ -14,12 +14,18 @@ from array import array
 from math import hypot
 from struct import unpack
 from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock
 
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
 
 from tests._helpers import assert_embedding_list, make_model_details
 from tests.conftest import logged_usage_entries
+lazy from stdapi import monitoring
+lazy from stdapi.models import InvokeResult, _compute_model_capabilities
+lazy from stdapi.models.embedding import EmbeddingResponse
+lazy from stdapi.models.embedding.cohere_embed import EmbeddingModel
+lazy from stdapi.routes import openai_embeddings
 
 if TYPE_CHECKING:
     from starlette.testclient import TestClient as TestClientType
@@ -649,10 +655,6 @@ class TestEmbeddingsCohereUnsupportedEmbeddingType:
         self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
     ) -> TestClientType:
         """Test client with stubbed model validation and Bedrock invocation."""
-        from unittest.mock import AsyncMock  # noqa: PLC0415
-
-        from stdapi.models import InvokeResult  # noqa: PLC0415
-        from stdapi.models.embedding.cohere_embed import EmbeddingModel  # noqa: PLC0415
 
         class _StubModelDetails:
             """Minimal stand-in exposing only the ``id`` attribute the route reads."""
@@ -726,9 +728,6 @@ class TestEmbeddingsRouteMapping:
         Returns:
             The list the stub appends one recorded ``embed_text`` call to.
         """
-        from stdapi.models.embedding import EmbeddingResponse  # noqa: PLC0415
-        from stdapi.routes import openai_embeddings  # noqa: PLC0415
-
         calls: list[dict[str, object]] = []
 
         async def _validate_model(
@@ -847,8 +846,6 @@ class TestEmbeddingsRouteMapping:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/monitoring.py:log_request_params
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         written: list[dict[str, Any]] = []
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(monitoring, "write_log_event", written.append)
@@ -878,8 +875,6 @@ class TestEmbeddingsRouteMapping:
              stdapi/routes/openai_embeddings.py:create_embeddings
              stdapi/monitoring.py:log_response_params
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         written: list[dict[str, Any]] = []
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(monitoring, "write_log_event", written.append)
@@ -931,7 +926,6 @@ class TestEmbeddingRouteAdvertised:
         """
         import stdapi.main  # noqa: F401, PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
-        from stdapi.models import _compute_model_capabilities  # noqa: PLC0415
 
         routes, tools = _compute_model_capabilities(
             "vendor.embed-v1", self._details(["EMBEDDING"])
@@ -968,7 +962,6 @@ class TestEmbeddingRouteAdvertised:
         Ref: stdapi/models/__init__.py:_compute_model_capabilities
         """
         import stdapi.main  # noqa: F401, PLC0415
-        from stdapi.models import _compute_model_capabilities  # noqa: PLC0415
 
         routes, tools = _compute_model_capabilities(
             "vendor.embed-v1", self._details(["TEXT"])

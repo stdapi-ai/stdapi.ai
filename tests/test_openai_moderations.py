@@ -6,14 +6,23 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
      stdapi/routes/openai_moderations.py:create_moderation
 """
 
-from asyncio import Event, wait_for
+from asyncio import Event, run, wait_for
 from base64 import b64encode
-from typing import TYPE_CHECKING, Any
+from io import BytesIO
+from typing import TYPE_CHECKING, Any, get_args
 
 import pytest
 from botocore.exceptions import ClientError
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 from starlette.testclient import TestClient
+lazy from openai.types.moderation import Categories as SdkCategories
+lazy from openai.types.moderation import (
+    CategoryAppliedInputTypes as SdkCategoryAppliedInputTypes,
+)
+lazy from openai.types.moderation_create_response import (
+    ModerationCreateResponse as SdkModerationCreateResponse,
+)
+lazy from PIL import Image
 
 from stdapi.config import SETTINGS
 from stdapi.models.moderation import (
@@ -31,6 +40,9 @@ from stdapi.types.openai_moderations import (
     ModerationCategoryAppliedInputTypes,
     ModerationCreateParams,
 )
+lazy from stdapi import auth, input_file, monitoring
+lazy from stdapi.aws import service_regions
+lazy from stdapi.main import app
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -171,10 +183,6 @@ class TestModerationsRoute:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/types/openai_moderations.py:ModerationCreateResponse
         """
-        from openai.types.moderation_create_response import (  # noqa: PLC0415
-            ModerationCreateResponse as SdkModerationCreateResponse,
-        )
-
         _stub_client(monkeypatch, _FLAGGED_RESPONSE)
 
         response = app_client.post("/v1/moderations", json={"input": "some text"})
@@ -420,10 +428,6 @@ class TestModerationsRoute:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html
              stdapi/models/moderation/amazon_bedrock_guardrail.py:_IMAGE_FORMATS
         """
-        from io import BytesIO  # noqa: PLC0415
-
-        from PIL import Image  # noqa: PLC0415
-
         buffer = BytesIO()
         Image.new("RGB", (1, 1)).save(buffer, "JPEG")
         jpeg = buffer.getvalue()
@@ -463,7 +467,6 @@ class TestModerationsRoute:
              stdapi/models/moderation/amazon_bedrock_guardrail.py:_to_content_block
              stdapi/input_file.py:_HttpSource
         """
-        from stdapi import input_file  # noqa: PLC0415
 
         async def _resolve_metadata(source: Any) -> None:  # noqa: ANN401
             source._content_type = "image/png"  # noqa: SLF001
@@ -512,7 +515,6 @@ class TestModerationsRoute:
              stdapi/models/moderation/amazon_bedrock_guardrail.py:_to_content_block
              stdapi/input_file.py:_S3Source
         """
-        from stdapi import input_file  # noqa: PLC0415
 
         async def _resolve_metadata(source: Any) -> None:  # noqa: ANN401
             source._content_type = "image/png"  # noqa: SLF001
@@ -599,8 +601,6 @@ class TestModerationsRoute:
         Ref: https://stdapi.ai/api_openai_moderations/
              stdapi/models/moderation/amazon_bedrock_guardrail.py:ModerationModel.moderate
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
         written: list[dict[str, Any]] = []
         monkeypatch.setattr(monitoring, "write_log_event", written.append)
@@ -917,13 +917,6 @@ class TestModerationsRoute:
         Ref: https://developers.openai.com/api/docs/guides/error-codes
              stdapi/auth.py:authenticate
         """
-        from asyncio import run  # noqa: PLC0415
-
-        from pydantic import SecretStr  # noqa: PLC0415
-
-        from stdapi import auth  # noqa: PLC0415
-        from stdapi.main import app  # noqa: PLC0415
-
         stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
         # The lifespan-initialized handler is not set up here: install one.
         monkeypatch.setattr(SETTINGS, "api_key", SecretStr("a-real-secret"))
@@ -957,8 +950,6 @@ class TestModerationsRoute:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html
              stdapi/usage.py:record_guardrail_policy_usage
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         _stub_client(monkeypatch, _CLEAN_RESPONSE)
         written: list[dict[str, Any]] = []
         monkeypatch.setattr(monitoring, "write_log_event", written.append)
@@ -992,8 +983,6 @@ class TestModerationsRoute:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html
              stdapi/usage.py:record_guardrail_policy_usage
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         _stub_client(monkeypatch, _CLEAN_IMAGE_RESPONSE)
         written: list[dict[str, Any]] = []
         monkeypatch.setattr(monitoring, "write_log_event", written.append)
@@ -1032,10 +1021,6 @@ class TestModerationsSdkParity:
 
         Ref: stdapi/models/moderation/__init__.py:ALL_CATEGORIES
         """
-        from openai.types.moderation import Categories as SdkCategories  # noqa: PLC0415
-        from openai.types.moderation import (  # noqa: PLC0415
-            CategoryAppliedInputTypes as SdkCategoryAppliedInputTypes,
-        )
 
         def _json_keys(fields: dict[str, Any]) -> set[str]:
             return {info.alias or name for name, info in fields.items()}
@@ -1058,12 +1043,6 @@ class TestModerationsSdkParity:
 
         Ref: stdapi/models/moderation/__init__.py:IMAGE_CATEGORIES
         """
-        from typing import get_args  # noqa: PLC0415
-
-        from openai.types.moderation import (  # noqa: PLC0415
-            CategoryAppliedInputTypes as SdkCategoryAppliedInputTypes,
-        )
-
         sdk_image_categories = {
             info.alias or name
             for name, info in SdkCategoryAppliedInputTypes.model_fields.items()
@@ -1327,9 +1306,6 @@ class TestComprehendModerationsRoute:
         Ref: https://docs.aws.amazon.com/comprehend/latest/dg/guidelines-and-limits.html
              stdapi/usage.py:record_comprehend_usage
         """
-        from stdapi import monitoring  # noqa: PLC0415
-        from stdapi.aws import service_regions  # noqa: PLC0415
-
         _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
         written: list[dict[str, Any]] = []
         monkeypatch.setattr(monitoring, "write_log_event", written.append)
@@ -2290,8 +2266,6 @@ class TestGuardrailChecksModerationsRoute:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html
              stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:ModerationModel.moderate
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         checks_stub, _ = _stub_checks(
             monkeypatch, _checks_response([]), error=_ACCESS_DENIED
         )
@@ -2423,8 +2397,6 @@ class TestGuardrailChecksModerationsRoute:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeGuardrailChecks.html
              stdapi/usage.py:record_guardrail_usage
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         _stub_checks(monkeypatch, _checks_response([], text_units=3))
         written: list[dict[str, Any]] = []
         monkeypatch.setattr(monitoring, "write_log_event", written.append)
@@ -2454,8 +2426,6 @@ class TestGuardrailChecksModerationsRoute:
         Ref: https://stdapi.ai/operations_logging_monitoring/#usage-metrics-fields
              stdapi/routes/openai_moderations.py:create_moderation
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         _stub_checks(monkeypatch, _checks_response([]))
         written: list[dict[str, Any]] = []
         monkeypatch.setattr(monitoring, "write_log_event", written.append)
@@ -2481,8 +2451,6 @@ class TestGuardrailChecksModerationsRoute:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeGuardrailChecks.html
              stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:ModerationModel._invoke_checks
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         _stub_checks(
             monkeypatch, {"results": {"contentFilter": {"results": []}}, "usage": {}}
         )
@@ -2796,8 +2764,6 @@ class TestGuardrailChecksExtraChecks:
         Ref: https://aws.amazon.com/bedrock/pricing/
              stdapi/usage.py:record_guardrail_usage
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         monkeypatch.setattr(
             SETTINGS, "aws_bedrock_guardrail_checks_prompt_attack", True
         )
@@ -2835,8 +2801,6 @@ class TestGuardrailChecksExtraChecks:
 
         Ref: stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:ModerationModel
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         monkeypatch.setattr(
             SETTINGS, "aws_bedrock_guardrail_checks_prompt_attack", True
         )
@@ -2865,8 +2829,6 @@ class TestGuardrailChecksExtraChecks:
         Ref: stdapi/config.py:_Settings
              stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:ModerationModel
         """
-        from stdapi import monitoring  # noqa: PLC0415
-
         stub, _ = _stub_checks(monkeypatch, _checks_response([]))
         written: list[dict[str, Any]] = []
         monkeypatch.setattr(monitoring, "write_log_event", written.append)

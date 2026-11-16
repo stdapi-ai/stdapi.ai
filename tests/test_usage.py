@@ -50,6 +50,7 @@ from stdapi.usage import (
     record_web_search_usage,
 )
 from tests.conftest import set_test_price
+lazy from stdapi.monitoring import PRINCIPAL, TENANT, Principal, Tenant
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -1763,8 +1764,6 @@ class TestUsageApiDimensions:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Its own set, so a query grouping by model is unaffected by it."""
-        from stdapi.monitoring import TENANT, Tenant  # noqa: PLC0415
-
         monkeypatch.setattr(SETTINGS, "usage_api", True)
         token = TENANT.set(Tenant(key_id="key1", name="tenant"))
         try:
@@ -1782,8 +1781,6 @@ class TestUsageApiDimensions:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The costs endpoint reports per key, never per user, so nothing else is stored."""
-        from stdapi.monitoring import PRINCIPAL, Principal  # noqa: PLC0415
-
         monkeypatch.setattr(SETTINGS, "usage_api", True)
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics_user_dimension", True)
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", True)
@@ -1809,8 +1806,6 @@ class TestUsageApiDimensions:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """One series per user is a bill the operator has to opt into."""
-        from stdapi.monitoring import PRINCIPAL, Principal  # noqa: PLC0415
-
         monkeypatch.setattr(SETTINGS, "usage_api", True)
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics_user_dimension", False)
         token = PRINCIPAL.set(Principal(subject="bob"))
@@ -1824,8 +1819,6 @@ class TestUsageApiDimensions:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Turning the setting on is what makes group_by=user_id answerable."""
-        from stdapi.monitoring import PRINCIPAL, Principal  # noqa: PLC0415
-
         monkeypatch.setattr(SETTINGS, "usage_api", True)
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics_user_dimension", True)
         token = PRINCIPAL.set(Principal(subject="bob"))

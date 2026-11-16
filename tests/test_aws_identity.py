@@ -41,8 +41,9 @@ from stdapi.aws import (
     user_role_session_identity,
 )
 from stdapi.config import AWS_SESSION, SETTINGS, _Settings
-from stdapi.monitoring import PRINCIPAL, Principal
+from stdapi.monitoring import PRINCIPAL, REQUEST_LOG, Principal
 from tests._helpers import make_client_error, make_event_log
+lazy from stdapi.models import _retryable_error_code
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator
@@ -380,8 +381,6 @@ class TestFailClosed:
         STS throttle chained here would mark every Bedrock Region unhealthy and
         re-attempt the request -- and its role session -- in each of them.
         """
-        from stdapi.models import _retryable_error_code  # noqa: PLC0415
-
         _stub_assume_role(monkeypatch, error=make_client_error(code, "AssumeRole"))
         with pytest.raises(ApiError) as raised:
             await user_role_credentials("alice")
@@ -672,8 +671,6 @@ class TestSignedRequest:
         Per-identity clients would mean a connection pool per end user; the
         credentials travel with the request instead.
         """
-        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
-
         keys = {}
         for user in ("alice", "bob"):
             _stub_assume_role(monkeypatch)

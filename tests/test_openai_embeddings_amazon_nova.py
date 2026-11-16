@@ -15,6 +15,11 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from tests._helpers import assert_embedding_list
+lazy from stdapi.api_errors import ApiError
+lazy from stdapi.aws_s3 import S3Object
+lazy from stdapi.input_file import InputFile
+lazy from stdapi.models import InvokeResult
+lazy from stdapi.models.embedding import amazon_nova_embed
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -434,9 +439,6 @@ class TestAmazonNovaSegmentedEmbedding:
         Returns:
             The list the stub appends each ``invoke_async`` request body to.
         """
-        from stdapi.models import InvokeResult  # noqa: PLC0415
-        from stdapi.models.embedding import amazon_nova_embed  # noqa: PLC0415
-
         requests: list[dict[str, Any]] = []
 
         async def _invoke_async(
@@ -486,7 +488,6 @@ class TestAmazonNovaSegmentedEmbedding:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
              stdapi/models/embedding/amazon_nova_embed.py:_fetch_and_parse_embedding_jsonl
         """
-        from stdapi.aws_s3 import S3Object  # noqa: PLC0415
         from stdapi.models.embedding.amazon_nova_embed import EmbeddingModel  # noqa: PLC0415 -- imported lazily under the test's settings
 
         requests = self._stub_backend(
@@ -535,8 +536,6 @@ class TestAmazonNovaSegmentedEmbedding:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._embed_segmented
         """
-        from stdapi.api_errors import ApiError  # noqa: PLC0415
-        from stdapi.aws_s3 import S3Object  # noqa: PLC0415
         from stdapi.models.embedding.amazon_nova_embed import EmbeddingModel  # noqa: PLC0415 -- imported lazily under the test's settings
 
         self._stub_backend(
@@ -621,8 +620,6 @@ class TestAmazonNovaStorageThreshold:
         Returns:
             An ``InputFile`` that resolves its metadata without a request.
         """
-        from stdapi.input_file import InputFile  # noqa: PLC0415
-
         value = InputFile("https://example.com/photo.png", content_type="image/png")
         source = value._source  # noqa: SLF001
         source._filename = None  # noqa: SLF001
@@ -636,8 +633,6 @@ class TestAmazonNovaStorageThreshold:
         Returns:
             The list the stubbed invocation appends the value it was given to.
         """
-        from stdapi.aws_s3 import S3Object  # noqa: PLC0415
-        from stdapi.input_file import InputFile  # noqa: PLC0415
         from stdapi.models.embedding.amazon_nova_embed import EmbeddingModel  # noqa: PLC0415 -- imported lazily under the test's settings
 
         sent: list[Any] = []
@@ -679,8 +674,6 @@ class TestAmazonNovaStorageThreshold:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A file under the body limit whose base64 form is over it goes to storage."""
-        from stdapi.aws_s3 import S3Object  # noqa: PLC0415
-
         # 20,000,000 bytes weigh 26,666,668 once base64-encoded.
         assert isinstance(await self._embed(monkeypatch, 20_000_000), S3Object)
 

@@ -48,6 +48,8 @@ from tests.test_openai_audio_transcriptions import (
     _STUB_TRANSCRIPT_DATA,
     _stub_transcribe,
 )
+lazy from stdapi.models.image import ImageGenerationResponse
+lazy from stdapi.models.video import VideoGenerationStart
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Iterator
@@ -762,8 +764,6 @@ class _StubImageJob:
 
     async def generate_images(self) -> list[Any]:
         """Return a single canned base64 image result."""
-        from stdapi.models.image import ImageGenerationResponse  # noqa: PLC0415
-
         return [ImageGenerationResponse(image="aW1n", index=0)]
 
 
@@ -855,8 +855,6 @@ class _StubVideoModel:
 
     async def start_video_generation(self, prompt: str, **kwargs: Any) -> Any:  # noqa: ANN401
         """Record the prompt and return a canned generation start."""
-        from stdapi.models.video import VideoGenerationStart  # noqa: PLC0415
-
         del kwargs
         self.prompts.append(prompt)
         return VideoGenerationStart(

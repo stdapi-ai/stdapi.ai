@@ -19,6 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from PIL import Image
 from pybase64 import b64decode as pybase64_b64decode
 from pybase64 import b64encode
+lazy from botocore.loaders import create_loader
 
 from stdapi import utils
 from stdapi.api_errors import ApiError
@@ -34,6 +35,7 @@ from stdapi.utils import (
     parse_content_disposition_filename,
     strip_url_query,
 )
+lazy from stdapi.input_file import InputFile
 
 pytestmark = pytest.mark.local
 
@@ -233,8 +235,6 @@ def test_http_input_file_repr_hides_presigned_signature() -> None:
 
     Ref: stdapi/input_file.py:InputFile.__repr__
     """
-    from stdapi.input_file import InputFile  # noqa: PLC0415
-
     url = (
         "https://bucket.s3.amazonaws.com/key.png"
         "?X-Amz-Credential=AKIAEXAMPLE&X-Amz-Signature=deadbeef"
@@ -486,8 +486,6 @@ class TestLanguageCodeFormatting:
         rewritten into another spelling is a language the deployment
         advertises and can no longer transcribe.
         """
-        from botocore.loaders import create_loader  # noqa: PLC0415
-
         listed: list[str] = create_loader().load_service_model(
             "transcribe", "service-2"
         )["shapes"]["LanguageCode"]["enum"]

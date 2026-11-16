@@ -43,6 +43,7 @@ from stdapi.models.sagemaker_endpoints import (
 )
 from stdapi.pricing import Service
 from tests._helpers import make_event_log, make_model_details
+lazy from stdapi.usage import UNPRICED_SERVICES
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -533,8 +534,6 @@ class TestUsageService:
     ) -> None:
         """The service exists to key quantities, not to price them."""
         del declared
-        # Imported here: only this test reads the unpriced-service set.
-        from stdapi.usage import UNPRICED_SERVICES  # noqa: PLC0415
 
         assert usage_service(MODEL_ID) == Service.SAGEMAKER
         assert Service.SAGEMAKER in UNPRICED_SERVICES
