@@ -43,6 +43,7 @@ available from any running instance through
 <tr><td>Jamba 1.5 Mini (legacy)</td><td><code>ai21.jamba-1-5-mini-v1:0</code></td><td>AI21 Labs</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>1</td></tr>
 <tr><td>Bedrock Guardrail Checks</td><td><code>amazon.bedrock-runtime-guardrail-checks</code></td><td>Amazon</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>MODERATION</td><td>7</td></tr>
 <tr><td>Comprehend Toxicity Detection</td><td><code>amazon.comprehend-toxicity</code></td><td>Amazon</td><td>AWS Comprehend</td><td>TEXT</td><td>MODERATION</td><td>33</td></tr>
+<tr><td>Nova 2.5 Sonic</td><td><code>amazon.nova-2-5-sonic</code></td><td>Amazon</td><td>AWS Bedrock Runtime</td><td>SPEECH, TEXT</td><td>SPEECH, TEXT</td><td>4</td></tr>
 <tr><td>Nova 2 Lite</td><td><code>amazon.nova-2-lite-v1:0</code></td><td>Amazon</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE, VIDEO</td><td>TEXT</td><td>25</td></tr>
 <tr><td>Amazon Nova Multimodal Embeddings</td><td><code>amazon.nova-2-multimodal-embeddings-v1:0</code></td><td>Amazon</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE, AUDIO, VIDEO</td><td>EMBEDDING</td><td>1</td></tr>
 <tr><td>Nova 2 Sonic</td><td><code>amazon.nova-2-sonic-v1:0</code></td><td>Amazon</td><td>AWS Bedrock Runtime</td><td>SPEECH</td><td>SPEECH, TEXT</td><td>4</td></tr>
@@ -67,12 +68,15 @@ available from any running instance through
 <tr><td>Claude 3.5 Sonnet</td><td><code>anthropic.claude-3-5-sonnet-20240620-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
 <tr><td>Claude 3.5 Sonnet v2</td><td><code>anthropic.claude-3-5-sonnet-20241022-v2:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
 <tr><td>Claude 3.7 Sonnet</td><td><code>anthropic.claude-3-7-sonnet-20250219-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
-<tr><td>Claude 3 Haiku</td><td><code>anthropic.claude-3-haiku-20240307-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>6</td></tr>
-<tr><td>Claude 3 Sonnet</td><td><code>anthropic.claude-3-sonnet-20240229-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>5</td></tr>
+<tr><td>Claude 3 Haiku (legacy)</td><td><code>anthropic.claude-3-haiku-20240307-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
+<tr><td>Claude 3 Sonnet (legacy)</td><td><code>anthropic.claude-3-sonnet-20240229-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
 <tr><td>Claude Fable 5</td><td><code>anthropic.claude-fable-5</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Fable 5.1</td><td><code>anthropic.claude-fable-5-1</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>Claude Fable 5.2</td><td><code>anthropic.claude-fable-5-2</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Fern TRN2 1024K</td><td><code>anthropic.claude-fern-trn2-1024k</code></td><td>Anthropic</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
 <tr><td>Claude Haiku 4.5</td><td><code>anthropic.claude-haiku-4-5-20251001-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime, AWS Bedrock Mantle</td><td>IMAGE, TEXT</td><td>TEXT</td><td>31</td></tr>
+<tr><td>Claude Haiku 5.5</td><td><code>anthropic.claude-haiku-5-5</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>Claude Mulberry TRN2 208K 20251001</td><td><code>anthropic.claude-mulberry-trn2-208k-20251001</code></td><td>Anthropic</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
 <tr><td>Claude Opus 4.1 (legacy)</td><td><code>anthropic.claude-opus-4-1-20250805-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
 <tr><td>Claude Opus 4.5</td><td><code>anthropic.claude-opus-4-5-20251101-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Opus 4.6</td><td><code>anthropic.claude-opus-4-6</code></td><td>Anthropic</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
@@ -82,7 +86,7 @@ available from any running instance through
 <tr><td>Claude Opus 5</td><td><code>anthropic.claude-opus-5</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Opus 5.5</td><td><code>anthropic.claude-opus-5-5</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Sonnet 4 (legacy)</td><td><code>anthropic.claude-sonnet-4-20250514-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
-<tr><td>Claude Sonnet 4.5</td><td><code>anthropic.claude-sonnet-4-5-20250929-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>Claude Sonnet 4.5 (legacy)</td><td><code>anthropic.claude-sonnet-4-5-20250929-v1:0</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Sonnet 4.6</td><td><code>anthropic.claude-sonnet-4-6</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Sonnet 5</td><td><code>anthropic.claude-sonnet-5</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Sonnet 5.5</td><td><code>anthropic.claude-sonnet-5-5</code></td><td>Anthropic</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
@@ -90,7 +94,7 @@ available from any running instance through
 <tr><td>Embed Multilingual</td><td><code>cohere.embed-multilingual-v3</code></td><td>Cohere</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>EMBEDDING</td><td>12</td></tr>
 <tr><td>Embed v4</td><td><code>cohere.embed-v4:0</code></td><td>Cohere</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>EMBEDDING</td><td>23</td></tr>
 <tr><td>Rerank 3.5</td><td><code>cohere.rerank-v3-5:0</code></td><td>Cohere</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>RERANKING</td><td>5</td></tr>
-<tr><td>DeepSeek-R1</td><td><code>deepseek.r1-v1:0</code></td><td>DeepSeek</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>3</td></tr>
+<tr><td>DeepSeek-R1 (legacy)</td><td><code>deepseek.r1-v1:0</code></td><td>DeepSeek</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>3</td></tr>
 <tr><td>DeepSeek-V3.1</td><td><code>deepseek.v3.1</code></td><td>DeepSeek</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>12</td></tr>
 <tr><td>DeepSeek V3.2</td><td><code>deepseek.v3.2</code></td><td>DeepSeek</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
 <tr><td>Gemma 3 12B IT</td><td><code>google.gemma-3-12b-it</code></td><td>Google</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>10</td></tr>
@@ -100,13 +104,13 @@ available from any running instance through
 <tr><td>Gemma 4 31B</td><td><code>google.gemma-4-31b</code></td><td>Google</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>4</td></tr>
 <tr><td>Gemma 4 E2B</td><td><code>google.gemma-4-e2b</code></td><td>Google</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>4</td></tr>
 <tr><td>Ray v2</td><td><code>luma.ray-v2:0</code></td><td>Luma AI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>VIDEO</td><td>1</td></tr>
-<tr><td>Llama 3.1 70B Instruct</td><td><code>meta.llama3-1-70b-instruct-v1:0</code></td><td>Meta</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>3</td></tr>
-<tr><td>Llama 3.1 8B Instruct</td><td><code>meta.llama3-1-8b-instruct-v1:0</code></td><td>Meta</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>3</td></tr>
-<tr><td>Llama 3.3 70B Instruct</td><td><code>meta.llama3-3-70b-instruct-v1:0</code></td><td>Meta</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>3</td></tr>
-<tr><td>Llama 3 70B Instruct</td><td><code>meta.llama3-70b-instruct-v1:0</code></td><td>Meta</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>5</td></tr>
-<tr><td>Llama 3 8B Instruct</td><td><code>meta.llama3-8b-instruct-v1:0</code></td><td>Meta</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>5</td></tr>
-<tr><td>Llama 4 Maverick 17B Instruct</td><td><code>meta.llama4-maverick-17b-instruct-v1:0</code></td><td>Meta</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>4</td></tr>
-<tr><td>Llama 4 Scout 17B Instruct</td><td><code>meta.llama4-scout-17b-instruct-v1:0</code></td><td>Meta</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>4</td></tr>
+<tr><td>Llama 3.1 70B Instruct (legacy)</td><td><code>meta.llama3-1-70b-instruct-v1:0</code></td><td>Meta</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>3</td></tr>
+<tr><td>Llama 3.1 8B Instruct (legacy)</td><td><code>meta.llama3-1-8b-instruct-v1:0</code></td><td>Meta</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>3</td></tr>
+<tr><td>Llama 3.3 70B Instruct (legacy)</td><td><code>meta.llama3-3-70b-instruct-v1:0</code></td><td>Meta</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>3</td></tr>
+<tr><td>Llama 3 70B Instruct (legacy)</td><td><code>meta.llama3-70b-instruct-v1:0</code></td><td>Meta</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>5</td></tr>
+<tr><td>Llama 3 8B Instruct (legacy)</td><td><code>meta.llama3-8b-instruct-v1:0</code></td><td>Meta</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>5</td></tr>
+<tr><td>Llama 4 Maverick 17B Instruct (legacy)</td><td><code>meta.llama4-maverick-17b-instruct-v1:0</code></td><td>Meta</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>4</td></tr>
+<tr><td>Llama 4 Scout 17B Instruct (legacy)</td><td><code>meta.llama4-scout-17b-instruct-v1:0</code></td><td>Meta</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>4</td></tr>
 <tr><td>MiniMax M2</td><td><code>minimax.minimax-m2</code></td><td>MiniMax</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
 <tr><td>MiniMax M2.1</td><td><code>minimax.minimax-m2.1</code></td><td>MiniMax</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>13</td></tr>
 <tr><td>MiniMax M2.5</td><td><code>minimax.minimax-m2.5</code></td><td>MiniMax</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>13</td></tr>
@@ -115,18 +119,19 @@ available from any running instance through
 <tr><td>Ministral 14B 3.0</td><td><code>mistral.ministral-3-14b-instruct</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>10</td></tr>
 <tr><td>Ministral 3B</td><td><code>mistral.ministral-3-3b-instruct</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>10</td></tr>
 <tr><td>Ministral 3 8B</td><td><code>mistral.ministral-3-8b-instruct</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>10</td></tr>
-<tr><td>Mistral 7B Instruct</td><td><code>mistral.mistral-7b-instruct-v0:2</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>9</td></tr>
+<tr><td>Mistral 7B Instruct (legacy)</td><td><code>mistral.mistral-7b-instruct-v0:2</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>9</td></tr>
 <tr><td>Mistral Large (24.02)</td><td><code>mistral.mistral-large-2402-v1:0</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>9</td></tr>
 <tr><td>Mistral Large (24.07)</td><td><code>mistral.mistral-large-2407-v1:0</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>1</td></tr>
 <tr><td>Mistral Large 3</td><td><code>mistral.mistral-large-3-675b-instruct</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>7</td></tr>
 <tr><td>Mistral Small (24.02)</td><td><code>mistral.mistral-small-2402-v1:0</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>1</td></tr>
-<tr><td>Mixtral 8x7B Instruct</td><td><code>mistral.mixtral-8x7b-instruct-v0:1</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>9</td></tr>
+<tr><td>Mixtral 8x7B Instruct (legacy)</td><td><code>mistral.mixtral-8x7b-instruct-v0:1</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>9</td></tr>
 <tr><td>Pixtral Large (25.02)</td><td><code>mistral.pixtral-large-2502-v1:0</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>7</td></tr>
 <tr><td>Voxtral Mini 3B 2507</td><td><code>mistral.voxtral-mini-3b-2507</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>SPEECH, TEXT</td><td>TEXT</td><td>10</td></tr>
 <tr><td>Voxtral Small 24B 2507</td><td><code>mistral.voxtral-small-24b-2507</code></td><td>Mistral AI</td><td>AWS Bedrock Runtime</td><td>SPEECH, TEXT</td><td>TEXT</td><td>10</td></tr>
 <tr><td>Kimi K2 Thinking</td><td><code>moonshotai.kimi-k2-thinking</code></td><td>Moonshot AI</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>12</td></tr>
 <tr><td>Kimi K2.5</td><td><code>moonshotai.kimi-k2.5</code></td><td>Moonshot AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>10</td></tr>
 <tr><td>Kimi K3</td><td><code>moonshotai.kimi-k3</code></td><td>Moonshot AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>Kimi K3.1</td><td><code>moonshotai.kimi-k3.1</code></td><td>Moonshot AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>NVIDIA Nemotron Nano 12B v2 VL BF16</td><td><code>nvidia.nemotron-nano-12b-v2</code></td><td>NVIDIA</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>10</td></tr>
 <tr><td>Nemotron Nano 3 30B</td><td><code>nvidia.nemotron-nano-3-30b</code></td><td>NVIDIA</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
 <tr><td>NVIDIA Nemotron Nano 9B v2</td><td><code>nvidia.nemotron-nano-9b-v2</code></td><td>NVIDIA</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
@@ -142,7 +147,8 @@ available from any running instance through
 <tr><td>GPT 6 Astra Minor</td><td><code>openai.gpt-6-astra-minor</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
 <tr><td>GPT-6 Luna</td><td><code>openai.gpt-6-luna</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
 <tr><td>GPT-6 Sol</td><td><code>openai.gpt-6-sol</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
-<tr><td>GPT-6.1 Sol</td><td><code>openai.gpt-6.1-sol</code></td><td>OpenAI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>GPT-6.1 Sol</td><td><code>openai.gpt-6.1-sol</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
+<tr><td>GPT-6.1 Terra</td><td><code>openai.gpt-6.1-terra</code></td><td>OpenAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
 <tr><td>GPT OSS 120B</td><td><code>openai.gpt-oss-120b</code></td><td>OpenAI</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
 <tr><td>GPT OSS 20B</td><td><code>openai.gpt-oss-20b</code></td><td>OpenAI</td><td>AWS Bedrock Mantle, AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
 <tr><td>GPT OSS Safeguard 120B</td><td><code>openai.gpt-oss-safeguard-120b</code></td><td>OpenAI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
@@ -171,11 +177,12 @@ available from any running instance through
 <tr><td>Stable Image Outpaint</td><td><code>stability.stable-outpaint-v1:0</code></td><td>Stability AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>IMAGE</td><td>3</td></tr>
 <tr><td>Stable Image Style Transfer</td><td><code>stability.stable-style-transfer-v1:0</code></td><td>Stability AI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>IMAGE</td><td>3</td></tr>
 <tr><td>Marengo Embed v2.7 (legacy)</td><td><code>twelvelabs.marengo-embed-2-7-v1:0</code></td><td>TwelveLabs</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE, SPEECH, VIDEO</td><td>EMBEDDING</td><td>3</td></tr>
-<tr><td>Marengo Embed 3.0</td><td><code>twelvelabs.marengo-embed-3-0-v1:0</code></td><td>TwelveLabs</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE, SPEECH, VIDEO</td><td>EMBEDDING</td><td>3</td></tr>
-<tr><td>Pegasus v1.2</td><td><code>twelvelabs.pegasus-1-2-v1:0</code></td><td>TwelveLabs</td><td>AWS Bedrock Runtime</td><td>TEXT, VIDEO</td><td>TEXT</td><td>30</td></tr>
+<tr><td>Marengo Embed 3.0 (legacy)</td><td><code>twelvelabs.marengo-embed-3-0-v1:0</code></td><td>TwelveLabs</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE, SPEECH, VIDEO</td><td>EMBEDDING</td><td>3</td></tr>
+<tr><td>Pegasus v1.2 (legacy)</td><td><code>twelvelabs.pegasus-1-2-v1:0</code></td><td>TwelveLabs</td><td>AWS Bedrock Runtime</td><td>TEXT, VIDEO</td><td>TEXT</td><td>30</td></tr>
+<tr><td>Pegasus v1.5</td><td><code>twelvelabs.pegasus-1-5-v1:0</code></td><td>TwelveLabs</td><td>AWS Bedrock Runtime</td><td>TEXT, VIDEO</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Writer Palmyra Vision 7B</td><td><code>writer.palmyra-vision-7b</code></td><td>Writer</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
-<tr><td>Palmyra X4</td><td><code>writer.palmyra-x4-v1:0</code></td><td>Writer</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>4</td></tr>
-<tr><td>Palmyra X5</td><td><code>writer.palmyra-x5-v1:0</code></td><td>Writer</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>4</td></tr>
+<tr><td>Palmyra X4 (legacy)</td><td><code>writer.palmyra-x4-v1:0</code></td><td>Writer</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>4</td></tr>
+<tr><td>Palmyra X5 (legacy)</td><td><code>writer.palmyra-x5-v1:0</code></td><td>Writer</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>4</td></tr>
 <tr><td>Grok 4.3</td><td><code>xai.grok-4.3</code></td><td>xAI</td><td>AWS Bedrock Mantle</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
 <tr><td>Grok 4.6</td><td><code>xai.grok-4.6</code></td><td>xAI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>28</td></tr>
 <tr><td>Grok 4.7</td><td><code>xai.grok-4.7</code></td><td>xAI</td><td>AWS Bedrock Runtime</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
@@ -183,6 +190,7 @@ available from any running instance through
 <tr><td>GLM 4.7</td><td><code>zai.glm-4.7</code></td><td>Z.AI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
 <tr><td>GLM 4.7 Flash</td><td><code>zai.glm-4.7-flash</code></td><td>Z.AI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>13</td></tr>
 <tr><td>GLM 5</td><td><code>zai.glm-5</code></td><td>Z.AI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
+<tr><td>GLM 5.3</td><td><code>zai.glm-5.3</code></td><td>Z.AI</td><td>AWS Bedrock Runtime</td><td>TEXT</td><td>TEXT</td><td>31</td></tr>
 </tbody></table>
 <!-- /catalog:noscript -->
 </noscript>
@@ -219,7 +227,7 @@ reflects the AWS account this snapshot came from — your own
 ## :material-database-outline: Sources, licences and caveats
 
 <!-- catalog:generated -->
-Snapshot taken on **2026-09-30** from a stdapi.ai instance, covering 144 models across 33 AWS regions. 7 model(s) AWS no longer lists are kept, tagged `delisted`. Prices and availability move — before you commit to a number, confirm it against the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) and your own [`search_models`](api_search_models.md).
+Snapshot taken on **2026-11-16** from a stdapi.ai instance, covering 152 models across 33 AWS regions. 12 model(s) AWS no longer lists are kept, tagged `delisted`. Prices and availability move — before you commit to a number, confirm it against the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) and your own [`search_models`](api_search_models.md).
 <!-- /catalog:generated -->
 
 <!-- catalog:sources -->
@@ -227,14 +235,14 @@ Every number on this page comes from one of the sources below, reproduced unmodi
 
 | Source | Licence | Read on | Used here |
 | --- | --- | --- | --- |
-| The gateway's own [`search_models`](api_search_models.md) and [`model_pricing`](api_model_pricing.md) | — | 2026-09-30 | 144 |
-| [Amazon Bedrock `ListFoundationModels`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html), read raw so its undocumented fields survive | — | 2026-09-30 | capabilities, APIs, media types, limits |
-| [LMArena Leaderboard](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-09-28 | 87 of 831 entries |
-| [MTEB — Massive Text Embedding Benchmark](https://github.com/embeddings-benchmark/results) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 2026-09-30 | 5 of 12 entries |
-| [Epoch AI — AI Benchmarking Hub](https://epoch.ai/benchmarks/use-this-data) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-09-29 | 68 of 710 entries |
-| [Amazon Bedrock model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html) | [AWS documentation](https://aws.amazon.com/terms/) | 2026-09-30 | 113 of 133 model cards |
-| [models.dev](https://models.dev/) | [MIT](https://github.com/anomalyco/models.dev/blob/dev/LICENSE) | 2026-09-30 | 72 of 183 models |
-| [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) | 2026-09-30 | 2 of 69 entries |
+| The gateway's own [`search_models`](api_search_models.md) and [`model_pricing`](api_model_pricing.md) | — | 2026-11-16 | 152 |
+| [Amazon Bedrock `ListFoundationModels`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html), read raw so its undocumented fields survive | — | 2026-11-16 | capabilities, APIs, media types, limits |
+| [LMArena Leaderboard](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-11-12 | 87 of 879 entries |
+| [MTEB — Massive Text Embedding Benchmark](https://github.com/embeddings-benchmark/results) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 2026-11-16 | 5 of 14 entries |
+| [Epoch AI — AI Benchmarking Hub](https://epoch.ai/benchmarks/use-this-data) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-11-06 | 72 of 755 entries |
+| [Amazon Bedrock model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html) | [AWS documentation](https://aws.amazon.com/terms/) | 2026-11-16 | 123 of 141 model cards |
+| [models.dev](https://models.dev/) | [MIT](https://github.com/anomalyco/models.dev/blob/dev/LICENSE) | 2026-11-16 | 78 of 208 models |
+| [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) | 2026-11-16 | 2 of 69 entries |
 
 - **LMArena Leaderboard** — Arena Elo ratings by LMArena (Arena Intelligence Inc.), reproduced unmodified under CC BY 4.0. The mapping to Amazon Bedrock model IDs is ours.
 - **MTEB — Massive Text Embedding Benchmark** — Benchmark results from the MTEB results repository, dedicated to the public domain under CC0 1.0. The mapping to Amazon Bedrock model IDs is ours.

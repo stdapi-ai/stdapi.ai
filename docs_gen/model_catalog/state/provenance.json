@@ -1340,6 +1340,12 @@
     "source_name": "Hugging Face model card (Qwen/Qwen3-Coder-480B-A35B-Instruct): \"Number of Parameters: 480B in total and 35B activated\"",
     "value": "35B"
    },
+   "context_window": {
+    "checked": "2026-08-22",
+    "source": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct",
+    "source_name": "Qwen3-Coder-480B-A35B-Instruct model card (Hugging Face) \u2014 262,144 natively",
+    "value": "256K"
+   },
    "family": {
     "checked": "2026-08-22",
     "source": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct",
