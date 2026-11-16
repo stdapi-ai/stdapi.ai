@@ -1855,6 +1855,61 @@ class CompactionTrigger(BaseModelRequest):
     )
 
 
+# Text format config types
+
+
+# Ref: openai.types.responses.response_format_text_json_schema_config.ResponseFormatTextJSONSchemaConfig
+class ResponseFormatTextJSONSchemaConfig(BaseModelRequest):
+    """JSON Schema response format for generating structured JSON responses."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(
+        description="Response format name (a-z, A-Z, 0-9, underscores, dashes; max 64 chars)."
+    )
+    schema_: JsonMapping = Field(
+        alias="schema",
+        serialization_alias="schema",
+        description="JSON Schema for response format.",
+    )
+    type: Literal["json_schema"] = Field(description="JSON schema response format.")
+    description: str | None = Field(
+        default=None, description="Description of the response format for the model."
+    )
+    strict: bool | None = Field(
+        default=None, description="Enable strict schema adherence."
+    )
+
+
+# Ref: openai.types.responses.response_format_text_config.ResponseFormatTextConfig
+ResponseFormatTextConfig = Annotated[
+    ResponseFormatText | ResponseFormatTextJSONSchemaConfig | ResponseFormatJSONObject,
+    Field(discriminator="type"),
+]
+
+# Ref: openai.types.responses.response_configuration_update_item.TextFormat
+ConfigurationUpdateTextFormat = Annotated[
+    ResponseFormatText | ResponseFormatTextJSONSchemaConfig, Field(discriminator="type")
+]
+
+
+# Ref: openai.types.responses.response_text_config.ResponseTextConfig
+class ResponseTextConfig(BaseModelRequest):
+    """Configuration options for a text response from the model."""
+
+    format: ResponseFormatTextConfig | None = Field(
+        default=None,
+        description=(
+            "An object specifying the format that the model must output. "
+            'Configuring `{ "type": "json_schema" }` enables Structured Outputs.'
+        ),
+    )
+    verbosity: VerbosityLevel | None = Field(
+        default=None,
+        description="Constrains the verbosity of the model's response. Values: `low`, `medium`, or `high`.",
+    )
+
+
 # Ref: openai.types.responses.response_configuration_update_item_param.Reasoning
 class ConfigurationUpdateReasoningInput(BaseModelRequest):
     """The reasoning settings carried by a configuration update item."""
@@ -1864,6 +1919,17 @@ class ConfigurationUpdateReasoningInput(BaseModelRequest):
         description="Reasoning effort recorded by this history item. Accepted "
         "and ignored: a response is configured by the `reasoning` parameter of "
         "its own request.",
+    )
+
+
+# Ref: openai.types.responses.response_configuration_update_item_param.Text
+class ConfigurationUpdateTextInput(BaseModelRequest):
+    """The text output settings carried by a configuration update item."""
+
+    format: ConfigurationUpdateTextFormat = Field(
+        description="Output format recorded by this history item. Accepted and "
+        "ignored: a response is configured by the `text` parameter of its own "
+        "request."
     )
 
 
@@ -1879,6 +1945,9 @@ class ConfigurationUpdateInput(BaseModelRequest):
     )
     reasoning: ConfigurationUpdateReasoningInput | None = Field(
         default=None, description="Reasoning settings recorded by this item."
+    )
+    text: ConfigurationUpdateTextInput | None = Field(
+        default=None, description="Text output settings recorded by this item."
     )
 
 
@@ -2666,6 +2735,15 @@ class ConfigurationUpdateReasoning(BaseModelResponse):
     )
 
 
+# Ref: openai.types.responses.response_configuration_update_item.Text
+class ConfigurationUpdateText(BaseModelResponse):
+    """The text output settings carried by a configuration update item."""
+
+    format: ConfigurationUpdateTextFormat = Field(
+        description="Output format recorded by this item."
+    )
+
+
 # Ref: openai.types.responses.response_configuration_update_item.ResponseConfigurationUpdateItem
 class ResponseConfigurationUpdateItem(BaseModelResponse):
     """A response configuration change recorded in conversation history."""
@@ -2676,6 +2754,9 @@ class ResponseConfigurationUpdateItem(BaseModelResponse):
     )
     reasoning: ConfigurationUpdateReasoning | None = Field(
         default=None, description="Reasoning settings recorded by this item."
+    )
+    text: ConfigurationUpdateText | None = Field(
+        default=None, description="Text output settings recorded by this item."
     )
 
 
@@ -3204,56 +3285,6 @@ class ResponseUsage(BaseModelResponse):
         description="Output token details."
     )
     total_tokens: int = Field(description="Total token count.")
-
-
-# Text format config types
-
-
-# Ref: openai.types.responses.response_format_text_json_schema_config.ResponseFormatTextJSONSchemaConfig
-class ResponseFormatTextJSONSchemaConfig(BaseModelRequest):
-    """JSON Schema response format for generating structured JSON responses."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    name: str = Field(
-        description="Response format name (a-z, A-Z, 0-9, underscores, dashes; max 64 chars)."
-    )
-    schema_: JsonMapping = Field(
-        alias="schema",
-        serialization_alias="schema",
-        description="JSON Schema for response format.",
-    )
-    type: Literal["json_schema"] = Field(description="JSON schema response format.")
-    description: str | None = Field(
-        default=None, description="Description of the response format for the model."
-    )
-    strict: bool | None = Field(
-        default=None, description="Enable strict schema adherence."
-    )
-
-
-# Ref: openai.types.responses.response_format_text_config.ResponseFormatTextConfig
-ResponseFormatTextConfig = Annotated[
-    ResponseFormatText | ResponseFormatTextJSONSchemaConfig | ResponseFormatJSONObject,
-    Field(discriminator="type"),
-]
-
-
-# Ref: openai.types.responses.response_text_config.ResponseTextConfig
-class ResponseTextConfig(BaseModelRequest):
-    """Configuration options for a text response from the model."""
-
-    format: ResponseFormatTextConfig | None = Field(
-        default=None,
-        description=(
-            "An object specifying the format that the model must output. "
-            'Configuring `{ "type": "json_schema" }` enables Structured Outputs.'
-        ),
-    )
-    verbosity: VerbosityLevel | None = Field(
-        default=None,
-        description="Constrains the verbosity of the model's response. Values: `low`, `medium`, or `high`.",
-    )
 
 
 # Prompt types

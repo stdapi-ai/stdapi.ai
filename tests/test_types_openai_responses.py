@@ -29,6 +29,7 @@ from stdapi.types.openai_responses import (
     ReasoningEffort,
     ResponseConfigurationUpdateItem,
     ResponseCreateParams,
+    ResponseFormatTextJSONSchemaConfig,
     ResponseItem,
 )
 
@@ -116,6 +117,38 @@ class TestConfigurationUpdateInput:
 
         assert params.reasoning is not None
         assert params.reasoning.effort == "minimal"
+
+    def test_a_replayed_text_update_keeps_its_format(self) -> None:
+        """An item recording a text output format validates with the format kept.
+
+        Ref: https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_configuration_update_item_param_param.py
+             stdapi/types/openai_responses.py:ConfigurationUpdateTextInput
+        """
+        params = ResponseCreateParams.model_validate(
+            {
+                "model": "m",
+                "input": [
+                    {
+                        "type": "configuration_update",
+                        "text": {
+                            "format": {
+                                "type": "json_schema",
+                                "name": "answer",
+                                "schema": {"type": "object"},
+                            }
+                        },
+                    }
+                ],
+            }
+        )
+
+        assert isinstance(params.input, list)
+        item = params.input[0]
+        assert isinstance(item, ConfigurationUpdateInput)
+        assert item.text is not None
+        assert isinstance(item.text.format, ResponseFormatTextJSONSchemaConfig)
+        assert item.text.format.name == "answer"
+        assert params.text is None
 
     def test_only_the_type_is_required(self) -> None:
         """``id`` and ``reasoning`` are optional, as they are upstream.
@@ -210,6 +243,24 @@ class TestResponseConfigurationUpdateItem:
         assert item.id == "cfg_1"
         assert item.reasoning is not None
         assert item.reasoning.effort == "medium"
+
+    def test_a_listed_text_update_keeps_its_format(self) -> None:
+        """A listed item recording a text output format keeps that format.
+
+        Ref: https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_configuration_update_item.py
+             stdapi/types/openai_responses.py:ConfigurationUpdateText
+        """
+        item = RESPONSE_ITEM_ADAPTER.validate_python(
+            {
+                "type": "configuration_update",
+                "id": "cfg_1",
+                "text": {"format": {"type": "text"}},
+            }
+        )
+
+        assert isinstance(item, ResponseConfigurationUpdateItem)
+        assert item.text is not None
+        assert item.text.format.type == "text"
 
     def test_the_listed_item_requires_an_id(self) -> None:
         """A listed item carries the identifier the conversation minted for it.
