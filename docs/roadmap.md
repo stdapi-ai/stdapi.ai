@@ -10,13 +10,13 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, software
 
 ## :material-tag-multiple: Version Index { #recent-releases }
 
-**Latest: [v1.20.2](#v1201-agpl-only-public-hardened-image-terraform-module-1200), the final release: released 2026-11-18.**
+**Latest: [v1.20.2](#v1201-agpl-only-public-hardened-image-terraform-module-1200-with-v1202-maintenance-update), the final release: released 2026-11-18.**
 
 Every release, newest first. Each entry in the [Release History](#release-history) below opens with a five-bullet summary.
 
 | Version | Date | Theme | Release notes |
 |---|---|---|---|
-| **v1.20.1** (and v1.20.2) | 2026-11-18 (2026-11-18) | Final release: project discontinued, AGPL-3.0-or-later only, public hardened image on GitHub Container Registry, Terraform module 1.20.0 | [Read](#v1201-agpl-only-public-hardened-image-terraform-module-1200) |
+| **v1.20.1** (and v1.20.2) | 2026-11-18 (2026-11-18) | Final release: project discontinued, AGPL-3.0-or-later only, public hardened image on GitHub Container Registry, Terraform module 1.20.0 | [Read](#v1201-agpl-only-public-hardened-image-terraform-module-1200-with-v1202-maintenance-update) |
 | **v1.19.0** (and v1.19.1) | 2026-09-23 (2026-09-29) | Long conversations, token counting on every model, reasoning control, medical transcription | [Read](#v1190-long-conversations-reasoning-control-medical-transcription-with-v1191-maintenance-update) |
 | **v1.18.0** | 2026-09-19 | Vendor parity across every mirrored API, tenant key rotation, per-tenant rate limits, realtime tools | [Read](#v1180-vendor-parity-tenant-key-rotation-rate-limits) |
 | **v1.17.0** | 2026-09-08 | Your own model endpoints, the Ollama dialect, per-tenant keys, usage and cost from the API, WebRTC | [Read](#v1170-your-own-models-your-own-tenants-your-own-spend) |
@@ -42,7 +42,7 @@ Every release, newest first. Each entry in the [Release History](#release-histor
 
 ## :material-history: Release History
 
-### v1.20.1 – 2026-11-18 – Final Release: AGPL Only, Public Hardened Image & Terraform Module 1.20.0 (with v1.20.2 maintenance update, 2026-11-18) { #v1201-agpl-only-public-hardened-image-terraform-module-1200 }
+### v1.20.1 – 2026-11-18 – Final Release: AGPL Only, Public Hardened Image & Terraform Module 1.20.0 (with v1.20.2 maintenance update, 2026-11-18) { #v1201-agpl-only-public-hardened-image-terraform-module-1200-with-v1202-maintenance-update }
 
 !!! danger "stdapi.ai is discontinued"
     v1.20.2 is the final release. No further development, fixes or support are planned. v1.20.1 replaces v1.20.0, which was tagged without a container image. The AWS Marketplace edition, its license and the managed deployment service have ended. The source code stays available under the AGPL-3.0-or-later.
@@ -62,10 +62,41 @@ Every release, newest first. Each entry in the [Release History](#release-histor
     - **The OpenAPI title, the MCP server name and the OAuth resource name** are now "stdapi.ai".
     - **The User-Agent** sent to AWS no longer carries the partner suffix.
     - **S3 objects and AWS resources the gateway creates** no longer carry the `aws-apn-id` tag.
+    - **`temperature` and `top_p` are accepted and ignored on Moonshot Kimi K3 and later, and on OpenAI GPT-6 and later served by bedrock-runtime.** These models refuse both with a `400`, and client tools send them by default. A server-log warning names the dropped parameter. `stop` and `stop_sequences` are still sent. On Bedrock Mantle, the default route for GPT-6, both values are still sent as received.
+    - **`reasoning_effort: "none"` on OpenAI GPT-6.1 and later, and on GPT-6 Astra, is served at the model's default effort with a warning**, where GPT-6.1 Sol answered `400`: these models refuse `none`.
+    - **Running stdapi.ai from source needs Python 3.15.** The container image ships it.
 
 !!! info "Upgrading from an earlier Terraform module version"
     - If the deployment has no internet access, mirror the image and set `container_image_repository_url` before you upgrade, or the tasks fail with `CannotPullContainerError`.
     - After the upgrade, you can cancel the AWS Marketplace subscription.
+
+#### :material-brain: Models
+
+- **New models**, listed on the [Models](models.md) page: Claude Fable 5.2, Claude Haiku 5.5, Claude Mulberry TRN2 208K, Amazon Nova 2.5 Sonic, Moonshot Kimi K3.1, OpenAI GPT-6.1 Sol and GPT-6.1 Terra, TwelveLabs Pegasus 1.5 and GLM 5.3.
+- **Retired by AWS**: Claude 3.5 Sonnet (both versions), Claude 3.7 Sonnet, Claude Sonnet 4 (20250514), Amazon Nova Canvas and both Amazon Nova Reel versions.
+- **OpenAI GPT-6 Astra is served by Bedrock Mantle in us-east-1** as well as us-west-2, and Claude Opus 5 and Sonnet 5 can be invoked on demand.
+
+#### :material-cash-minus: Cost Reporting
+
+These models were reported as free. Their rates come from their AWS model cards, the Price List or the Amazon Bedrock pricing page:
+
+- **OpenAI GPT-6.1 Sol**: $2.20 / $11.00 per million input / output tokens In-Region and on the US profile, $2.00 / $10.00 Global.
+- **OpenAI GPT-6.1 Terra**: $1.10 / $5.50 In-Region and on the US profile, $1.00 / $5.00 Global. On both GPT-6.1 models, input past 272K tokens costs twice as much and output 1.5 times as much.
+- **Moonshot Kimi K3.1**: $4.40 / $22.00 on the US and India profiles, $4.00 / $20.00 Global.
+- **TwelveLabs Pegasus 1.5**: $0.00049 per second of input video and $7.50 per million output tokens, as for Pegasus 1.2.
+- **GLM 5.3**: $1.848 / $5.808 on the US profile, $1.68 / $5.28 Global, with cache reads and 30-minute cache writes priced.
+- **Claude Mulberry TRN2 208K** has no published price, so its usage is recorded without a cost.
+
+#### Platform Features
+
+- **Python 3.15**, with current dependencies: FastAPI 0.162, Starlette 1.10, Pydantic 2.14, the OpenAI SDK 3.46, the Anthropic SDK 2.6, Pillow 13 and PyAV 19.
+- **Uploaded and fetched files, synthesized audio, batch results and buffered streams are passed on without an extra copy**: on a 16 MiB buffer this is twice as fast and needs one full copy less.
+
+#### :material-bug: Fixes { #fixes-7 }
+
+- **The returned content ends at the first stop sequence matched**, on every route, streamed or not, and in chat batch results. Amazon Nova Micro checks stop sequences once per chunk of about six tokens, so it could return text past the first match. Content after the match is dropped, and an answer cut before its tool call reports the stop reason `end_turn`.
+- **The Responses API accepts a replayed `configuration_update` item that carries a `text` setting.** The OpenAI SDK 3.46 writes it back on replay, and strict input validation refused it with a `422`. The setting is now stored and listed back with the conversation. On models served through Converse, a request is configured by its own `text` parameter.
+- **Structured output on Anthropic Messages works on Moonshot Kimi K3 and K3.1**, which refused a JSON schema without a name.
 
 #### Fixes & Maintenance (v1.20.2)
 
