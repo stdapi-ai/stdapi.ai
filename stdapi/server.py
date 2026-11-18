@@ -12,7 +12,7 @@ SERVER_ID = webuuid()
 SERVER_NAME = f"{gethostname()[:128]}-{getpid()}-{SERVER_ID}"
 
 #: Server version
-SERVER_VERSION = "1.20.1"
+SERVER_VERSION = "1.20.2"
 
 #: Server title reported in the OpenAPI spec and to MCP clients
 SERVER_TITLE = "stdapi.ai"

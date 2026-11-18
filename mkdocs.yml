@@ -1,7 +1,7 @@
 ---
 site_name: stdapi.ai
 site_description: "Self-hosted OpenAI, Anthropic, Cohere and Ollama compatible API gateway for Amazon Bedrock. Point your applications at it and reach 100+ models across 20+ providers including Claude, OpenAI GPT, xAI Grok and Amazon Nova, for chat, images, video, speech, transcription, embeddings and moderation — in your own AWS account, at AWS rates with no markup."
-site_url: https://stdapi.ai
+site_url: https://stdapi.jgoutin.dev
 site_author: JGoutin-dev
 exclude_docs: |
   internal/**/*
@@ -101,7 +101,7 @@ nav:
           - Resilience & Failover: operations_resilience.md
           - Data Sovereignty & Compliance: operations_compliance.md
           - Logging & Monitoring: operations_logging_monitoring.md
-          - Pricing & Licensing: operations_licensing.md
+          - Licensing: operations_licensing.md
       - Configuration Reference:
           - Overview & Essential Settings: operations_configuration.md
           - Regions & AWS Clients: operations_configuration_aws.md

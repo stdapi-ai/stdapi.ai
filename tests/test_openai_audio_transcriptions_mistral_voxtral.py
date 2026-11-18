@@ -311,7 +311,7 @@ class TestMistralVoxtralTranscriptions:
         only ``{"json", "text"}`` as supported formats and the request is refused
         before Bedrock is called.
 
-        Ref: https://stdapi.ai/api_openai_audio_transcriptions/
+        Ref: https://stdapi.jgoutin.dev/api_openai_audio_transcriptions/
              stdapi/models/audio/__init__.py:AudioModelBase._validate_response_formats
         """
         with pytest.raises(BadRequestError) as exc_info:

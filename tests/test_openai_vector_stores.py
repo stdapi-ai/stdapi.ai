@@ -13,7 +13,7 @@ Indexing is asynchronous, exactly as upstream: every test that needs a file to
 be searchable polls until the store reports it ``completed``.
 
 Ref: https://platform.openai.com/docs/api-reference/vector-stores
-     https://stdapi.ai/api_openai_vector_stores/
+     https://stdapi.jgoutin.dev/api_openai_vector_stores/
      stdapi/routes/openai_vector_stores.py
      stdapi/vector_stores/engine.py
 """

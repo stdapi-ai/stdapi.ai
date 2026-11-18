@@ -635,6 +635,6 @@ flowchart LR
 - :material-cog: [**Configuration Reference**](operations_configuration.md) — All routing and failover environment variables
 - :material-shield-lock: [**Data Sovereignty & Compliance**](operations_compliance.md) — GDPR-compliant region configuration
 - :material-cash-multiple: [**Cost Management**](operations_cost_management.md) — What each additional region and task costs
-- :material-email-outline: [**Contact**](contact.md) — Discuss a multi-region or high-availability deployment
+- :material-email-outline: [**Contact**](contact.md) — Bug reports on GitHub issues (project discontinued)
 
 </div>

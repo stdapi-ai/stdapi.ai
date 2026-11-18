@@ -1446,7 +1446,7 @@ class TestPollyEncodeContract:
         muxer and resampler all present. The body must carry 1.5x the bytes of
         its input, which is the contract callers decode against.
 
-        Ref: https://stdapi.ai/api_openai_audio_speech/
+        Ref: https://stdapi.jgoutin.dev/api_openai_audio_speech/
              stdapi/models/audio/amazon_polly.py:_OPENAI_PCM_SAMPLE_RATE
         """
         source = _pcm_sample()

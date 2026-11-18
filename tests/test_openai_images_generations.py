@@ -1,7 +1,7 @@
 """OpenAI Images Generations API (``/v1/images/generations``) compatibility tests.
 
 Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-     https://stdapi.ai/api_openai_images_generations/
+     https://stdapi.jgoutin.dev/api_openai_images_generations/
      stdapi/routes/openai_images_generations.py:create_images
 """
 
@@ -1715,7 +1715,7 @@ class TestResponseFormatUrlRequiresBucket:
     guardrail blocks -- is answered before it, since a request that is invalid
     is invalid whatever the deployment can host.
 
-    Ref: https://stdapi.ai/api_openai_images_generations/
+    Ref: https://stdapi.jgoutin.dev/api_openai_images_generations/
          stdapi/routes/openai_images_generations.py:create_images
          stdapi/aws_s3.py:require_url_response_bucket
     """
@@ -2002,7 +2002,7 @@ class TestNullableFieldsSentAsNull:
     they share the request model the behaviour belongs to.
 
     Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-         https://stdapi.ai/api_openai_images_generations/
+         https://stdapi.jgoutin.dev/api_openai_images_generations/
          stdapi/types/openai_images.py:_ImageBaseParams
     """
 

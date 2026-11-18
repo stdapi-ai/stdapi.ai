@@ -6,7 +6,7 @@ Amazon Translate into English, so the accepted ``response_format`` set is OpenAI
 services are billed within a single request.
 
 Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-     https://stdapi.ai/api_openai_audio_translations/
+     https://stdapi.jgoutin.dev/api_openai_audio_translations/
      stdapi/routes/openai_audio_translations.py:create_translation
 """
 
@@ -68,7 +68,7 @@ class TestAudioTranslations:
     The sample audio says "This is a test." in English, so content assertions stay
     tolerant (a single expected word) rather than matching an exact transcript.
 
-    Ref: https://stdapi.ai/api_openai_audio_translations/
+    Ref: https://stdapi.jgoutin.dev/api_openai_audio_translations/
          stdapi/models/audio/amazon_transcribe.py:AudioModel.stt_translate
     """
 
@@ -82,7 +82,7 @@ class TestAudioTranslations:
         rejects both with a 400 rather than ignoring them, so a default request is
         the only shape valid for every model this fixture can resolve to.
 
-        Ref: https://stdapi.ai/api_openai_audio_translations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_audio_translations/
              stdapi/models/audio/__init__.py:AudioModelBase._validate_no_prompt
         """
         response = openai_client.audio.translations.create(
@@ -370,7 +370,7 @@ class TestAudioTranslationsJsonBody:
     URI, and is the only path through which provider extra parameters such as AWS
     Translate's ``Settings`` can be sent.
 
-    Ref: https://stdapi.ai/api_openai_audio_translations/
+    Ref: https://stdapi.jgoutin.dev/api_openai_audio_translations/
          stdapi/types/openai_audio.py:AudioTranslationJsonBody
     """
 
@@ -687,7 +687,7 @@ class TestTranslateUnsupportedParameters:
     translation path runs its own validation, so it can regress independently
     of the transcription one.
 
-    Ref: https://stdapi.ai/api_openai_audio_translations/
+    Ref: https://stdapi.jgoutin.dev/api_openai_audio_translations/
          stdapi/models/audio/amazon_transcribe.py:AudioModel.stt_translate
          stdapi/models/audio/__init__.py:AudioModelBase._validate_no_prompt
     """

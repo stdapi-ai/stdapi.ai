@@ -30,7 +30,7 @@ class TestOpenaiVoicesFemale:
     forwarded to Polly verbatim and rejected as an unknown ``VoiceId``.
 
     Ref: https://docs.aws.amazon.com/polly/latest/dg/available-voices.html
-         https://stdapi.ai/api_openai_audio_speech/
+         https://stdapi.jgoutin.dev/api_openai_audio_speech/
          stdapi/models/audio/amazon_polly.py:_select_voice
     """
 
@@ -54,7 +54,7 @@ class TestTranscriptionCreateParamsKnownSpeaker:
     speaker labels rather than failing the request.
 
     Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization.html
-         https://stdapi.ai/api_openai_audio_transcriptions/
+         https://stdapi.jgoutin.dev/api_openai_audio_transcriptions/
          stdapi/types/openai_audio.py:TranscriptionCreateParams._unsupported
     """
 

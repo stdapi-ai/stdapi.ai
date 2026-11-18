@@ -106,7 +106,7 @@ class TestAmazonNovaEmbeddings:
         ``GENERIC_INDEX``. Nova defines nine purposes, of which ``CLASSIFICATION``
         is one — an out-of-enum value would be rejected by Bedrock.
 
-        Ref: https://stdapi.ai/api_openai_embeddings/
+        Ref: https://stdapi.jgoutin.dev/api_openai_embeddings/
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel.embed_text
         """
         response = openai_client.embeddings.create(
@@ -314,7 +314,7 @@ class TestAmazonNovaEmbeddings:
         ``source.s3Location``. The call stays a synchronous ``SINGLE_EMBEDDING``
         because the image is far below the 50 MB image sync cutoff.
 
-        Ref: https://stdapi.ai/api_openai_embeddings/
+        Ref: https://stdapi.jgoutin.dev/api_openai_embeddings/
              stdapi/models/embedding/amazon_nova_embed.py:_SYNC_LIMIT_SIZES
         """
         response = openai_client.embeddings.create(
@@ -334,7 +334,7 @@ class TestAmazonNovaEmbeddings:
         Only inputs above the 100 MB audio sync cutoff switch to the asynchronous
         segmented job, so a short sample uploaded to S3 comes back inline.
 
-        Ref: https://stdapi.ai/api_openai_embeddings/
+        Ref: https://stdapi.jgoutin.dev/api_openai_embeddings/
              stdapi/models/embedding/amazon_nova_embed.py:_SYNC_LIMIT_SIZES
         """
         response = openai_client.embeddings.create(
@@ -358,7 +358,7 @@ class TestAmazonNovaEmbeddings:
     ) -> None:
         """``force_s3_data`` stages video on S3 and still embeds it synchronously.
 
-        Ref: https://stdapi.ai/api_openai_embeddings/
+        Ref: https://stdapi.jgoutin.dev/api_openai_embeddings/
              stdapi/models/embedding/amazon_nova_embed.py:_SYNC_LIMIT_SIZES
         """
         response = openai_client.embeddings.create(
@@ -389,7 +389,7 @@ class TestAmazonNovaEmbeddings:
         call, so the plain string is uploaded as a text object too and referenced
         through ``text.source.s3Location``.
 
-        Ref: https://stdapi.ai/api_openai_embeddings/
+        Ref: https://stdapi.jgoutin.dev/api_openai_embeddings/
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._embed
         """
         inputs = [

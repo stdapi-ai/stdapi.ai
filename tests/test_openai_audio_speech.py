@@ -1,7 +1,7 @@
 """Tests for the OpenAI /v1/audio/speech route served by Amazon Polly.
 
 Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-     https://stdapi.ai/api_openai_audio_speech/
+     https://stdapi.jgoutin.dev/api_openai_audio_speech/
      stdapi/routes/openai_audio_speech.py:create_speech
 """
 
@@ -265,7 +265,7 @@ class TestAudioSpeech:
         16 kHz output to 24 kHz with ffmpeg: the default body carries ~1.5x
         the samples of the same text pinned to Polly's native rate.
 
-        Ref: https://stdapi.ai/api_openai_audio_speech/
+        Ref: https://stdapi.jgoutin.dev/api_openai_audio_speech/
              stdapi/models/audio/amazon_polly.py:AudioModel.tts
         """
         default_response = openai_client.audio.speech.create(
@@ -335,7 +335,7 @@ class TestAudioSpeech:
         unknown keys, so both failures surface as an ``invalid_request_error``
         listing the failed validation, as OpenAI's speech route words its own.
 
-        Ref: https://stdapi.ai/api_openai_audio_speech/
+        Ref: https://stdapi.jgoutin.dev/api_openai_audio_speech/
              stdapi/models/audio/amazon_polly.py:_PollyExtraParams
              stdapi/main.py:handle_validation_exception
         """
@@ -974,7 +974,7 @@ class TestAudioSpeech:
 class TestAudioSpeechMCP:
     """MCP tool behavior of the /v1/audio/speech endpoint.
 
-    Ref: https://stdapi.ai/api_openai_audio_speech/
+    Ref: https://stdapi.jgoutin.dev/api_openai_audio_speech/
          stdapi/routes/openai_audio_speech.py:create_speech
     """
 
@@ -1106,7 +1106,7 @@ def _patch_speech_model(
 class TestAudioSpeechContentType:
     """create_speech: the model's content type override wins over response_format.
 
-    Ref: https://stdapi.ai/api_openai_audio_speech/
+    Ref: https://stdapi.jgoutin.dev/api_openai_audio_speech/
          stdapi/routes/openai_audio_speech.py:create_speech
     """
 
@@ -1154,7 +1154,7 @@ class TestAudioSpeechContentType:
         The route fails with a 400 before streaming anything and closes the
         backend stream, so no Polly response is left dangling.
 
-        Ref: https://stdapi.ai/api_openai_audio_speech/
+        Ref: https://stdapi.jgoutin.dev/api_openai_audio_speech/
              stdapi/routes/openai_audio_speech.py:create_speech
         """
         stream = _byte_stream(b"{}\n")
@@ -1451,7 +1451,7 @@ class TestSpeechCreateParamsCompatibility:
     parameter is rejected. A field that is dropped from the request model would
     therefore turn a working request into a 400.
 
-    Ref: https://stdapi.ai/api_openai_audio_speech/
+    Ref: https://stdapi.jgoutin.dev/api_openai_audio_speech/
          stdapi/types/openai_audio.py:SpeechCreateParams
          stdapi/routes/openai_audio_speech.py:create_speech
     """

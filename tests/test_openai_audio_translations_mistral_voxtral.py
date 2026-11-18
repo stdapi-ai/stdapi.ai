@@ -36,7 +36,7 @@ class TestMistralVoxtralTranslations:
     is expected to keep that wording; assertions stay tolerant because the
     wording comes from a generative model.
 
-    Ref: https://stdapi.ai/api_openai_audio_translations/
+    Ref: https://stdapi.jgoutin.dev/api_openai_audio_translations/
     """
 
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
@@ -86,7 +86,7 @@ class TestMistralVoxtralTranslationsResponseFormats:
     subtitle and verbose formats are refused there independently of the
     transcription surface, before any Bedrock invocation.
 
-    Ref: https://stdapi.ai/api_openai_audio_translations/
+    Ref: https://stdapi.jgoutin.dev/api_openai_audio_translations/
          stdapi/models/audio/_default.py:AudioModel.stt_translate
          stdapi/models/audio/__init__.py:AudioModelBase._validate_response_formats
     """

@@ -21,7 +21,7 @@ skips rather than fails.
 Ref: https://platform.openai.com/docs/api-reference/vector-stores
      https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Retrieve.html
      https://docs.aws.amazon.com/bedrock/latest/userguide/kb-direct-ingestion.html
-     https://stdapi.ai/api_openai_vector_stores/#knowledge-base-stores
+     https://stdapi.jgoutin.dev/api_openai_vector_stores/#knowledge-base-stores
      stdapi/vector_stores/knowledge_base.py
 """
 
@@ -718,7 +718,7 @@ class TestRefusals:
     ) -> None:
         """A threshold over a score with no stated range is refused, not applied.
 
-        Ref: https://stdapi.ai/api_openai_vector_stores/#scores
+        Ref: https://stdapi.jgoutin.dev/api_openai_vector_stores/#scores
              stdapi/vector_stores/engine.py:search
         """
         with pytest.raises(BadRequestError) as raised:

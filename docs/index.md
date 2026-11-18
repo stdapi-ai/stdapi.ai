@@ -22,10 +22,9 @@ An AI gateway you run in your own AWS account. Point Claude Code, Open WebUI, n8
 
 <div class="hero2__proof">
 <span><strong>AWS Qualified</strong> Software</span>
-<span><strong>$0</strong> gateway fee</span>
 <span><strong>0%</strong> markup on model usage</span>
 <span><strong>&lt;1 ms</strong> gateway overhead</span>
-<span>Open source, <strong>AGPL-3.0-or-later</strong></span>
+<span>Free and open source, <strong>AGPL-3.0-or-later</strong></span>
 </div>
 
 </div>
@@ -536,10 +535,6 @@ MCP is not a like-for-like row: stdapi.ai exposes its own AI and media endpoints
 <span class="m-y" aria-hidden="true">✓</span> full &nbsp; <span class="m-p" aria-hidden="true">◐</span> partial / manual setup &nbsp; <span class="m-n" aria-hidden="true">—</span> not available &nbsp;·&nbsp; [Full comparison](compare.md#how-stdapiai-compares)
 </div>
 
-<div class="buttons" markdown>
-[See pricing](#transparent-pricing){ .md-button }
-</div>
-
 <!-- What teams run on it -->
 ## Verified against the tools teams already use
 
@@ -632,26 +627,6 @@ Media generation, knowledge management and team chatbots are covered too. [:octi
 
 </div>
 
-<!-- Pricing — the closing conversion moment -->
-## Transparent pricing
-
-Start local, graduate to AWS — same API, same SDKs. And zero lock-in: leaving is the same client-side change that got you in.
-
-<div class="pricing">
-<div class="pricing__col">
-<div class="pricing__tier">Local container</div>
-<div class="pricing__price">$0</div>
-<p>AGPL-3.0 · hardened Docker image · full API · local development and testing</p>
-<p><a class="md-button" href="operations_getting_started_local/">Run with Docker</a></p>
-</div>
-<div class="pricing__col pricing__col--featured">
-<div class="pricing__tier">Terraform module · AWS</div>
-<div class="pricing__price">$0 <small>gateway license</small></div>
-<p>AGPL-3.0 · the same hardened image deployed by the Terraform module, with a minimal base, no shell and a read-only root filesystem. You pay AWS for what it runs: the Terraform module defaults to one container per Availability Zone and scales on CPU up to five times that under load. No markup on model usage: pay Bedrock rates directly.</p>
-<p><a class="md-button md-button--primary" href="operations_getting_started/">Deploy on AWS</a></p>
-</div>
-</div>
-
 <div class="footer-line" markdown>
-Questions before you commit? [Talk to the founder](contact.md) · [GitHub](https://github.com/stdapi-ai/stdapi.ai) · [Documentation](getting_started.md)
+[Contact](contact.md) · [GitHub](https://github.com/stdapi-ai/stdapi.ai) · [Documentation](getting_started.md)
 </div>

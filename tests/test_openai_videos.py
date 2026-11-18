@@ -7,7 +7,7 @@ status and ``progress`` are synthesized, and the accepted ``seconds``/``size``
 values are the model's, not OpenAI's 4/8/12 and 720x1280.
 
 Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-     https://stdapi.ai/api_openai_videos/
+     https://stdapi.jgoutin.dev/api_openai_videos/
      https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_GetAsyncInvoke.html
      stdapi/routes/openai_videos.py:create_video
 """
@@ -193,7 +193,7 @@ class TestOpenAIVideoRoutes:
         rejected, and omitting seconds/size leaves the model defaults to the
         backend, which reports the effective values back.
 
-        Ref: https://stdapi.ai/api_openai_videos/
+        Ref: https://stdapi.jgoutin.dev/api_openai_videos/
              stdapi/aws_bedrock.py:get_extra_model_parameters
         """
         response = app_client.post(
@@ -391,7 +391,7 @@ class TestOpenAIVideoRoutes:
         echoed only by create: a retrieved job is rebuilt from the AWS job state
         plus the ID, which holds no prompt.
 
-        Ref: https://stdapi.ai/api_openai_videos/
+        Ref: https://stdapi.jgoutin.dev/api_openai_videos/
              stdapi/routes/openai_videos.py:_decode_video_id
         """
         create_response = app_client.post(
@@ -470,7 +470,7 @@ class TestOpenAIVideoRoutes:
         Retention is a server setting, so the expiry is the job completion time
         plus that period rather than OpenAI's fixed window.
 
-        Ref: https://stdapi.ai/api_openai_videos/
+        Ref: https://stdapi.jgoutin.dev/api_openai_videos/
              stdapi/models/video/__init__.py:video_expires_at
         """
         monkeypatch.setattr(SETTINGS, "aws_s3_videos_expires_after", 3600)
@@ -644,7 +644,7 @@ class TestOpenAIVideoRoutes:
         Only the S3 output is removed: the AWS invocation record stays until AWS
         expires it, so a deleted video remains listable.
 
-        Ref: https://stdapi.ai/api_openai_videos/
+        Ref: https://stdapi.jgoutin.dev/api_openai_videos/
              stdapi/models/video/__init__.py:delete_video_output
         """
         _stub_job(monkeypatch, "completed")
@@ -942,7 +942,7 @@ class TestOpenAIVideoIntegration:
     status progression, the echoed parameters and a downloadable MP4.
 
     Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-         https://stdapi.ai/api_openai_videos/
+         https://stdapi.jgoutin.dev/api_openai_videos/
     """
 
     @pytest.mark.video
@@ -1138,7 +1138,7 @@ class TestOpenAIVideoIntegration:
         carry neither), while the prompt is not stored anywhere and so is never
         reported on a listed job.
 
-        Ref: https://stdapi.ai/api_openai_videos/
+        Ref: https://stdapi.jgoutin.dev/api_openai_videos/
              stdapi/models/video/__init__.py:list_video_jobs
         """
         page = openai_client.videos.list(limit=5)

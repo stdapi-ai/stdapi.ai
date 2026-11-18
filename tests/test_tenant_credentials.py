@@ -670,8 +670,8 @@ class TestTheRefusalReachesTheTenant:
     tenant's own resources, and are what the documentation tells an operator to
     tell the two apart by.
 
-    Ref: https://stdapi.ai/operations_authentication_security/#tenant-aws-credentials
-         https://stdapi.ai/operations_troubleshooting/
+    Ref: https://stdapi.jgoutin.dev/operations_authentication_security/#tenant-aws-credentials
+         https://stdapi.jgoutin.dev/operations_troubleshooting/
          stdapi/utils.py:hide_security_details
     """
 

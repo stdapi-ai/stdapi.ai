@@ -11,7 +11,7 @@ store and the job service. Submitting for real is the one step those doubles
 cannot stand in for, and it is what ``TestMessageBatchLive`` does.
 
 Ref: https://platform.claude.com/docs/en/build-with-claude/batch-processing
-     https://stdapi.ai/api_anthropic_batches/
+     https://stdapi.jgoutin.dev/api_anthropic_batches/
      stdapi/routes/anthropic_messages_batches.py:create
      stdapi/batches.py:prepare_anthropic_requests
 """

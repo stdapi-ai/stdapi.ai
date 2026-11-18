@@ -1,22 +1,22 @@
 ---
 title: Releases - Release History
-description: stdapi.ai release history. The project is discontinued and v1.20.1, released 2026-11-18, is its final release.
+description: stdapi.ai release history. The project is discontinued and v1.20.2, released 2026-11-18, is its final release.
 keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, software changelog, final release, discontinued
 ---
 
 # :material-timeline: Releases & Roadmap
 
-**stdapi.ai is discontinued.** v1.20.1, released 2026-11-18, is its final release: no further development or support is planned. The source code stays available under the AGPL-3.0-or-later.
+**stdapi.ai is discontinued.** v1.20.2, released 2026-11-18, is its final release: no further development or support is planned. The source code stays available under the AGPL-3.0-or-later.
 
 ## :material-tag-multiple: Version Index { #recent-releases }
 
-**Latest: [v1.20.1](#v1201-agpl-only-public-hardened-image-terraform-module-1200), the final release: released 2026-11-18.**
+**Latest: [v1.20.2](#v1201-agpl-only-public-hardened-image-terraform-module-1200), the final release: released 2026-11-18.**
 
 Every release, newest first. Each entry in the [Release History](#release-history) below opens with a five-bullet summary.
 
 | Version | Date | Theme | Release notes |
 |---|---|---|---|
-| **v1.20.1** | 2026-11-18 | Final release: project discontinued, AGPL-3.0-or-later only, public hardened image on GitHub Container Registry, Terraform module 1.20.0 | [Read](#v1201-agpl-only-public-hardened-image-terraform-module-1200) |
+| **v1.20.1** (and v1.20.2) | 2026-11-18 (2026-11-18) | Final release: project discontinued, AGPL-3.0-or-later only, public hardened image on GitHub Container Registry, Terraform module 1.20.0 | [Read](#v1201-agpl-only-public-hardened-image-terraform-module-1200) |
 | **v1.19.0** (and v1.19.1) | 2026-09-23 (2026-09-29) | Long conversations, token counting on every model, reasoning control, medical transcription | [Read](#v1190-long-conversations-reasoning-control-medical-transcription-with-v1191-maintenance-update) |
 | **v1.18.0** | 2026-09-19 | Vendor parity across every mirrored API, tenant key rotation, per-tenant rate limits, realtime tools | [Read](#v1180-vendor-parity-tenant-key-rotation-rate-limits) |
 | **v1.17.0** | 2026-09-08 | Your own model endpoints, the Ollama dialect, per-tenant keys, usage and cost from the API, WebRTC | [Read](#v1170-your-own-models-your-own-tenants-your-own-spend) |
@@ -42,10 +42,10 @@ Every release, newest first. Each entry in the [Release History](#release-histor
 
 ## :material-history: Release History
 
-### v1.20.1 – 2026-11-18 – Final Release: AGPL Only, Public Hardened Image & Terraform Module 1.20.0 { #v1201-agpl-only-public-hardened-image-terraform-module-1200 }
+### v1.20.1 – 2026-11-18 – Final Release: AGPL Only, Public Hardened Image & Terraform Module 1.20.0 (with v1.20.2 maintenance update, 2026-11-18) { #v1201-agpl-only-public-hardened-image-terraform-module-1200 }
 
 !!! danger "stdapi.ai is discontinued"
-    This is the final release. No further development, fixes or support are planned. v1.20.1 replaces v1.20.0, which was tagged without a container image. The AWS Marketplace edition, its license and the managed deployment service have ended. The source code stays available under the AGPL-3.0-or-later.
+    v1.20.2 is the final release. No further development, fixes or support are planned. v1.20.1 replaces v1.20.0, which was tagged without a container image. The AWS Marketplace edition, its license and the managed deployment service have ended. The source code stays available under the AGPL-3.0-or-later.
 
 !!! abstract "At a glance"
     - **One license.** stdapi.ai is licensed under the AGPL-3.0-or-later only. There is no Marketplace edition.
@@ -66,6 +66,13 @@ Every release, newest first. Each entry in the [Release History](#release-histor
 !!! info "Upgrading from an earlier Terraform module version"
     - If the deployment has no internet access, mirror the image and set `container_image_repository_url` before you upgrade, or the tasks fail with `CannotPullContainerError`.
     - After the upgrade, you can cancel the AWS Marketplace subscription.
+
+#### Fixes & Maintenance (v1.20.2)
+
+- **The documentation moved to [stdapi.jgoutin.dev](https://stdapi.jgoutin.dev).** The stdapi.ai domain will not be renewed. The OpenAPI contact link, the API reference link on `/` and the `resource_documentation` link of the OAuth protected resource metadata point to the new address.
+- **Terraform module 1.20.1** links the new address in its README and says the project is discontinued. It deploys the same image as 1.20.0.
+- **The site and the README say the project is discontinued**, with a banner on every page, and no longer show a price: stdapi.ai is free.
+- **The stdapi.ai email addresses are removed.** Report bugs on [GitHub issues](https://github.com/stdapi-ai/stdapi.ai/issues).
 
 ---
 
@@ -333,7 +340,7 @@ This release widens what a deployment can serve, who it can serve it to, and wha
 
 | Feature                                | Description                                                                                                                                                                             |
 |----------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
-| [Public Models page](https://stdapi.ai/models/) | Browse, filter and compare every model the gateway serves, with each fact resolved from the source that states it |
+| [Public Models page](https://stdapi.jgoutin.dev/models/) | Browse, filter and compare every model the gateway serves, with each fact resolved from the source that states it |
 | [Denials name the permission they need](operations_troubleshooting.md) | An AWS authorization failure is logged with the action that was denied, instead of leaving the operator to infer it from the call that failed |
 | MCP server identity | The published container images declare the MCP server they serve, so a registry and an MCP client can identify it |
 | WebRTC media path provisioned | Off by default: it needs [`REALTIME_WEBRTC_ENABLED`](operations_configuration_bedrock.md#realtime-webrtc-enabled) on the server and [`realtime_webrtc_media_enabled`](operations_deploy_advanced.md#webrtc-and-sip-need-their-own-ingress) on the Terraform module. In media mode the module provisions the whole UDP path on the VPC it creates — the matching egress, and the application-subnet network ACL entries the media needs; bring your own `subnet_ids` and those entries stay yours to widen. The module's `realtime_webrtc_stun_server` defaults to a Google-operated public STUN server, which the task reaches over an egress rule open to `0.0.0.0/0` on that port — the one place this deployment talks to a third party. Point it at a STUN server you run to keep the flow inside your account |

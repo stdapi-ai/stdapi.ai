@@ -344,7 +344,7 @@ $ curl https://api.example.com/.well-known/oauth-protected-resource
   "scopes_supported": ["stdapi/invoke"],
   "bearer_methods_supported": ["header"],
   "resource_name": "stdapi.ai",
-  "resource_documentation": "https://stdapi.ai/api_reference/"
+  "resource_documentation": "https://stdapi.jgoutin.dev/api_reference/"
 }
 ```
 

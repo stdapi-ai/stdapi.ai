@@ -128,7 +128,7 @@ class TestAudioTranscriptions:
     ``stream=true`` runs a live ``StartStreamTranscription`` session whenever the
     request names a language it can be opened with.
 
-    Ref: https://stdapi.ai/api_openai_audio_transcriptions/
+    Ref: https://stdapi.jgoutin.dev/api_openai_audio_transcriptions/
          https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartTranscriptionJob.html
          stdapi/models/audio/amazon_transcribe.py:AudioModel
     """
@@ -380,7 +380,7 @@ class TestAudioTranscriptions:
         rejected identifier ("The model `X` does not exist or you do not have
         access to it.").
 
-        Ref: https://stdapi.ai/api_openai_audio_transcriptions/
+        Ref: https://stdapi.jgoutin.dev/api_openai_audio_transcriptions/
              stdapi/api_errors.py:UnsupportedModelError
         """
         with pytest.raises(NotFoundError) as exc_info:
@@ -778,7 +778,7 @@ class TestAudioTranscriptions:
         ``tests/test_models_transcribe.py::TestBuildTranscriptionSegment``.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-             https://stdapi.ai/api_openai_audio_transcriptions/#limits-and-behaviour-to-know
+             https://stdapi.jgoutin.dev/api_openai_audio_transcriptions/#limits-and-behaviour-to-know
              stdapi/models/audio/amazon_transcribe.py:_build_transcription_segment
         """
         response = openai_client.audio.transcriptions.create(
@@ -992,7 +992,7 @@ class TestAudioTranscriptionsJsonBody:
     requests: ``file`` accepts a base64 string, data URI, HTTPS URL or S3 URI. It is
     also the only path through which provider-specific extra parameters are reachable.
 
-    Ref: https://stdapi.ai/api_openai_audio_transcriptions/
+    Ref: https://stdapi.jgoutin.dev/api_openai_audio_transcriptions/
          stdapi/types/openai_audio.py:AudioTranscriptionJsonBody
     """
 
@@ -1059,7 +1059,7 @@ class TestAudioTranscriptionsJsonBody:
         The response is the same ``json`` payload as the multipart path, including the
         duration-based usage block.
 
-        Ref: https://stdapi.ai/api_openai_audio_transcriptions/
+        Ref: https://stdapi.jgoutin.dev/api_openai_audio_transcriptions/
              stdapi/input_file.py:InputFile
         """
         http_client = openai_client._client  # noqa: SLF001
@@ -1303,7 +1303,7 @@ class TestTranscriptionMultipartFormParsing:
     split by the route before the request model sees it, an encoding that only
     exists on this gateway.
 
-    Ref: https://stdapi.ai/api_openai_audio_transcriptions/
+    Ref: https://stdapi.jgoutin.dev/api_openai_audio_transcriptions/
          stdapi/routes/openai_audio_transcriptions.py:create_transcription
     """
 
@@ -1648,7 +1648,7 @@ class TestTranscribeUnsupportedParameters:
     Each rejection is an ``unsupported_parameter`` error naming the offending
     field, which is what lets a client tell it apart from a malformed request.
 
-    Ref: https://stdapi.ai/api_openai_audio_transcriptions/
+    Ref: https://stdapi.jgoutin.dev/api_openai_audio_transcriptions/
          stdapi/models/audio/amazon_transcribe.py:AudioModel._transcribe
          stdapi/models/audio/__init__.py:AudioModelBase._validate_no_prompt
     """

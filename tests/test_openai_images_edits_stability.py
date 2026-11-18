@@ -9,7 +9,7 @@ Image content is measured on the pixels wherever the claim admits a measurement,
 and left to a vision judge only where it does not.
 
 Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/stable-image-services.html
-     https://stdapi.ai/api_openai_images_edits/
+     https://stdapi.jgoutin.dev/api_openai_images_edits/
      stdapi/models/image/_stability.py:StabilityImageGenerationJobBase
 """
 
@@ -681,7 +681,7 @@ class TestStabilityEditModels:
     """Stability models that edit a region of the source image.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/stable-image-services.html
-         https://stdapi.ai/api_openai_images_edits/
+         https://stdapi.jgoutin.dev/api_openai_images_edits/
     """
 
     @pytest.mark.image_generation

@@ -653,7 +653,7 @@ class TestVideoParity:
     for schema parity only and is excluded from the emitted payload.
 
     Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-         https://stdapi.ai/api_openai_videos/
+         https://stdapi.jgoutin.dev/api_openai_videos/
          stdapi/types/openai_videos.py:Video
     """
 

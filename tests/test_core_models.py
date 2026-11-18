@@ -8,8 +8,8 @@ makes every expectation below exact and offline.
 Errors on these routes use the default envelope ``{"error": "<message>"}``
 because the ``Models`` route tag has no provider-specific formatter.
 
-Ref: https://stdapi.ai/api_search_models/
-     https://stdapi.ai/api_model_pricing/
+Ref: https://stdapi.jgoutin.dev/api_search_models/
+     https://stdapi.jgoutin.dev/api_model_pricing/
      stdapi/routes/core_models.py
      stdapi/api_providers/__init__.py:_default_formatter
 """
@@ -662,7 +662,7 @@ class TestFilterByBatch:
     keeps a batched request from reaching the backend
     (``tests/test_openai_batches.py``).
 
-    Ref: https://stdapi.ai/api_search_models/
+    Ref: https://stdapi.jgoutin.dev/api_search_models/
          stdapi/routes/core_models.py:search_models
          stdapi/models/__init__.py:sync_batch_support
     """
@@ -891,7 +891,7 @@ def priced_catalog(api_key: str, monkeypatch: pytest.MonkeyPatch) -> dict[str, s
 class TestModelPricingEndpoint:
     """GET /model_pricing against a seeded in-memory price index.
 
-    Ref: https://stdapi.ai/api_model_pricing/
+    Ref: https://stdapi.jgoutin.dev/api_model_pricing/
          stdapi/routes/core_models.py:model_pricing
     """
 
@@ -1148,7 +1148,7 @@ class TestModelPricingEndpoint:
         so quoting the model's own default tier would understate the price of
         exactly the name the client sends.
 
-        Ref: https://stdapi.ai/operations_configuration/#model-aliases-configuration
+        Ref: https://stdapi.jgoutin.dev/operations_configuration/#model-aliases-configuration
              stdapi/routes/core_models.py:_pricing_defaults
         """
         monkeypatch.setitem(MODEL_ALIASES, "priced-alias", "amazon.pricedmodel-v1:0")

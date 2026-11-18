@@ -7,7 +7,7 @@ of its own.
 
 Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_StartAsyncInvoke.html
      https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_GetAsyncInvoke.html
-     https://stdapi.ai/api_openai_videos/
+     https://stdapi.jgoutin.dev/api_openai_videos/
      stdapi/models/video/__init__.py:VideoModelBase
 """
 
@@ -288,7 +288,7 @@ class TestNovaReelInput:
         Provider extras are merged with ``setdefault``, so a caller cannot
         rewrite the duration the job is billed and tagged with.
 
-        Ref: https://stdapi.ai/api_openai_videos/
+        Ref: https://stdapi.jgoutin.dev/api_openai_videos/
              stdapi/models/video/amazon_nova_reel.py:VideoModel.build_generation_input
         """
         body = self._build(extra_params={"seed": 7, "durationSeconds": 99})
@@ -1078,7 +1078,7 @@ class TestVideoJobAccess:
         OpenAI always reports an ``expires_at``; here retention is a bucket
         lifecycle setting, so the field stays null unless it is configured.
 
-        Ref: https://stdapi.ai/api_openai_videos/
+        Ref: https://stdapi.jgoutin.dev/api_openai_videos/
              stdapi/models/video/__init__.py:video_expires_at
         """
         job = self._job().model_copy(update={"completed_at": 1000})
@@ -1108,7 +1108,7 @@ class TestVideoJobAccess:
         The retention window is checked before the download, so an expired video
         is refused even while the S3 lifecycle rule has not run yet.
 
-        Ref: https://stdapi.ai/api_openai_videos/
+        Ref: https://stdapi.jgoutin.dev/api_openai_videos/
              stdapi/models/video/__init__.py:open_video_content
         """
         monkeypatch.setattr(SETTINGS, "aws_s3_videos_expires_after", 3600)
@@ -1349,7 +1349,7 @@ class TestListVideoJobs:
     tags, which AWS itself does not report in a job summary.
 
     Ref: botocore/data/bedrock-runtime/2023-09-30/service-2.json:ListAsyncInvokes
-         https://stdapi.ai/api_openai_videos/
+         https://stdapi.jgoutin.dev/api_openai_videos/
          stdapi/models/video/__init__.py:list_video_jobs
     """
 
@@ -1566,7 +1566,7 @@ class TestListVideoJobsMultiRegion:
     every configured region; a region that cannot be reached is skipped rather
     than failing the whole listing.
 
-    Ref: https://stdapi.ai/api_openai_videos/
+    Ref: https://stdapi.jgoutin.dev/api_openai_videos/
          stdapi/models/video/__init__.py:list_video_jobs
     """
 

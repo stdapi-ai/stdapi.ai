@@ -135,7 +135,7 @@ class TestTwelveLabsMarengoEmbeddings:
         asynchronous branch with an input that would otherwise be inlined and
         embedded synchronously.
 
-        Ref: https://stdapi.ai/api_openai_embeddings/
+        Ref: https://stdapi.jgoutin.dev/api_openai_embeddings/
              stdapi/models/embedding/twelvelabs_marengo_embed.py:EmbeddingModel._embed
         """
         response = openai_client.embeddings.create(
@@ -155,7 +155,7 @@ class TestTwelveLabsMarengoEmbeddings:
         Video is asynchronous either way; the difference is that the payload is
         passed as ``mediaSource.s3Location`` instead of an inline base64 string.
 
-        Ref: https://stdapi.ai/api_openai_embeddings/
+        Ref: https://stdapi.jgoutin.dev/api_openai_embeddings/
              stdapi/models/embedding/twelvelabs_marengo_embed.py:_media_source
         """
         response = openai_client.embeddings.create(
@@ -179,7 +179,7 @@ class TestTwelveLabsMarengoEmbeddings:
     ) -> None:
         """``force_s3_data`` stages audio on S3 and references it by URI.
 
-        Ref: https://stdapi.ai/api_openai_embeddings/
+        Ref: https://stdapi.jgoutin.dev/api_openai_embeddings/
              stdapi/models/embedding/twelvelabs_marengo_embed.py:_media_source
         """
         response = openai_client.embeddings.create(

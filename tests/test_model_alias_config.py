@@ -6,7 +6,7 @@ model parameters. Those values resolve as one chain -- request, then alias,
 then general configuration -- with the security- and cost-bearing knobs gated
 by their ``*_allow_*_override`` setting.
 
-Ref: https://stdapi.ai/operations_configuration/#model-aliases
+Ref: https://stdapi.jgoutin.dev/operations_configuration/#model-aliases
      stdapi/config.py:ModelAliasConfig
      stdapi/aws_bedrock.py:resolve_service_tier
      stdapi/models/__init__.py:_populate_model_aliases

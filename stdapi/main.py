@@ -430,7 +430,7 @@ app = FastAPI(
     version=SERVER_VERSION,
     lifespan=lifespan,
     # Swagger UI renders this as the clickable link in the /docs header.
-    contact={"name": "stdapi.ai", "url": f"https://stdapi.ai/?{DOCS_UTM}"},
+    contact={"name": "stdapi.ai", "url": f"https://stdapi.jgoutin.dev/?{DOCS_UTM}"},
     license_info=LICENSE_INFO,
     # The built-in pages load their icon from fastapi.tiangolo.com; the routes in
     # stdapi/routes/core_docs.py serve the same pages from the gateway alone.

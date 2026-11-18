@@ -1094,7 +1094,7 @@ class TestWarmedS3Clients:
 
     Ref: stdapi/main.py:lifespan
          stdapi/aws.py:get_client
-         https://stdapi.ai/operations_configuration/
+         https://stdapi.jgoutin.dev/operations_configuration/
     """
 
     async def test_accepted_bucket_regions_are_warmed(
@@ -1206,7 +1206,7 @@ class TestShutdownDrain:
 
     Ref: stdapi/main.py:drain_background_tasks
          stdapi/cleanup.py:drain_tasks
-         https://stdapi.ai/operations_configuration/#shutdown-drain-timeout
+         https://stdapi.jgoutin.dev/operations_configuration/#shutdown-drain-timeout
     """
 
     @staticmethod

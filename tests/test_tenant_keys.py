@@ -1230,7 +1230,7 @@ class TestModelScope:
         named models still reaches Amazon Comprehend and Bedrock Guardrails on
         the deployment's bill.
 
-        Ref: https://stdapi.ai/operations_authentication_security/#scopes
+        Ref: https://stdapi.jgoutin.dev/operations_authentication_security/#scopes
              stdapi/routes/openai_moderations.py:create_moderation
         """
 
@@ -1283,7 +1283,7 @@ class TestModelScope:
         alone would answer a tenant `404 model_not_found` for an identifier it
         never sent, for a store it can still search.
 
-        Ref: https://stdapi.ai/operations_authentication_security/#scopes
+        Ref: https://stdapi.jgoutin.dev/operations_authentication_security/#scopes
              stdapi/vector_stores/engine.py:resolve_embedding_model
         """
         model_id = SETTINGS.vector_store_embedding_model

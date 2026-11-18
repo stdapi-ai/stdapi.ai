@@ -5,7 +5,7 @@ The pinned models are ``amazon.titan-embed-text-v2:0`` locally and
 float32 vectors, which is what the numeric assertions below rely on.
 
 Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-     https://stdapi.ai/api_openai_embeddings/
+     https://stdapi.jgoutin.dev/api_openai_embeddings/
      stdapi/routes/openai_embeddings.py:create_embeddings
 """
 
@@ -45,7 +45,7 @@ def _decode_base64_vector(encoded: object) -> list[float]:
     The gateway encodes ``array("f", vector).tobytes()``, so the payload length
     must be a whole number of 4-byte little-endian floats.
 
-    Ref: https://stdapi.ai/api_openai_embeddings/
+    Ref: https://stdapi.jgoutin.dev/api_openai_embeddings/
          stdapi/routes/openai_embeddings.py:create_embeddings
     """
     assert isinstance(encoded, str), f"expected a base64 string, got {type(encoded)}"
@@ -509,7 +509,7 @@ class TestEmbeddings:
 class TestEmbeddingsUsage:
     """Usage accounting emitted by the embeddings route.
 
-    Ref: https://stdapi.ai/api_openai_embeddings/
+    Ref: https://stdapi.jgoutin.dev/api_openai_embeddings/
          stdapi/usage.py:record_bedrock_usage
     """
 
@@ -604,7 +604,7 @@ class TestEmbeddingsTokenArrayRejected:
     Validation happens before any model dispatch or AWS call, so these tests
     run against an app instance without the AWS-touching lifespan.
 
-    Ref: https://stdapi.ai/api_openai_embeddings/
+    Ref: https://stdapi.jgoutin.dev/api_openai_embeddings/
          stdapi/types/openai_embeddings.py:EmbeddingCreateParams
     """
 
@@ -712,7 +712,7 @@ class TestEmbeddingsRouteMapping:
     is about what the route itself forwards, echoes and logs.
 
     Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-         https://stdapi.ai/api_openai_embeddings/
+         https://stdapi.jgoutin.dev/api_openai_embeddings/
          stdapi/routes/openai_embeddings.py:create_embeddings
     """
 
@@ -871,7 +871,7 @@ class TestEmbeddingsRouteMapping:
         route's ``exclude`` argument would copy every vector into the structured
         log, blowing up log volume and leaking customer content.
 
-        Ref: https://stdapi.ai/api_openai_embeddings/
+        Ref: https://stdapi.jgoutin.dev/api_openai_embeddings/
              stdapi/routes/openai_embeddings.py:create_embeddings
              stdapi/monitoring.py:log_response_params
         """
@@ -900,7 +900,7 @@ class TestEmbeddingRouteAdvertised:
     ``supported_mcp_tools``, so a modality or registration typo would silently
     make every embedding model undiscoverable to MCP clients.
 
-    Ref: https://stdapi.ai/api_openai_embeddings/
+    Ref: https://stdapi.jgoutin.dev/api_openai_embeddings/
          stdapi/models/capabilities.py:register_route_capability
          stdapi/models/__init__.py:_compute_model_capabilities
     """

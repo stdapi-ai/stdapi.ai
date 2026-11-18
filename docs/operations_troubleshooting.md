@@ -1053,6 +1053,6 @@ stdapi.ai translates upstream AWS error codes into standard HTTP responses with 
 - :material-lock: [**Authentication & Security**](operations_authentication_security.md) — API keys, OIDC/Cognito, IAM
 - :material-terraform: [**Terraform Module Docs**](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) — All module inputs and outputs
 - :material-github: [**GitHub Issues**](https://github.com/stdapi-ai/stdapi.ai/issues) — Report a bug or ask a question
-- :material-email-outline: [**Contact**](contact.md) — Reach the team directly
+- :material-email-outline: [**Contact**](contact.md) — Bug reports on GitHub issues (project discontinued)
 
 </div>

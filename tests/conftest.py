@@ -333,7 +333,7 @@ environ.update(
         "aws_bedrock_allow_application_inference_profile_arn": "true",
         "aws_bedrock_allow_prompt_router_arn": "true",
         # OAuth 2.0 discovery: publishes the metadata document named in every 401.
-        "oauth_resource_identifier": "https://gateway.tests.stdapi.ai",
+        "oauth_resource_identifier": "https://gateway.tests.example.com",
         "oauth_authorization_servers": (
             "https://cognito-idp.eu-west-3.amazonaws.com/eu-west-3_tEsTpOoL1"
         ),

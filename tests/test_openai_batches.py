@@ -13,7 +13,7 @@ account. Submitting for real is the one step those doubles cannot stand in for,
 and it is what ``TestOpenAIBatchLive`` does.
 
 Ref: https://developers.openai.com/api/docs/guides/batch.md
-     https://stdapi.ai/api_openai_batches/
+     https://stdapi.jgoutin.dev/api_openai_batches/
      stdapi/routes/openai_batches.py:create
      stdapi/batches.py:create_batch
 """
@@ -266,7 +266,7 @@ class TestOpenAIBatchValidation:
     reports `failed`, which is the documented divergence these tests pin: the
     refusal, its message and the absence of any batch behind it.
 
-    Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+    Ref: https://stdapi.jgoutin.dev/api_openai_batches/#input-file-validation
          stdapi/batches.py:_read_input_file
     """
 
@@ -358,7 +358,7 @@ class TestOpenAIBatchValidation:
         newer model half-way down the file and split one batch into two jobs.
         The name is therefore pinned to what it first resolved to.
 
-        Ref: https://stdapi.ai/api_openai_batches/#model-support
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#model-support
              stdapi/batches.py:_resolve_model
         """
         _, bedrock = _batches.install(monkeypatch)
@@ -440,7 +440,7 @@ class TestOpenAIBatchValidation:
     ) -> None:
         """A file not uploaded for batching is refused, naming the purpose.
 
-        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#input-file-validation
              https://developers.openai.com/api/docs/guides/batch.md
              stdapi/batches.py:_open_input_file
         """
@@ -459,7 +459,7 @@ class TestOpenAIBatchValidation:
     ) -> None:
         """A line whose 'body' is not an object is refused, naming its position.
 
-        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#input-file-validation
              https://developers.openai.com/api/docs/guides/batch.md
              stdapi/batches.py:_read_input_request
         """
@@ -481,7 +481,7 @@ class TestOpenAIBatchValidation:
     ) -> None:
         """A line targeting another endpoint is refused, naming its position.
 
-        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#input-file-validation
              https://developers.openai.com/api/docs/guides/batch.md
              stdapi/batches.py:_read_input_request
         """
@@ -505,7 +505,7 @@ class TestOpenAIBatchValidation:
         fixes its file and retries creates its first batch rather than its
         second.
 
-        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#input-file-validation
              stdapi/batches.py:_read_input_file
         """
         _, bedrock = _batches.install(monkeypatch)
@@ -524,7 +524,7 @@ class TestOpenAIBatchValidation:
     ) -> None:
         """A line that is not a JSON object is refused, naming its position.
 
-        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#input-file-validation
              stdapi/batches.py:_iter_input_requests
         """
         _batches.install(monkeypatch)
@@ -545,7 +545,7 @@ class TestOpenAIBatchValidation:
         A file written by a crashed producer ends mid-object, and the decoder's
         own `ValueError` reaches no handler.
 
-        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#input-file-validation
              stdapi/batches.py:_iter_input_requests
         """
         _batches.install(monkeypatch)
@@ -604,7 +604,7 @@ class TestOpenAIBatchValidation:
     ) -> None:
         """A line asking for another HTTP method is refused, naming its position.
 
-        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#input-file-validation
              https://developers.openai.com/api/docs/guides/batch.md
              stdapi/batches.py:_read_input_request
         """
@@ -657,7 +657,7 @@ class TestOpenAIBatchValidation:
     ) -> None:
         """A repeated custom_id is refused: it is the only join key results have.
 
-        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#input-file-validation
              https://developers.openai.com/api/docs/guides/batch.md
              stdapi/batches.py:_validate_custom_ids
         """
@@ -969,7 +969,7 @@ class TestOpenAIBatchValidation:
         the backend accepts. The batch below names a model the catalogue does
         not advertise and must still reach the job service.
 
-        Ref: https://stdapi.ai/api_search_models/
+        Ref: https://stdapi.jgoutin.dev/api_search_models/
              stdapi/models/__init__.py:sync_batch_support
              stdapi/batches.py:_submit_job
         """
@@ -1231,7 +1231,7 @@ class TestOpenAIBatchCreationConcurrency:
     server-wide, and a caller is admitted or refused rather than queued behind
     another tenant's file for as long as that file takes.
 
-    Ref: https://stdapi.ai/api_openai_batches/#creation-concurrency
+    Ref: https://stdapi.jgoutin.dev/api_openai_batches/#creation-concurrency
          stdapi/batches.py:_admit_creation
     """
 
@@ -2026,7 +2026,7 @@ class TestOpenAIBatchLifecycle:
         instant gives it, as the server stores its own — so the batch created
         last is reached only by a scan that seeks the end of the key space.
 
-        Ref: https://stdapi.ai/api_openai_batches/#listing-order
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#listing-order
              stdapi/batches.py:_scan_bucket
         """
         s3, _ = _batches.install(monkeypatch)
@@ -2125,7 +2125,7 @@ class TestOpenAIBatchLifecycle:
         marker is placed deep enough into a week of history that only a scan
         spending its idle budget on a wider probe reaches it.
 
-        Ref: https://stdapi.ai/api_openai_batches/#listing-window
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#listing-window
              stdapi/batches.py:_scan_bucket
         """
         s3, _ = _batches.install(monkeypatch)
@@ -2221,7 +2221,7 @@ class TestOpenAIBatchLifecycle:
         hours in the past is otherwise never bisected into within the budget,
         and the listing answers from its oldest end.
 
-        Ref: https://stdapi.ai/api_openai_batches/#listing-window
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#listing-window
              stdapi/batches.py:_scan_bucket
         """
         s3, _ = _batches.install(monkeypatch)
@@ -2273,7 +2273,7 @@ class TestOpenAIBatchLifecycle:
         rate the pages read it. Retrieval by identifier, which never depends on
         the scan, is asserted alongside it.
 
-        Ref: https://stdapi.ai/api_openai_batches/#listing-window
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#listing-window
              stdapi/batches.py:_scan_bucket
         """
         s3, _ = _batches.install(monkeypatch)
@@ -2310,7 +2310,7 @@ class TestOpenAIBatchLifecycle:
         tie — the stability the API documentation promises a client paging
         with `after`.
 
-        Ref: https://stdapi.ai/api_openai_batches/#listing-order
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#listing-order
              stdapi/batches.py:list_batches
         """
         _batches.install(monkeypatch)
@@ -2344,7 +2344,7 @@ class TestOpenAIBatchLifecycle:
         batch follows it and both are still retrievable by ID — the
         limitation the API documentation states.
 
-        Ref: https://stdapi.ai/api_openai_batches/#listing-order
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#listing-order
              stdapi/batches.py:list_batches
         """
         from stdapi.config import SETTINGS  # noqa: PLC0415
@@ -2393,7 +2393,7 @@ class TestOpenAIBatchLifecycle:
         a single input line would carry left empty, and says what to do instead
         of what happened behind the API.
 
-        Ref: https://stdapi.ai/api_openai_batches/#input-file-validation
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#input-file-validation
              openai/types/batch_error.py
              stdapi/routes/openai_batches.py:_to_batch
         """
@@ -3434,7 +3434,7 @@ class TestOpenAIBatchLive:
         measured rather than assumed.
 
         Ref: https://developers.openai.com/api/docs/guides/batch.md
-             https://stdapi.ai/api_openai_batches/#input-file-validation
+             https://stdapi.jgoutin.dev/api_openai_batches/#input-file-validation
              stdapi/batches.py:_read_input_file
         """
         good_lines = "\n".join(
@@ -3723,7 +3723,7 @@ class TestOpenAIBatchRoundTrip:
         Before that pairing existed the batch was refused outright, so this is
         the whole of the path's coverage.
 
-        Ref: https://stdapi.ai/api_openai_batches/#models
+        Ref: https://stdapi.jgoutin.dev/api_openai_batches/#models
              stdapi/batches.py:_batch_model_id
         """
         results = self._round_trip(

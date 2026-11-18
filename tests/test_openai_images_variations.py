@@ -5,7 +5,7 @@ The gateway accepts both ``multipart/form-data`` (binary upload) and
 schema only defines the multipart form.
 
 Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-     https://stdapi.ai/api_openai_images_variations/
+     https://stdapi.jgoutin.dev/api_openai_images_variations/
      stdapi/routes/openai_images_variations.py:create_image_variations
 """
 

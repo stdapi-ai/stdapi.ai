@@ -82,7 +82,7 @@ def _isolated_registries() -> Generator[None]:
 class TestInitializeModerationModels:
     """Moderation model registration and alias resolution.
 
-    Ref: https://stdapi.ai/api_openai_moderations/
+    Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
          stdapi/models/moderation/__init__.py:initialize_moderation_models
     """
 

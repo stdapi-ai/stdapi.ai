@@ -272,7 +272,7 @@ class TestCohereEmbedRoute:
         route's ``exclude`` argument would put every vector of every request
         into the structured log, blowing up log volume and leaking content.
 
-        Ref: https://stdapi.ai/api_cohere_embed/
+        Ref: https://stdapi.jgoutin.dev/api_cohere_embed/
              stdapi/routes/cohere_embed.py:embed
              stdapi/monitoring.py:log_response_params
         """
@@ -689,7 +689,7 @@ class TestCohereEmbedRoute:
         combining the three fields has to be able to map `embeddings[i]` back to
         what it sent.
 
-        Ref: https://stdapi.ai/api_cohere_embed/
+        Ref: https://stdapi.jgoutin.dev/api_cohere_embed/
              stdapi/routes/cohere_embed.py:embed
         """
         response = app_client.post(
@@ -888,7 +888,7 @@ class TestCohereEmbedRoute:
         A text part reaching the model unscreened would be a guardrail bypass
         that a client can trigger by moving its text into a fused entry.
 
-        Ref: https://stdapi.ai/api_cohere_embed/
+        Ref: https://stdapi.jgoutin.dev/api_cohere_embed/
              stdapi/aws_bedrock.py:apply_guardrail_to_texts
         """
         seen: list[Any] = []

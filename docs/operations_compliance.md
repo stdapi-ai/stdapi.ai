@@ -517,6 +517,6 @@ Attorneys, consultants, accountants, and other professionals bound by confidenti
 - :material-server-network: [**Advanced Deployment**](operations_deploy_advanced.md) — Multi-region Terraform examples
 - :material-directions-fork: [**Resilience & Failover**](operations_resilience.md) — Multi-region routing and infrastructure resilience
 - :material-cog: [**Configuration Reference**](operations_configuration.md) — Complete list of environment variables
-- :material-email-outline: [**Contact**](contact.md) — Questions about the product's controls, configuration or licensing. Assessing those controls against your obligations is a judgement for you and your own advisers
+- :material-email-outline: [**Contact**](contact.md) — Bug reports on GitHub issues (project discontinued)
 
 </div>

@@ -68,7 +68,7 @@ Competitor capabilities were verified against official sources on 5 August 2026;
 | **Self-hosted**                             | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **AWS-native focus**                        | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^5] | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> |
 | **Multi-provider support**                  | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> [^11] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
-| **Source license**                          |  AGPL-3.0 · $0 license cost |                   MIT                   |                  MIT-0                  |               AWS service               |
+| **Source license**                          |  AGPL-3.0 · free |                   MIT                   |                  MIT-0                  |               AWS service               |
 | **Distribution & supply chain**             |                GHCR                 |                pip/PyPI                 |             GitHub (MIT-0)              |               AWS-managed               |
 
 <div class="compare__legend" markdown>
@@ -124,7 +124,7 @@ Model documentation describes what a model is supposed to accept. What it actual
 - **Security scanning** of dependencies and container images, with the Terraform module's AWS resources validated against AWS Security Hub's Foundational Security Best Practices
 
 !!! tip "Found something anyway?"
-    No suite catches everything. If you hit a compatibility difference between stdapi.ai and the API it mirrors, open an issue on [GitHub](https://github.com/stdapi-ai/stdapi.ai/issues) — or [email us](contact.md) if you would rather not report it publicly. That class of bug is treated as a defect, not as expected behaviour.
+    No suite catches everything. If you hit a compatibility difference between stdapi.ai and the API it mirrors, open an issue on [GitHub](https://github.com/stdapi-ai/stdapi.ai/issues). That class of bug is treated as a defect, not as expected behaviour.
 
 [^1]: Full Bedrock catalog supported; each model must be declared in config (applies to auto-discovery)
 [^2]: Subset of Bedrock models — mostly newer open-weight models (DeepSeek, Gemma, Qwen, GLM, MiniMax, Kimi, newer Mistral) plus OpenAI GPT/gpt-oss and xAI Grok; newer Anthropic Claude generations are available via the Messages API only. Amazon Nova, Meta Llama, AI21, Cohere, and Stability AI (images) are not available — see [AWS endpoint availability](https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html)

@@ -1,5 +1,9 @@
 {% extends "base.html" %}
 
+{% block announce %}
+  <strong>stdapi.ai is discontinued.</strong> v1.20.2 is its final release: no further development or support is planned. The source code stays available under the AGPL-3.0-or-later. <a href="{{ 'roadmap/' | url }}">Release notes</a>
+{% endblock %}
+
 {% block extrahead %}
   {{ super() }}
 

@@ -6,7 +6,7 @@ offers a medical transcription model, so neither runs on the vendor lane.
 
 Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartMedicalTranscriptionJob.html
      https://docs.aws.amazon.com/transcribe/latest/APIReference/API_streaming_StartMedicalStreamTranscription.html
-     https://stdapi.ai/api_openai_audio_transcriptions/#medical-transcription
+     https://stdapi.jgoutin.dev/api_openai_audio_transcriptions/#medical-transcription
 """
 
 from base64 import b64encode

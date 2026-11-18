@@ -34,13 +34,9 @@ One container image is published, under this license: the hardened image `ghcr.i
 
     **Manual ECS deployment**: update the container image tag in your ECS task definition and trigger a new deployment.
 
-    Security patches are released as new container image versions. Watch [GitHub releases](https://github.com/stdapi-ai/stdapi.ai/releases) to be notified.
+    The project is discontinued: no further releases, security patches included, are planned. A deployment that stays on the image owns its updates, and the AGPL lets you maintain a fork. Any new version would appear on [GitHub releases](https://github.com/stdapi-ai/stdapi.ai/releases).
 
 ---
-
-## :material-email-outline: Questions
-
-For licensing questions, email [support@stdapi.ai](mailto:support@stdapi.ai) or see [Contact](contact.md).
 
 ## :material-arrow-right: Next Steps
 

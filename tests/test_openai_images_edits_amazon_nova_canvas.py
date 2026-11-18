@@ -5,7 +5,7 @@ quality/style mapping. The whole module is skipped: the model reaches end of
 life on 2026-09-30.
 
 Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-     https://stdapi.ai/api_openai_images_edits/
+     https://stdapi.jgoutin.dev/api_openai_images_edits/
      https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
      stdapi/routes/openai_images_edits.py:edit_images
      https://github.com/stdapi-ai/stdapi.ai/issues/93

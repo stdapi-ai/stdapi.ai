@@ -281,6 +281,6 @@ Deploy intelligent AI assistants to your team's communication platforms powered 
 - :material-rocket-launch: [**Deploy to AWS**](operations_getting_started.md) — Production-ready with two Terraform commands
 - :material-docker: [**Try Locally with Docker**](operations_getting_started_local.md) — container image for development and testing
 - :material-book-open-variant: [**API Overview**](api_overview.md) — Endpoints, parameters, and usage examples
-- :material-email-outline: [**Contact**](contact.md) — Integration questions and general contact
+- :material-email-outline: [**Contact**](contact.md) — Bug reports on GitHub issues (project discontinued)
 
 </div>

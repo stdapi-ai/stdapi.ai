@@ -1,7 +1,7 @@
 """Coverage of the OpenAI-compatible /v1/images/edits endpoint.
 
 Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-     https://stdapi.ai/api_openai_images_edits/
+     https://stdapi.jgoutin.dev/api_openai_images_edits/
      stdapi/routes/openai_images_edits.py:edit_images
 """
 
@@ -55,7 +55,7 @@ _NO_MASK_MODEL_SIZE = smallest_image_size(_NO_MASK_MODEL)
 class TestImagesEditsBasic:
     """Editing-specific behavior of /v1/images/edits: masks, image fields, streaming.
 
-    Ref: https://stdapi.ai/api_openai_images_edits/
+    Ref: https://stdapi.jgoutin.dev/api_openai_images_edits/
          stdapi/routes/openai_images_edits.py:edit_images
     """
 
@@ -485,7 +485,7 @@ class TestImagesEditsBasic:
         The Files API is S3-backed here and the identifier it returns carries
         the ``file-`` prefix that the edit body accepts.
 
-        Ref: https://stdapi.ai/api_openai_files/
+        Ref: https://stdapi.jgoutin.dev/api_openai_files/
              stdapi/input_file.py:FileIdInputFile
         """
         uploaded = openai_client.files.create(
@@ -880,7 +880,7 @@ class TestImagesEditsJsonBodyMask:
     ``images`` array because it also feeds the alpha-to-black/white conversion
     and the billed input image count.
 
-    Ref: https://stdapi.ai/api_openai_images_edits/
+    Ref: https://stdapi.jgoutin.dev/api_openai_images_edits/
          stdapi/routes/openai_images_edits.py:edit_images
     """
 
@@ -975,7 +975,7 @@ class TestImagesEditsMaskUsageAccounting:
     text tokens. The mask is one of those inputs, so leaving it out of the count
     would silently reattribute it to the prompt.
 
-    Ref: https://stdapi.ai/api_openai_images_edits/
+    Ref: https://stdapi.jgoutin.dev/api_openai_images_edits/
          stdapi/routes/openai_images_edits.py:edit_images
          stdapi/routes/_images_common.py:build_images_response
     """

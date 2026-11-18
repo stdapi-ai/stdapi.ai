@@ -975,7 +975,7 @@ class TestSynthesizeSpeechEncodedFormats:
 class TestSynthesizeSpeechPcmSampleRate:
     """AudioModel.tts: default pcm output is forced to OpenAI's 24 kHz contract.
 
-    Ref: https://stdapi.ai/api_openai_audio_speech/
+    Ref: https://stdapi.jgoutin.dev/api_openai_audio_speech/
          https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
          stdapi/models/audio/amazon_polly.py:AudioModel.tts
     """

@@ -5,7 +5,7 @@ it detects the origin (raw base64, data URI, HTTPS URL, ``s3://`` URI,
 ``file-id:`` reference or an uploaded multipart part) and enforces the size and
 allowlist limits before any AWS call.
 
-Ref: https://stdapi.ai/api_openai_files/
+Ref: https://stdapi.jgoutin.dev/api_openai_files/
      stdapi/input_file.py:InputFile
 """
 
@@ -2182,7 +2182,7 @@ class TestUploadedFileExpiry:
     schedule, which is why the check is made against the clock at every read
     rather than trusted to happen on time.
 
-    Ref: https://stdapi.ai/api_openai_files/
+    Ref: https://stdapi.jgoutin.dev/api_openai_files/
          stdapi/input_file.py:_S3Source
     """
 

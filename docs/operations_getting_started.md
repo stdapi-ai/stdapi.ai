@@ -171,7 +171,7 @@ The `503` hiccup on first deployment is already covered above — see [Make Your
 :material-arrow-right: **Full troubleshooting guide:** [Troubleshooting](operations_troubleshooting.md) — 401 auth errors, 404 model not found, ThrottlingException, S3 errors, VPC connectivity, Terraform IAM failures, and more.
 
 !!! info "Need help?"
-    For questions, issue reports, or assistance, see the [Contact](contact.md) page.
+    To report a bug, see the [Contact](contact.md) page. The project is discontinued, so no assistance is planned.
 
 ---
 

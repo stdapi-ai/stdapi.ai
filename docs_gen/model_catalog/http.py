@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
 
 #: Identifies the generator to the public APIs it reads.
-USER_AGENT: str = "stdapi.ai-model-catalog-generator/1.0 (+https://stdapi.ai)"
+USER_AGENT: str = "stdapi.ai-model-catalog-generator/1.0 (+https://stdapi.jgoutin.dev)"
 
 #: Schemes the generator is allowed to fetch; plain HTTP only for a local gateway.
 _ALLOWED_SCHEMES: frozenset[str] = frozenset({"http", "https"})

@@ -30,7 +30,7 @@ class PingResponse:
 
 
 #: Public API reference, as machine-readable metadata quotes it: no query string.
-_API_REFERENCE_URL = "https://stdapi.ai/api_reference/"
+_API_REFERENCE_URL = "https://stdapi.jgoutin.dev/api_reference/"
 
 #: The same reference, campaign-tagged, for the one place a human clicks it.
 _API_REFERENCE_LINK = f"{_API_REFERENCE_URL}?{DOCS_UTM}"

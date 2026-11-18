@@ -283,7 +283,7 @@ jobs:
             --title "Release $TAG_NAME" \
             --generate-notes \
             --notes-start-tag "" \
-            --notes "See our [Roadmap & Changelog](https://stdapi.ai/roadmap/) for more details." \
+            --notes "See our [Roadmap & Changelog](https://stdapi.jgoutin.dev/roadmap/) for more details." \
             $PRERELEASE_FLAG
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

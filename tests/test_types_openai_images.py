@@ -7,7 +7,7 @@ serialise a struct of optional fields -- the default in several JSON libraries
 to validate exactly as its omission does.
 
 Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-     https://stdapi.ai/api_openai_images_generations/
+     https://stdapi.jgoutin.dev/api_openai_images_generations/
      stdapi/types/openai_images.py
 """
 

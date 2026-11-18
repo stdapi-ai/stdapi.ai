@@ -59,7 +59,7 @@ class TestCohereEmbeddings:
         families: v3 takes ``START``/``END``, v4 takes ``LEFT``/``RIGHT``. The value
         only matters for over-long inputs, so a short input must simply succeed.
 
-        Ref: https://stdapi.ai/api_openai_embeddings/
+        Ref: https://stdapi.jgoutin.dev/api_openai_embeddings/
              stdapi/models/embedding/cohere_embed.py:_Request
         """
         truncate_value = "START" if model_id.endswith("v3") else "LEFT"

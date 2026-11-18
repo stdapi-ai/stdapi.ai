@@ -6,7 +6,7 @@ lets ``/v1/files`` page S3 keys directly and resolve a bucket without any lookup
 table.  The base32hex alphabet (``0-9a-v``) is required for that ordering —
 standard base32 maps the six highest values to ``2-7``, which sort below ``a-z``.
 
-Ref: https://stdapi.ai/api_openai_files/
+Ref: https://stdapi.jgoutin.dev/api_openai_files/
      stdapi/files/_core.py:encode_id_payload
      stdapi/files/_core.py:decode_id_payload
 """

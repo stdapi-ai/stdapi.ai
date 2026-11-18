@@ -258,7 +258,7 @@ async def test_alpha_mask_to_bw_passes_through_masks_without_alpha() -> None:
     Callers may pass a Bedrock-style mask directly; re-encoding it would be
     lossy work for no gain.
 
-    Ref: https://stdapi.ai/api_openai_images_edits/
+    Ref: https://stdapi.jgoutin.dev/api_openai_images_edits/
          stdapi/utils.py:alpha_mask_to_bw
     """
     source = _b64_png(Image.new("RGB", (4, 4), (0, 0, 0)))
@@ -339,7 +339,7 @@ async def test_alpha_mask_to_bw_maps_alpha_to_black_and_white(
     polarity. The edit region is ``alpha < threshold``, so a pixel sitting exactly at
     the threshold falls on the preserve (white) side.
 
-    Ref: https://stdapi.ai/api_openai_images_edits/
+    Ref: https://stdapi.jgoutin.dev/api_openai_images_edits/
          https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
          https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
     """

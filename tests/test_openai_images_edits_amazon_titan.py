@@ -5,7 +5,7 @@ the longer side, which is why the tests stay at the model's cheapest size. The
 whole module is skipped: the model is deprecated.
 
 Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-     https://stdapi.ai/api_openai_images_edits/
+     https://stdapi.jgoutin.dev/api_openai_images_edits/
      https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
      stdapi/routes/openai_images_edits.py:edit_images
 """

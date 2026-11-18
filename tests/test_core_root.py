@@ -29,7 +29,7 @@ _EXPECTED_DOC_TARGET = (
     else (
         "/redoc"
         if SETTINGS.enable_redoc
-        else f"https://stdapi.ai/api_reference/?{_DOCS_UTM}"
+        else f"https://stdapi.jgoutin.dev/api_reference/?{_DOCS_UTM}"
     )
 )
 
@@ -180,7 +180,7 @@ class TestOpenApiInfoLinks:
         contact = self._info()["contact"]
         assert isinstance(contact, dict)
 
-        assert contact["url"] == f"https://stdapi.ai/?{_DOCS_UTM}"
+        assert contact["url"] == f"https://stdapi.jgoutin.dev/?{_DOCS_UTM}"
 
     def test_the_openapi_info_reports_the_agpl_license_and_title(self) -> None:
         """The spec names the single AGPL-3.0-or-later license, with no edition."""
@@ -506,7 +506,10 @@ class TestOAuthProtectedResource:
         assert body["authorization_servers"] == SETTINGS.oauth_authorization_servers
         assert body["bearer_methods_supported"] == ["header"]
         assert body["resource_name"] == SERVER_TITLE
-        assert body["resource_documentation"] == "https://stdapi.ai/api_reference/"
+        assert (
+            body["resource_documentation"]
+            == "https://stdapi.jgoutin.dev/api_reference/"
+        )
         if SETTINGS.oauth_scopes_supported:
             assert body["scopes_supported"] == SETTINGS.oauth_scopes_supported
         else:

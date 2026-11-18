@@ -6,7 +6,7 @@ the listing order and the ``after`` cursor rely on) and any instance resolves
 any ID without shared state.
 
 Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-     https://stdapi.ai/api_openai_files/
+     https://stdapi.jgoutin.dev/api_openai_files/
      stdapi/routes/openai_files.py
      stdapi/routes/openai_uploads.py
      stdapi/files/_core.py
@@ -249,7 +249,7 @@ class TestOpenAIFiles:
         30 days (2 592 000 s) is also the maximum accepted ``expires_after``
         value, so the default is the upper bound rather than an arbitrary window.
 
-        Ref: https://stdapi.ai/api_openai_files/
+        Ref: https://stdapi.jgoutin.dev/api_openai_files/
              stdapi/routes/openai_files.py:_resolve_expires_after_seconds
         """
         result = openai_client.files.create(
@@ -534,7 +534,7 @@ class TestOpenAIFiles:
         queued for background deletion.  Advancing that clock is why this test is
         local-only.
 
-        Ref: https://stdapi.ai/api_openai_files/
+        Ref: https://stdapi.jgoutin.dev/api_openai_files/
              stdapi/files/_core.py:_get_file_impl
         """
         f = openai_client.files.create(
@@ -617,7 +617,7 @@ class TestOpenAIFiles:
         gateway accepts a file input — including a field OpenAI defines as a
         plain URL.
 
-        Ref: https://stdapi.ai/api_openai_files/
+        Ref: https://stdapi.jgoutin.dev/api_openai_files/
              stdapi/input_file.py:InputFile._normalize_and_detect_origin
         """
         uploaded = openai_client.files.create(
@@ -1749,7 +1749,7 @@ class TestOpenAIFilesExpiresAfterBracketNotation:
 class TestResolveExpiresAfterSecondsUnit:
     """The ``purpose=batch`` default-expiry resolution helper (unit, no AWS).
 
-    Ref: https://stdapi.ai/api_openai_files/
+    Ref: https://stdapi.jgoutin.dev/api_openai_files/
          stdapi/routes/openai_files.py:_resolve_expires_after_seconds
     """
 
@@ -1791,7 +1791,7 @@ class TestOpenAIFilesBatchDefaultExpiry:
     ``upload_file`` is stubbed, so these tests pin the TTL the route computes for
     each body form rather than S3 behavior.
 
-    Ref: https://stdapi.ai/api_openai_files/
+    Ref: https://stdapi.jgoutin.dev/api_openai_files/
          stdapi/routes/openai_files.py:upload
     """
 
@@ -1890,7 +1890,7 @@ class TestOpenAIUploads:
     and the file it produces share one payload (``upload_X`` → ``file-X``).
 
     Ref: https://developers.openai.com/api/reference/resources/uploads
-         https://stdapi.ai/api_openai_files/
+         https://stdapi.jgoutin.dev/api_openai_files/
          stdapi/files/_multipart.py:MultipartSession
     """
 
@@ -2395,7 +2395,7 @@ class TestOpenAIUploadsJsonBody:
     that MCP agents unable to build multipart requests can still run the upload
     flow end to end.
 
-    Ref: https://stdapi.ai/api_openai_files/
+    Ref: https://stdapi.jgoutin.dev/api_openai_files/
          stdapi/routes/openai_uploads.py:add_upload_part
     """
 
@@ -2427,7 +2427,7 @@ class TestOpenAIUploadsJsonBody:
     def test_json_body_part_upload_with_data_uri(self, openai_client: OpenAI) -> None:
         """A part sent as a data URI completes the upload exactly like a binary part.
 
-        Ref: https://stdapi.ai/api_openai_files/
+        Ref: https://stdapi.jgoutin.dev/api_openai_files/
              stdapi/routes/openai_uploads.py:add_upload_part
         """
         http_client = openai_client._client  # noqa: SLF001
@@ -2479,7 +2479,7 @@ class TestOpenAIFilesJsonBody:
     S3 URI; the gateway detects the encoding and MIME type itself, so the result
     is a File object identical to the multipart form upload.
 
-    Ref: https://stdapi.ai/api_openai_files/
+    Ref: https://stdapi.jgoutin.dev/api_openai_files/
          stdapi/types/openai_files.py:FileUploadJsonBody
     """
 
@@ -2505,7 +2505,7 @@ class TestOpenAIFilesJsonBody:
         The stored size proves the base64 payload was decoded rather than saved
         verbatim: ``SGVsbG8gV29ybGQ=`` is 16 characters but 11 bytes.
 
-        Ref: https://stdapi.ai/api_openai_files/
+        Ref: https://stdapi.jgoutin.dev/api_openai_files/
              stdapi/routes/openai_files.py:upload
         """
         http_client = openai_client._client  # noqa: SLF001
@@ -2528,7 +2528,7 @@ class TestOpenAIFilesJsonBody:
     def test_json_body_upload_with_raw_base64(self, openai_client: OpenAI) -> None:
         """A bare base64 string in the JSON ``file`` field is accepted like a data URI.
 
-        Ref: https://stdapi.ai/api_openai_files/
+        Ref: https://stdapi.jgoutin.dev/api_openai_files/
              stdapi/input_file.py:InputFile._normalize_and_detect_origin
         """
         http_client = openai_client._client  # noqa: SLF001
@@ -2821,7 +2821,7 @@ class TestListFilesExpiryUnit:
     an object nothing can read, and skips the background deletion the retrieve path
     schedules — leaving the object to the day-granular Lifecycle rule instead.
 
-    Ref: https://stdapi.ai/api_openai_files/
+    Ref: https://stdapi.jgoutin.dev/api_openai_files/
          stdapi/files/_core.py:_head_record
     """
 
@@ -3385,7 +3385,7 @@ class TestOpenAIFilesJsonBodyReferenceSourcesUnit:
     the reference has to be recognised as such (a URL fetched server-side, an S3
     URI checked against the allowlist) rather than mistaken for inline base64.
 
-    Ref: https://stdapi.ai/api_openai_files/
+    Ref: https://stdapi.jgoutin.dev/api_openai_files/
          stdapi/types/openai_files.py:FileUploadJsonBody
     """
 

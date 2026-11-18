@@ -51,7 +51,7 @@ class TestAmazonTitanEmbeddings:
         fields into the native Titan request. With ``normalize=true`` (also Titan's
         default) the returned vector has L2 norm 1.
 
-        Ref: https://stdapi.ai/api_openai_embeddings/
+        Ref: https://stdapi.jgoutin.dev/api_openai_embeddings/
              stdapi/aws_bedrock.py:get_extra_model_parameters
         """
         response = openai_client.embeddings.create(

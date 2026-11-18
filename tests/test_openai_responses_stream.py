@@ -1660,7 +1660,7 @@ class TestStreamedModeration:
         derives ``category_scores`` from a fixed HIGH→0.75 / LOW→0.25 table, and a
         ``BLOCKED`` action is what sets ``flagged``.
 
-        Ref: https://stdapi.ai/api_openai_moderations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
              stdapi/models/__init__.py:ModelBase._capture_stream_usage
         """
         stream_events = _text_stream_events()

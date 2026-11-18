@@ -8,7 +8,7 @@ guesses when the date does not single one model out. Legacy, deprecated,
 undated and never-subscribed models are never selected.
 
 Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
-     https://stdapi.ai/operations_configuration/#alias-resolution
+     https://stdapi.jgoutin.dev/operations_configuration/#alias-resolution
      stdapi/models/__init__.py:validate_model
      stdapi/models/__init__.py:_resolve_model_wildcard
      stdapi/models/__init__.py:match_model_names
@@ -658,7 +658,7 @@ class TestQualifierInTheVersionPosition:
 class TestModelsSearch:
     """``search_models`` answers what a pattern matches before a request uses it.
 
-    Ref: https://stdapi.ai/api_search_models/
+    Ref: https://stdapi.jgoutin.dev/api_search_models/
          stdapi/routes/core_models.py:search_models
     """
 
@@ -691,7 +691,7 @@ class TestModelsSearch:
         the cost of that compile grows with the query, on the event loop and
         under the catalogue lock, exactly as on the request path.
 
-        Ref: https://stdapi.ai/api_search_models/
+        Ref: https://stdapi.jgoutin.dev/api_search_models/
              stdapi/models/__init__.py:match_model_names
         """
         catalog(_seed(new=_model("vendor.family-10-v1:0", _NEWER)))

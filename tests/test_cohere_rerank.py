@@ -208,7 +208,7 @@ class TestCohereRerankRoute:
         route's ``exclude`` argument every ranked customer document would be
         copied into the structured request log.
 
-        Ref: https://stdapi.ai/api_cohere_rerank/
+        Ref: https://stdapi.jgoutin.dev/api_cohere_rerank/
              stdapi/routes/cohere_rerank.py:rerank
              stdapi/monitoring.py:log_response_params
         """
@@ -467,7 +467,7 @@ class TestCohereRerankV1Route:
         ``return_documents`` is set, so dropping its own ``exclude`` argument
         would copy whole customer documents into the structured request log.
 
-        Ref: https://stdapi.ai/api_cohere_rerank/
+        Ref: https://stdapi.jgoutin.dev/api_cohere_rerank/
              stdapi/routes/cohere_rerank_v1.py:rerank_v1
              stdapi/monitoring.py:log_response_params
         """

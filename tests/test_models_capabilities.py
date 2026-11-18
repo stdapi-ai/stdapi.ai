@@ -239,7 +239,7 @@ class TestRealtimeRouteAdvertised:
     both. The realtime route is a WebSocket route with no MCP tool, so it is
     advertised as a path only.
 
-    Ref: https://stdapi.ai/api_openai_realtime/
+    Ref: https://stdapi.jgoutin.dev/api_openai_realtime/
          stdapi/models/__init__.py:_model_capability_flags
          stdapi/routes/openai_realtime.py:register_route_capability
     """
@@ -340,7 +340,7 @@ class TestBatchAdvertisement:
     accepted, which ``tests/test_openai_batches.py`` covers on the batch route.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference-supported.html
-         https://stdapi.ai/api_search_models/
+         https://stdapi.jgoutin.dev/api_search_models/
          stdapi/models/__init__.py:sync_batch_support
          stdapi/pricing.py:batch_priced_models
     """

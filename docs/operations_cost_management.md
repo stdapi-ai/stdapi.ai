@@ -568,6 +568,6 @@ The items are tiny — a partition key, a sort key and two counters, well inside
 - :material-tag-search: [**Model Pricing API**](api_model_pricing.md) — Query AWS unit prices per model for cost-aware selection
 - :material-cog: [**Configuration Reference**](operations_configuration.md) — `COST_TRACKING`, `COST_PRICE_OVERRIDES` and IAM permissions
 - :material-scale-balance: [**Licensing**](operations_licensing.md) — AGPL-3.0-or-later license and update FAQ
-- :material-email-outline: [**Contact**](contact.md) — Support and billing questions
+- :material-email-outline: [**Contact**](contact.md) — Bug reports on GitHub issues (project discontinued)
 
 </div>

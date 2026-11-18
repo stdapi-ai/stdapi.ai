@@ -5,7 +5,7 @@
 
 **OpenAI, Anthropic, Cohere & Ollama Compatible API Gateway for Amazon Bedrock and AWS AI Services**
 
-Run your favorite OpenAI, Anthropic, Cohere and Ollama-compatible applications on Amazon Bedrock. Access [100+ models](https://stdapi.ai/models/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) including Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
+Run your favorite OpenAI, Anthropic, Cohere and Ollama-compatible applications on Amazon Bedrock. Access [100+ models](https://stdapi.jgoutin.dev/models/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) including Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
 
 ---
 
@@ -17,21 +17,24 @@ Run your favorite OpenAI, Anthropic, Cohere and Ollama-compatible applications o
 
 [**Try it locally with Docker**](#-try-it-locally-with-docker)
 
-[![Documentation](https://img.shields.io/badge/Documentation-stdapi.ai-526CFE?logo=materialformkdocs&logoColor=ffffff)](https://stdapi.ai/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)
+[![Documentation](https://img.shields.io/badge/Documentation-stdapi.ai-526CFE?logo=materialformkdocs&logoColor=ffffff)](https://stdapi.jgoutin.dev/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)
 [![Samples](https://img.shields.io/badge/Examples-stdapi.ai--samples-24292E?logo=github&logoColor=ffffff)](https://github.com/stdapi-ai/samples)
 [![Lint](https://github.com/stdapi-ai/stdapi.ai/actions/workflows/lint.yml/badge.svg)](https://github.com/stdapi-ai/stdapi.ai/actions/workflows/lint.yml)
 [![Code quality](https://app.codacy.com/project/badge/Grade/a6036988660e47e7bf59821f55105464)](https://app.codacy.com/gh/stdapi-ai/stdapi.ai/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 </div>
 
+> [!CAUTION]
+> **stdapi.ai is discontinued.** v1.20.2 is its final release: no further development or support is planned. The source code stays available under the AGPL-3.0-or-later. See the [release notes](https://stdapi.jgoutin.dev/roadmap/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces).
+
 ---
 
 ## 🎯 Why stdapi.ai?
 
-- **🔌 Same API, wider catalogue** — Adoption is quick: standard OpenAI, Anthropic, Cohere and Ollama SDKs connect on the base URL alone, and hundreds of applications and tools build on them; the model you then name is drawn from every provider in [the catalogue](https://stdapi.ai/models/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces), not one vendor's list. Twenty-two clients are driven end to end against a live gateway by the [automated test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests): **Claude Code**, **Codex**, **pi**, **OpenClaw**, **Hermes**, **Qwen Code**, **n8n**, **Haystack**, **Open WebUI**, **wyoming-openai**, **Home Assistant**, **LangChain**, **Pydantic AI**, **LiteLLM**, **Docling Serve**, **OpenAI Agents SDK**, **LiveKit Agents**, **Pipecat**, **inspect-ai**, **Agno**, **LlamaIndex**, the official **ollama** client.
-- **🔒 Runs in your AWS account** — No third party sits between your users and your models. Amazon Bedrock does not share your prompts with model providers or use them for training — two models it serves today, Claude Fable 5 and Claude Fable 5.1, require your account to allow AWS's own human review of retained traffic; the compliance guide covers this in full. Configure region allow-lists to match your own requirements — AWS compliance certifications apply to the AWS services and regions you choose, and are not inherited by stdapi.ai or by your application. **[Compliance guide →](https://stdapi.ai/operations_compliance/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
-- **🌍 Add a region, add its quota** — Every AWS region has its own Bedrock quota, and every region you enable adds its own. Eligible throttling and availability failures retry in another enabled region, with no client changes. Streaming retries only before the stream opens, and asynchronous jobs stay in the region that accepted them. **[Resilience guide →](https://stdapi.ai/operations_resilience/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
-- **💰 Pay only what you use** — Amazon Bedrock rates with 0% markup: model usage is billed to you directly by AWS, with no minimum commitment. Each end user's model calls can run under their own short-lived role session, so AWS reports their spend separately in Cost Explorer and the CUR — from the invoice, not from an estimate. The gateway license itself is metered per container-hour.
+- **🔌 Same API, wider catalogue** — Adoption is quick: standard OpenAI, Anthropic, Cohere and Ollama SDKs connect on the base URL alone, and hundreds of applications and tools build on them; the model you then name is drawn from every provider in [the catalogue](https://stdapi.jgoutin.dev/models/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces), not one vendor's list. Twenty-two clients are driven end to end against a live gateway by the [automated test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests): **Claude Code**, **Codex**, **pi**, **OpenClaw**, **Hermes**, **Qwen Code**, **n8n**, **Haystack**, **Open WebUI**, **wyoming-openai**, **Home Assistant**, **LangChain**, **Pydantic AI**, **LiteLLM**, **Docling Serve**, **OpenAI Agents SDK**, **LiveKit Agents**, **Pipecat**, **inspect-ai**, **Agno**, **LlamaIndex**, the official **ollama** client.
+- **🔒 Runs in your AWS account** — No third party sits between your users and your models. Amazon Bedrock does not share your prompts with model providers or use them for training — two models it serves today, Claude Fable 5 and Claude Fable 5.1, require your account to allow AWS's own human review of retained traffic; the compliance guide covers this in full. Configure region allow-lists to match your own requirements — AWS compliance certifications apply to the AWS services and regions you choose, and are not inherited by stdapi.ai or by your application. **[Compliance guide →](https://stdapi.jgoutin.dev/operations_compliance/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
+- **🌍 Add a region, add its quota** — Every AWS region has its own Bedrock quota, and every region you enable adds its own. Eligible throttling and availability failures retry in another enabled region, with no client changes. Streaming retries only before the stream opens, and asynchronous jobs stay in the region that accepted them. **[Resilience guide →](https://stdapi.jgoutin.dev/operations_resilience/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
+- **💰 Pay only what you use** — Amazon Bedrock rates with 0% markup: model usage is billed to you directly by AWS, with no minimum commitment. Each end user's model calls can run under their own short-lived role session, so AWS reports their spend separately in Cost Explorer and the CUR — from the invoice, not from an estimate.
 - **⚡ Advanced Bedrock features** — Reasoning modes (Claude, Nova), prompt caching, guardrails, service tiers, inference profiles, prompt routers, batch inference at the discounted batch price, server-side conversations continued by id—all through standard OpenAI and Anthropic API parameters.
 - **🧠 100+ models** — Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen, GLM, Nova, Llama, Stability AI, and more. Switch model by name — no vendor lock-in. When AWS retires a model, requests are transparently redirected to its replacement, so applications survive deprecations without code changes.
 - **🎨 Complete multi-modal API** — Chat, embeddings, image generation/editing/variations, video generation, audio speech/transcription/translation, live speech-to-speech over a WebSocket, content moderation. Amazon Bedrock, Bedrock Mantle, Polly, Transcribe and Comprehend are discovered automatically and surface as one catalog under OpenAI-compatible endpoints — and, for chat, generation and embeddings, under Ollama-compatible ones — no model list to maintain. Amazon Translate backs audio translation.
@@ -39,11 +42,11 @@ Run your favorite OpenAI, Anthropic, Cohere and Ollama-compatible applications o
 - **📊 Full observability** — OpenTelemetry integration, request/response logging, Swagger and ReDoc API documentation, and opt-in per-request cost tracking — off by default, and estimated from published AWS prices rather than read back from your invoice.
 - **🤖 Integrated MCP server** — Every API endpoint an agent can use is exposed as a Model Context Protocol tool. AI agents connect directly—no HTTP client code required. Streamable HTTP and SSE transports with configurable tool selection.
 - **🔑 Identity per caller** — Accept Amazon Cognito user pool tokens instead of, or alongside, the API key, and publish an OAuth 2.0 protected resource metadata document so an agent discovers how to authenticate on its own.
-- **🏢 One gateway, many tenants** — Issue each customer or team its own API key, scoped to the models and endpoints it is entitled to, with per-minute request and token limits enforced across every instance and answered with a `429` carrying `retry-after`. Keys rotate on a schedule through AWS Secrets Manager, with an overlap window so nobody is locked out. **[Authentication & security guide →](https://stdapi.ai/operations_authentication_security/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
+- **🏢 One gateway, many tenants** — Issue each customer or team its own API key, scoped to the models and endpoints it is entitled to, with per-minute request and token limits enforced across every instance and answered with a `429` carrying `retry-after`. Keys rotate on a schedule through AWS Secrets Manager, with an overlap window so nobody is locked out. **[Authentication & security guide →](https://stdapi.jgoutin.dev/operations_authentication_security/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
 
 **Measured, not asserted:** `<1 ms` gateway overhead (0.8 ms of gateway CPU on a 2.5 KB chat request) · **8,000+ automated test cases** run against real AWS services, at **95%+ branch coverage** · **22 third-party clients** driven end to end against a live gateway · **100+ API operations**, published as **90+ MCP tools**.
 
-**[See all features →](https://stdapi.ai/features/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)** · **[Browse every model →](https://stdapi.ai/models/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)** · **[Browse the test suite →](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests)**
+**[See all features →](https://stdapi.jgoutin.dev/features/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)** · **[Browse every model →](https://stdapi.jgoutin.dev/models/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)** · **[Browse the test suite →](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests)**
 
 ---
 
@@ -113,7 +116,7 @@ curl http://localhost:8000/anthropic/v1/messages \
 
 **Using the official SDKs?** Point `base_url` at `http://localhost:8000/v1` (OpenAI SDK), `http://localhost:8000/anthropic` (Anthropic SDK), or `http://localhost:8000/cohere` (Cohere SDK) — and the Ollama client's `host` at `http://localhost:8000/ollama` — no other code changes.
 
-**[Local development guide →](https://stdapi.ai/operations_getting_started_local/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
+**[Local development guide →](https://stdapi.jgoutin.dev/operations_getting_started_local/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
 
 ---
 
@@ -147,9 +150,9 @@ module "stdapi_ai" {
 }
 ```
 
-The default deploys one task per availability zone, so a 3-AZ region runs 3 containers before ALB, NAT, Fargate and KMS costs; autoscaling can add up to 5× that under load by default, so size the ceiling in the [cost management guide](https://stdapi.ai/operations_cost_management/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces).
+The default deploys one task per availability zone, so a 3-AZ region runs 3 containers before ALB, NAT, Fargate and KMS costs; autoscaling can add up to 5× that under load by default, so size the ceiling in the [cost management guide](https://stdapi.jgoutin.dev/operations_cost_management/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces).
 
-**[Full deployment guide →](https://stdapi.ai/operations_getting_started/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)** · **[Advanced deployment →](https://stdapi.ai/operations_deploy_advanced/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)** · **[Cost management →](https://stdapi.ai/operations_cost_management/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
+**[Full deployment guide →](https://stdapi.jgoutin.dev/operations_getting_started/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)** · **[Advanced deployment →](https://stdapi.jgoutin.dev/operations_deploy_advanced/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)** · **[Cost management →](https://stdapi.jgoutin.dev/operations_cost_management/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
 
 ---
 
@@ -157,23 +160,23 @@ The default deploys one task per availability zone, so a 3-AZ region runs 3 cont
 
 | Category | What You Can Build | Tools | Guide |
 |---|---|---|---|
-| **💬 Chat Interfaces** | Private ChatGPT alternative, team chat, knowledge base with RAG | **Open WebUI**, LobeHub, AnythingLLM, LibreChat | [Guide →](https://stdapi.ai/use_cases_openwebui/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) |
-| **💻 Coding Assistants** | AI pair programming, code completion, codebase chat | **Claude Code**, **Codex**, **Qwen Code**, **pi**, Cline, OpenCode, Zed | [Guide →](https://stdapi.ai/use_cases_coding_assistants/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) |
-| **🔄 Workflow Automation** | AI-powered ticket routing, content creation, data processing | **n8n**, Langflow, Dify, Flowise | [Guide →](https://stdapi.ai/use_cases_n8n/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) |
+| **💬 Chat Interfaces** | Private ChatGPT alternative, team chat, knowledge base with RAG | **Open WebUI**, LobeHub, AnythingLLM, LibreChat | [Guide →](https://stdapi.jgoutin.dev/use_cases_openwebui/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) |
+| **💻 Coding Assistants** | AI pair programming, code completion, codebase chat | **Claude Code**, **Codex**, **Qwen Code**, **pi**, Cline, OpenCode, Zed | [Guide →](https://stdapi.jgoutin.dev/use_cases_coding_assistants/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) |
+| **🔄 Workflow Automation** | AI-powered ticket routing, content creation, data processing | **n8n**, Langflow, Dify, Flowise | [Guide →](https://stdapi.jgoutin.dev/use_cases_n8n/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) |
 | **🤖 Chatbots** | Slack/Discord/Teams bots, documentation assistants | Dify, Chatwoot, Typebot | |
-| **🧠 Autonomous Agents** | Personal AI assistants, research agents, multi-agent systems, code agents, evaluation harnesses | **OpenClaw**, **Hermes**, **Pydantic AI**, **OpenAI Agents SDK**, **Agno**, **inspect-ai**, **LiteLLM**, LangGraph, CrewAI | [Guide →](https://stdapi.ai/use_cases_autonomous_agents/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) |
-| **🔍 RAG & Voice** | Vector stores, semantic search, document pipelines, speech-to-speech assistants | **LangChain**, **LlamaIndex**, **Haystack**, **wyoming-openai**, **Docling Serve**, **LiveKit Agents**, **Pipecat**, RAGFlow | [Guide →](https://stdapi.ai/use_cases_rag/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) |
+| **🧠 Autonomous Agents** | Personal AI assistants, research agents, multi-agent systems, code agents, evaluation harnesses | **OpenClaw**, **Hermes**, **Pydantic AI**, **OpenAI Agents SDK**, **Agno**, **inspect-ai**, **LiteLLM**, LangGraph, CrewAI | [Guide →](https://stdapi.jgoutin.dev/use_cases_autonomous_agents/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) |
+| **🔍 RAG & Voice** | Vector stores, semantic search, document pipelines, speech-to-speech assistants | **LangChain**, **LlamaIndex**, **Haystack**, **wyoming-openai**, **Docling Serve**, **LiveKit Agents**, **Pipecat**, RAGFlow | [Guide →](https://stdapi.jgoutin.dev/use_cases_rag/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) |
 
 **Bold** = driven end to end against a live gateway by the [automated test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests). The others have a documented setup and use the same standard SDKs.
 
-**[All use cases and integration guides →](https://stdapi.ai/use_cases/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
+**[All use cases and integration guides →](https://stdapi.jgoutin.dev/use_cases/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
 
 ---
 
 ## 🏅 AWS Qualified Software
 
 <div align="center">
-<img src="https://stdapi.ai/styles/aws_qualified_software_badge_light.png" alt="AWS Qualified Software badge" width="120" />
+<img src="https://stdapi.jgoutin.dev/styles/aws_qualified_software_badge_light.png" alt="AWS Qualified Software badge" width="120" />
 
 stdapi.ai was approved by AWS as **AWS Qualified Software**, after AWS verified it against its technical and security requirements.
 </div>
@@ -218,28 +221,27 @@ uv run uvicorn stdapi.main:app --host 0.0.0.0 --port 8000
 
 Licensed under **[AGPL-3.0-or-later](LICENSE-AGPL)**.
 
-**[Learn more about licensing →](https://stdapi.ai/operations_licensing/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
+**[Learn more about licensing →](https://stdapi.jgoutin.dev/operations_licensing/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)**
 
 ---
 
 ## 🤝 Contributing
 
-We welcome contributions! Whether it's bug reports, new features, documentation improvements, or ideas — please feel free to open issues or submit pull requests.
+The project is discontinued, so new features are not planned. Bug reports and pull requests are still accepted on GitHub, without a promise of an answer.
 
 ---
 
-## 💬 Support
+## 💬 Links
 
 - **Issues:** [GitHub Issue Tracker](https://github.com/stdapi-ai/stdapi.ai/issues)
-- **Documentation:** [stdapi.ai](https://stdapi.ai/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)
-- **Sponsor:** [GitHub Sponsors](https://github.com/sponsors/JGoutin) — Priority support, feature prioritization, and influence on the roadmap.
+- **Documentation:** [stdapi.ai](https://stdapi.jgoutin.dev/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces)
 
 ---
 
 <div align="center">
 
-**Ready to run [100+ AI models](https://stdapi.ai/models/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) securely on AWS?**
+**Ready to run [100+ AI models](https://stdapi.jgoutin.dev/models/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) securely on AWS?**
 
-[Deployment guide](https://stdapi.ai/operations_getting_started/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) · [Terraform examples](https://github.com/stdapi-ai/samples) · [Try Locally with Docker](#-try-it-locally-with-docker)
+[Deployment guide](https://stdapi.jgoutin.dev/operations_getting_started/?utm_source=github-readme&utm_medium=repo&utm_campaign=owned-surfaces) · [Terraform examples](https://github.com/stdapi-ai/samples) · [Try Locally with Docker](#-try-it-locally-with-docker)
 
 </div>

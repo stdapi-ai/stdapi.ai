@@ -292,7 +292,7 @@ class TestAddUploadPartJsonBodyRemoteSources:
     the literal ASCII of the URL instead of the file it names, and an unlisted
     bucket would be read with the gateway's own credentials.
 
-    Ref: https://stdapi.ai/api_openai_files/
+    Ref: https://stdapi.jgoutin.dev/api_openai_files/
          stdapi/routes/openai_uploads.py:add_upload_part
          stdapi/types/openai_uploads.py:AddUploadPartJsonBody
     """

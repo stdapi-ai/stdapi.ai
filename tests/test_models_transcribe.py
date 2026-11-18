@@ -1570,7 +1570,7 @@ class TestBuildTranscriptionSegment:
         documentation says exactly which constants. This pins the documented
         values so behaviour and documentation cannot drift apart.
 
-        Ref: https://stdapi.ai/api_openai_audio_transcriptions/#limits-and-behaviour-to-know
+        Ref: https://stdapi.jgoutin.dev/api_openai_audio_transcriptions/#limits-and-behaviour-to-know
              stdapi/models/audio/amazon_transcribe.py:_build_transcription_segment
         """
         segment: dict[str, Any] = {

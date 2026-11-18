@@ -256,23 +256,6 @@ a.logo-item:hover, a.logo-item:focus-visible {
   letter-spacing: -0.01em;
 }
 
-/* Custom icons for admonitions, e.g. `!!! info email "Title"` */
-:root {
-  --md-admonition-icon--email: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m20 8-8 5-8-5V6l8 5 8-5m0-2H4c-1.11 0-2 .89-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2"/></svg>');
-  --md-admonition-icon--availability: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15 4a8 8 0 0 1 8 8 8 8 0 0 1-8 8 8 8 0 0 1-8-8 8 8 0 0 1 8-8m0 2a6 6 0 0 0-6 6 6 6 0 0 0 6 6 6 6 0 0 0 6-6 6 6 0 0 0-6-6m-1 2h1.5v3.78l2.33 2.33-1.06 1.06L14 12.4zM2 18a1 1 0 0 1-1-1 1 1 0 0 1 1-1h3.83c.31.71.71 1.38 1.17 2zm1-5a1 1 0 0 1-1-1 1 1 0 0 1 1-1h2.05L5 12l.05 1zm1-5a1 1 0 0 1-1-1 1 1 0 0 1 1-1h3c-.46.62-.86 1.29-1.17 2z"/></svg>');
-}
-
-.md-typeset .info.email > .admonition-title::before,
-.md-typeset .info.email > summary::before {
-  -webkit-mask-image: var(--md-admonition-icon--email);
-  mask-image: var(--md-admonition-icon--email);
-}
-
-.md-typeset .abstract.availability > .admonition-title::before,
-.md-typeset .abstract.availability > summary::before {
-  -webkit-mask-image: var(--md-admonition-icon--availability);
-  mask-image: var(--md-admonition-icon--availability);
-}
 /* ============================================================
    Homepage (docs/index.md)
    Ink tokens stop at .55 alpha: that is the lowest that still
@@ -819,32 +802,6 @@ a.logo-item:focus-visible span { color: var(--primary-dark); }
 .md-typeset .usecase p { margin: 0; font-size: 0.68rem; }
 .md-typeset .usecases__more { margin-top: 0.9rem; font-size: 0.72rem; }
 
-/* --- Pricing --- */
-.pricing { display: grid; grid-template-columns: 1fr 1.2fr; gap: 0.8rem; align-items: stretch; }
-.pricing__col {
-  background: var(--deep-bg);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 1.4rem;
-}
-.pricing__col--featured {
-  background: linear-gradient(160deg, var(--primary), var(--card-bg));
-  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
-  position: relative;
-}
-.pricing__tier {
-  font-size: 0.6rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink-60);
-  font-weight: 700;
-  margin-bottom: 0.4rem;
-}
-.pricing__col--featured .pricing__tier { color: var(--accent-light); }
-.pricing__price { font-size: 1.5rem; font-weight: 800; color: #fff; line-height: 1.2; }
-.pricing__price small { font-size: 0.72rem; font-weight: 400; color: var(--ink-70); opacity: 1; }
-.md-typeset .pricing__col p { font-size: 0.7rem; color: var(--ink-70); }
-
 /* --- Footer line --- */
 .footer-line {
   margin-top: 2.4rem;
@@ -886,7 +843,6 @@ a.logo-item:focus-visible span { color: var(--primary-dark); }
 @media (max-width: 960px) {
   .carousel { padding: 1.6rem 1.1rem; }
   .panel-split { grid-template-columns: 1fr; }
-  .pricing { grid-template-columns: 1fr; gap: 1.4rem; }
   .qualified-card { padding: 1.4rem; gap: 1.2rem; }
 }
 @media (max-width: 600px) {

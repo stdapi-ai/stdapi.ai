@@ -2,7 +2,7 @@
 
 Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
      https://developers.openai.com/api/docs/guides/moderation
-     https://stdapi.ai/api_openai_moderations/
+     https://stdapi.jgoutin.dev/api_openai_moderations/
      stdapi/routes/openai_moderations.py:create_moderation
 """
 
@@ -565,7 +565,7 @@ class TestModerationsRoute:
         with no MIME header to read, the guardrail ``format`` can only come
         from sniffing the decoded bytes.
 
-        Ref: https://stdapi.ai/api_openai_moderations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
              stdapi/types/openai_moderations.py:ModerationImageURL
              stdapi/input_file.py:_Base64Source
         """
@@ -598,7 +598,7 @@ class TestModerationsRoute:
         whitespace-only input reaches ApplyGuardrail and is metered at the
         units the response reports.
 
-        Ref: https://stdapi.ai/api_openai_moderations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
              stdapi/models/moderation/amazon_bedrock_guardrail.py:ModerationModel.moderate
         """
         stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
@@ -842,7 +842,7 @@ class TestModerationsRoute:
         preserve OpenAI parity (and avoid billing). The stub is armed with the
         flagged response: any AWS call would make the result flagged.
 
-        Ref: https://stdapi.ai/api_openai_moderations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
              stdapi/models/moderation/amazon_bedrock_guardrail.py:ModerationModel.moderate
         """
         stub, _ = _stub_client(monkeypatch, _FLAGGED_RESPONSE)
@@ -868,7 +868,7 @@ class TestModerationsRoute:
         ApplyGuardrail call is made and the result list still aligns
         positionally with the request.
 
-        Ref: https://stdapi.ai/api_openai_moderations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
              stdapi/routes/openai_moderations.py:create_moderation
         """
         stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
@@ -891,7 +891,7 @@ class TestModerationsRoute:
         path, so neither reaches ApplyGuardrail (armed here with the flagged
         response).
 
-        Ref: https://stdapi.ai/api_openai_moderations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
              stdapi/models/moderation/amazon_bedrock_guardrail.py:ModerationModel.moderate
         """
         stub, _ = _stub_client(monkeypatch, _FLAGGED_RESPONSE)
@@ -1064,7 +1064,7 @@ class TestModerationInputLimit:
     documented limit and these tests together.
 
     Ref: stdapi/types/openai_moderations.py:_MAX_INPUT_ITEMS
-         https://stdapi.ai/api_openai_moderations/
+         https://stdapi.jgoutin.dev/api_openai_moderations/
     """
 
     def test_input_at_the_limit_is_accepted(self) -> None:
@@ -1365,7 +1365,7 @@ class TestComprehendModerationsRoute:
         to the Comprehend backend instead of failing; either way the requested
         alias is echoed back.
 
-        Ref: https://stdapi.ai/api_openai_moderations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
              stdapi/models/moderation/amazon_bedrock_guardrail.py:ModerationModel.get_aliases
         """
         batches = _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
@@ -1389,7 +1389,7 @@ class TestComprehendModerationsRoute:
         does not silently fall back to Comprehend. The message must point the
         caller at the administrator without disclosing the setting name.
 
-        Ref: https://stdapi.ai/api_openai_moderations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
              stdapi/aws_bedrock.py:resolve_moderation_model
         """
         response = app_client.post(
@@ -1561,7 +1561,7 @@ class TestComprehendModerationsRoute:
         Selecting the text-only backend explicitly overrides the server's
         configured guardrail, which is why the guardrail stub must stay unused.
 
-        Ref: https://stdapi.ai/api_openai_moderations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
              stdapi/aws_bedrock.py:is_comprehend_moderation_model
         """
         stub, _ = _stub_client(monkeypatch, _FLAGGED_RESPONSE)
@@ -1689,7 +1689,7 @@ class TestComprehendModerationsRoute:
         ``DetectToxicContent`` call, hence no billing. The stub is armed with the
         toxic result, so any call would flip ``flagged``.
 
-        Ref: https://stdapi.ai/api_openai_moderations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
              stdapi/models/moderation/amazon_comprehend.py:ModerationModel.moderate
         """
         batches = _stub_toxicity(monkeypatch, [[_TOXIC_RESULT]])
@@ -1711,7 +1711,7 @@ class TestComprehendModerationsRoute:
         whitespace-padded string reaches ``DetectToxicContent`` unchanged and
         its verdict comes from the service rather than from the shortcut.
 
-        Ref: https://stdapi.ai/api_openai_moderations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
              stdapi/models/moderation/amazon_comprehend.py:ModerationModel.moderate
         """
         batches = _stub_toxicity(monkeypatch, [[_TOXIC_RESULT]])
@@ -2119,7 +2119,7 @@ class TestGuardrailChecksModerationsRoute:
         checks before the Comprehend last resort; either spelling is echoed
         back verbatim in ``model``.
 
-        Ref: https://stdapi.ai/api_openai_moderations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
              stdapi/routes/openai_moderations.py:create_moderation
         """
         stub, _ = _stub_checks(monkeypatch, _checks_response([]))
@@ -2169,7 +2169,7 @@ class TestGuardrailChecksModerationsRoute:
         server has a default guardrail, mirroring how
         ``amazon.comprehend-toxicity`` bypasses it.
 
-        Ref: https://stdapi.ai/api_openai_moderations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
              stdapi/routes/openai_moderations.py:create_moderation
         """
         checks_stub, _ = _stub_checks(monkeypatch, _checks_response([]))
@@ -2319,7 +2319,7 @@ class TestGuardrailChecksModerationsRoute:
         OpenAI's legacy text moderation models keep mapping to Comprehend
         even when guardrail checks could serve the request.
 
-        Ref: https://stdapi.ai/api_openai_moderations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
              stdapi/aws_bedrock.py:is_comprehend_moderation_model
         """
         checks_stub, _ = _stub_checks(monkeypatch, _checks_response([]))
@@ -2370,7 +2370,7 @@ class TestGuardrailChecksModerationsRoute:
         Same OpenAI-parity shortcut as the other backends. The stub is armed
         with a flagged response: any AWS call would make the result flagged.
 
-        Ref: https://stdapi.ai/api_openai_moderations/
+        Ref: https://stdapi.jgoutin.dev/api_openai_moderations/
              stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:ModerationModel.moderate
         """
         checks_stub, _ = _stub_checks(
@@ -2423,7 +2423,7 @@ class TestGuardrailChecksModerationsRoute:
         (the price catalog holds no row for a moderation alias). The response
         still echoes the requested name.
 
-        Ref: https://stdapi.ai/operations_logging_monitoring/#usage-metrics-fields
+        Ref: https://stdapi.jgoutin.dev/operations_logging_monitoring/#usage-metrics-fields
              stdapi/routes/openai_moderations.py:create_moderation
         """
         _stub_checks(monkeypatch, _checks_response([]))
