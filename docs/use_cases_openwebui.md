@@ -365,7 +365,6 @@ tofu apply
 
 | Charge | Driver |
 | --- | --- |
-| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | ECS Fargate | Four services — Open WebUI, the gateway, SearXNG, Playwright — each sized and auto-scaled independently |
 | Load balancing and networking | One ALB, plus the NAT gateways the private subnets egress through — the S3 gateway endpoint alongside them carries no charge |
 | Aurora Serverless v2 | Scales with query load; the sample floors it at 0.5 ACU rather than zero, because auto-pause needs no open connections and the application holds an idle pool |

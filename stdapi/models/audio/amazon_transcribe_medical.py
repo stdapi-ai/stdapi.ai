@@ -148,7 +148,9 @@ def _build_medical_job_params(
         "OutputKey": f"{s3_prefix}{job_id}/output.json",
         "Specialty": _PRIMARY_CARE,
         "Type": (extra.Type if extra is not None else None) or _DEFAULT_TYPE,
-        "Tags": [{"Key": k, "Value": v} for k, v in build_metadata(apn=True).items()],
+        "Tags": [
+            {"Key": k, "Value": v} for k, v in build_metadata(as_tags=True).items()
+        ],
     }
     if key_arn := SETTINGS.aws_transcribe_output_encryption_key_arn:
         job_params["OutputEncryptionKMSKeyId"] = key_arn

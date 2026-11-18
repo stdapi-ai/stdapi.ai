@@ -1,6 +1,6 @@
 ---
 title: stdapi.ai - OpenAI, Anthropic, Cohere & Ollama Compatible AI Gateway for Amazon Bedrock
-description: Run your favorite OpenAI, Anthropic, Cohere and Ollama-compatible apps on Amazon Bedrock. Access 100+ models including Claude, OpenAI GPT, xAI Grok, Amazon Nova for chat, images, video, audio, embeddings, and content moderation — in your own AWS account, at AWS rates with no markup. 14-day free trial on AWS Marketplace.
+description: Run your favorite OpenAI, Anthropic, Cohere and Ollama-compatible apps on Amazon Bedrock. Access 100+ models including Claude, OpenAI GPT, xAI Grok, Amazon Nova for chat, images, video, audio, embeddings, and content moderation — in your own AWS account, at AWS rates with no markup. Open source (AGPL-3.0-or-later).
 keywords: OpenAI API gateway, Anthropic API gateway, Cohere API gateway, Ollama API gateway, AWS Bedrock API, OpenAI compatible API, Anthropic compatible API, Cohere compatible API, Ollama compatible API, AWS AI gateway, OpenAI AWS integration, Anthropic AWS integration, Ollama AWS integration, enterprise AI API, AWS Bedrock integration, Amazon SageMaker AI gateway, SageMaker OpenAI compatible endpoint, OpenAI alternative, Anthropic alternative, multimodal AI API, multi-region AI gateway, video generation API, content moderation API, private AI deployment
 hide:
   - toc
@@ -16,16 +16,16 @@ hide:
 An AI gateway you run in your own AWS account. Point Claude Code, Open WebUI, n8n, OpenClaw — or your own code — at it, and they reach [100+ models](models.md) including Claude, OpenAI GPT, DeepSeek and Nova, at AWS Bedrock rates with zero markup. Adoption is quick: they point at your gateway instead of the vendor's, and the model they name is now drawn from all of them, not one vendor's list.
 
 <div class="buttons" markdown>
-[Start 14-day free trial](operations_getting_started.md){ .md-button .md-button--primary }
-[Try locally with Docker — free](operations_getting_started_local.md){ .md-button }
+[Deploy on AWS](operations_getting_started.md){ .md-button .md-button--primary }
+[Try locally with Docker](operations_getting_started_local.md){ .md-button }
 </div>
 
 <div class="hero2__proof">
 <span><strong>AWS Qualified</strong> Software</span>
-<span><strong>$0.10</strong>/container-hour</span>
+<span><strong>$0</strong> gateway fee</span>
 <span><strong>0%</strong> markup on model usage</span>
 <span><strong>&lt;1 ms</strong> gateway overhead</span>
-<span>Open-source Community Edition</span>
+<span>Open source, <strong>AGPL-3.0-or-later</strong></span>
 </div>
 
 </div>
@@ -346,14 +346,11 @@ The validated Terraform module ships the whole stack — ECS Fargate, HTTPS, aut
 </div>
 <div class="panel-stats" markdown>
 
-- <code>2</code> commands from AWS Marketplace subscription to a production endpoint
+- <code>2</code> Terraform commands to a production endpoint
 - <code>FSBP</code> aligned defaults out of the box — private subnets, least privilege, encryption at rest
 - <code>100+</code> optional variables for power users — bring your own VPC, go multi-region, or cost-optimize
 
 [:octicons-arrow-right-24: Deploy on AWS guide](operations_getting_started.md)
-
-Prefer hands-off? A [managed deployment service](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) sets it up in your account — no Terraform required.
-{ .panel-stats__note }
 
 </div>
 </div>
@@ -504,7 +501,7 @@ AWS compliance certifications apply to the AWS services and regions you choose �
 
 <div class="qualified-card">
 <img src="styles/aws_qualified_software_badge_dark.png" alt="AWS Qualified Software badge" width="120" height="120" decoding="async" loading="lazy" />
-<div><strong>AWS Qualified Software</strong><br/>Verified by AWS against its technical and security requirements for AWS Marketplace.</div>
+<div><strong>AWS Qualified Software</strong><br/>Approved by AWS after it verified stdapi.ai against its technical and security requirements.</div>
 </div>
 
 </div>
@@ -642,23 +639,16 @@ Start local, graduate to AWS — same API, same SDKs. And zero lock-in: leaving 
 
 <div class="pricing">
 <div class="pricing__col">
-<div class="pricing__tier">Community</div>
+<div class="pricing__tier">Local container</div>
 <div class="pricing__price">$0</div>
-<p>AGPL-3.0 · Docker image · full API · local dev &amp; open-source projects</p>
+<p>AGPL-3.0 · hardened Docker image · full API · local development and testing</p>
 <p><a class="md-button" href="operations_getting_started_local/">Run with Docker</a></p>
 </div>
 <div class="pricing__col pricing__col--featured">
-<div class="pricing__flag">14-DAY FREE TRIAL</div>
-<div class="pricing__tier">Commercial · AWS Marketplace</div>
-<div class="pricing__price">$0.10 <small>/container-hour</small></div>
-<p>Per running container — the Terraform module defaults to one per Availability Zone, and scales on CPU up to five times that under load. No markup on model usage: pay Bedrock rates directly. Hardened container, Terraform module, commercial support (1 business day), no AGPL obligations. Billed through AWS Marketplace onto your existing AWS invoice — no new vendor onboarding.</p>
-<p><a class="md-button md-button--primary" href="operations_getting_started/">Start 14-day free trial</a></p>
-</div>
-<div class="pricing__col pricing__col--offer">
-<div class="pricing__tier pricing__tier--accent">Private offer · buy on your terms</div>
-<div class="pricing__price">$0.09 <small>/container-hour</small></div>
-<p>Custom terms and duration, committed usage, and a preferential rate — procured through your existing AWS relationship, so there's no new vendor to onboard. Want to try first? Use the free trial, then accept your offer.</p>
-<p><a class="md-button" href="contact/#private-offer">Request a private offer</a></p>
+<div class="pricing__tier">Terraform module · AWS</div>
+<div class="pricing__price">$0 <small>gateway license</small></div>
+<p>AGPL-3.0 · the same hardened image deployed by the Terraform module, with a minimal base, no shell and a read-only root filesystem. You pay AWS for what it runs: the Terraform module defaults to one container per Availability Zone and scales on CPU up to five times that under load. No markup on model usage: pay Bedrock rates directly.</p>
+<p><a class="md-button md-button--primary" href="operations_getting_started/">Deploy on AWS</a></p>
 </div>
 </div>
 

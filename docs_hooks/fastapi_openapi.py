@@ -33,6 +33,4 @@ def on_pre_build(config: Any) -> None:  # noqa: ARG001,ANN401
     if contact_url:
         openapi_schema["info"]["contact"]["url"] = contact_url.split("?", 1)[0]
     with Path("docs/openapi.yml").open("w") as f:
-        content = dump(openapi_schema, stream=None, sort_keys=False, allow_unicode=True)
-        content = content.replace(" (Community Edition)", "")
-        f.write(content)
+        f.write(dump(openapi_schema, stream=None, sort_keys=False, allow_unicode=True))

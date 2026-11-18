@@ -532,7 +532,7 @@ Correlation also works in the other direction — from a stdapi.ai log event to 
 
 <div class="grid cards" markdown>
 
-- :material-cash-multiple: [**Cost Management**](operations_cost_management.md) — Cost tracking, AWS Marketplace billing, and cost attribution
+- :material-cash-multiple: [**Cost Management**](operations_cost_management.md) — Cost tracking, Marketplace model billing, and cost attribution
 - :material-cog: [**Configuration Reference**](operations_configuration.md) — Complete list of environment variables including logging options
 - :material-chart-bar: [**Data Sovereignty & Compliance**](operations_compliance.md) — Compliance-focused logging and audit requirements
 - :material-server-network: [**Advanced Deployment**](operations_deploy_advanced.md) — Production deployment with observability stack

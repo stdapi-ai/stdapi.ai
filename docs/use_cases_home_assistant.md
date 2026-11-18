@@ -268,7 +268,6 @@ Nothing is left manual after `tofu apply`: a bootstrap container in the same ECS
 
 | Charge | Driver |
 | --- | --- |
-| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | ECS Fargate | Two services — the Home Assistant + wyoming-openai task, pinned to exactly one, and the gateway, sized independently |
 | Load balancing and networking | One ALB, plus the NAT gateways — one per Availability Zone — the private subnets egress through |
 | Amazon EFS | Standing storage and throughput for `.storage` and `configuration.yaml` |

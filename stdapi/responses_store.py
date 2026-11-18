@@ -173,7 +173,7 @@ async def create_stored_response_session(kind: StoredObjectKind) -> str:
     client = _client()
     key = SETTINGS.aws_bedrock_session_encryption_key_arn
     created_at = str(int(REQUEST_TIME.get().timestamp()))
-    tags = build_metadata(apn=True) | {KIND_TAG: kind, CREATED_AT_TAG: created_at}
+    tags = build_metadata(as_tags=True) | {KIND_TAG: kind, CREATED_AT_TAG: created_at}
     with handle_bedrock_client_error():
         response = await client.create_session(
             tags=tags,

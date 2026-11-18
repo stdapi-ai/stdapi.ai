@@ -12,8 +12,8 @@ from stdapi import server
 from stdapi.api_errors import ApiError
 from stdapi.aws import call_with_region_failover, service_regions
 from stdapi.config import SETTINGS
-from stdapi.metering import SERVER_FULL_VERSION
 from stdapi.monitoring import EventLog, log_error_details, write_log_event
+from stdapi.server import SERVER_VERSION
 from stdapi.usage import record_translate_usage
 from stdapi.utils import language_code_to_name
 
@@ -83,7 +83,7 @@ async def load_supported_languages() -> None:
                 level="warning",
                 date=SETTINGS.now(),
                 server_id=server.SERVER_NAME,
-                server_version=SERVER_FULL_VERSION,
+                server_version=SERVER_VERSION,
                 event="translate_languages_load",
                 error_detail=[
                     (

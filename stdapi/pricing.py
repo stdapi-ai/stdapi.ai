@@ -44,11 +44,11 @@ from pydantic_core import from_json
 from stdapi import server
 from stdapi.aws import get_client
 from stdapi.config import AWS_REGION, SETTINGS
+from stdapi.server import SERVER_VERSION
 
-# Lazy: stdapi.metering and stdapi.monitoring import this module. The module
+# Lazy: stdapi.monitoring imports this module. The module
 # itself is bound, so a test patching stdapi.monitoring reaches this one.
 lazy from stdapi import monitoring
-lazy from stdapi.metering import SERVER_FULL_VERSION
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -2416,7 +2416,7 @@ def _log_price_catalog_event(
         level=level,
         date=SETTINGS.now(),
         server_id=server.SERVER_NAME,
-        server_version=SERVER_FULL_VERSION,
+        server_version=SERVER_VERSION,
         event="price_catalog_load",
     )
     if start_ns is not None:

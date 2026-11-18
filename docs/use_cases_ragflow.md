@@ -234,7 +234,6 @@ The sample encrypts every hop and keeps every secret out of plain environment va
 
 | Charge | Driver |
 | --- | --- |
-| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | ECS Fargate | The RAGFlow task (4 vCPU / 16 GB, three containers, one of which — the bootstrap — runs once per task start) and the gateway task, each billed for the vCPU and memory reserved while running |
 | Load balancing and networking | One ALB fronting RAGFlow, plus the NAT gateways the private subnets egress through |
 | Amazon OpenSearch Service | A standing charge: one `t3.small.search` data node plus 20 GiB of `gp3` storage, independent of query volume |

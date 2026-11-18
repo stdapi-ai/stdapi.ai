@@ -27,7 +27,6 @@ Each row below is one section of this page. Find the features your deployment en
 | **[Bedrock Marketplace Auto-Subscribe](#bedrock-marketplace-auto-subscribe-iam)** | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions` | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default) |
 | **[Bedrock Marketplace Model Endpoints](#bedrock-marketplace-endpoints-iam)** | `bedrock:ListMarketplaceModelEndpoints`<br>`bedrock:GetMarketplaceModelEndpoint`<br>`sagemaker:InvokeEndpoint`<br>`sagemaker:InvokeEndpointWithResponseStream` (on `arn:aws:sagemaker:*:*:endpoint/*`, conditioned on `aws:CalledViaLast: bedrock.amazonaws.com`) | `AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED=true` |
 | **[SageMaker AI Endpoints](#sagemaker-endpoints-iam)** | `sagemaker:CallWithBearerToken` (on `*`, no resource-level support)<br>`sagemaker:InvokeEndpoint` (on the endpoint ARNs you serve) | `AWS_SAGEMAKER_ENDPOINTS` configured |
-| **[AWS Marketplace Metering](#aws-marketplace-metering)** | `aws-marketplace:RegisterUsage` | AWS Marketplace image only (always active); not required for the community image |
 | **[Bedrock Inference Profiles, Prompt Routers and Prompt Management](#bedrock-inference-profiles-and-prompt-routers-optional)** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`<br>`bedrock:GetPrompt` and `bedrock:RenderPrompt` (on `arn:aws:bedrock:*:*:prompt/*`) for Prompt Management prompts | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
 | **[Bedrock Guardrails](#bedrock-guardrails-optional)** | `bedrock:ApplyGuardrail` | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER` |
 | **[Bedrock Session Storage](#bedrock-session-storage-optional)** | Bedrock session permissions (`bedrock:CreateSession`, `bedrock:GetSession`, `bedrock:*Invocation*`, `bedrock:ListSessions`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`, `bedrock:ListTagsForResource` on sessions) | `store=true` requests and stored-completion listings |
@@ -203,26 +202,6 @@ Required only if you name Amazon SageMaker AI endpoints for stdapi.ai to serve. 
     The OpenAI-compatible route authenticates with a short-term API key the server derives locally from its own credentials, which is what `sagemaker:CallWithBearerToken` authorizes; the action supports no resource-level scope, hence `Resource: "*"`. That key carries the same authority as the role, so **`sagemaker:InvokeEndpoint` is what bounds it** — list the endpoint ARNs you actually serve rather than `*`, and a leaked key can still reach nothing else.
 
     See [OpenAI-compatible endpoints](https://docs.aws.amazon.com/sagemaker/latest/dg/realtime-endpoints-openai-compatible.html).
-
----
-
-## :material-storefront: AWS Marketplace Metering (AWS Marketplace Image Only) { #aws-marketplace-metering }
-
-**Environment Variables**: none (always active on the AWS Marketplace image)
-
-Required only for the **AWS Marketplace image** — not the community image. At startup it registers hourly usage with AWS Marketplace Metering on ECS, EKS, and Fargate; an `AccessDenied` error aborts startup.
-
-??? example "AWS Marketplace Metering IAM Policy Statement"
-    ```json
-    {
-      "Sid": "MarketplaceRegisterUsage",
-      "Effect": "Allow",
-      "Action": [
-        "aws-marketplace:RegisterUsage"
-      ],
-      "Resource": "*"
-    }
-    ```
 
 ---
 
@@ -1477,14 +1456,6 @@ Required if you configure API authentication. See the [Authentication](operation
             "aws-marketplace:ViewSubscriptions"
           ],
           "Resource": "*"
-        },
-        {
-          "Sid": "MarketplaceRegisterUsage",
-          "Effect": "Allow",
-          "Action": [
-            "aws-marketplace:RegisterUsage"
-          ],
-          "Resource": "*"
         }
       ]
     }
@@ -1492,9 +1463,6 @@ Required if you configure API authentication. See the [Authentication](operation
 
     !!! note "Marketplace Auto-Subscribe (Default Enabled)"
         The marketplace permissions are included because `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE` defaults to `true`. If you set it to `false`, you can remove the `BedrockMarketplaceAutoSubscribe` statement.
-
-    !!! note "Marketplace RegisterUsage (AWS Marketplace Image Only)"
-        `MarketplaceRegisterUsage` is only needed on the **AWS Marketplace image**; remove it when deploying the community image.
 
 ??? example "Production Policy (Bedrock + S3 + Authentication)"
     ```json
@@ -1541,14 +1509,6 @@ Required if you configure API authentication. See the [Authentication](operation
           "Action": [
             "aws-marketplace:Subscribe",
             "aws-marketplace:ViewSubscriptions"
-          ],
-          "Resource": "*"
-        },
-        {
-          "Sid": "MarketplaceRegisterUsage",
-          "Effect": "Allow",
-          "Action": [
-            "aws-marketplace:RegisterUsage"
           ],
           "Resource": "*"
         },
@@ -1606,9 +1566,6 @@ Required if you configure API authentication. See the [Authentication](operation
     !!! note "Marketplace Auto-Subscribe (Default Enabled)"
         The marketplace permissions are included because `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE` defaults to `true`. If you set it to `false`, you can remove the `BedrockMarketplaceAutoSubscribe` statement to follow the principle of least privilege.
 
-    !!! note "Marketplace RegisterUsage (AWS Marketplace Image Only)"
-        `MarketplaceRegisterUsage` is only needed on the **AWS Marketplace image**; remove it when deploying the community image.
-
     !!! note "Cost Tracking (Opt-In)"
         `PricingCatalog` is only needed when [`COST_TRACKING`](operations_configuration_observability.md#cost-tracking) is set to `true`; remove it otherwise.
 
@@ -1639,7 +1596,6 @@ If your AWS organization enforces a [tag policy](https://docs.aws.amazon.com/org
 | `stdapi-ai.request_id` | request UUID | Bedrock async jobs, Transcribe jobs |
 | `stdapi-ai.server_id` | server instance name | Bedrock async jobs, Transcribe jobs |
 | `stdapi-ai.user_id` | user identifier | Bedrock async jobs, Transcribe jobs (when user identity is known) |
-| `aws-apn-id` | `pc:<product-code>` | All AWS resources created at runtime and by the Terraform module. This is a [standard AWS Marketplace attribution tag](https://docs.aws.amazon.com/PRM/latest/aws-prm-onboarding-guide/what-is-service.html) required by any AWS Marketplace product — allowing it benefits all such products deployed in your organization, not only stdapi.ai. |
 
 ---
 

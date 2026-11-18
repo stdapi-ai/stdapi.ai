@@ -34,7 +34,6 @@ from stdapi.api_providers.anthropic import TAG_ANTHROPIC
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import AuthenticationHandler, authenticate
 from stdapi.config import SETTINGS
-from stdapi.metering import SERVER_FULL_VERSION
 from stdapi.models import ModelBase
 from stdapi.monitoring import (
     PRINCIPAL,
@@ -52,6 +51,7 @@ from stdapi.monitoring import (
     resolve_request_identity,
 )
 from stdapi.pricing import Dimension
+from stdapi.server import SERVER_VERSION
 from stdapi.usage import get_model_state, record_bedrock_usage
 from tests._helpers import make_event_log
 from tests.conftest import set_test_price
@@ -1417,7 +1417,7 @@ class TestRequestIdentity:
         """
         request_log["request_user_id"] = "acme,inc#42$ tail\r\nX"
 
-        tags = build_metadata(apn=True)
+        tags = build_metadata(as_tags=True)
 
         assert tags["stdapi-ai.user_id"] == "acmeinc42 tailX"
         assert all(_TAG_VALUE_RE.fullmatch(value) for value in tags.values())
@@ -1559,7 +1559,7 @@ def test_traces_are_attributed_to_the_running_release() -> None:
     """
     resource = otel_manager._tracer_provider.resource  # noqa: SLF001
 
-    assert resource.attributes["service.version"] == SERVER_FULL_VERSION
+    assert resource.attributes["service.version"] == SERVER_VERSION
     assert resource.attributes["service.name"] == SETTINGS.otel_service_name
 
 

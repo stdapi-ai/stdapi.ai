@@ -91,7 +91,6 @@ _REGISTRY: tuple[_Entry, ...] = (
             "amazon_elasticache",
             "amazon_global_accelerator",
             "amazon_load_balancing",
-            "amazon_marketplace",
             "amazon_nova",
             "amazon_opensearch",
             "amazon_polly",

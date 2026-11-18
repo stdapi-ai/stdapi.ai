@@ -29,7 +29,7 @@ client = OpenAI(base_url="https://your-endpoint/v1", api_key="YOUR_KEY")
 An Anthropic, Cohere or Ollama client takes the same three changes, against its own [route prefix](api_overview.md).
 
 !!! tip "Try it before committing to anything"
-    Run stdapi.ai on your laptop with the [free community Docker image](operations_getting_started_local.md) — or deploy to AWS with a [14-day free trial](operations_getting_started.md). Both editions expose the same API surface, so the integrations below are configured the same way against either.
+    Run stdapi.ai on your laptop with the [container image](operations_getting_started_local.md) — or deploy to AWS with the [Terraform module](operations_getting_started.md). Both expose the same API surface, so the integrations below are configured the same way against either.
 
 ## :material-view-grid: Choose Your Integration
 
@@ -271,16 +271,16 @@ Deploy intelligent AI assistants to your team's communication platforms powered 
 ## :material-help-circle: Common Questions
 
 - **Where does my data go?** The gateway runs in your own AWS account, so no third party sits between your users and your models: inference runs on the AWS services and regions you enable, and Amazon Bedrock does not share prompts with model providers or use them for training. [Data sovereignty & compliance →](operations_compliance.md)
-- **What does it cost?** $0.10/container-hour for the gateway — the Terraform module runs one container per Availability Zone by default — plus Amazon Bedrock rates, with no markup and no per-seat fees. Each end user's share can be reported separately in Cost Explorer, from the invoice rather than an estimate. [Licensing & pricing →](operations_licensing.md) · [Cost management →](operations_cost_management.md)
+- **What does it cost?** Nothing for the gateway, which is open source (AGPL-3.0). You pay for the AWS resources it runs on (the Terraform module runs one container per Availability Zone by default) and Amazon Bedrock rates, with no markup and no per-seat fees. Each end user's share can be reported separately in Cost Explorer, from the invoice rather than an estimate. [Licensing →](operations_licensing.md) · [Cost management →](operations_cost_management.md)
 - **Am I locked in?** No — stdapi.ai speaks the standard OpenAI, Anthropic, Cohere and Ollama APIs. Leaving is the same client-side change that got you in.
 
 ## :material-arrow-right: Ready to Get Started?
 
 <div class="grid cards" markdown>
 
-- :material-rocket-launch: [**Deploy to AWS**](operations_getting_started.md) — Production-ready with two Terraform commands (14-day free trial)
-- :material-docker: [**Try Locally with Docker**](operations_getting_started_local.md) — Free community image for development and testing
+- :material-rocket-launch: [**Deploy to AWS**](operations_getting_started.md) — Production-ready with two Terraform commands
+- :material-docker: [**Try Locally with Docker**](operations_getting_started_local.md) — container image for development and testing
 - :material-book-open-variant: [**API Overview**](api_overview.md) — Endpoints, parameters, and usage examples
-- :material-email-outline: [**Contact**](contact.md) — Integration questions, sales, and private offers
+- :material-email-outline: [**Contact**](contact.md) — Integration questions and general contact
 
 </div>

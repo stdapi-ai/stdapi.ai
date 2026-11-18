@@ -19,7 +19,6 @@ from stdapi.api_errors import (
 from stdapi.aws import get_client
 from stdapi.cleanup import schedule_cleanup
 from stdapi.config import SETTINGS
-from stdapi.server import AWS_APN_ID
 from stdapi.utils import async_iter, buffered_chunks, chain_async_iterators
 
 if TYPE_CHECKING:
@@ -35,14 +34,11 @@ _INPUT_STORAGE_FEATURE: Final[str] = "Attachment storage"
 #: The feature name a caller reads when no bucket can host a URL response.
 _PRESIGNED_URL_FEATURE: Final[str] = "The 'url' response format"
 
-#: Default S3 ``Tagging`` query string
-S3_TAGGING: Final[str] = urlencode({"aws-apn-id": AWS_APN_ID})
-
 #: S3 tag key a Lifecycle rule matches to delete an expired object.
 EXPIRING_S3_TAG_KEY: Final[str] = "stdapi-ai.expires"
 
 #: S3 ``Tagging`` query string marking an object for Lifecycle expiry cleanup.
-EXPIRING_S3_TAGGING: Final[str] = f"{S3_TAGGING}&{EXPIRING_S3_TAG_KEY}=true"
+EXPIRING_S3_TAGGING: Final[str] = urlencode({EXPIRING_S3_TAG_KEY: "true"})
 
 #: :data:`EXPIRING_S3_TAGGING` in the ``TagSet`` shape ``PutObjectTagging`` takes.
 EXPIRING_S3_TAG_SET: Final[list[TagTypeDef]] = [
@@ -448,7 +444,8 @@ async def copy_s3_object(
             Bucket=dest_bucket,
             Key=dest_key,
             CopySource=copy_source,
-            Tagging=S3_TAGGING,
+            # Not inheriting the source tags keeps its expiry tag off the copy and
+            # spares caller-owned buckets the s3:GetObjectTagging permission.
             TaggingDirective="REPLACE",
             MetadataDirective="REPLACE" if replaced else "COPY",
             **replaced,
@@ -458,7 +455,7 @@ async def copy_s3_object(
         try:
             upload_id = (
                 await s3.create_multipart_upload(
-                    Bucket=dest_bucket, Key=dest_key, Tagging=S3_TAGGING, **replaced
+                    Bucket=dest_bucket, Key=dest_key, **replaced
                 )
             )["UploadId"]
 
@@ -547,9 +544,9 @@ async def put_s3_object(
         raise ValueError(msg)
     key = key or _get_tmp_key(content_type)
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
-    kwargs: dict[str, str | dict[str, str]] = {
-        "Tagging": EXPIRING_S3_TAGGING if expiring else S3_TAGGING
-    }
+    kwargs: dict[str, str | dict[str, str]] = {}
+    if expiring:
+        kwargs["Tagging"] = EXPIRING_S3_TAGGING
     if content_type:
         kwargs["ContentType"] = content_type
     if content_disposition:

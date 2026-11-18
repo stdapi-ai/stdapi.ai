@@ -1,20 +1,19 @@
 ---
 title: Cost Management - Amazon Bedrock Gateway Spend, Pricing & Attribution
-description: Understand and control what stdapi.ai costs — AWS Marketplace vs AWS-billed models and credit eligibility, infrastructure and license cost, per-request cost estimation from published AWS prices, and per-user cost attribution.
+description: Understand and control what stdapi.ai costs — Marketplace-billed vs AWS-billed models and credit eligibility, gateway infrastructure cost, per-request cost estimation from published AWS prices, and per-user cost attribution.
 keywords: AWS Bedrock cost, AI gateway pricing, AWS Marketplace billing, AWS credits, Bedrock cost tracking, cost attribution, FinOps AWS AI, LLM cost management, CloudWatch GetMetricData cost, usage API cost
 ---
 
 # :material-cash-multiple: Cost Management
 
-Running stdapi.ai bills into three independent buckets:
+Running stdapi.ai bills into two independent buckets. The stdapi.ai software itself is free (AGPL-3.0-or-later) and adds no line to your bill:
 
 | Cost                          | Billed by                                                                     | Scales with           | Covered by AWS credits            |
 |:------------------------------|:------------------------------------------------------------------------------|:----------------------|:-----------------------------------|
 | **AI service usage**          | AWS (Amazon Bedrock, Polly, Transcribe, …) **or** AWS Marketplace, per model  | Requests and tokens   | Only the AWS-billed models         |
 | **Gateway infrastructure**    | AWS (ECS Fargate, ALB, S3, CloudWatch, …)                                     | Running containers    | Yes                                |
-| **Gateway license**           | AWS Marketplace (Commercial License only)                                      | Container-hours       | No — Marketplace is never credited |
 
-**AI service usage dominates any normal deployment.** The gateway runs on a small ARM64 container, so its infrastructure and license form a low fixed floor that model spend passes quickly. Read the AI-cost sections first; [Gateway Cost](#gateway-cost) matters mainly at low traffic or under a hard cost constraint.
+**AI service usage dominates any normal deployment.** The gateway runs on a small ARM64 container, so its infrastructure forms a low fixed floor that model spend passes quickly. Read the AI-cost sections first; [Gateway Cost](#gateway-cost) matters mainly at low traffic or under a hard cost constraint.
 
 stdapi.ai **adds no markup**: model usage is billed to you by AWS at the same rate as calling Bedrock directly.
 
@@ -25,7 +24,7 @@ stdapi.ai **adds no markup**: model usage is billed to you by AWS at the same ra
 | See what each request cost, in the logs                              | [Cost Tracking](#cost-tracking-real-time-aws-pricing)                            | `COST_TRACKING=true`, `pricing:GetProducts`, and an estimate rather than a bill                        |
 | Split the bill per user, team or customer                            | [AWS Cost Attribution](#aws-cost-attribution)                                    | Per-user attribution names a role session per caller; a tenant's own AWS credential moves the charge entirely off your bill |
 | Query aggregate usage and cost over an API                           | [Usage API Query Cost](#usage-api-cost)                                          | A paid CloudWatch `GetMetricData` read per query, plus stored metric series at rest                     |
-| Know what the gateway itself costs, idle                             | [Gateway Cost](#gateway-cost)                                                    | A fixed floor of container-hours, ALB and license — three worked tiers, from ~$17/month upward          |
+| Know what the gateway itself costs, idle                             | [Gateway Cost](#gateway-cost)                                                    | A fixed floor of container-hours and ALB — three tiers          |
 | Cut that floor                                                       | [Keeping It Low](#keeping-it-low)                                                | Scheduled hours, Spot and one task: availability and headroom traded for price                          |
 | Reconcile any of it against the real invoice                         | AWS Cost Explorer, grouped by service                                            | The only authority — everything on this page is estimated from published prices                          |
 
@@ -501,13 +500,13 @@ The [Terraform module](operations_getting_started.md) provisions:
 
 #### Cost Tiers at a Glance
 
-Both infrastructure and license cost scale with **how many containers run and for how long** — there's no single "deployment cost," just a wide range between a minimal setup and a full production one. Three representative configurations:
+Infrastructure cost scales with **how many containers run and for how long** — there's no single "deployment cost," just a wide range between a minimal setup and a full production one. Three representative configurations:
 
 | Tier | Configuration | You pay for | Main cost driver |
 |:-----|:--------------|:-------------|:-------------------|
-| **Minimal** | 1 ARM64 task, [Fargate Spot](operations_deploy_advanced.md#cost-optimized-deployment) (~70% cheaper than on-demand), [scheduled service hours](#keeping-it-low), no ALB — reached via [Service Discovery](operations_deploy_advanced.md#integration-with-existing-infrastructure) | Spot compute only for the scheduled hours; license for those same hours; no ALB/WAF charges at all | Hours the schedule keeps the service running — see [License](#license) for a worked example (~$17/month at ~165 h/month) |
+| **Minimal** | 1 ARM64 task, [Fargate Spot](operations_deploy_advanced.md#cost-optimized-deployment) (~70% cheaper than on-demand), [scheduled service hours](#keeping-it-low), no ALB — reached via [Service Discovery](operations_deploy_advanced.md#integration-with-existing-infrastructure) | Spot compute only for the scheduled hours; no ALB/WAF charges at all | Hours the schedule keeps the service running |
 | **Standard** | 1 on-demand task, single AZ (`subnet_ids` limited to one subnet or `autoscaling_min_capacity = 1`), ALB enabled, running 24/7 | On-demand compute for one container around the clock, plus the ALB's hourly rate and LCU usage | The ALB becomes a fixed cost on top of continuous compute; no Spot discount |
-| **Full production** | One task per Availability Zone (module default), ALB + WAF, running 24/7 | Compute × number of AZs, ALB + WAF, and the per-container-hour license × total task-hours across all AZs | AZ count is the main multiplier — it scales infrastructure and license cost together |
+| **Full production** | One task per Availability Zone (module default), ALB + WAF, running 24/7 | Compute × number of AZs, ALB + WAF | AZ count is the main multiplier of compute cost |
 
 None of these include AI service usage (Bedrock, Polly, Transcribe, …), which is billed separately by AWS at cost — see the buckets table at the top of this page.
 
@@ -521,7 +520,7 @@ None of these include AI service usage (Bedrock, Polly, Transcribe, …), which 
     ```
 
 - **Reuse existing network infrastructure.** Passing `subnet_ids` and `security_group_id` deploys into your VPC and creates **no additional NAT gateways or load balancers** — see [Integration with Existing Infrastructure](operations_deploy_advanced.md). On a small deployment these are often larger than the gateway itself.
-- **Scale to your real floor.** `autoscaling_min_capacity` sets how many containers run at idle. Because the Commercial License is billed per container-hour, this number drives both infrastructure *and* license cost.
+- **Scale to your real floor.** `autoscaling_min_capacity` sets how many containers run at idle. This number drives the compute cost.
 - **Use Fargate Spot** and trim log retention, as the [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) example does.
 - **Trim observability volume.** Raising `LOG_LEVEL` and disabling request/response payload logging cut CloudWatch ingestion — see [Controlling Log Verbosity](operations_logging_monitoring.md#controlling-log-verbosity). Note that **EMF metric lines are not affected by `LOG_LEVEL`**: they are written to stdout on every request whenever `CLOUDWATCH_METRICS` is on, so disabling that setting is the only way to remove them.
 
@@ -561,15 +560,6 @@ The items are tiny — a partition key, a sort key and two counters, well inside
 
 ---
 
-### License
-
-stdapi.ai is [dual-licensed](operations_licensing.md): the free AGPL-3.0-or-later license costs nothing but requires sharing your modifications, while the Commercial License — billed per container-hour via AWS Marketplace, no per-request or per-token component — is what production deployments typically run. See [Licensing](operations_licensing.md) for the full pricing table and trial/private-offer terms.
-
-!!! info "The license is itself a Marketplace charge"
-    Being an AWS Marketplace subscription, the Commercial License appears on the Marketplace section of your bill and — like [Marketplace-billed models](#why-it-matters-aws-credits) — **cannot be paid with AWS promotional credits**.
-
----
-
 ## :material-arrow-right: Next Steps
 
 <div class="grid cards" markdown>
@@ -577,7 +567,7 @@ stdapi.ai is [dual-licensed](operations_licensing.md): the free AGPL-3.0-or-late
 - :material-chart-line: [**Logging & Monitoring**](operations_logging_monitoring.md) — Usage metrics fields, CloudWatch EMF, and log verbosity
 - :material-tag-search: [**Model Pricing API**](api_model_pricing.md) — Query AWS unit prices per model for cost-aware selection
 - :material-cog: [**Configuration Reference**](operations_configuration.md) — `COST_TRACKING`, `COST_PRICE_OVERRIDES` and IAM permissions
-- :material-scale-balance: [**Licensing**](operations_licensing.md) — AGPL vs commercial license and AWS Marketplace subscription
-- :material-email-outline: [**Contact**](contact.md) — Private offers, committed usage, and billing questions
+- :material-scale-balance: [**Licensing**](operations_licensing.md) — AGPL-3.0-or-later license and update FAQ
+- :material-email-outline: [**Contact**](contact.md) — Support and billing questions
 
 </div>

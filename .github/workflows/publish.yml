@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: read
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}-community
@@ -49,20 +52,29 @@ jobs:
           VERSION="${TAG_VERSION#v}"
           # Check if version contains prerelease identifiers (-, alpha, beta, rc, etc.)
           if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
             echo "This is a stable release: $VERSION"
           else
-            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
             echo "This is a prerelease: $VERSION"
           fi
 
-  build-and-push:
+  build:
     # No source-level check runs here: Lint and Test already ran on this commit
     # before it was tagged, and a tag is only applied to a green pipeline. What
     # this job does check is the artifact, which nothing else has seen.
+    # Each architecture builds on its own native runner: emulated, the ffmpeg
+    # compilation takes hours, and the container suite would test the emulator.
     needs: validate-version
     environment: github-container-registry
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -82,29 +94,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Docker
+      - name: Extract labels for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest,enable=${{ needs.validate-version.outputs.is_prerelease == 'false' }}
 
       # Loaded into the local engine instead of pushed: the image is tested
-      # before it reaches the registry, and the tags below are applied to the
-      # exact image that passed.
+      # before it reaches the registry.
       - name: Build the candidate image
         uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: linux/${{ matrix.arch }}
           load: true
           tags: ${{ env.CANDIDATE_IMAGE }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=publish-${{ matrix.arch }}
+          cache-to: type=gha,scope=publish-${{ matrix.arch }},mode=max
 
       - name: Install uv
         uses: astral-sh/setup-uv@v8.1.0
@@ -126,7 +133,7 @@ jobs:
       - name: Test the candidate image
         env:
           CONTAINER_ENGINE: docker
-          STDAPI_CONTAINER_IMAGE_COMMUNITY: ${{ env.CANDIDATE_IMAGE }}
+          STDAPI_CONTAINER_IMAGE: ${{ env.CANDIDATE_IMAGE }}
           AWS_EC2_METADATA_DISABLED: "true"
           AWS_CONFIG_FILE: /dev/null
           AWS_SHARED_CREDENTIALS_FILE: /dev/null
@@ -134,19 +141,126 @@ jobs:
           AWS_DEFAULT_REGION: us-east-1
         run: pytest --container -m container
 
-      - name: Push the tested image
+      # The same builder rebuilds from its own cache, so every layer pushed is
+      # the one just tested. Pushed untagged: the merge job tags the
+      # multi-architecture index once every architecture has passed.
+      - name: Push the tested image by digest
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=publish-${{ matrix.arch }}
+
+      - name: Record the digest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: [validate-version, build]
+    environment: github-container-registry
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download the digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # A prerelease gets only its full version: the semver patterns below skip
+      # prereleases, and `latest` names the newest stable release only.
+      - name: Extract tags for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ needs.validate-version.outputs.is_prerelease == 'false' }}
+
+      - name: Create and push the multi-architecture image
+        working-directory: ${{ runner.temp }}/digests
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
-          printf '%s\n' "$TAGS" | while read -r tag; do
-            [ -n "$tag" ] || continue
-            docker tag "$CANDIDATE_IMAGE" "$tag"
-            docker push "$tag"
+          tag_args=()
+          while read -r tag; do
+            [ -n "$tag" ] && tag_args+=(--tag "$tag")
+          done <<< "$TAGS"
+          sources=()
+          for digest in *; do
+            sources+=("$IMAGE@sha256:$digest")
           done
+          docker buildx imagetools create "${tag_args[@]}" "${sources[@]}"
+
+      - name: Inspect the published image
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools inspect "$IMAGE:$VERSION"
+
+      # Users pull without logging in, so the release is only announced once an
+      # anonymous client can resolve it on every architecture.
+      - name: Check an anonymous pull resolves the image
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          token=$(curl -fsS --retry 3 --max-time 30 \
+            "https://ghcr.io/token?scope=repository:${IMAGE_NAME}:pull" | jq -r .token)
+          if ! manifest=$(curl -fsS --retry 3 --max-time 30 \
+              -H "Authorization: Bearer $token" \
+              -H "Accept: application/vnd.oci.image.index.v1+json" \
+              -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+              "https://ghcr.io/v2/${IMAGE_NAME}/manifests/${VERSION}"); then
+            echo "::error::An anonymous client cannot pull ${IMAGE_NAME}:${VERSION}. Make the package public in the organization's package settings."
+            exit 1
+          fi
+          for platform in linux/amd64 linux/arm64; do
+            if ! jq -e --arg p "$platform" \
+                '[.manifests[].platform | select(. != null) | "\(.os)/\(.architecture)"] | index($p)' \
+                <<< "$manifest" > /dev/null; then
+              echo "::error::${IMAGE_NAME}:${VERSION} has no ${platform} image."
+              exit 1
+            fi
+          done
+          echo "Anonymous pull of ${IMAGE_NAME}:${VERSION} resolves linux/amd64 and linux/arm64."
 
   publish:
     # Announced only once the image it refers to is built, tested and pushed.
-    needs: [validate-version, build-and-push]
+    needs: [validate-version, merge]
     runs-on: ubuntu-latest
     environment: github-releases
     permissions:

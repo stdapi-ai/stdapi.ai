@@ -374,12 +374,6 @@ class TestIamActionDerivation:
                 id="api-endpoint-prefix",
             ),
             pytest.param("sts", "AssumeRole", "sts:AssumeRole", id="no-signing-name"),
-            pytest.param(
-                "meteringmarketplace",
-                "BatchMeterUsage",
-                "aws-marketplace:BatchMeterUsage",
-                id="renamed-service",
-            ),
         ],
     )
     def test_the_action_comes_from_the_service_model(
@@ -387,8 +381,8 @@ class TestIamActionDerivation:
     ) -> None:
         """The prefix is the signing name, falling back to the endpoint prefix.
 
-        ``bedrock-runtime``, ``api.pricing`` and ``metering.marketplace`` are
-        the three shapes proving the endpoint prefix alone would be wrong.
+        ``bedrock-runtime`` and ``api.pricing`` are the two shapes proving the
+        endpoint prefix alone would be wrong.
         """
         assert iam_action(_operation_model(service, operation)) == expected
 

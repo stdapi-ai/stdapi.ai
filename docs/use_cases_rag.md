@@ -311,7 +311,6 @@ Want the platform instead of the pipeline? This page covers wiring stdapi.ai int
 
 | Charge | Driver |
 | --- | --- |
-| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | Amazon ECS on AWS Fargate | The gateway, and — for the document-parsing stage — Docling Serve, each sized independently |
 | Amazon Bedrock — ingestion | One embedding call per indexed passage, paid once when a file is attached |
 | Amazon Bedrock — query | One embedding call per search query; the assembled pipeline adds a reranking call, and either mode adds a generation call whenever a chat model answers from the retrieved passages |

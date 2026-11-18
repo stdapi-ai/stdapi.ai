@@ -21,7 +21,7 @@ from stdapi.api_providers import format_http_error
 from stdapi.aws_bedrock import AWS_ERROR_MAP, without_model_refusal_prefix
 from stdapi.config import SETTINGS, LogLevel
 from stdapi.docs_assets import ASSET_PATHS
-from stdapi.metering import SERVER_FULL_VERSION
+from stdapi.server import SERVER_VERSION
 from stdapi.usage import (
     IMAGE_SPEC,
     MODEL_STATE,
@@ -61,9 +61,6 @@ if TYPE_CHECKING:
     from opentelemetry.trace.span import Span
     from pydantic.main import IncEx
     from types_aiobotocore_bedrock.literals import RegionName
-    from types_aiobotocore_meteringmarketplace.type_defs import (
-        RegisterUsageResultTypeDef,
-    )
 
     from stdapi.models.chat._adapters._responses_context import ContextOverflow
     from stdapi.monitoring_otel import OpenTelemetryManager
@@ -112,7 +109,6 @@ class EventLog(TypedDict):
     # "start" type
     server_start_time_ms: NotRequired[int]
     server_warnings: NotRequired[JsonList]
-    register_usage_response: NotRequired[RegisterUsageResultTypeDef]
     region_latencies: NotRequired[
         dict[RegionName, dict[RegionLatenciesStatsKeys, float]]
     ]
@@ -449,7 +445,7 @@ def flush_usage_log_event(elapsed_ms: int) -> None:
         level="info",
         date=SETTINGS.now(),
         server_id=server.SERVER_NAME,
-        server_version=SERVER_FULL_VERSION,
+        server_version=SERVER_VERSION,
         id=parent.get("id", ""),
         execution_time_ms=elapsed_ms,
     )
@@ -652,7 +648,7 @@ def log_request_event(request: HTTPConnection) -> Generator[EventLog]:
             level="info",
             date=request_time,
             server_id=server.SERVER_NAME,
-            server_version=SERVER_FULL_VERSION,
+            server_version=SERVER_VERSION,
             id=request_id,
             method=method,
             path=request.url.path,
@@ -883,7 +879,7 @@ def log_background_event(
         level="info",
         date=SETTINGS.now(),
         server_id=server.SERVER_NAME,
-        server_version=SERVER_FULL_VERSION,
+        server_version=SERVER_VERSION,
         id=request_id,
         event=event,
     )
@@ -1000,7 +996,7 @@ async def _rebuild_and_log_stream[T](
             level="info",
             date=SETTINGS.now(),
             server_id=server.SERVER_NAME,
-            server_version=SERVER_FULL_VERSION,
+            server_version=SERVER_VERSION,
             id=request_id,
         )
         start = perf_counter_ns()
@@ -1424,7 +1420,7 @@ def resolve_request_identity() -> str | None:
 
 
 def build_metadata(
-    existing: Mapping[str, str] | None = None, *, apn: bool = False
+    existing: Mapping[str, str] | None = None, *, as_tags: bool = False
 ) -> dict[str, str]:
     """Build request metadata with ``stdapi-ai.`` keys injected.
 
@@ -1433,9 +1429,8 @@ def build_metadata(
 
     Args:
         existing: Caller-supplied metadata from the request body, if any.
-        apn: When ``True``, add ``aws-apn-id`` tag.
-            Only set this when the result is used as resource tags, not as
-            request-level metadata: it also narrows the attributed identity to
+        as_tags: Set when the result is used as resource tags, not as
+            request-level metadata: it narrows the attributed identity to
             the smaller character set a tag value accepts.
 
     Returns:
@@ -1448,11 +1443,9 @@ def build_metadata(
     }
     metadata["stdapi-ai.request_id"] = REQUEST_ID.get()
     metadata["stdapi-ai.server_id"] = server.SERVER_NAME
-    strip = _TAG_VALUE_STRIP_RE if apn else _METADATA_VALUE_STRIP_RE
+    strip = _TAG_VALUE_STRIP_RE if as_tags else _METADATA_VALUE_STRIP_RE
     if (user_id := resolve_request_identity()) and (
         user_id := strip.sub("", user_id)[:256]
     ):
         metadata["stdapi-ai.user_id"] = user_id
-    if apn:
-        metadata["aws-apn-id"] = server.AWS_APN_ID
     return metadata

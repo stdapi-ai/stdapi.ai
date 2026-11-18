@@ -25,7 +25,7 @@ Connect your favorite AI coding assistants to Amazon Bedrock models through stda
   <br>Run stdapi.ai in AWS for production or locally with Docker for development. Test locally, deploy to cloud—same API, same experience.
 
 - :material-currency-usd-off: __No Per-Developer Licence__
-  <br>The gateway is licensed per container-hour, not per developer, and model usage is billed by Amazon Bedrock at its published rates with no markup, on your own AWS account. Enable per-user attribution and the invoice shows which developer spent what. A flat-rate subscription can still cost less for one developer coding all day; this is for the calls a subscription does not cover, and for seeing who made them.
+  <br>The gateway is open source (AGPL-3.0), with no per-developer fee, and model usage is billed by Amazon Bedrock at its published rates with no markup, on your own AWS account. Enable per-user attribution and the invoice shows which developer spent what. A flat-rate subscription can still cost less for one developer coding all day; this is for the calls a subscription does not cover, and for seeing who made them.
 
 </div>
 
@@ -583,7 +583,6 @@ The Application Load Balancer, optionally fronted by AWS WAF, is the only addres
 
 | Charge | Driver |
 | --- | --- |
-| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial |
 | ECS Fargate | One shared gateway service for the whole team, sized and auto-scaled independently of developer count |
 | Elastic Load Balancing | One ALB serving every developer's connections |
 | NAT gateways | Standing charge, plus data processing, for the private-subnet egress path — every AWS service call except S3 |

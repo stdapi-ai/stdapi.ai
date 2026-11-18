@@ -607,7 +607,6 @@ tofu apply
 
 | Charge | Driver |
 | --- | --- |
-| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | ECS Fargate | Three steady services — n8n's main, n8n's autoscaled worker and the gateway — each sized independently, plus the one-shot import task that seeds credentials and workflows |
 | Load balancing and networking | One ALB, plus the NAT gateways the private subnets egress through for multi-region Bedrock access |
 | Aurora Serverless v2 | Scales with query load; the sample sets a minimum capacity of zero ACUs |

@@ -17,8 +17,8 @@ from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
 from opentelemetry.trace import Status, StatusCode, set_span_in_context
 
 from stdapi.config import SETTINGS
-from stdapi.metering import SERVER_FULL_VERSION
 from stdapi.monitoring_otel_base import OpenTelemetryManager as _OpenTelemetryManager
+from stdapi.server import SERVER_VERSION
 from stdapi.utils import strip_url_query
 
 if TYPE_CHECKING:
@@ -38,7 +38,7 @@ class OpenTelemetryManager(_OpenTelemetryManager):
         resource = Resource.create(
             {
                 "service.name": SETTINGS.otel_service_name,
-                "service.version": SERVER_FULL_VERSION,
+                "service.version": SERVER_VERSION,
             }
         )
         self._tracer_provider = TracerProvider(

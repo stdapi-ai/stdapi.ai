@@ -60,13 +60,6 @@ from stdapi.cleanup import (
 from stdapi.config import SETTINGS
 from stdapi.exceptions import ServerError
 from stdapi.input_file import reset_current_input_files
-from stdapi.metering import (
-    DOCS_UTM,
-    EDITION_TITLE,
-    LICENCE_INFO,
-    SERVER_FULL_VERSION,
-    register,
-)
 from stdapi.models import (
     drain_model_refresh,
     initialize_bedrock_models,
@@ -100,7 +93,7 @@ from stdapi.realtime import (
 from stdapi.region_routing import measure_region_latencies, quota_retry_after
 from stdapi.routes import discover_routers
 from stdapi.routes.core_root import WWW_AUTHENTICATE_CHALLENGE
-from stdapi.server import SERVER_VERSION
+from stdapi.server import DOCS_UTM, LICENSE_INFO, SERVER_TITLE, SERVER_VERSION
 from stdapi.tenant_keys import (
     close_tenant_key_reconciliation,
     initialize_tenant_keys,
@@ -216,7 +209,7 @@ def write_stop_event(start: int, abandoned: dict[str, int]) -> None:
         level="warning" if abandoned else "info",
         date=SETTINGS.now(),
         server_id=server.SERVER_NAME,
-        server_version=SERVER_FULL_VERSION,
+        server_version=SERVER_VERSION,
         server_uptime_ms=(time_ns() - start) // 1000000,
     )
     if abandoned:
@@ -331,7 +324,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:  # noqa: PLR0915 - one l
                         level="info",
                         date=SETTINGS.now(),
                         server_id=server.SERVER_NAME,
-                        server_version=SERVER_FULL_VERSION,
+                        server_version=SERVER_VERSION,
                     )
                     # Runs alone: the ECS metadata endpoint answers on the task
                     # ENI and times out when the startup fan-out below saturates
@@ -350,7 +343,6 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:  # noqa: PLR0915 - one l
                             verify_table(start_event),
                             initialize_tenant_keys(start_event),
                             initialize_job_queue(start_event),
-                            register(start_event),
                             return_exceptions=True,
                         )
                     )
@@ -407,7 +399,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:  # noqa: PLR0915 - one l
                 level="error",
                 date=SETTINGS.now(),
                 server_id=server.SERVER_NAME,
-                server_version=SERVER_FULL_VERSION,
+                server_version=SERVER_VERSION,
                 error_detail=[
                     f"{type(exception).__name__}: {exception}",
                     *getattr(exception, "__notes__", []),
@@ -422,7 +414,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:  # noqa: PLR0915 - one l
                 level="critical",
                 date=SETTINGS.now(),
                 server_id=server.SERVER_NAME,
-                server_version=SERVER_FULL_VERSION,
+                server_version=SERVER_VERSION,
                 error_detail=["\n".join(format_exception(exception))],
             )
         )
@@ -433,13 +425,13 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:  # noqa: PLR0915 - one l
 
 
 app = FastAPI(
-    title=EDITION_TITLE,
+    title=SERVER_TITLE,
     description="AWS standardized AI API",
     version=SERVER_VERSION,
     lifespan=lifespan,
     # Swagger UI renders this as the clickable link in the /docs header.
     contact={"name": "stdapi.ai", "url": f"https://stdapi.ai/?{DOCS_UTM}"},
-    license_info=LICENCE_INFO,
+    license_info=LICENSE_INFO,
     # The built-in pages load their icon from fastapi.tiangolo.com; the routes in
     # stdapi/routes/core_docs.py serve the same pages from the gateway alone.
     docs_url=None,

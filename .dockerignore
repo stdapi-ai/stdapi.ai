@@ -1,11 +1,9 @@
-# Build context: the files the images copy (both editions copy the same, except
-# for the licence text each one ships).
+# Build context: the files the images copy.
 *
 !pyproject.toml
 !uv.lock
 !stdapi
 !LICENSE-AGPL
-!LICENSE-COMMERCIAL
 stdapi/**/__pycache__
 # Fetched inside the build instead, so a stale local copy can never be shipped.
 stdapi/docs_assets/*.css

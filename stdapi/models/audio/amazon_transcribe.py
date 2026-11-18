@@ -724,7 +724,9 @@ def _build_transcription_job_params(
         "Media": {"MediaFileUri": f"s3://{s3_bucket}/{s3_prefix}{job_id}/input"},
         "OutputBucketName": s3_bucket,
         "OutputKey": f"{s3_prefix}{job_id}/output.json",
-        "Tags": [{"Key": k, "Value": v} for k, v in build_metadata(apn=True).items()],
+        "Tags": [
+            {"Key": k, "Value": v} for k, v in build_metadata(as_tags=True).items()
+        ],
     }
 
     if key_arn := SETTINGS.aws_transcribe_output_encryption_key_arn:

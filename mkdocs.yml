@@ -125,8 +125,6 @@ nav:
           - Home Assistant Voice: use_cases_home_assistant.md
       - Releases & Roadmap: roadmap.md
       - Trademarks: trademarks.md
-  - Blog:
-      - blog/index.md
   - Contact: contact.md
 
 repo_url: https://github.com/stdapi-ai/stdapi.ai
@@ -141,21 +139,6 @@ validation:
     anchors: warn
 
 plugins:
-  # Before search, so generated archive and category pages are indexed.
-  - blog:
-      blog_dir: blog
-      post_url_format: "{slug}"
-      post_excerpt: required
-      # A post scheduled for a later date stays out of the build until that date,
-      # so the campaign can queue drafts ahead without publishing them early.
-      draft_if_future_date: true
-      archive_toc: true
-      categories_allowed:
-        - Amazon Bedrock
-        - AI gateways
-        - Cost & FinOps
-        - Data sovereignty
-      pagination_per_page: 10
   - search:
       lang: en
       separator: '[\s\-,:!=\[\]()"/]+|(?!\b)(?=[A-Z][a-z])|\.(?!\d)|&[lg]t;'
@@ -195,7 +178,6 @@ hooks:
   - docs_hooks/check_footnotes.py
   - docs_hooks/fastapi_openapi.py
   - docs_hooks/markdown_for_agents.py
-  - docs_hooks/blog_rss.py
   # Listed last so its on_post_build step runs after the agent-readable copies of
   # the pages have been written, and can fill the trademarks table in its copy.
   - docs_hooks/trademarks.py
@@ -234,9 +216,6 @@ extra:
     - icon: fontawesome/brands/github
       link: https://github.com/stdapi-ai/stdapi.ai
       name: GitHub repository
-    - icon: fontawesome/brands/aws
-      link: https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo
-      name: AWS Marketplace
   analytics:
     feedback:
       title: Was this page helpful?
@@ -260,7 +239,5 @@ extra:
       link: operations_troubleshooting.md
     - label: View on GitHub
       link: https://github.com/stdapi-ai/stdapi.ai
-    - label: AWS Marketplace
-      link: https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo
 
 copyright: <a href="https://jgoutin.dev/">JGoutin-dev SARL - 994495422 R.C.S. Paris, France</a>

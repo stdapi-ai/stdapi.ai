@@ -20,7 +20,7 @@ Deploy stdapi.ai into your existing VPC and network infrastructure for maximum c
 ```hcl
 module "stdapi_ai" {
   source  = "stdapi-ai/stdapi-ai/aws"
-  version = "~> 1.0"
+  version = "~> 1.20"
 
   # Use your existing network
   subnet_ids = [
@@ -48,7 +48,7 @@ After deployment, add a target group pointing to port 8000, with a health check 
     ```hcl
     module "stdapi_ai_integrated" {
       source  = "stdapi-ai/stdapi-ai/aws"
-      version = "~> 1.0"
+      version = "~> 1.20"
 
       name_prefix = "my-stdapi-integrated"
 
@@ -319,6 +319,39 @@ Enable private DNS on it, so `bedrock-mantle.<region>.api.aws` resolves to the e
 !!! warning "A Region without an interface endpoint service fails at plan time"
     The module looks the endpoint service up before creating it, so a fully private deployment in a Region that offers none for a service it needs — Amazon S3 Vectors, for instance — fails during `terraform plan` rather than at runtime. This is the same failure documented below for [Amazon Comprehend](#vpc-endpoint-error-couldnt-find-resource-for-amazon-comprehend); confirm the services your deployment enables offer an endpoint in your Region before planning a fully private deployment.
 
+### Deployment without internet access
+
+The Terraform module deploys the hardened image `ghcr.io/stdapi-ai/stdapi.ai-community`, which the ECS tasks pull from GitHub Container Registry at startup. A deployment with no internet egress cannot reach it, and its tasks stop with `CannotPullContainerError`. To deploy without internet access:
+
+1. Mirror the image into an Amazon ECR repository of your own, in the deployment Region, with the multi-arch tag `<version>`. The module pulls the image that matches `cpu_architecture` from it, so copy the whole manifest list with `--all`. For example, with [skopeo](https://github.com/containers/skopeo):
+
+    ```bash
+    aws ecr get-login-password --region <region> | skopeo login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com
+    skopeo copy --all docker://ghcr.io/stdapi-ai/stdapi.ai-community:<version> docker://<account-id>.dkr.ecr.<region>.amazonaws.com/<repository>:<version>
+    ```
+
+2. Set `container_image_repository_url` on the module to that repository URL, without a tag, and turn off Amazon Bedrock Marketplace auto-subscribe:
+
+    ```hcl
+    module "stdapi_ai" {
+      source  = "stdapi-ai/stdapi-ai/aws"
+      version = "~> 1.20"
+
+      container_image_repository_url         = "<account-id>.dkr.ecr.<region>.amazonaws.com/<repository>"
+      aws_bedrock_marketplace_auto_subscribe = false
+    }
+    ```
+
+The module then pulls the image through its Amazon ECR VPC endpoints. Mirror each new version before you raise `version_to_deploy` or upgrade the module. With the variable left at its default (`null`), the module pulls from `ghcr.io`.
+
+The mirror alone does not remove internet access. The module keeps internet egress until all of these hold:
+
+- `container_image_repository_url` names a mirror.
+- `aws_bedrock_marketplace_auto_subscribe = false`.
+- Every AWS service the deployment uses is in the deployment Region (no cross-region service setting).
+- WebRTC media mode (`realtime_webrtc_media_enabled`) is off.
+- The module creates the VPC. With your own `subnet_ids`, the endpoints and routes are yours to provide.
+
 ### Proxied deployments
 
 Where egress is only possible through an HTTP proxy, set `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` in the task environment. Every connection the server makes to an AWS endpoint honours them, so one set of variables covers the whole deployment.
@@ -331,13 +364,13 @@ Two connections deliberately do not, and neither needs an entry in `NO_PROXY`:
 !!! warning "A `~/.netrc` file in the image becomes credentials on the wire"
     Honouring the proxy variables also enables `.netrc` lookups, which is how the standard tooling behaves. If a `.netrc` exists in the container's home directory, its entries are matched against outbound hosts and sent as HTTP authentication.
 
-    The images stdapi.ai publishes contain no `.netrc`. Only a custom image, or a volume mounted over the home directory, can introduce one — do not add one, and check for it if you build your own image.
+    The image stdapi.ai publishes contains no `.netrc`. Only a custom image, or a volume mounted over the home directory, can introduce one — do not add one, and check for it if you build your own image.
 
 ---
 
 ## :material-shield-check: Production Deployment (Fully Featured)
 
-Enterprise-ready deployment with HTTPS endpoints, WAF protection, auto-scaling, regional S3 buckets, and comprehensive monitoring.
+Production deployment with HTTPS endpoints, WAF protection, auto-scaling, regional S3 buckets, and comprehensive monitoring.
 
 ??? example "Full production example with multi-region Bedrock support"
 
@@ -345,7 +378,7 @@ Enterprise-ready deployment with HTTPS endpoints, WAF protection, auto-scaling, 
     # Main deployment
     module "stdapi_ai" {
       source  = "stdapi-ai/stdapi-ai/aws"
-      version = "~> 1.0"
+      version = "~> 1.20"
 
       # Custom public domain with TLS
       alb_domain_name   = "api.example.com"
@@ -437,7 +470,7 @@ flowchart LR
     ```hcl
     module "stdapi_ai" {
       source  = "stdapi-ai/stdapi-ai/aws"
-      version = "~> 1.0"
+      version = "~> 1.20"
 
       # HTTPS with your domain
       alb_domain_name = "api.example.com"
@@ -477,7 +510,7 @@ flowchart LR
 ## :material-currency-usd: Cost-Optimized Deployment
 
 !!! info "How costs scale"
-    By default, the Terraform module deploys **one ECS Fargate container per Availability Zone (AZ)**. Both AWS infrastructure costs (ECS/Fargate) and the stdapi.ai product fee (billed per container-hour, after the 14-day trial) are **proportional to the number of running containers** — so the number of AZs directly drives your bill.
+    By default, the Terraform module deploys **one ECS Fargate container per Availability Zone (AZ)**. The AWS infrastructure cost (ECS/Fargate) is **proportional to the number of running containers**, so the number of AZs directly drives your bill.
 
     To reduce costs: limit the number of subnets/AZs passed to the module, use Fargate Spot pricing, or schedule the service to stop outside business hours.
 
@@ -488,7 +521,7 @@ For development, side projects, and non-critical workloads.
     ```hcl
     module "stdapi_ai_cost_optimized" {
       source  = "stdapi-ai/stdapi-ai/aws"
-      version = "~> 1.0"
+      version = "~> 1.20"
 
       # Aggressive Auto-scaling with Fargate spot
       autoscaling_min_capacity       = 1
@@ -597,17 +630,16 @@ Deploy the stdapi.ai container image directly to AWS ECS without Terraform.
 
 ### Prerequisites
 
-1. **Subscribe to stdapi.ai** on [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) (14-day free trial included)
-2. Set up an ECS cluster (Fargate or EC2)
-3. Configure networking (VPC, subnets, security groups)
-4. Set up IAM roles with appropriate permissions
+1. Set up an ECS cluster (Fargate or EC2)
+2. Configure networking (VPC, subnets, security groups), with internet access to `ghcr.io`, or an Amazon ECR mirror of the image (see [Deployment without internet access](#deployment-without-internet-access))
+3. Set up IAM roles with appropriate permissions
 
 ### Container Image
 
-After subscribing, the container image is available from AWS Marketplace ECR:
+The hardened image is public on GitHub Container Registry:
 
 ```text
-709825985650.dkr.ecr.us-east-1.amazonaws.com/j-goutin/stdapi.ai:<version>
+ghcr.io/stdapi-ai/stdapi.ai-community:<version>
 ```
 
 ```mermaid
@@ -616,7 +648,7 @@ flowchart LR
   openai["<img src='../styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> OpenAI SDK"] --> alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:64px;width:auto;vertical-align:middle;' /> Your ALB/NLB"]
   anthropic["<img src='../styles/logo_anthropic.svg' style='height:64px;width:auto;vertical-align:middle;' /> Anthropic SDK"] --> alb
   alb --> ecs["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS (Fargate/EC2)"]
-  ecr["<img src='../styles/logo_amazon_marketplace.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Marketplace ECR"] --> ecs
+  ecr["ghcr.io<br/>Container registry"] --> ecs
   ecs --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
   ecs --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Polly"]
   ecs --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
@@ -625,9 +657,9 @@ flowchart LR
 
 ### ECS Task Definition Example
 
-The example below uses ARM64 architecture, which requires the `-arm64` image tag. Replace `ARM64` with `X86_64` and `-arm64` with `-amd64` for AMD64. Drop the suffix and keep the version alone to let ECS select the architecture automatically via the multi-arch manifest.
+The example below uses the ARM64 architecture; replace `ARM64` with `X86_64` for AMD64. The image tag is multi-arch, so ECS selects the matching architecture from the manifest.
 
-`{version}` is the release you deploy — there is no `latest` tag. The [AWS Marketplace listing](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) publishes the versions available to you, and the [release notes](roadmap.md) name the current one.
+`{version}` is the release you deploy. Pin an exact version rather than `latest`. The [release notes](roadmap.md) name the current one.
 
 ```json
 {
@@ -645,7 +677,7 @@ The example below uses ARM64 architecture, which requires the `-arm64` image tag
   "containerDefinitions": [
     {
       "name": "main",
-      "image": "709825985650.dkr.ecr.us-east-1.amazonaws.com/j-goutin/stdapi.ai:{version}-arm64",
+      "image": "ghcr.io/stdapi-ai/stdapi.ai-community:{version}",
       "essential": true,
       "readonlyRootFilesystem": true,
       "user": "65532:65532",
@@ -778,14 +810,14 @@ Error: reading EC2 VPC Endpoint Services: couldn't find resource
 
 **Cause:** Amazon Comprehend is not available as a VPC endpoint service in your current region.
 
-**When this happens:** only on a fully private deployment — one where the module builds the VPC (no `subnet_ids`), `vpc_endpoints_allowed` is left at its default, `aws_bedrock_marketplace_auto_subscribe = false`, and every AWS service resolves to the deployment region. Any other configuration needs internet egress, so no interface endpoint is created and this error cannot occur.
+**When this happens:** only on a fully private deployment — one where the module builds the VPC (no `subnet_ids`), `vpc_endpoints_allowed` is left at its default, `aws_bedrock_marketplace_auto_subscribe = false`, `container_image_repository_url` names an ECR mirror (see [Deployment without internet access](#deployment-without-internet-access)), WebRTC media mode is off, and every AWS service resolves to the deployment region. Any other configuration needs internet egress, so no interface endpoint is created and this error cannot occur.
 
 **Solution:** Set the `aws_comprehend_region` variable to a region where Comprehend is available:
 
 ```hcl
 module "stdapi_ai" {
   source  = "stdapi-ai/stdapi-ai/aws"
-  version = "~> 1.0"
+  version = "~> 1.20"
 
   aws_comprehend_region = "us-east-1"
 }

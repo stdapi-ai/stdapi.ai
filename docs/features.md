@@ -41,7 +41,7 @@ stdapi.ai is an **AI gateway purpose-built for AWS**. It brings OpenAI, Anthropi
   <br>How the compatibility claims on this page are tested.
 
 - :material-rocket-launch: __[Deployment](#deployment)__
-  <br>The Community and Commercial editions, side by side.
+  <br>Run the container locally, or deploy it to AWS with Terraform.
 
 - :material-scale-balance: __[How stdapi.ai Compares](#how-stdapiai-compares)__
   <br>Feature-by-feature against the alternatives.
@@ -408,16 +408,16 @@ S3 backs the whole API surface, not just file storage, which buys three things a
 - **Malformed requests stop at the edge** — Out-of-spec requests are rejected before they reach an AWS call, under a [strict mode](operations_configuration_observability.md#strict-input-validation) that also refuses unknown fields instead of ignoring them
 - **API keys are not stored in the clear** — Held in SSM Parameter Store or Secrets Manager, kept in memory only as a salted hash, and compared in constant time so a key cannot be recovered by timing
 - **Encrypted in transit** — TLS 1.2+ on every AWS service call; the Terraform module terminates client traffic on TLS 1.3 with post-quantum hybrid key exchange, and forwarded headers from ALB and CloudFront are processed safely
-- **A hardened supply chain** — The commercial container image is validated and built without exposure to a public package registry at run time
+- **A hardened supply chain** — The hardened container image is built without exposure to a public package registry at run time
 
-!!! success "Commercial: hardened image, Security Hub validated :material-arrow-right: [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)"
-    The commercial image is security-validated by AWS Marketplace: a hardened minimal base with **minimal installed packages** and **no shell**, deployed with a **read-only root filesystem** and **dropped Linux capabilities**. The community image is a standard Debian-slim build carrying the same API surface, the same models and the same media stack, so what the commercial edition adds is hardening and optimization, not capability. The Terraform module is built against the **AWS Security Hub Foundational Security Best Practices** standard, passes a large share of applicable controls out of the box, and configures a **Customer Managed KMS key** with auto-rotation for all data at rest. Optional variables add native **GuardDuty Runtime Monitoring** and **Route 53 Resolver DNS Firewall** on the module's dedicated VPC.
+!!! success "Hardened image and FSBP-aligned Terraform module"
+    The container image (`ghcr.io/stdapi-ai/stdapi.ai-community`, amd64 and arm64) is hardened: a minimal base with **minimal installed packages** and **no shell**, deployed with a **read-only root filesystem** and **dropped Linux capabilities**. The Terraform module is built against the **AWS Security Hub Foundational Security Best Practices** standard, passes a large share of applicable controls out of the box, and configures a **Customer Managed KMS key** with auto-rotation for all data at rest. Optional variables add native **GuardDuty Runtime Monitoring** and **Route 53 Resolver DNS Firewall** on the module's dedicated VPC.
 
     [:octicons-arrow-right-24: AWS Security Hub, GuardDuty & DNS Firewall Integration](operations_authentication_security.md#aws-security-hub-guardduty-dns-firewall-integration)
 
 ### Compliance & Data Sovereignty
 
-The gateway runs on infrastructure you own, so no third party sits between your users and your models, and Amazon Bedrock does not store your prompts or use them to train models. AWS service calls are restricted to the regions you configure. The AWS services used by stdapi.ai (Bedrock, S3, Polly, Transcribe, and more) are in scope for **GDPR**, **ISO 27001/27017/27018**, **SOC 1/2/3**, **HIPAA**, **FedRAMP**, **PCI-DSS**, and **CSA STAR Level 2** — these certifications apply to the AWS services and regions you choose, and are not inherited by stdapi.ai or by your application. The commercial Terraform module adds VPC endpoints (no internet egress), Customer Managed KMS keys, and region-pinned cross-region profiles for strict data residency.
+The gateway runs on infrastructure you own, so no third party sits between your users and your models, and Amazon Bedrock does not store your prompts or use them to train models. AWS service calls are restricted to the regions you configure. The AWS services used by stdapi.ai (Bedrock, S3, Polly, Transcribe, and more) are in scope for **GDPR**, **ISO 27001/27017/27018**, **SOC 1/2/3**, **HIPAA**, **FedRAMP**, **PCI-DSS**, and **CSA STAR Level 2** — these certifications apply to the AWS services and regions you choose, and are not inherited by stdapi.ai or by your application. The Terraform module adds VPC endpoints (no internet egress once the image is mirrored to your own ECR repository, see [Deployment without internet access](operations_deploy_advanced.md#deployment-without-internet-access)), Customer Managed KMS keys, and region-pinned cross-region profiles for strict data residency.
 
 [:octicons-arrow-right-24: Data Sovereignty & Compliance](operations_compliance.md)
 
@@ -536,18 +536,17 @@ Every compatibility claim on this page is tested against the real vendor APIs an
 
 ## :material-rocket-launch: Deployment
 
-### Community vs Commercial
+### Local container vs Terraform module
 
-|                               | :material-docker: **Community**                         | :material-aws: **Commercial**                                                                     |
+|                               | :material-docker: **Local container**                   | :material-aws: **Terraform module**                                                               |
 |-------------------------------|---------------------------------------------------------|---------------------------------------------------------------------------------------------------|
-| **Price**                     | Free                                                    | $0.10/container-hour - With 14-day free trial                                                     |
-| **License**                   | AGPL-3.0                                                | AWS Marketplace SCMP                                                                              |
-| **API compatibility**         | <span class="m-y" aria-hidden="true">✓</span> Full                   | <span class="m-y" aria-hidden="true">✓</span> Full                                                             |
-| **Container image**           | <span class="m-p" aria-hidden="true">◐</span> Standard Debian-slim build (GHCR) | <span class="m-y" aria-hidden="true">✓</span> Hardened minimal base, AWS Marketplace security-validated      |
-| **Deployment**                | <span class="m-p" aria-hidden="true">◐</span> Docker / self-managed | <span class="m-y" aria-hidden="true">✓</span> Terraform module (ECS Fargate) - AWS Marketplace container image |
-| **Production infrastructure** | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-y" aria-hidden="true">✓</span> Fully featured - AWS Well-Architected - Hardened                 |
+| **Price**                     | Free                                                    | Free                                                                                              |
+| **License**                   | AGPL-3.0-or-later                                       | AGPL-3.0-or-later                                                                                 |
+| **API compatibility**         | <span class="m-y" aria-hidden="true">✓</span> Full      | <span class="m-y" aria-hidden="true">✓</span> Full                                                |
+| **Container image**           | <span class="m-y" aria-hidden="true">✓</span> Hardened minimal base, no shell (`stdapi.ai-community`) | <span class="m-y" aria-hidden="true">✓</span> The same image |
+| **Deployment**                | <span class="m-p" aria-hidden="true">◐</span> Docker / self-managed | <span class="m-y" aria-hidden="true">✓</span> ECS Fargate, or any container platform with the image |
+| **Production infrastructure** | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-y" aria-hidden="true">✓</span> Fully featured - AWS Well-Architected - Hardened |
 | **Security posture**          | Manual (self-managed)                                   | <span class="m-y" aria-hidden="true">✓</span> Built against Security Hub FSBP, passing most applicable controls out of the box; GuardDuty & DNS Firewall integrations |
-| **Commercial support**        | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-y" aria-hidden="true">✓</span> 1 business day                                                   |
 
 ---
 

@@ -66,9 +66,8 @@ def iam_action(model: OperationModel) -> str:
     The action is ``<service prefix>:<OperationName>``, and botocore already
     carries both halves: ``signingName`` is the service's IAM prefix wherever
     the two differ from the endpoint prefix (``pricing`` for ``api.pricing``,
-    ``bedrock`` for ``bedrock-runtime``, ``aws-marketplace`` for
-    ``metering.marketplace``), and the endpoint prefix is the prefix for the
-    services that declare no signing name. Amazon S3 is the one service this
+    ``bedrock`` for ``bedrock-runtime``), and the endpoint prefix is the prefix
+    for the services that declare no signing name. Amazon S3 is the one service this
     server calls whose operations are authorized by a differently named action,
     so those are mapped explicitly.
 

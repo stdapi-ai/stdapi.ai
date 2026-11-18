@@ -34,7 +34,6 @@ from stdapi.config import SETTINGS
 from stdapi.files import FileRecord, _core, _multipart
 from stdapi.input_file import InputFile
 from stdapi.routes import openai_files as openai_files_routes
-from stdapi.server import AWS_APN_ID
 from tests._helpers import make_client_error
 
 if TYPE_CHECKING:
@@ -941,7 +940,7 @@ class TestCreateMultipartSessionUnit:
         """
         await _multipart.create_multipart_session("f.bin", "a/b", "assistants", 1)
         assert stub_s3.create_kwargs["Metadata"]["expires-at"] == ""
-        assert "stdapi-ai.expires" not in stub_s3.create_kwargs["Tagging"]
+        assert "Tagging" not in stub_s3.create_kwargs
 
 
 #: Externally owned bucket an ``s3://`` upload source is read from.
@@ -1276,8 +1275,7 @@ class TestUploadFileExpiryTagUnit:
         assert len(stub_s3.tag_sets) == 1
         assert stub_s3.tag_sets[0] is EXPIRING_S3_TAG_SET
         tags = {tag["Key"]: tag["Value"] for tag in stub_s3.tag_sets[0]}
-        assert tags["stdapi-ai.expires"] == "true"
-        assert tags["aws-apn-id"] == AWS_APN_ID
+        assert tags == {"stdapi-ai.expires": "true"}
 
     async def test_an_upload_without_a_ttl_is_never_tagged_for_expiry(
         self, stub_s3: _StubS3CopyStore

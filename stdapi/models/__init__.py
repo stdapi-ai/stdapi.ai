@@ -1115,7 +1115,7 @@ class ModelBase[RequestT, ResponseT]:
                     },
                     tags=[
                         {"key": k, "value": v}
-                        for k, v in build_metadata(apn=True).items()
+                        for k, v in build_metadata(as_tags=True).items()
                     ],
                 )
             )["invocationArn"]

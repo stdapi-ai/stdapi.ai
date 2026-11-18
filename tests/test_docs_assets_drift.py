@@ -26,7 +26,7 @@ CURRENT      the pin is the latest and the bytes match      none
 A DIGEST finding is the serious one: either the recorded hash is wrong, in which
 case every image build already fails, or an immutable published file changed
 under us. A LICENCE finding matters because these files are redistributed inside
-a paid Marketplace image, so the notice that travels with them has to be the
+the hardened published image, so the notice that travels with them has to be the
 right one.
 
 The live check is opt-in (``--drift``), like the price detector it rides beside:

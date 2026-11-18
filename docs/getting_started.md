@@ -1,7 +1,7 @@
 ---
 title: Get Started - Run stdapi.ai locally or on AWS
-description: Pick your path to try stdapi.ai - a one-line Docker run for local development, or a two-command Terraform deployment on AWS with a 14-day free trial of the license.
-keywords: stdapi.ai getting started, try stdapi.ai, OpenAI gateway AWS, Anthropic gateway AWS, AWS Bedrock quickstart, Docker local AI gateway, Terraform AI gateway, AWS Marketplace AI
+description: Pick your path to try stdapi.ai - a one-line Docker run for local development, or a two-command Terraform deployment on AWS.
+keywords: stdapi.ai getting started, try stdapi.ai, OpenAI gateway AWS, Anthropic gateway AWS, AWS Bedrock quickstart, Docker local AI gateway, Terraform AI gateway
 ---
 
 # :material-rocket-launch: Get Started
@@ -12,14 +12,14 @@ Two ways to get an OpenAI-, Anthropic-, Cohere- and Ollama-compatible endpoint i
 
 <div class="grid cards" markdown>
 
--   :material-aws:{ .lg .middle } __14-day free trial — Deploy on AWS with Terraform__
+-   :material-aws:{ .lg .middle } __Two commands: deploy on AWS with Terraform__
 
     ---
 
     **Start here — recommended for production.**
 
     - 2 Terraform commands → ECS Fargate with HTTPS, auto-scaling, optional WAF
-    - Hardened container image from **AWS Marketplace** — license free for 14 days, then $0.10/container-hour
+    - Hardened container image (`ghcr.io/stdapi-ai/stdapi.ai-community`), free under AGPL-3.0, with no subscription
     - IP-restricted by default — safe to test right away
     - Multi-region variants available (EU / US) for data residency
 
@@ -34,7 +34,7 @@ Two ways to get an OpenAI-, Anthropic-, Cohere- and Ollama-compatible endpoint i
     - One `docker run` command — no AWS infrastructure to provision
     - Uses your local AWS credentials (mounted from `~/.aws`) to reach Bedrock
     - No authentication or IP restriction by default — intended for local use only
-    - Free **community image** (AGPL-3.0)
+    - Free hardened container image (AGPL-3.0)
     - Full API compatibility — same endpoints as production
 
     [:octicons-arrow-right-24: Run Locally with Docker](operations_getting_started_local.md){ .md-button }
@@ -56,12 +56,9 @@ Looking for reference documentation rather than a quickstart? See [Features](fea
     - **Administrator-level AWS permissions** — the module provisions IAM roles and policies, KMS keys, ECS/Fargate, ALB, and networking. A restricted developer profile will fail.
     - **A sandbox AWS account is strongly recommended** for evaluation. Replicate into your target account once you've validated the stack.
     - [Terraform](https://www.terraform.io/downloads) or [OpenTofu](https://opentofu.org/docs/intro/install/) >= 1.9.
-    - An **[AWS Marketplace subscription](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)** (14-day free trial of the license).
+    - Internet access from the tasks, to pull the image from GitHub Container Registry. Without it, mirror the image into your own Amazon ECR.
 
     The Docker path additionally needs [Docker](https://docs.docker.com/get-started/get-docker/) or [Podman](https://podman.io/docs/installation).
-
-!!! tip trial "14-day free trial on AWS"
-    Deploy the production-ready stack today — the stdapi.ai license is free for 14 days. AWS charges for what it runs (ALB, Fargate, KMS, NAT) and for Bedrock usage from the first minute. After the trial, the license is $0.10/container-hour — cancel anytime.
 
 ---
 
@@ -70,9 +67,9 @@ Looking for reference documentation rather than a quickstart? See [Features](fea
 | You are... | Go with | Why |
 |---|---|---|
 | A developer evaluating for the first time | **Docker (local)** | Fastest feedback loop, no cloud resources to tear down. |
-| A team lead validating for production use | **AWS (Terraform)** | Mirrors real deployment. 14-day free license trial during evaluation. |
+| A team lead validating for production use | **AWS (Terraform)** | Mirrors real deployment. |
 | Already running a production workload elsewhere | **AWS (Terraform)** | Jump straight to the stack you'll operate long-term. |
-| Contributing to an open-source project | **Docker (local)** | AGPL-3.0 community image is free to use and redistribute. |
+| Contributing to an open-source project | **Docker (local)** | AGPL-3.0 container image is free to use and redistribute. |
 
 You can start local and migrate to AWS later — same API, same SDKs, same client-side changes. Point the base URL at your AWS endpoint, add that deployment's API key, and check your model names against what its regions serve.
 
@@ -98,6 +95,6 @@ What the base URL buys is the catalogue behind it: it spans every provider your 
 - :material-cog: [**Configuration**](operations_configuration.md) — Every environment variable and option
 - :material-wrench: [**Troubleshooting**](operations_troubleshooting.md) — Common first-deployment errors and fixes
 - :material-server-network: [**Advanced Deployment**](operations_deploy_advanced.md) — VPC integration, multi-region, cost optimization
-- :material-scale-balance: [**Licensing**](operations_licensing.md) — Community (AGPL) vs Commercial
+- :material-scale-balance: [**Licensing**](operations_licensing.md) — AGPL-3.0-or-later terms
 
 </div>

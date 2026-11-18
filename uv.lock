@@ -2706,7 +2706,7 @@ wheels = [
 
 [[package]]
 name = "stdapi"
-version = "1.19.1"
+version = "1.20.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
@@ -2776,7 +2776,7 @@ dev = [
     { name = "pytest-xdist", extra = ["psutil"] },
     { name = "ruff" },
     { name = "stdapi", extra = ["granian", "mcp", "opentelemetry", "uvicorn", "webrtc"] },
-    { name = "types-aiobotocore", extra = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "cloudwatch", "comprehend", "meteringmarketplace", "polly", "pricing", "s3", "ssm", "sts", "transcribe", "translate"] },
+    { name = "types-aiobotocore", extra = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "cloudwatch", "comprehend", "polly", "pricing", "s3", "ssm", "sts", "transcribe", "translate"] },
     { name = "types-pyyaml" },
 ]
 docs = [
@@ -2794,7 +2794,7 @@ lint = [
     { name = "pyarrow" },
     { name = "ruff" },
     { name = "stdapi", extra = ["opentelemetry", "uvicorn"] },
-    { name = "types-aiobotocore", extra = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "cloudwatch", "comprehend", "meteringmarketplace", "polly", "pricing", "s3", "ssm", "sts", "transcribe", "translate"] },
+    { name = "types-aiobotocore", extra = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "cloudwatch", "comprehend", "polly", "pricing", "s3", "ssm", "sts", "transcribe", "translate"] },
     { name = "types-pyyaml" },
 ]
 test = [
@@ -2875,7 +2875,7 @@ dev = [
     { name = "stdapi" },
     { name = "stdapi", extras = ["opentelemetry", "uvicorn"] },
     { name = "stdapi", extras = ["opentelemetry", "uvicorn", "granian", "mcp", "webrtc"] },
-    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "cloudwatch", "polly", "comprehend", "meteringmarketplace", "pricing", "s3", "ssm", "sts", "transcribe", "translate"], specifier = ">=3.8" },
+    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "cloudwatch", "polly", "comprehend", "pricing", "s3", "ssm", "sts", "transcribe", "translate"], specifier = ">=3.8" },
     { name = "types-pyyaml" },
 ]
 docs = [
@@ -2894,7 +2894,7 @@ lint = [
     { name = "ruff" },
     { name = "stdapi" },
     { name = "stdapi", extras = ["opentelemetry", "uvicorn"] },
-    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "cloudwatch", "polly", "comprehend", "meteringmarketplace", "pricing", "s3", "ssm", "sts", "transcribe", "translate"], specifier = ">=3.8" },
+    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "cloudwatch", "polly", "comprehend", "pricing", "s3", "ssm", "sts", "transcribe", "translate"], specifier = ">=3.8" },
     { name = "types-pyyaml" },
 ]
 test = [
@@ -3015,9 +3015,6 @@ cloudwatch = [
 comprehend = [
     { name = "types-aiobotocore-comprehend" },
 ]
-meteringmarketplace = [
-    { name = "types-aiobotocore-meteringmarketplace" },
-]
 polly = [
     { name = "types-aiobotocore-polly" },
 ]
@@ -3083,15 +3080,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/1b/b0/d985ef96fd6ed2bc7759d522decc2a39f645a6d73c0cf6d75fb9b5a316ca/types_aiobotocore_comprehend-3.10.0.tar.gz", hash = "sha256:aeb641bbb8f8d491faf5e7d1f0d916b89e6d981309678140d686a7cca9800a4c", size = 43912, upload-time = "2026-10-24T03:46:10.632Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a4/90/a94bb5ecd52997ecf446351ed1f195208a4265dbf37306cb9ce3193b90c9/types_aiobotocore_comprehend-3.10.0-py3-none-any.whl", hash = "sha256:0148f84c4761b8aeffd6463e7e6a9e1ac8c9060c8435ad3979f2c9f3371dd2ae", size = 49637, upload-time = "2026-10-24T03:46:08.63Z" },
-]
-
-[[package]]
-name = "types-aiobotocore-meteringmarketplace"
-version = "3.10.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2a/6c/c499c6ef9981e6847beed956fc6be4bac986737150496ddef9ebbfb59f85/types_aiobotocore_meteringmarketplace-3.10.0.tar.gz", hash = "sha256:4fd790ed08bfb6a940fca9e26993da6ec328442e7ad97da25faba1c375bf1d3a", size = 16415, upload-time = "2026-10-24T03:49:54.073Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/1f/e1602d9e79df268d8c6266b4512e679002d9a564f6c5d107b180b4cb7256/types_aiobotocore_meteringmarketplace-3.10.0-py3-none-any.whl", hash = "sha256:91323d3d612697baf23552d74743a3ce2065b4cd491d0294ead3eca382072235", size = 20857, upload-time = "2026-10-24T03:49:51.397Z" },
 ]
 
 [[package]]

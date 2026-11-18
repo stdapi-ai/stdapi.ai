@@ -343,7 +343,7 @@ $ curl https://api.example.com/.well-known/oauth-protected-resource
   "authorization_servers": ["https://cognito-idp.eu-west-3.amazonaws.com/eu-west-3_a1b2c3d4e"],
   "scopes_supported": ["stdapi/invoke"],
   "bearer_methods_supported": ["header"],
-  "resource_name": "stdapi.ai (Community Edition)",
+  "resource_name": "stdapi.ai",
   "resource_documentation": "https://stdapi.ai/api_reference/"
 }
 ```
@@ -368,7 +368,7 @@ From there the agent reads the authorization server's own metadata, signs in, an
 
 ### :material-account-check: OIDC, Cognito & IAM Identity Center
 
-For user-facing applications or enterprise SSO, you can offload authentication to an OpenID Connect (OIDC) provider, Amazon Cognito, or AWS IAM Identity Center (the AWS-native workforce SSO service for centralized employee and partner access).
+For user-facing applications or corporate SSO, you can offload authentication to an OpenID Connect (OIDC) provider, Amazon Cognito, or AWS IAM Identity Center (the AWS-native workforce SSO service for centralized employee and partner access).
 
 When authentication is handled at this layer, requests are fully validated **before they reach stdapi.ai** — the application receives only authenticated, pre-authorized requests. This remains a valid alternative to [validating Cognito tokens in stdapi.ai](#amazon-cognito-user-pool-tokens): choose the edge when you need a hosted sign-in flow or session cookies, and choose in-application validation when clients already hold a bearer token and you want the verified caller to drive [per-user cost attribution](operations_cost_management.md#per-user-attribution).
 
@@ -428,12 +428,10 @@ When no authentication method is configured, stdapi.ai will:
 
 ## :material-shield-outline: Application Security
 
-stdapi.ai includes built-in security mechanisms that are active regardless of the authentication method chosen.
+stdapi.ai includes built-in security mechanisms that are active regardless of the authentication method chosen. stdapi.ai was approved by AWS as **AWS Qualified Software**, after AWS verified it against its technical and security requirements.
 
 !!! abstract "Hardened Container Image"
-    The AWS Marketplace image is built on a security-hardened minimal base: **no shell**, **no package manager**, no unnecessary system tools, and a distribution rebuilt continuously to keep its known-vulnerability count at or near zero. The community image is built on a standard Debian base — the same application, the same non-root user, a larger base with the system tools a general-purpose distribution ships. Both run as an unprivileged user, and the Terraform module further enforces a **read-only root filesystem** and **drops all Linux capabilities** from the ECS task definition, reducing the attack surface to the minimum required for operation.
-
-    [:octicons-arrow-right-24: Subscribe on AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)
+    The container image (`ghcr.io/stdapi-ai/stdapi.ai-community`) is built on a security-hardened minimal base: **no shell**, **no package manager**, no unnecessary system tools, and a distribution rebuilt continuously to keep its known-vulnerability count at or near zero. It runs as an unprivileged user, and the Terraform module further enforces a **read-only root filesystem** and **drops all Linux capabilities** from the ECS task definition, reducing the attack surface to the minimum required for operation.
 
 ### :material-package-variant-closed: Supply Chain Security
 
@@ -441,9 +439,8 @@ Supply chain attacks — where malicious code is injected into a software packag
 
 stdapi.ai's distribution model eliminates this attack surface entirely:
 
-- **Container-only distribution** — stdapi.ai is never distributed as a pip package or PyPI dependency. There is no `pip install stdapi.ai`, no transitive dependency chain to compromise, and no package registry to hijack. The only distribution channels are the AWS Marketplace ECR registry (commercial) and GHCR (community image).
-- **AWS Marketplace security validation** — the commercial container image is scanned and validated by AWS before being made available in the Marketplace. The image you deploy is exactly the image AWS validated — nothing can be inserted between validation and deployment.
-- **Minimal base image (commercial)** — the Marketplace container has no shell, no package manager, and no unnecessary system tools. There is no mechanism to install additional packages or execute arbitrary commands at runtime. The community image uses a standard Debian base and keeps those tools.
+- **Container-only distribution** — stdapi.ai is never distributed as a pip package or PyPI dependency. There is no `pip install stdapi.ai`, no transitive dependency chain to compromise, and no package registry to hijack. The only distribution channel is GitHub Container Registry (GHCR), for the container image.
+- **Minimal base image** — the container has no shell, no package manager, and no unnecessary system tools. There is no mechanism to install additional packages or execute arbitrary commands at runtime.
 - **Immutable deployment** — the container image is pulled once at task start and run as-is. There are no runtime `pip install`, `apt install`, or dependency resolution steps that could fetch and execute untrusted code.
 - **Read-only root filesystem** — when deployed via the Terraform module, the ECS task definition enforces a read-only root filesystem, preventing any modification to the container files at runtime.
 - **Temporary credentials with least privilege** — CI/CD pipelines that build and publish the container image use short-lived, role-scoped credentials with only the permissions required for that specific job. No long-lived access keys are used in the build or release process. Jobs that do not require AWS access — such as linters and security scanners — run on isolated runners with no AWS credentials at all, limiting the blast radius of any compromised job.

@@ -1646,7 +1646,7 @@ class TestOpenAIBatchLifecycle:
         s3, body = self._completed_batch(app_client, monkeypatch)
         options = _batches.result_file_options(s3, body["output_file_id"])
         assert options["Metadata"]["expires-at"] == ""
-        assert "stdapi-ai.expires" not in options["Tagging"]
+        assert "Tagging" not in options
 
     @pytest.mark.parametrize(
         "policy",

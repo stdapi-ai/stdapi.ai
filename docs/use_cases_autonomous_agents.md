@@ -275,7 +275,6 @@ tofu apply
 
 | Charge | Driver |
 | --- | --- |
-| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | ECS Fargate | The Hermes task — pinned to exactly one, see *Single instance by design* in the sample's README — and the gateway task, each sized independently; a short-lived init container re-seeds `config.yaml` on every deployment |
 | Load balancing and networking | One ALB fronting the gateway API and dashboard, plus the NAT gateways the private subnets egress through |
 | Amazon EFS | Standing storage and throughput cost for `/opt/data` — config, SQLite state, sessions, memories, skills |
@@ -331,7 +330,6 @@ tofu apply
 
 | Charge | Driver |
 | --- | --- |
-| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | ECS Fargate | The OpenClaw task — pinned to exactly one, see *Single Instance, by Design* in the sample's README — and the gateway task, each sized independently; a short-lived init container seeds `openclaw.json` on first boot only, and runs harmlessly on every later deployment |
 | Load balancing and networking | One ALB fronting the gateway and Control UI, plus the NAT gateways the private subnets egress through |
 | Amazon EFS | Standing storage and throughput cost for OpenClaw's config, auth material and workspace |

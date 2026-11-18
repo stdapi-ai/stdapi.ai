@@ -7,8 +7,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from stdapi.config import SETTINGS
-from stdapi.metering import DOCS_UTM, EDITION_TITLE
-from stdapi.server import SERVER_VERSION
+from stdapi.server import DOCS_UTM, SERVER_TITLE, SERVER_VERSION
 
 if TYPE_CHECKING:
     from typing import Any
@@ -66,7 +65,7 @@ _OAUTH_METADATA: dict[str, Any] | None = (
         # RFC 9728 section 3.2 requires zero-valued members to be omitted.
         **({"scopes_supported": _oauth_scopes} if _oauth_scopes else {}),
         "bearer_methods_supported": ["header"],
-        "resource_name": EDITION_TITLE,
+        "resource_name": SERVER_TITLE,
         "resource_documentation": _API_REFERENCE_URL,
     }
     if _oauth_resource
@@ -164,7 +163,7 @@ MCP_SERVER_CARD: dict[str, Any] | None = (
         "$schema": "https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json",
         "version": "1.0",
         "protocolVersion": "2025-03-26",
-        "serverInfo": {"name": EDITION_TITLE, "version": SERVER_VERSION},
+        "serverInfo": {"name": SERVER_TITLE, "version": SERVER_VERSION},
         "transport": (
             {"type": "streamable-http", "endpoint": "/mcp"}
             if _mcp_streamable

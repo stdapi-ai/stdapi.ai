@@ -309,7 +309,6 @@ The solid path is the public one: an application outside the VPC has no route to
 
 | Charge | Driver |
 | --- | --- |
-| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | ECS Fargate | The gateway service, sized and auto-scaled independently of your application's own compute |
 | Load balancing and networking | An ALB plus the NAT gateways the private subnets egress through, next to the S3 gateway endpoint, which carries no charge — the ALB drops out entirely when your application runs in the same VPC and reaches the gateway over Cloud Map private DNS |
 | Model and AI-service usage | Amazon Bedrock at AWS rates, billed to your account with no markup |

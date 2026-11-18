@@ -1,21 +1,22 @@
 ---
-title: Releases & Roadmap - Active Development
-description: stdapi.ai release history and upcoming features. Track regular updates, new Amazon Bedrock capabilities, and active development progress.
-keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gateway roadmap, software changelog, active development, new AI features, product updates
+title: Releases - Release History
+description: stdapi.ai release history. The project is discontinued and v1.20.1, released 2026-11-18, is its final release.
+keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, software changelog, final release, discontinued
 ---
 
 # :material-timeline: Releases & Roadmap
 
-**stdapi.ai is under active development** with regular feature releases.
+**stdapi.ai is discontinued.** v1.20.1, released 2026-11-18, is its final release: no further development or support is planned. The source code stays available under the AGPL-3.0-or-later.
 
 ## :material-tag-multiple: Version Index { #recent-releases }
 
-**Latest: [v1.19.1](#v1190-long-conversations-reasoning-control-medical-transcription-with-v1191-maintenance-update) — released 2026-09-29.**
+**Latest: [v1.20.1](#v1201-agpl-only-public-hardened-image-terraform-module-1200), the final release: released 2026-11-18.**
 
 Every release, newest first. Each entry in the [Release History](#release-history) below opens with a five-bullet summary.
 
 | Version | Date | Theme | Release notes |
 |---|---|---|---|
+| **v1.20.1** | 2026-11-18 | Final release: project discontinued, AGPL-3.0-or-later only, public hardened image on GitHub Container Registry, Terraform module 1.20.0 | [Read](#v1201-agpl-only-public-hardened-image-terraform-module-1200) |
 | **v1.19.0** (and v1.19.1) | 2026-09-23 (2026-09-29) | Long conversations, token counting on every model, reasoning control, medical transcription | [Read](#v1190-long-conversations-reasoning-control-medical-transcription-with-v1191-maintenance-update) |
 | **v1.18.0** | 2026-09-19 | Vendor parity across every mirrored API, tenant key rotation, per-tenant rate limits, realtime tools | [Read](#v1180-vendor-parity-tenant-key-rotation-rate-limits) |
 | **v1.17.0** | 2026-09-08 | Your own model endpoints, the Ollama dialect, per-tenant keys, usage and cost from the API, WebRTC | [Read](#v1170-your-own-models-your-own-tenants-your-own-spend) |
@@ -39,13 +40,34 @@ Every release, newest first. Each entry in the [Release History](#release-histor
 
 ---
 
-## :material-rocket-launch: Roadmap (Tracked on GitHub)
+## :material-history: Release History
 
-Pending features and current deployment state are tracked on the [GitHub Project](https://github.com/orgs/stdapi-ai/projects/1).
+### v1.20.1 – 2026-11-18 – Final Release: AGPL Only, Public Hardened Image & Terraform Module 1.20.0 { #v1201-agpl-only-public-hardened-image-terraform-module-1200 }
+
+!!! danger "stdapi.ai is discontinued"
+    This is the final release. No further development, fixes or support are planned. v1.20.1 replaces v1.20.0, which was tagged without a container image. The AWS Marketplace edition, its license and the managed deployment service have ended. The source code stays available under the AGPL-3.0-or-later.
+
+!!! abstract "At a glance"
+    - **One license.** stdapi.ai is licensed under the AGPL-3.0-or-later only. There is no Marketplace edition.
+    - **One public, hardened image.** `ghcr.io/stdapi-ai/stdapi.ai-community` is now the hardened image (minimal base, no shell, audio-only LGPL FFmpeg), multi-arch (amd64 and arm64) under the tags `X.Y.Z`, `X.Y`, `X` and `latest`. The Terraform module deploys it, and you can run it locally. The repository's `Dockerfile` builds this image (`docker build -t stdapi.ai .`).
+    - **Terraform module 1.20.0.** It deploys the image's `latest` tag by default (`version_to_deploy` pins a version) and pulls it from GitHub Container Registry, or from your own Amazon ECR mirror through `container_image_repository_url`.
+    - **No partner attribution.** The `aws-apn-id` tag and the partner User-Agent suffix are gone.
+    - **Bedrock Marketplace models are unchanged.** Third-party models served through Amazon Bedrock Marketplace work as before.
+
+!!! warning "Behavior Changes"
+    Review these before upgrading:
+
+    - **Terraform module 1.20.0 pulls the image from `ghcr.io`** instead of AWS Marketplace. `container_image_repository_url` points the module at an Amazon ECR mirror ([Deployment without internet access](operations_deploy_advanced.md#deployment-without-internet-access)). The `aws-apn-id` tag, the `aws-marketplace:RegisterUsage` permission and the metering VPC endpoint are removed. The module adds the tag `stdapi-ai.deployment`.
+    - **`server_version` in logs and the OpenTelemetry `service.version` attribute** no longer carry the `+c` suffix.
+    - **The OpenAPI title, the MCP server name and the OAuth resource name** are now "stdapi.ai".
+    - **The User-Agent** sent to AWS no longer carries the partner suffix.
+    - **S3 objects and AWS resources the gateway creates** no longer carry the `aws-apn-id` tag.
+
+!!! info "Upgrading from an earlier Terraform module version"
+    - If the deployment has no internet access, mirror the image and set `container_image_repository_url` before you upgrade, or the tasks fail with `CannotPullContainerError`.
+    - After the upgrade, you can cancel the AWS Marketplace subscription.
 
 ---
-
-## :material-history: Release History
 
 ### v1.19.0 – 2026-09-23 – Long Conversations, Reasoning Control & Medical Transcription (with v1.19.1 maintenance update, 2026-09-29) { #v1190-long-conversations-reasoning-control-medical-transcription-with-v1191-maintenance-update }
 
@@ -255,13 +277,13 @@ This release widens what a deployment can serve, who it can serve it to, and wha
     - **The same rule now covers your own SageMaker AI endpoints.** A request to a SageMaker-served model under a configured guardrail answers `400` instead of being served unfiltered, and a `MODEL_ALIASES` guardrail naming one stops startup. A SageMaker endpoint with no capacity to wake answers `503` (retry later), not `400`.
     - **Mantle routing and the per-user role's identity requirement are refused together.** A Mantle request is signed with the server's own credentials, so [`AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY`](operations_configuration_bedrock.md#aws-bedrock-user-role-require-identity) can never apply to a model routed there: a deployment setting both with `AWS_BEDROCK_MANTLE_PREFERRED_MODELS` non-empty stops at startup, and a Mantle request without an end-user identity answers `400`.
     - **The Terraform module requires Terraform or OpenTofu 1.9.** An existing deployment has to be on that version before it can upgrade the module.
-    - **The Terraform module now scales the service on CPU, where before it never scaled at all.** `autoscaling_cpu_target_percent` defaults to 70 instead of creating no scaling policy, so a fleet that has always held one task per availability zone now grows under load up to `autoscaling_max_capacity` — five times the minimum unless you set it. That raises what the Marketplace license can bill: a 3-AZ deployment metered at $0.10 per container-hour moves from a flat ~$216/month to a range whose ceiling is five times that. The gateway spends most of its time awaiting AWS, so CPU mainly answers the audio and video transcoding; set `autoscaling_alb_target_requests_per_target` to scale on request volume instead, or `autoscaling_cpu_target_percent = null` to hold the fleet at a fixed size. A WebRTC media deployment is unaffected: it pins the capacity to one task, and no policy is created when the minimum and maximum are equal.
+    - **The Terraform module now scales the service on CPU, where before it never scaled at all.** `autoscaling_cpu_target_percent` defaults to 70 instead of creating no scaling policy, so a fleet that has always held one task per availability zone now grows under load up to `autoscaling_max_capacity` — five times the minimum unless you set it. That raises the cost of the compute the deployment runs on, up to five times the baseline. The gateway spends most of its time awaiting AWS, so CPU mainly answers the audio and video transcoding; set `autoscaling_alb_target_requests_per_target` to scale on request volume instead, or `autoscaling_cpu_target_percent = null` to hold the fleet at a fixed size. A WebRTC media deployment is unaffected: it pins the capacity to one task, and no policy is created when the minimum and maximum are equal.
     - **A load balancer with no certificate now says so.** `alb_enabled` without `alb_domain_name` in a public zone or an `alb_certificate_arn` serves the API over plain HTTP, which is a supported way to stand up a trial. The plan and apply now carry a warning naming the two variables that turn on HTTPS, rather than leaving it to be noticed. It is a warning, not an error: nothing about the deployment changes.
     - **The Terraform module turns its CloudWatch alarms on for a deployment that named a topic.** `alarms_enabled` defaults to whether `sns_topic_arn` is set, rather than to `false`: a deployment that gave a topic and never set the flag had no alarms and no notifications, which is the one configuration that cannot have been intended. It now creates the five it was configured for — the four ECS service alarms of the underlying module, plus one on `ERROR` and `CRITICAL` log lines — each with its own CloudWatch charge. Setting `alarms_enabled = false` keeps the previous behaviour, and setting it `true` with no topic creates the alarms with nothing to notify.
     - **A configuration that would silently drop the compliance VPC endpoints is refused at plan time.** `compliance_vpc_endpoints_enabled` and `guardduty_vpc_endpoint_enabled` need a private application subnet to place their network interface in. Setting `nat_gateways_allowed = false` while internet access is still required — which it is by default — makes those subnets public, and the endpoints were then simply not created, with nothing said. That combination now fails the plan. A deployment already running it was not getting the endpoints it had asked for: set `nat_gateways_allowed = true`, or leave it unset, or turn the endpoints off.
     - **Input token counting is unavailable for the GPT-5.6 family.** [`POST /v1/responses/input_tokens`](api_openai_responses.md#input-token-counting) answers `400` for the models Mantle serves, which now includes that family. Clearing `AWS_BEDROCK_MANTLE_PREFERRED_MODELS` brings it back.
     - **GPT-5.6 usage is reported and billed under Bedrock Mantle**, attributed by [project](operations_configuration_aws.md#bedrock-mantle-project) rather than by IAM principal, and runs on Mantle's own throughput quotas. Batch inference, prompt caching and response IDs stored before the upgrade are unaffected.
-    - **The community container image moves from Alpine to a standard Debian base.** glibc is what the WebRTC media stack needs — `aiortc` publishes no musl wheel for any version — so the community image now ships every capability the commercial one does. It declares `python` as the image entry point and runs as an unprivileged user with **uid/gid 65532** instead of 1000. The API, its endpoints and the audio formats it accepts are unchanged, and deployments through the Terraform module are unaffected — the task definition already pinned 65532. Two things change for anyone running the image by hand: arguments after the image name are passed to the Python interpreter rather than run as a program, and a mounted `~/.aws` needs `--user "$(id -u):$(id -g)" -e HOME=/home/nonroot` — or `--userns=keep-id:uid=65532,gid=65532` on rootless Podman — to stay readable. It is also a larger image, built from the distribution's own packages; the hardened, minimal one is the [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) edition. See [Local Development](operations_getting_started_local.md#run-it).
+    - **The Debian container image moves from Alpine to a standard Debian base.** glibc is what the WebRTC media stack needs — `aiortc` publishes no musl wheel for any version — so the Debian image now ships every capability the hardened one does. It declares `python` as the image entry point and runs as an unprivileged user with **uid/gid 65532** instead of 1000. The API, its endpoints and the audio formats it accepts are unchanged, and deployments through the Terraform module are unaffected — the task definition already pinned 65532. Two things change for anyone running the image by hand: arguments after the image name are passed to the Python interpreter rather than run as a program, and a mounted `~/.aws` needs `--user "$(id -u):$(id -g)" -e HOME=/home/nonroot` — or `--userns=keep-id:uid=65532,gid=65532` on rootless Podman — to stay readable. It is also a larger image, built from the distribution's own packages; the hardened, minimal one is the [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) edition. See [Local Development](operations_getting_started_local.md#run-it).
 
 #### :material-server-network: Your Own Model Endpoints
 
@@ -560,7 +582,7 @@ Prompt caching itself is not new — this release adds *explicit placement and l
 | Programmatic tool calling types        | The OpenAI SDK's programmatic tool calling type surface parses on every request union, accepted and ignored on models without the capability                                              |
 | [Performance](features.md#performance) | Hot paths run in compiled native code and independent work runs in parallel: a 1 MB request costs 30% less CPU, multi-image generations finish in the time of the slowest image, and every optimization is pinned by regression tests |
 | MCP context efficiency                 | Tool schemas hide parameters MCP callers cannot use (streaming modes, token-level tuning, caller identifiers) and tool results return as compact JSON, cutting the tokens each call costs the calling agent; every exposed MCP tool is exercised end to end through a real MCP client in the test suite |
-| Slimmer container image                | The community image shrinks from 230 MB to 156 MB: unused dependency payloads are removed (language-name data, `cryptography`, `rich`/`typer`, uvicorn extras) and AWS service models are pruned to the services actually used, guarded by a build-time smoke test; the package inventory stays complete for vulnerability scanners (self-built ffmpeg registered, Python package metadata retained) and every redistributed component keeps its [licence and notice files](operations_licensing.md#frequently-asked-questions) |
+| Slimmer container image                | The Debian image shrinks from 230 MB to 156 MB: unused dependency payloads are removed (language-name data, `cryptography`, `rich`/`typer`, uvicorn extras) and AWS service models are pruned to the services actually used, guarded by a build-time smoke test; the package inventory stays complete for vulnerability scanners (self-built ffmpeg registered, Python package metadata retained) and every redistributed component keeps its [licence and notice files](operations_licensing.md#frequently-asked-questions) |
 | Metadata filter for MCP clients        | Listing stored chat completions accepts the metadata filter as a single [`metadata={"key": "value"}` JSON object](api_openai_chat_completions.md#stored-chat-completions) as well as the OpenAI SDK's `metadata[key]=value` pairs, so clients that can only send one query parameter per field — MCP tool calls among them — can filter too |
 
 #### :material-robot-happy: Verified with Real Clients
@@ -658,7 +680,7 @@ Enabled-by-default support ([`AWS_BEDROCK_MANTLE_ENABLED`](operations_configurat
 | Fault-tolerant, faster startup                | Unreachable Bedrock regions or Polly engines no longer abort startup; they are skipped with a warning and retried on the next refresh — and startup is faster overall             |
 | Usage & cost tracking                         | Request logs report the usage actually billed by AWS with its cost computed from live AWS pricing, optionally exported as CloudWatch metrics ([`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf)); the previous token estimation is removed and its `TOKENS_ESTIMATION*` settings are deprecated and ignored |
 | [Cost attribution](operations_cost_management.md#aws-cost-attribution) | Request, server, and user correlation metadata is now attached to every synchronous Bedrock inference call — the `InvokeModel` family included, not only `Converse` — so Bedrock invocation logs can be filtered and costs attributed per request or per user |
-| Smaller container images                      | The published images shrink by around 40% — 413 MB to 253 MB for the AWS Marketplace image, 377 MB to 230 MB for the community image — cutting pull time and storage. ffmpeg is now built with only the audio encoders the server uses, and the unused OpenTelemetry gRPC exporter is no longer installed |
+| Smaller container images                      | The published images shrink by around 40% — 413 MB to 253 MB for the hardened image, 377 MB to 230 MB for the Debian image — cutting pull time and storage. ffmpeg is now built with only the audio encoders the server uses, and the unused OpenTelemetry gRPC exporter is no longer installed |
 | Video retention (`AWS_S3_VIDEOS_EXPIRES_AFTER`) | Optional retention period for generated videos, reported as `expires_at` and enforced on download                                                                               |
 | Upload expiry (`expires_after`)               | Multipart upload sessions honor the OpenAI `expires_after` policy on the resulting file                                                                                           |
 | Session storage encryption                    | Optional KMS key for Amazon Bedrock session storage (`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`)                                                                                       |
@@ -752,7 +774,6 @@ This release focuses on the [stdapi-ai Terraform module](https://github.com/stda
 |-------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | AWS provider version bump     | Requirement raised to `>= 6.27.0` across all four modules                                                                                                                                                           |
 | S3 object tag rename          | Files API objects and the corresponding Terraform lifecycle rule now use the `stdapi-ai.expires` tag key instead of `expires`; a temporary backward-compatible rule still expires legacy-tagged objects             |
-| `aws-apn-id` resource tagging | AWS resources created at runtime (Bedrock async jobs, Transcribe jobs, S3 objects) are tagged with `aws-apn-id`, the standard AWS Marketplace attribution tag — an internal, vendor-side tag, not user-configurable |
 
 #### :material-robot-outline: MCP Token Optimization
 

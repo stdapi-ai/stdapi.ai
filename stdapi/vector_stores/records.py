@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from stdapi.api_errors import ApiError, FeatureUnavailableError
 from stdapi.aws import get_client
-from stdapi.aws_s3 import BUCKET_TO_REGION, S3_TAGGING
+from stdapi.aws_s3 import BUCKET_TO_REGION
 from stdapi.config import SETTINGS
 from stdapi.vector_stores._concurrency import gather_bounded
 from stdapi.vector_stores._paging import page_identifiers, page_records
@@ -141,7 +141,6 @@ async def write_record(key: str, record: BaseModel, *, etag: str | None = None) 
         Key=key,
         Body=record.model_dump_json().encode(),
         ContentType="application/json",
-        Tagging=S3_TAGGING,
         **conditions,  # type: ignore[arg-type]
     )
 

@@ -265,9 +265,9 @@ class TestTrademarkDetection:
     """
 
     def test_the_coding_assistant_marks_are_registered(self) -> None:
-        """The blog post names Cline, Cursor and Continue.dev.
+        """The coding assistant guide names Cline, Cursor and Continue.dev.
 
-        Ref: docs/blog/posts/bedrock-with-your-openai-code.md
+        Ref: docs/use_cases_coding_assistants.md
         """
         owners = {entry.label: entry.owner for entry in _REGISTRY}
         assert owners["Cline"] == "Cline Bot Inc."

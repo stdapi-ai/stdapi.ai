@@ -330,7 +330,7 @@ Everything else is unchanged: the same request bodies, the same newline-delimite
 - :material-check-all: [**Features**](features.md) — Full capabilities and AWS integrations
 - :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Deploy to AWS with Terraform
 - :material-puzzle: [**Use Cases**](use_cases.md) — Integration examples with popular tools
-- :material-cash-multiple: [**Cost Management**](operations_cost_management.md) — Model, infrastructure, and license costs, and per-request cost estimation
-- :material-email-outline: [**Contact**](contact.md) — Technical questions, sales, and private offers
+- :material-cash-multiple: [**Cost Management**](operations_cost_management.md) — Model and infrastructure costs, and per-request cost estimation
+- :material-email-outline: [**Contact**](contact.md) — Technical questions and general contact
 
 </div>

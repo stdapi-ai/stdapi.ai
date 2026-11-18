@@ -10,7 +10,7 @@ Ref: stdapi/main.py
 from __future__ import annotations
 
 from asyncio import CancelledError, Event, create_task, sleep, wait_for
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import contextmanager
 from inspect import signature
 from io import BytesIO
 from json import loads
@@ -21,7 +21,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Self
 
 import pytest
-from botocore.exceptions import ClientError, ParamValidationError
+from botocore.exceptions import ClientError
 from httpx import ASGITransport, AsyncClient
 from starlette.datastructures import UploadFile
 from starlette.middleware.gzip import GZipMiddleware
@@ -29,7 +29,7 @@ from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
 from stdapi import main as stdapi_main
-from stdapi import metering, monitoring
+from stdapi import monitoring
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.cleanup import (
     _DETACHED_TASKS,
@@ -37,13 +37,8 @@ from stdapi.cleanup import (
     run_cleanups_detached,
     schedule_cleanup,
 )
-from stdapi.config import AWS_REGION, SETTINGS
-from stdapi.exceptions import (
-    InvalidProductError,
-    NotEntitledError,
-    ServerError,
-    UnsupportedPlatformError,
-)
+from stdapi.config import SETTINGS
+from stdapi.exceptions import ServerError
 from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile
 from stdapi.main import handle_exception_group
 from stdapi.routes import (
@@ -53,9 +48,8 @@ from stdapi.routes import (
     discover_routers,
     openai_chat_completions,
 )
-from stdapi.server import SERVER_ID
 from stdapi.types.openai_chat_completions import ChatCompletion
-from tests._helpers import make_client_error, make_event_log, make_model_details
+from tests._helpers import make_model_details
 from tests.conftest import REPO_ROOT
 
 if TYPE_CHECKING:
@@ -818,159 +812,6 @@ class TestForwardedClientAddress:
         )
 
 
-#: Stand-in AWS Marketplace product code for the Enterprise build's registration.
-_FAKE_PRODUCT_CODE = "test-product-code"
-
-
-class _FakeMeteringClient:
-    """Marketplace metering client returning a canned answer or raising *error*."""
-
-    def __init__(self, error: Exception | None = None) -> None:
-        self.error = error
-        self.calls: list[dict[str, Any]] = []
-
-    async def register_usage(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
-        """Record the call and answer it, or fail it with the configured error."""
-        self.calls.append(kwargs)
-        if self.error is not None:
-            raise self.error
-        return {"Signature": "sig", "PublicKeyRotationTimestamp": "2026-01-01"}
-
-
-class TestMarketplaceRegistration:
-    """AWS Marketplace RegisterUsage runs only on the metered build, and maps its errors.
-
-    The call gates startup on the hourly-billed Enterprise build: a subscription
-    that is missing, a platform that cannot meter, or a mistyped product code
-    must each surface as the specific exception the lifespan reports, not as a
-    raw botocore error. The Community build must never reach the API at all.
-
-    Ref: https://docs.aws.amazon.com/marketplace/latest/APIReference/API_RegisterUsage.html
-         stdapi/metering.py:register
-    """
-
-    @staticmethod
-    def _install(
-        monkeypatch: pytest.MonkeyPatch,
-        client: _FakeMeteringClient,
-        *,
-        product_code: str = _FAKE_PRODUCT_CODE,
-    ) -> list[tuple[str, str | None]]:
-        """Pin the product code and hand *client* to ``register``.
-
-        Args:
-            monkeypatch: Fixture scoping the module-level patches.
-            client: Stub returned by the patched ``create_client``.
-            product_code: Value for the build's ``PRODUCT_CODE`` constant.
-
-        Returns:
-            The (service, region) pairs ``create_client`` was asked for.
-        """
-        opened: list[tuple[str, str | None]] = []
-
-        @asynccontextmanager
-        async def create_client(
-            service: str,
-            **kwargs: Any,  # noqa: ANN401
-        ) -> AsyncGenerator[_FakeMeteringClient]:
-            """Yield the stub instead of a real meteringmarketplace client."""
-            opened.append((service, kwargs.get("region_name")))
-            yield client
-
-        session = type("_Session", (), {"create_client": staticmethod(create_client)})()
-        monkeypatch.setattr(metering, "PRODUCT_CODE", product_code)
-        monkeypatch.setattr(metering, "AWS_SESSION", session)
-        return opened
-
-    async def test_successful_registration_is_recorded_on_the_start_event(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The response lands on the start event, and the nonce is this server's ID.
-
-        The nonce is what makes a restart idempotent for Marketplace, so it must
-        be the per-process server ID rather than a fresh value per call.
-        """
-        client = _FakeMeteringClient()
-        opened = self._install(monkeypatch, client)
-        start_event = make_event_log(type="start")
-
-        await metering.register(start_event)
-
-        assert opened == [("meteringmarketplace", AWS_REGION)]
-        assert client.calls == [
-            {
-                "ProductCode": _FAKE_PRODUCT_CODE,
-                "PublicKeyVersion": 1,
-                "Nonce": SERVER_ID,
-            }
-        ]
-        assert start_event["register_usage_response"]["Signature"] == "sig"
-
-    async def test_community_build_never_calls_the_metering_api(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """With no product code, no client is opened and no field is added.
-
-        The unmetered build ships to accounts with no Marketplace subscription,
-        where the call would fail startup outright.
-        """
-        client = _FakeMeteringClient()
-        opened = self._install(monkeypatch, client, product_code="")
-        start_event = make_event_log(type="start")
-
-        await metering.register(start_event)
-
-        assert opened == []
-        assert client.calls == []
-        assert "register_usage_response" not in start_event
-
-    @pytest.mark.parametrize(
-        ("code", "expected"),
-        [
-            ("CustomerNotEntitledException", NotEntitledError),
-            ("PlatformNotSupportedException", UnsupportedPlatformError),
-            ("DisabledApiException", UnsupportedPlatformError),
-            ("InvalidProductCodeException", InvalidProductError),
-            ("InvalidPublicKeyVersionException", InvalidProductError),
-        ],
-    )
-    async def test_each_registration_failure_maps_to_its_own_exception(
-        self, monkeypatch: pytest.MonkeyPatch, code: str, expected: type[Exception]
-    ) -> None:
-        """Every documented RegisterUsage error becomes the matching startup exception.
-
-        Each one also has to say what to do about it: the operator sees only
-        this message when the server refuses to start.
-        """
-        client = _FakeMeteringClient(make_client_error(code, "RegisterUsage"))
-        self._install(monkeypatch, client)
-
-        with pytest.raises(expected) as excinfo:
-            await metering.register(make_event_log(type="start"))
-
-        assert str(excinfo.value).strip(), "the startup failure carries no message"
-
-    async def test_a_product_code_the_api_refuses_outright_is_an_invalid_product(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A parameter botocore rejects before the call reads as the same mistake.
-
-        Nothing reaches AWS when the build was stamped with a product code
-        outside the API's own constraints, so there is no error code to map:
-        without its own handler the raw botocore failure ends the lifespan
-        with a traceback instead of the refusal naming the product.
-        """
-        client = _FakeMeteringClient(
-            ParamValidationError(report="Invalid length for parameter ProductCode")
-        )
-        self._install(monkeypatch, client)
-
-        with pytest.raises(InvalidProductError) as excinfo:
-            await metering.register(make_event_log(type="start"))
-
-        assert "Invalid AWS Marketplace product" in str(excinfo.value)
-
-
 class TestValidationErrorSelection:
     """The reported validation error is the most specific one, not the first.
 
@@ -1497,7 +1338,6 @@ class TestShutdownDrain:
             "initialize_polly_models",
             "initialize_transcribe_models",
             "measure_region_latencies",
-            "register",
             "verify_knowledge_bases",
             "verify_user_role_access",
         ):

@@ -12,16 +12,22 @@ SERVER_ID = webuuid()
 SERVER_NAME = f"{gethostname()[:128]}-{getpid()}-{SERVER_ID}"
 
 #: Server version
-SERVER_VERSION = "1.19.1"
+SERVER_VERSION = "1.20.1"
 
-#: Product code
-PRODUCT_CODE = "72gxmztpjz2hm5qnkkg0iiazo"
+#: Server title reported in the OpenAPI spec and to MCP clients
+SERVER_TITLE = "stdapi.ai"
 
-#: aws-apn-id tag value
-AWS_APN_ID = f"pc:{PRODUCT_CODE}"
+#: License metadata reported in the OpenAPI spec
+LICENSE_INFO = {
+    "name": "GNU Affero General Public License v3.0 or later",
+    "identifier": "AGPL-3.0-or-later",
+}
+
+#: Campaign parameters marking a click that started on the gateway's own docs surface
+DOCS_UTM = "utm_source=api-docs&utm_medium=product&utm_campaign=owned-surfaces"
 
 #: Server user agent
-USER_AGENT = f"stdapi.ai/{SERVER_VERSION}/{SERVER_ID} APN_1.1/pc_{PRODUCT_CODE}$"
+USER_AGENT = f"stdapi.ai/{SERVER_VERSION}/{SERVER_ID}"
 
 #: User agent used by the MCP internal HTTP client
 MCP_USER_AGENT = f"stdapi.ai/MCP/{SERVER_ID}"

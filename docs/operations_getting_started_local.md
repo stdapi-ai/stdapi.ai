@@ -1,12 +1,12 @@
 ---
 title: Local Development - Run stdapi.ai with Docker
-description: Run stdapi.ai locally with Docker or Podman for development, testing, and evaluation. Free community image with full API compatibility for Amazon Bedrock models.
+description: Run stdapi.ai locally with Docker or Podman for development, testing, and evaluation. Free hardened image with full API compatibility for Amazon Bedrock models.
 keywords: Docker OpenAI gateway, local AI development, Podman AI gateway, free OpenAI alternative, local AWS Bedrock, Docker AI API, community AI gateway, AGPL AI gateway
 ---
 
 # :material-docker: Local Development with Docker/Podman
 
-Run stdapi.ai locally for development, testing, and evaluation using the free community container image (AGPL-3.0). Full API compatibility — the same endpoints and features as the production deployment.
+Run stdapi.ai locally for development, testing, and evaluation using the published container image (AGPL-3.0-or-later). Full API compatibility — the same endpoints and features as the production deployment.
 
 ??? info "Before you start"
     To run stdapi.ai locally you need:
@@ -127,14 +127,14 @@ curl http://localhost:8000/v1/chat/completions \
 
 ## :material-information: Technical Notes
 
-**Building from source:** See the [Dockerfile](https://github.com/stdapi-ai/stdapi.ai/blob/main/Dockerfile) if you prefer to build the image yourself.
+**Building from source:** The repository's [Dockerfile](https://github.com/stdapi-ai/stdapi.ai/blob/main/Dockerfile) builds the published image. To build it yourself, run `docker build -t stdapi.ai .` from the repository root. The build compiles FFmpeg from source.
 
-**Container runtime:** Both community and Marketplace images use [Granian](https://github.com/emmett-framework/granian), a high-performance Python ASGI server. Granian environment variables (e.g., `GRANIAN_PORT`, `GRANIAN_WORKERS`) are supported.
+**Container runtime:** The image uses [Granian](https://github.com/emmett-framework/granian), a high-performance Python ASGI server. Granian environment variables (e.g., `GRANIAN_PORT`, `GRANIAN_WORKERS`) are supported.
 
 **Configuration:** See [Configuration Reference](operations_configuration.md) for all environment variables.
 
 !!! tip "Ready for Production?"
-    When you're ready to deploy to AWS with HTTPS, auto-scaling, and enterprise features, the [production deployment guide](operations_getting_started.md) gets you running with two Terraform commands. The [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) subscription includes a **14-day free trial of the license**.
+    When you're ready to deploy to AWS with HTTPS and auto-scaling, the [production deployment guide](operations_getting_started.md) gets you running with two Terraform commands, using the hardened image `ghcr.io/stdapi-ai/stdapi.ai`.
 
 ---
 

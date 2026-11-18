@@ -23,12 +23,10 @@ still passes once ``TRUSTED_HOSTS`` makes the server validate Host headers — a
 pinned in :class:`TestFinalImageRuntime`, again against the application's own
 code rather than against a Dockerfile.
 
-The images under test come from ``STDAPI_CONTAINER_DOCKERFILES``, a
-comma-separated list of ``label=path`` entries (absolute, or relative to the
-repository root), defaulting to ``community=Dockerfile``. The build context is
-always the repository root. ``STDAPI_CONTAINER_IMAGE_<LABEL>`` supplies an
-already-built tag and skips that label's build, and ``CONTAINER_ENGINE``
-overrides the engine command (e.g. ``flatpak-spawn --host podman``).
+The image under test is built from the repository's ``Dockerfile``, with the
+repository root as build context. ``STDAPI_CONTAINER_IMAGE`` supplies an
+already-built tag and skips the build, and ``CONTAINER_ENGINE`` overrides the
+engine command (e.g. ``flatpak-spawn --host podman``).
 
 Ref: https://docs.podman.io/en/latest/markdown/podman-build.1.html
      https://ffmpeg.org/ffmpeg-formats.html
@@ -92,10 +90,8 @@ pytestmark = pytest.mark.container
 #: Container engine command, split so an indirection like flatpak-spawn works.
 _ENGINE = tuple(environ.get("CONTAINER_ENGINE", "podman").split())
 
-#: Images to test, as ``label=dockerfile`` entries; the repository's own image by default.
-_DOCKERFILES_SETTING = environ.get(
-    "STDAPI_CONTAINER_DOCKERFILES", "community=Dockerfile"
-)
+#: Dockerfile of the image under test.
+_DOCKERFILE = Path(REPO_ROOT, "Dockerfile")
 
 #: Mount point of the host root inside a toolbox container.
 _HOST_ROOT_PREFIX = "/run/host"
@@ -103,7 +99,7 @@ _HOST_ROOT_PREFIX = "/run/host"
 #: Engine commands run outside this process's mount namespace, which resolve host paths.
 _HOST_SIDE_ENGINE_MARKERS = ("flatpak-spawn", "--remote")
 
-#: Seconds allowed for one image build; one of them compiles the whole ffmpeg.
+#: Seconds allowed for the image build, which compiles the whole ffmpeg.
 _BUILD_TIMEOUT = 3600
 
 #: Label the MCP Registry reads to match an image against its server entry.
@@ -562,34 +558,6 @@ if shutil.which(_ENGINE[0]) is None:
     pytest.skip(
         f"container engine '{_ENGINE[0]}' is not available", allow_module_level=True
     )
-
-
-def _parse_dockerfiles(setting: str) -> dict[str, Path]:
-    """Parse the ``label=path`` image list into resolved Dockerfile paths.
-
-    Args:
-        setting: Value of ``STDAPI_CONTAINER_DOCKERFILES``.
-
-    Returns:
-        Each label mapped to its Dockerfile, in the order they were declared.
-
-    Raises:
-        pytest.UsageError: If an entry is not a ``label=path`` pair.
-    """
-    dockerfiles: dict[str, Path] = {}
-    for entry in setting.split(","):
-        if not entry.strip():
-            continue
-        label, separator, path = entry.partition("=")
-        if not separator or not label.strip() or not path.strip():
-            msg = f"STDAPI_CONTAINER_DOCKERFILES entry '{entry}' is not 'label=path'"
-            raise pytest.UsageError(msg)
-        dockerfiles[label.strip()] = Path(REPO_ROOT, path.strip())
-    return dockerfiles
-
-
-#: Dockerfile of each image under test, keyed by its label.
-_DOCKERFILES = _parse_dockerfiles(_DOCKERFILES_SETTING)
 
 
 def _engine_path(path: Path) -> str:
@@ -1144,8 +1112,8 @@ def _healthcheck_probe(image: str, trusted_hosts: Sequence[str]) -> dict[str, ob
             "--rm",
             "--network=none",
             *environment,
-            # Driven by the image's own interpreter: every runtime image ships
-            # Python, and one of them ships no shell at all.
+            # Driven by the image's own interpreter: the image ships Python but
+            # no shell.
             "--entrypoint",
             probe[0],
             image,
@@ -1402,46 +1370,20 @@ def _wait_for_health(container: str, port: int) -> None:
     )
 
 
-@pytest.fixture(scope="session", params=list(_DOCKERFILES), ids=list(_DOCKERFILES))
-def image_label(request: pytest.FixtureRequest) -> str:
-    """Label of the image under test, as declared in ``STDAPI_CONTAINER_DOCKERFILES``.
-
-    Carries the parametrisation the ``image`` fixture builds from, so a test
-    whose expectation legitimately differs between the two images can say which
-    one it is looking at.
-
-    Args:
-        request: Fixture request carrying the image label.
-
-    Returns:
-        The label of the image to test.
-    """
-    return str(request.param)
-
-
 @pytest.fixture(scope="session")
-def image(image_label: str) -> str:
+def image() -> str:
     """Build the image under test, or return the prebuilt tag configured for it.
 
-    Building an image may compile ffmpeg from source, so
-    ``STDAPI_CONTAINER_IMAGE_<LABEL>`` short-circuits it with an already-built
-    tag while iterating.
-
-    Args:
-        image_label: Label of the image to build.
+    Building the image compiles ffmpeg from source, so ``STDAPI_CONTAINER_IMAGE``
+    short-circuits it with an already-built tag while iterating.
 
     Returns:
         The image tag to test.
     """
-    label = image_label
-    prebuilt = environ.get(f"STDAPI_CONTAINER_IMAGE_{label.upper()}")
+    prebuilt = environ.get("STDAPI_CONTAINER_IMAGE")
     if prebuilt:
         return prebuilt
-    dockerfile = _DOCKERFILES[label]
-    assert dockerfile.is_file(), (
-        f"the '{label}' image declares a Dockerfile that does not exist: {dockerfile}"
-    )
-    tag = f"localhost/stdapi-image-test-{label}:latest"
+    tag = "localhost/stdapi-image-test:latest"
 
     built = _engine_run(
         [
@@ -1449,7 +1391,7 @@ def image(image_label: str) -> str:
             "--tag",
             tag,
             "--file",
-            _engine_path(dockerfile),
+            _engine_path(_DOCKERFILE),
             _engine_path(REPO_ROOT),
         ],
         timeout=_BUILD_TIMEOUT,
@@ -1458,8 +1400,7 @@ def image(image_label: str) -> str:
     if built.returncode != 0:
         output = (built.stdout + built.stderr).decode(errors="replace").splitlines()
         pytest.fail(
-            f"building the '{label}' image failed:\n"
-            + "\n".join(output[-_BUILD_LOG_LINES:])
+            "building the image failed:\n" + "\n".join(output[-_BUILD_LOG_LINES:])
         )
     return tag
 
@@ -1632,11 +1573,8 @@ class TestUvBootstrap:
     """
 
     def test_uv_is_copied_from_a_digest_pinned_image(self) -> None:
-        """The community Dockerfile pins ``uv`` to a ``@sha256`` digest, not PyPI."""
-        dockerfile = _DOCKERFILES.get("community")
-        if dockerfile is None:
-            pytest.skip("no 'community' entry in STDAPI_CONTAINER_DOCKERFILES")
-        text = dockerfile.read_text()
+        """The Dockerfile pins ``uv`` to a ``@sha256`` digest, not PyPI."""
+        text = _DOCKERFILE.read_text()
 
         assert "pip install" not in text.replace("uv pip install", ""), (
             "the Dockerfile still installs a tool with plain pip, bypassing "
@@ -1915,21 +1853,16 @@ class TestFinalImageRuntime:
 
         assert euid != 0, "the image runs its command as root"
 
-    def test_the_home_directory_is_traversable_only_where_that_is_documented(
-        self, image: str, image_label: str
+    def test_the_home_directory_is_traversable_by_a_foreign_uid(
+        self, image: str
     ) -> None:
-        """A foreign uid reaches the home directory of the image whose docs promise it.
+        """A foreign uid reaches the home directory the credential mount recipe uses.
 
         README.md, the local-development guide and the troubleshooting page
         document ``--user "$(id -u):$(id -g)" -e HOME=/home/nonroot -v
-        ~/.aws:/home/nonroot/.aws`` for the community image, so a foreign uid
-        can read the caller's own AWS credentials; a home directory it cannot
-        traverse breaks that recipe before botocore reads anything under it.
-        The Marketplace image keeps its base image's private home: it is
-        deployed as its own user and documents no foreign-uid recipe, so
-        opening it would loosen the more hardened of the two for a convenience
-        it does not offer. The divergence is asserted rather than skipped, so
-        neither image can drift into the other's posture unnoticed.
+        ~/.aws:/home/nonroot/.aws``, so a foreign uid can read the caller's own
+        AWS credentials; a home directory it cannot traverse breaks that recipe
+        before botocore reads anything under it.
 
         Ref: https://docs.docker.com/reference/dockerfile/#user
              Dockerfile
@@ -1953,17 +1886,10 @@ class TestFinalImageRuntime:
             f"uid {_FOREIGN_UID_GID} could not run in the image:\n"
             f"{output}\n{_tail(result.stderr)}"
         )
-        if image_label == "community":
-            assert output.strip() == "ok", (
-                f"uid {_FOREIGN_UID_GID} cannot traverse '/home/nonroot', so the "
-                f"documented credential mount cannot work: {output.strip()}"
-            )
-        else:
-            assert output.strip() != "ok", (
-                f"the '{image_label}' image now lets uid {_FOREIGN_UID_GID} traverse "
-                "'/home/nonroot'; it documents no foreign-uid recipe, so either the "
-                "hardening regressed or the docs gained one this test does not know about"
-            )
+        assert output.strip() == "ok", (
+            f"uid {_FOREIGN_UID_GID} cannot traverse '/home/nonroot', so the "
+            f"documented credential mount cannot work: {output.strip()}"
+        )
 
     @pytest.mark.parametrize(
         "trusted_hosts", _TRUSTED_HOSTS_CASES.values(), ids=_TRUSTED_HOSTS_CASES
@@ -2037,7 +1963,7 @@ class TestFinalImageRuntime:
         """The application's own licence and ffmpeg's travel with the binaries.
 
         The image is published as a whole: the served application under its
-        edition's licence, and the ffmpeg it ships under whichever licence
+        licence, and the ffmpeg it ships under whichever licence
         applies to the build it uses — LGPL for one built from source, GPL for
         the distribution's own package. Both texts must be in the image, and
         readable by the unprivileged user it runs as.

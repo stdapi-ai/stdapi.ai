@@ -1,7 +1,7 @@
 ---
 title: Getting Started - Deploy stdapi.ai on AWS
-description: Deploy stdapi.ai on AWS with two Terraform commands. Production-grade ECS Fargate deployment with HTTPS, auto-scaling, and optional WAF and monitoring. 14-day free trial of the license on AWS Marketplace.
-keywords: deploy OpenAI gateway AWS, AWS Bedrock deployment, Terraform AWS AI, enterprise AI deployment, AWS Bedrock setup, OpenAI API hosting, production AI gateway, AWS ECS Fargate AI
+description: Deploy stdapi.ai on AWS with two Terraform commands. Production-grade ECS Fargate deployment with HTTPS, auto-scaling, and optional WAF and monitoring.
+keywords: deploy OpenAI gateway AWS, AWS Bedrock deployment, Terraform AWS AI, production AI deployment, AWS Bedrock setup, OpenAI API hosting, production AI gateway, AWS ECS Fargate AI
 ---
 
 # :material-rocket-launch: Deploy stdapi.ai on AWS
@@ -62,21 +62,19 @@ flowchart LR
 ### Prerequisites
 
 ??? info "Before you start"
-    1. **Subscribe on AWS Marketplace** — this is the action that starts your 14-day free trial:
-
-        [Subscribe on AWS Marketplace — starts your 14-day free trial](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo){ .md-button .md-button--primary }
-
-    2. Install [Terraform](https://www.terraform.io/downloads) or [OpenTofu](https://opentofu.org/docs/intro/install/) >= 1.9.
-    3. Configure [AWS credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) (`aws configure` or `aws sso login`).
-    4. A domain in a **public Route 53 hosted zone in this account** — the deployment serves the API from a name under it, such as `api.example.com`. It is required: an ALB reached through its generated `*.elb.amazonaws.com` name can never hold a trusted certificate, since ACM does not issue for a name you do not control, so a deployment without a domain would publish the API and every API key in cleartext over HTTP.
+    1. Install [Terraform](https://www.terraform.io/downloads) or [OpenTofu](https://opentofu.org/docs/intro/install/) >= 1.9.
+    2. Configure [AWS credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) (`aws configure` or `aws sso login`).
+    3. A domain in a **public Route 53 hosted zone in this account** — the deployment serves the API from a name under it, such as `api.example.com`. It is required: an ALB reached through its generated `*.elb.amazonaws.com` name can never hold a trusted certificate, since ACM does not issue for a name you do not control, so a deployment without a domain would publish the API and every API key in cleartext over HTTP.
 
 !!! warning "Requires AWS administrator permissions"
     The Terraform module provisions IAM roles and policies, KMS keys, ECS/Fargate, ALB, and networking. A restricted developer profile will fail during `terraform apply`.
 
     **Strongly recommended:** deploy into a **sandbox / non-production AWS account first** to evaluate the stack, then replicate into your target account with scoped-down principals once you've validated it.
 
-!!! tip trial "14-Day Free Trial"
-    The AWS Marketplace subscription includes a **14-day free trial of the stdapi.ai license**. AWS charges for the infrastructure it deploys (ALB, Fargate, KMS, NAT) and for Bedrock usage apply from the first minute — see [Deployment Cost](#deployment-cost).
+!!! info "Container image and internet access"
+    The ECS tasks pull the hardened image `ghcr.io/stdapi-ai/stdapi.ai-community` from GitHub Container Registry, so they need internet access. For a deployment without internet access, see [Deployment Without Internet Access](operations_deploy_advanced.md#deployment-without-internet-access).
+
+AWS charges for the infrastructure the module deploys (ALB, Fargate, KMS, NAT) and for Bedrock usage from the first minute: see [Deployment Cost](#deployment-cost).
 
 ### Get Your Credentials
 
@@ -105,7 +103,7 @@ terraform output docs_url
 **Want to explore the API without writing code?** Use the `docs_url` from `terraform output docs_url` to open the interactive Swagger documentation in your browser — you can browse all available endpoints and make live API calls directly from the page, no code required.
 
 !!! info "If the docs page returns 503"
-    This is normal on a fresh deployment: the ECS service takes 2–3 minutes to pass health checks. If it persists, check that the AWS Marketplace subscription was accepted — without it the ECS tasks cannot pull the licensed image and never become healthy. See [Troubleshooting](operations_troubleshooting.md).
+    This is normal on a fresh deployment: the ECS service takes 2–3 minutes to pass health checks. If it persists, check that the ECS tasks can pull the container image: without internet access to `ghcr.io` they never become healthy. See [Troubleshooting](operations_troubleshooting.md).
 
     TLS needs no attention here: the sample serves the API from your own domain under an ACM certificate, so the browser trusts it. Only a configuration with neither `alb_domain_name` nor `alb_certificate_arn` behaves differently — the module then creates no HTTPS listener at all and the endpoint is plain `http://`, which must never carry an API key.
 
@@ -175,16 +173,13 @@ The `503` hiccup on first deployment is already covered above — see [Make Your
 !!! info "Need help?"
     For questions, issue reports, or assistance, see the [Contact](contact.md) page.
 
-!!! info "Prefer a hands-off setup?"
-    A [managed deployment service](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) is available if you'd rather not manage Terraform yourself. Choose between guided assistance (step-by-step support while you retain full control) or fully managed setup (handled on your behalf, inside your AWS account). Response time is 1 business day during the engagement.
-
 ---
 
 ## :material-currency-usd: Deployment Cost
 
 AWS infrastructure cost is driven by configuration, not a fixed default: task count (one per Availability Zone unless overridden), Fargate Spot vs. on-demand, scheduled service hours, and whether an ALB is provisioned at all. A minimal deployment — one scheduled Fargate Spot task, no ALB, reached via Service Discovery — and a full multi-AZ production stack — ALB + WAF, one task per AZ, running 24/7 — sit at opposite ends of a wide range.
 
-stdapi.ai's own license is billed separately at **$0.10/container-hour** ($0.09 via [private offer](contact.md#private-offer)); Bedrock and other AI service usage is billed by AWS at cost, with no stdapi.ai markup.
+stdapi.ai itself is free and open source (AGPL-3.0-or-later). Bedrock and other AI service usage is billed by AWS at cost, with no stdapi.ai markup.
 
 See [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) for the Spot/scheduling configuration, and [Cost Management → Gateway Cost](operations_cost_management.md#gateway-cost) for the full tier-by-tier breakdown.
 
@@ -192,7 +187,7 @@ See [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-dep
 
 ## :material-delete-outline: Cleaning Up
 
-When you're done testing, tear down the stack to stop incurring AWS and license charges:
+When you're done testing, tear down the stack to stop incurring AWS charges:
 
 ```bash
 terraform destroy
@@ -209,11 +204,11 @@ Running from the ZIP download instead of `git clone`? Run the same command from 
 - :material-book-open-variant: [**API Overview**](api_overview.md) — Endpoints, parameters, and usage examples
 - :material-cog: [**Configuration**](operations_configuration.md) — All environment variables and options
 - :material-server-network: [**Advanced Deployment**](operations_deploy_advanced.md) — VPC integration, multi-region, cost optimization, manual ECS
-- :material-cash-multiple: [**Cost Management**](operations_cost_management.md) — Infrastructure, license, and AI usage cost breakdown
+- :material-cash-multiple: [**Cost Management**](operations_cost_management.md) — Infrastructure and AI usage cost breakdown
 - :material-directions-fork: [**Resilience & Failover**](operations_resilience.md) — Multi-region routing, and the quota each enabled region adds
 - :material-shield-lock: [**Data Sovereignty & Compliance**](operations_compliance.md) — GDPR-compliant region configuration
 - :material-puzzle: [**Use Cases**](use_cases.md) — Open WebUI, n8n, coding assistants, and more
 - :material-wrench: [**Troubleshooting**](operations_troubleshooting.md) — Common first-deployment errors and fixes
-- :material-scale-balance: [**Licensing**](operations_licensing.md) — AGPL vs commercial options
+- :material-scale-balance: [**Licensing**](operations_licensing.md) — AGPL-3.0-or-later license
 
 </div>

@@ -24,7 +24,6 @@ from stdapi import server
 from stdapi.api_providers.ollama import MCP_ALWAYS_REFUSED_OPERATIONS
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS, LogLevel
-from stdapi.metering import EDITION_TITLE
 from stdapi.monitoring import REQUEST, REQUEST_ID, log_error_details
 from stdapi.routes.core_root import MCP_SERVER_CARD
 from stdapi.utils import b64encode
@@ -490,7 +489,7 @@ def mount_mcp(app: FastAPI) -> None:
     include_operations, exclude_operations = _operation_filters()
     mcp = FastApiMCP(
         app,
-        name=EDITION_TITLE,
+        name=server.SERVER_TITLE,
         description="AWS standardized AI API",
         include_operations=include_operations,
         exclude_operations=exclude_operations,

@@ -70,9 +70,9 @@ jobs:
 
   container:
     name: Container image
-    # The image assembles the server from distribution packages and a locked
-    # environment, so a missing codec, an unreadable file or a broken probe can
-    # be there while every other job stays green.
+    # The image compiles its own ffmpeg, prunes and byte-compiles its
+    # dependencies and ships no shell, so a missing codec, an unreadable file or
+    # a broken probe can be there while every other job stays green.
     # Skipped on manual runs, which exist to reach the credentialed lanes.
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest

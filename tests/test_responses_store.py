@@ -229,7 +229,7 @@ def stub(monkeypatch: pytest.MonkeyPatch) -> _StubSessionClient:
     client = _StubSessionClient()
     monkeypatch.setattr(responses_store, "get_client", lambda *_: client)
     monkeypatch.setattr(
-        responses_store, "build_metadata", lambda **_: {"aws-apn-id": "apn"}
+        responses_store, "build_metadata", lambda **_: {"stdapi-ai.request_id": "rid"}
     )
     # Isolate the session-tag cache from other tests reusing the same session IDs.
     monkeypatch.setattr(responses_store, "_TAG_CACHE", {})
@@ -242,7 +242,7 @@ def missing_stub(monkeypatch: pytest.MonkeyPatch) -> _StubSessionClient:
     client = _StubSessionClient(missing=True)
     monkeypatch.setattr(responses_store, "get_client", lambda *_: client)
     monkeypatch.setattr(
-        responses_store, "build_metadata", lambda **_: {"aws-apn-id": "apn"}
+        responses_store, "build_metadata", lambda **_: {"stdapi-ai.request_id": "rid"}
     )
     # Isolate the session-tag cache from other tests reusing the same session IDs.
     monkeypatch.setattr(responses_store, "_TAG_CACHE", {})
@@ -278,7 +278,7 @@ class TestStoredResponseSessions:
         assert name == "create_session"
         assert params == {
             "tags": {
-                "aws-apn-id": "apn",
+                "stdapi-ai.request_id": "rid",
                 "stdapi-ai.stored-object": "response",
                 "stdapi-ai.created-at": "1714979289",
             },
@@ -305,7 +305,7 @@ class TestStoredResponseSessions:
         assert name == "create_session"
         assert params == {
             "tags": {
-                "aws-apn-id": "apn",
+                "stdapi-ai.request_id": "rid",
                 "stdapi-ai.stored-object": "chat_completion",
                 "stdapi-ai.created-at": "1714979289",
             }

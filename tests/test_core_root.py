@@ -84,7 +84,7 @@ class TestRoot:
         cannot be told apart from any other arrival at the site.
 
         Ref: stdapi/routes/core_root.py:_API_REFERENCE_LINK
-             stdapi/metering.py:DOCS_UTM
+             stdapi/server.py:DOCS_UTM
         """
         if SETTINGS.enable_docs or SETTINGS.enable_redoc:
             pytest.skip("A built-in documentation page is enabled")
@@ -149,13 +149,13 @@ class TestRoot:
 
 
 class TestOpenApiInfoLinks:
-    """The two stdapi.ai URLs the OpenAPI ``info`` block carries.
+    """What the OpenAPI ``info`` block carries: the campaign-tagged contact URL, the title and the license.
 
-    One is read by a human -- Swagger UI renders ``contact.url`` as the link in
-    its header -- and one is read by licence tooling. Only the first is tagged.
+    Swagger UI renders ``contact.url`` as the link in its header, so it is the
+    only value tagged.
 
     Ref: stdapi/main.py
-         stdapi/metering.py:DOCS_UTM
+         stdapi/server.py:DOCS_UTM
          https://spec.openapis.org/oas/v3.1.0#info-object
     """
 
@@ -182,24 +182,25 @@ class TestOpenApiInfoLinks:
 
         assert contact["url"] == f"https://stdapi.ai/?{_DOCS_UTM}"
 
-    def test_the_licence_url_is_not_tagged(self) -> None:
-        """``license.url`` stays clean on both editions: it identifies a licence, not a visit.
+    def test_the_openapi_info_reports_the_agpl_license_and_title(self) -> None:
+        """The spec names the single AGPL-3.0-or-later license, with no edition."""
+        info = self._info()
 
-        Licence tooling matches this field against a known URL, so a query
-        string on it makes the licence unrecognisable. The community build
-        never carries a ``url`` at all, so that branch alone would pass
-        vacuously; ``PRODUCT_CODE`` is fixed at import time, so the
-        commercial branch is built directly through ``licence_info`` instead
-        of relying on the process this suite runs in.
+        assert info["title"] == "stdapi.ai"
+        assert info["license"] == {
+            "name": "GNU Affero General Public License v3.0 or later",
+            "identifier": "AGPL-3.0-or-later",
+        }
+
+    def test_the_user_agent_carries_no_partner_suffix(self) -> None:
+        """The user agent is the server identity alone.
+
+        Ref: stdapi/server.py:USER_AGENT
         """
-        from stdapi.metering import licence_info  # noqa: PLC0415
+        from stdapi.server import SERVER_VERSION, USER_AGENT  # noqa: PLC0415 -- imported in the test, as across this module
 
-        community = self._info().get("license", {})
-        assert isinstance(community, dict)
-        assert "utm_" not in community.get("url", "")
-
-        commercial = licence_info("some-marketplace-product-code")
-        assert "utm_" not in commercial.get("url", "")
+        assert USER_AGENT.startswith(f"stdapi.ai/{SERVER_VERSION}/")
+        assert "APN" not in USER_AGENT
 
     def test_the_docs_site_export_carries_no_tracking_query(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -349,8 +350,7 @@ class TestMcpServerCard:
         """
         if not _MCP_ENABLED:
             pytest.skip("MCP is disabled in this environment")
-        from stdapi.metering import EDITION_TITLE  # noqa: PLC0415
-        from stdapi.server import SERVER_VERSION  # noqa: PLC0415
+        from stdapi.server import SERVER_TITLE, SERVER_VERSION  # noqa: PLC0415 -- imported in the test, as across this module
 
         body = test_client.get("/.well-known/mcp/server-card.json").json()
         assert body["$schema"] == (
@@ -358,7 +358,7 @@ class TestMcpServerCard:
         )
         assert body["version"] == "1.0"
         assert body["protocolVersion"] == "2025-03-26"
-        assert body["serverInfo"] == {"name": EDITION_TITLE, "version": SERVER_VERSION}
+        assert body["serverInfo"] == {"name": SERVER_TITLE, "version": SERVER_VERSION}
         assert body["transport"] == (
             {"type": "streamable-http", "endpoint": "/mcp"}
             if SETTINGS.enable_mcp_streamable_http
@@ -490,7 +490,7 @@ class TestOAuthProtectedResource:
         """
         if not _OAUTH_ENABLED:
             pytest.skip("No OAuth resource identifier configured")
-        from stdapi.metering import EDITION_TITLE  # noqa: PLC0415
+        from stdapi.server import SERVER_TITLE  # noqa: PLC0415 -- imported in the test, as across this module
 
         body = app_client.get(_OAUTH_METADATA_PATH).json()
 
@@ -505,7 +505,7 @@ class TestOAuthProtectedResource:
         assert not body["resource"].endswith("/")
         assert body["authorization_servers"] == SETTINGS.oauth_authorization_servers
         assert body["bearer_methods_supported"] == ["header"]
-        assert body["resource_name"] == EDITION_TITLE
+        assert body["resource_name"] == SERVER_TITLE
         assert body["resource_documentation"] == "https://stdapi.ai/api_reference/"
         if SETTINGS.oauth_scopes_supported:
             assert body["scopes_supported"] == SETTINGS.oauth_scopes_supported

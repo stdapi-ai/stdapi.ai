@@ -1,6 +1,6 @@
 [project]
 name = "stdapi"
-version = "1.19.1"
+version = "1.20.1"
 description = "Standard API for AI on AWS"
 authors = [{ name = "J.Goutin", email = "contact@stdapi.ai" }]
 requires-python = ">=3.15"
@@ -70,7 +70,7 @@ lint = [
     "mypy",
     "ruff",
     {include-group = "docs-gen"},
-    "types-aiobotocore[bedrock, bedrock-agent-runtime, bedrock-runtime, cloudwatch, polly, comprehend, meteringmarketplace, pricing, s3, ssm, sts, transcribe, translate]>=3.8",
+    "types-aiobotocore[bedrock, bedrock-agent-runtime, bedrock-runtime, cloudwatch, polly, comprehend, pricing, s3, ssm, sts, transcribe, translate]>=3.8",
     "types-PyYAML",
 ]
 docs = [

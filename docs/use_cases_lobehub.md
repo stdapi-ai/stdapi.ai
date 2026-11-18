@@ -214,7 +214,6 @@ tofu apply
 
 | Charge | Driver |
 | --- | --- |
-| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | ECS Fargate | Three services — LobeHub, the gateway, and the self-hosted ParadeDB Postgres task, which is pinned to exactly one instance |
 | Load balancing and networking | One ALB fronting LobeHub, plus the NAT gateways the private subnets egress through — the S3 gateway endpoint alongside them carries no charge |
 | Amazon EFS | Backing storage for the Postgres data directory |

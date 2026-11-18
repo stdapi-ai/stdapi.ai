@@ -236,7 +236,7 @@ class TestCopyS3ObjectMultipart:
         assert call["Bucket"] == "dest"
         assert call["Key"] == "dk"
         assert call["TaggingDirective"] == "REPLACE"
-        assert call["Tagging"] == aws_s3.S3_TAGGING
+        assert "Tagging" not in call
         assert call["MetadataDirective"] == "COPY", (
             "a copy naming no metadata must inherit the source's"
         )
@@ -300,7 +300,7 @@ class TestCopyS3ObjectMetadata:
         assert call["ContentDisposition"] == 'attachment; filename="doc.pdf"'
         assert call["Metadata"] == {"purpose": "batch"}
         assert call["ContentType"] == "application/pdf"
-        assert call["Tagging"] == aws_s3.S3_TAGGING
+        assert "Tagging" not in call
 
     async def test_multipart_copy_declares_them_on_the_created_upload(
         self, monkeypatch: pytest.MonkeyPatch
@@ -333,7 +333,7 @@ class TestCopyS3ObjectMetadata:
         )
         assert stub.create_kwargs["Metadata"] == {"purpose": "batch"}
         assert stub.create_kwargs["ContentType"] == "application/pdf"
-        assert stub.create_kwargs["Tagging"] == aws_s3.S3_TAGGING
+        assert "Tagging" not in stub.create_kwargs
         assert "MetadataDirective" not in stub.create_kwargs, (
             "CreateMultipartUpload has no MetadataDirective parameter"
         )

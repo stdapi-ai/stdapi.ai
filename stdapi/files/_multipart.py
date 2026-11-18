@@ -44,7 +44,6 @@ from stdapi.aws import get_client
 from stdapi.aws_s3 import (
     BUCKET_TO_REGION,
     EXPIRING_S3_TAGGING,
-    S3_TAGGING,
     UPLOAD_CHUNK_SIZE,
     track_temporary_s3_objects,
 )
@@ -470,6 +469,10 @@ async def create_multipart_session(
     created_at = _created_at_from_upload_id(upload_id)
     file_expires_at = created_at + expires_after if expires_after is not None else None
 
+    # Only an expiring upload carries a tag set.
+    expiry_tagging = (
+        {"Tagging": EXPIRING_S3_TAGGING} if file_expires_at is not None else {}
+    )
     multipart_resp, _ = await gather(
         s3.create_multipart_upload(
             Bucket=bucket,
@@ -482,7 +485,7 @@ async def create_multipart_session(
                 if file_expires_at is not None
                 else "",
             },
-            Tagging=EXPIRING_S3_TAGGING if file_expires_at is not None else S3_TAGGING,
+            **expiry_tagging,  # type: ignore[arg-type]  # dict[str, str] vs each stub keyword
         ),
         s3.put_object(
             Bucket=bucket,
@@ -495,7 +498,6 @@ async def create_multipart_session(
                 "purpose": purpose,
                 "total-bytes": str(total_bytes),
             },
-            Tagging=S3_TAGGING,
         ),
     )
     _cache_set(upload_id, multipart_resp["UploadId"])

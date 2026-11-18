@@ -301,7 +301,10 @@ class VideoModelBase(ModelBase[Any, Any]):
             ),
             region,
         )
-        tags = build_metadata(apn=True) | {_SECONDS_TAG: str(seconds), _SIZE_TAG: size}
+        tags = build_metadata(as_tags=True) | {
+            _SECONDS_TAG: str(seconds),
+            _SIZE_TAG: size,
+        }
         with handle_bedrock_client_error():
             response = await client.start_async_invoke(
                 modelId=resolved_model_id,

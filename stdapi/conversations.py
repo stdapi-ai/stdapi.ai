@@ -468,7 +468,7 @@ async def create_conversation(metadata: Mapping[str, str]) -> tuple[str, int]:
         handle_bedrock_client_error(),
     ):
         session = await client.create_session(
-            tags=build_metadata(apn=True) | {KIND_TAG: _KIND},
+            tags=build_metadata(as_tags=True) | {KIND_TAG: _KIND},
             sessionMetadata=dict(metadata),
             **({"encryptionKeyArn": key} if key else {}),
         )
